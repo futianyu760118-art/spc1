@@ -1,0 +1,76 @@
+# 订单交付中心
+from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.order.eta_update import ETAUpdate
+
+# 物料齐套中心
+from app.models.material.material_demand import MaterialDemand
+from app.models.material.purchase_order import PurchaseOrder
+from app.models.material.binding import OrderMaterialPoBinding
+from app.models.material.receipt_batch import ReceiptBatch
+from app.models.material.material_issue import MaterialIssue
+from app.models.material.long_lead_material import LongLeadMaterial
+from app.models.material.purchase_invoice import PurchaseInvoice
+
+# 生产协同中心
+from app.models.production.process_progress import ProcessProgress
+from app.models.production.process_exception import ProcessException
+
+# 异常与质量中心
+from app.models.exception.risk_issue import RiskIssue
+from app.models.exception.issue_log import IssueLog
+from app.models.exception.change_log import ChangeLog
+from app.models.exception.quality_issue import QualityIssue
+
+# 规则配置中心
+from app.models.rules.risk_rule import RiskRule
+from app.models.rules.inspection_rule import InspectionRule
+from app.models.rules.node_standard import NodeStandard
+from app.models.rules.responsibility_map import ResponsibilityMap
+from app.models.rules.status_dictionary import StatusDictionary
+
+# 主数据与集成中心
+from app.models.masterdata.user import SysUser, SysRole
+from app.models.masterdata.audit_log import AuditLog
+from app.models.masterdata.field_mapping import FieldMapping
+from app.models.masterdata.sync_sql_config import SyncSqlConfig  # noqa: F401
+from app.models.masterdata.sync_log import SyncLog  # noqa: F401
+from app.models.masterdata.file_asset import FileAsset  # noqa: F401
+from app.models.masterdata.feedback import Feedback  # noqa: F401
+
+__all__ = [
+    # 订单交付中心
+    "SaleOrder",
+    "SaleOrderLine",
+    # 物料齐套中心
+    "MaterialDemand",
+    "PurchaseOrder",
+    "OrderMaterialPoBinding",
+    "ReceiptBatch",
+    "ETAUpdate",
+    "MaterialIssue",
+    "LongLeadMaterial",
+    "PurchaseInvoice",
+    # 生产协同中心
+    "ProcessProgress",
+    "ProcessException",
+    # 异常与质量中心
+    "RiskIssue",
+    "IssueLog",
+    "ChangeLog",
+    "QualityIssue",
+    # 规则配置中心
+    "RiskRule",
+    "InspectionRule",
+    "NodeStandard",
+    "ResponsibilityMap",
+    "StatusDictionary",
+    # 主数据与集成中心
+    "SysUser",
+    "SysRole",
+    "AuditLog",
+    "FieldMapping",
+    "SyncSqlConfig",
+    "SyncLog",
+    "FileAsset",
+    "Feedback",
+]

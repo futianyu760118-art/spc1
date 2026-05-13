@@ -1,0 +1,25 @@
+name: spc-dev
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC}
+      ERP_DB_URL: ${ERP_DB_URL}
+      ERP_DB_SCHEMA: ${ERP_DB_SCHEMA}
+      ERP_SYNC_ENABLED: ${ERP_SYNC_ENABLED:-false}
+      ERP_SYNC_BATCH_SIZE: ${ERP_SYNC_BATCH_SIZE}
+      REDIS_URL: ${REDIS_URL}
+      SECRET_KEY: ${SECRET_KEY}
+    command: >
+      sh -c "python init_database.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      - backend

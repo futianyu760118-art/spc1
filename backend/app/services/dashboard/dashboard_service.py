@@ -1,0 +1,669 @@
+"""供应链驾驶舱 — 仪表盘服务"""
+
+from datetime import date, timedelta
+from sqlalchemy import select, func, and_, case, DateTime
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.order.sale_order import SaleOrder
+from app.models.material.material_demand import MaterialDemand
+from app.models.material.purchase_order import PurchaseOrder
+from app.models.exception.risk_issue import RiskIssue
+from app.schemas.dashboard.schemas import (
+    DashboardData, RiskSummary, OrderRiskRow, RiskDistribution,
+    TodayOverview, TodayDueOrder,
+    RollingRiskDay, RollingRiskData,
+    RiskDimensionItem, RiskFactorDistributionItem, OrderRiskDistributionData,
+    ClosureAchievement,
+)
+from app.services.exception.risk_engine import FACTOR_MAX, FACTOR_LABELS
+
+
+class DashboardService:
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    # ===== 基础：总览摘要 =====
+
+    async def get_summary(self) -> DashboardData:
+        red_count = (await self.db.execute(
+            select(func.count(SaleOrder.id)).where(SaleOrder.risk_level == "red")
+        )).scalar() or 0
+        yellow_count = (await self.db.execute(
+            select(func.count(SaleOrder.id)).where(SaleOrder.risk_level == "yellow")
+        )).scalar() or 0
+        green_count = (await self.db.execute(
+            select(func.count(SaleOrder.id)).where(SaleOrder.risk_level == "green")
+        )).scalar() or 0
+
+        summary = RiskSummary(
+            red_count=red_count,
+            yellow_count=yellow_count,
+            green_count=green_count,
+            total_count=red_count + yellow_count + green_count,
+        )
+
+        recent_issues_result = await self.db.execute(
+            select(RiskIssue).order_by(RiskIssue.created_at.desc()).limit(10)
+        )
+        recent_issues = [
+            {
+                "issue_no": i.issue_no,
+                "issue_type": i.issue_type,
+                "risk_level": i.risk_level,
+                "description": i.description,
+                "status": i.status,
+            }
+            for i in recent_issues_result.scalars().all()
+        ]
+
+        return DashboardData(risk_summary=summary, recent_issues=recent_issues)
+
+    # ===== 今日总览 =====
+
+    async def get_today_overview(self) -> TodayOverview:
+        today = date.today()
+
+        # 今日应交订单
+        due_today_q = await self.db.execute(
+            select(func.count(SaleOrder.id)).where(SaleOrder.promised_date == today)
+        )
+        due_today = due_today_q.scalar() or 0
+
+        # 今日应交中红/黄灯
+        due_today_red_q = await self.db.execute(
+            select(func.count(SaleOrder.id)).where(
+                SaleOrder.promised_date == today, SaleOrder.risk_level == "red"
+            )
+        )
+        due_today_red = due_today_red_q.scalar() or 0
+
+        due_today_yellow_q = await self.db.execute(
+            select(func.count(SaleOrder.id)).where(
+                SaleOrder.promised_date == today, SaleOrder.risk_level == "yellow"
+            )
+        )
+        due_today_yellow = due_today_yellow_q.scalar() or 0
+
+        # 欠料订单数（有 shortage_flag=True 的物料需求的订单）
+        shortage_orders_q = await self.db.execute(
+            select(func.count(func.distinct(MaterialDemand.order_no))).where(
+                MaterialDemand.shortage_flag == True
+            )
+        )
+        shortage_orders = shortage_orders_q.scalar() or 0
+
+        # 待关闭异常
+        pending_close_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(
+                RiskIssue.status.in_(["open", "processing", "pending_review"])
+            )
+        )
+        pending_close_issues = pending_close_q.scalar() or 0
+
+        # 超时任务（commit_date < today 且未关闭）
+        overdue_tasks_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(
+                RiskIssue.commit_date < today,
+                RiskIssue.status.notin_(["closed", "resolved"]),
+            )
+        )
+        overdue_tasks = overdue_tasks_q.scalar() or 0
+
+        # 在途 PO
+        in_transit_q = await self.db.execute(
+            select(func.count(PurchaseOrder.id)).where(
+                PurchaseOrder.po_status.in_(["in_transit", "shipped", "partial_received"])
+            )
+        )
+        in_transit_po = in_transit_q.scalar() or 0
+
+        # ETA 超期 PO
+        eta_overdue_q = await self.db.execute(
+            select(func.count(PurchaseOrder.id)).where(
+                PurchaseOrder.eta < today,
+                PurchaseOrder.po_status.notin_(["received", "completed", "closed"]),
+            )
+        )
+        eta_overdue_po = eta_overdue_q.scalar() or 0
+
+        # 全局订单风险计数
+        total_orders_q = await self.db.execute(select(func.count(SaleOrder.id)))
+        total_orders = total_orders_q.scalar() or 0
+
+        red_orders_q = await self.db.execute(
+            select(func.count(SaleOrder.id)).where(SaleOrder.risk_level == "red")
+        )
+        red_orders = red_orders_q.scalar() or 0
+
+        yellow_orders_q = await self.db.execute(
+            select(func.count(SaleOrder.id)).where(SaleOrder.risk_level == "yellow")
+        )
+        yellow_orders = yellow_orders_q.scalar() or 0
+
+        green_orders_q = await self.db.execute(
+            select(func.count(SaleOrder.id)).where(SaleOrder.risk_level == "green")
+        )
+        green_orders = green_orders_q.scalar() or 0
+
+        blue_orders_q = await self.db.execute(
+            select(func.count(SaleOrder.id)).where(SaleOrder.risk_level == "blue")
+        )
+        blue_orders = blue_orders_q.scalar() or 0
+
+        return TodayOverview(
+            due_today=due_today,
+            due_today_red=due_today_red,
+            due_today_yellow=due_today_yellow,
+            shortage_orders=shortage_orders,
+            pending_close_issues=pending_close_issues,
+            overdue_tasks=overdue_tasks,
+            in_transit_po=in_transit_po,
+            eta_overdue_po=eta_overdue_po,
+            total_orders=total_orders,
+            red_orders=red_orders,
+            yellow_orders=yellow_orders,
+            blue_orders=blue_orders,
+            green_orders=green_orders,
+        )
+
+    async def get_today_due_orders(self, *, page=1, page_size=50) -> dict:
+        """今日应交订单列表"""
+        today = date.today()
+        query = select(SaleOrder).where(SaleOrder.promised_date == today)
+        count_query = select(func.count(SaleOrder.id)).where(SaleOrder.promised_date == today)
+
+        total = (await self.db.execute(count_query)).scalar() or 0
+        # 红灯排最前，黄灯次之
+        risk_order = case(
+            (SaleOrder.risk_level == "red", 0),
+            (SaleOrder.risk_level == "yellow", 1),
+            else_=2,
+        )
+        query = query.order_by(risk_order, SaleOrder.updated_at.desc()).offset((page - 1) * page_size).limit(page_size)
+
+        result = await self.db.execute(query)
+        orders = result.scalars().all()
+
+        items = []
+        for order in orders:
+            items.append(TodayDueOrder(
+                order_no=order.order_no,
+                line_no=order.line_no,
+                customer=order.customer,
+                product_name=order.product_name,
+                order_qty=order.order_qty,
+                promised_date=order.promised_date,
+                risk_level=order.risk_level,
+                owner=order.owner,
+            ))
+
+        from app.schemas.common import PageResult
+        return PageResult(total=total, page=page, page_size=page_size, items=items)
+
+    # ===== 14天滚动风险 =====
+
+    async def get_rolling_risk(self) -> RollingRiskData:
+        today = date.today()
+        days = []
+        total_due = 0
+        total_red = 0
+        total_yellow = 0
+        total_blue = 0
+
+        for i in range(14):
+            d = today + timedelta(days=i)
+            due_q = await self.db.execute(
+                select(func.count(SaleOrder.id)).where(SaleOrder.promised_date == d)
+            )
+            due_count = due_q.scalar() or 0
+
+            red_q = await self.db.execute(
+                select(func.count(SaleOrder.id)).where(
+                    SaleOrder.promised_date == d, SaleOrder.risk_level == "red"
+                )
+            )
+            red_count = red_q.scalar() or 0
+
+            yellow_q = await self.db.execute(
+                select(func.count(SaleOrder.id)).where(
+                    SaleOrder.promised_date == d, SaleOrder.risk_level == "yellow"
+                )
+            )
+            yellow_count = yellow_q.scalar() or 0
+
+            blue_q = await self.db.execute(
+                select(func.count(SaleOrder.id)).where(
+                    SaleOrder.promised_date == d, SaleOrder.risk_level == "blue"
+                )
+            )
+            blue_count = blue_q.scalar() or 0
+
+            # 取该日前5个风险订单
+            risk_orders_q = await self.db.execute(
+                select(SaleOrder).where(SaleOrder.promised_date == d)
+                .order_by(SaleOrder.risk_level).limit(5)
+            )
+            risk_orders_result = risk_orders_q.scalars().all()
+
+            risk_orders = []
+            for order in risk_orders_result:
+                risk_orders.append(TodayDueOrder(
+                    order_no=order.order_no,
+                    line_no=order.line_no,
+                    customer=order.customer,
+                    product_name=order.product_name,
+                    order_qty=order.order_qty,
+                    promised_date=order.promised_date,
+                    risk_level=order.risk_level,
+                    owner=order.owner,
+                    risk_score=order.risk_score,
+                    risk_factors=order.risk_factors,
+                    risk_assessed_at=order.risk_assessed_at,
+                ))
+
+            days.append(RollingRiskDay(
+                date=d,
+                due_count=due_count,
+                red_count=red_count,
+                yellow_count=yellow_count,
+                blue_count=blue_count,
+                orders=risk_orders,
+            ))
+            total_due += due_count
+            total_red += red_count
+            total_yellow += yellow_count
+            total_blue += blue_count
+
+        return RollingRiskData(
+            days=days,
+            total_due=total_due,
+            total_red=total_red,
+            total_yellow=total_yellow,
+            total_blue=total_blue,
+        )
+
+    # ===== 订单风险分布 =====
+
+    async def get_order_risk_distribution(self) -> OrderRiskDistributionData:
+        # 按客户
+        by_customer_q = await self.db.execute(
+            select(
+                SaleOrder.customer,
+                func.count(SaleOrder.id),
+                func.sum(case((SaleOrder.risk_level == "red", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "yellow", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "blue", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "green", 1), else_=0)),
+            ).group_by(SaleOrder.customer).order_by(func.count(SaleOrder.id).desc()).limit(10)
+        )
+        by_customer = [
+            RiskDimensionItem(
+                name=row[0] or "未知",
+                total_count=row[1],
+                red_count=row[2] or 0,
+                yellow_count=row[3] or 0,
+                blue_count=row[4] or 0,
+                green_count=row[5] or 0,
+            )
+            for row in by_customer_q.all()
+        ]
+
+        # 按产品
+        by_product_q = await self.db.execute(
+            select(
+                SaleOrder.product_name,
+                func.count(SaleOrder.id),
+                func.sum(case((SaleOrder.risk_level == "red", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "yellow", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "blue", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "green", 1), else_=0)),
+            ).group_by(SaleOrder.product_name).order_by(func.count(SaleOrder.id).desc()).limit(10)
+        )
+        by_product = [
+            RiskDimensionItem(
+                name=row[0] or "未知",
+                total_count=row[1],
+                red_count=row[2] or 0,
+                yellow_count=row[3] or 0,
+                blue_count=row[4] or 0,
+                green_count=row[5] or 0,
+            )
+            for row in by_product_q.all()
+        ]
+
+        # 按责任人
+        by_owner_q = await self.db.execute(
+            select(
+                SaleOrder.owner,
+                func.count(SaleOrder.id),
+                func.sum(case((SaleOrder.risk_level == "red", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "yellow", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "blue", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "green", 1), else_=0)),
+            ).group_by(SaleOrder.owner).order_by(func.count(SaleOrder.id).desc()).limit(10)
+        )
+        by_owner = [
+            RiskDimensionItem(
+                name=row[0] or "未分配",
+                total_count=row[1],
+                red_count=row[2] or 0,
+                yellow_count=row[3] or 0,
+                blue_count=row[4] or 0,
+                green_count=row[5] or 0,
+            )
+            for row in by_owner_q.all()
+        ]
+
+        # 按部门
+        by_dept_q = await self.db.execute(
+            select(
+                SaleOrder.department,
+                func.count(SaleOrder.id),
+                func.sum(case((SaleOrder.risk_level == "red", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "yellow", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "blue", 1), else_=0)),
+                func.sum(case((SaleOrder.risk_level == "green", 1), else_=0)),
+            ).group_by(SaleOrder.department).order_by(func.count(SaleOrder.id).desc()).limit(10)
+        )
+        by_department = [
+            RiskDimensionItem(
+                name=row[0] or "未分配",
+                total_count=row[1],
+                red_count=row[2] or 0,
+                yellow_count=row[3] or 0,
+                blue_count=row[4] or 0,
+                green_count=row[5] or 0,
+            )
+            for row in by_dept_q.all()
+        ]
+
+        # 按风险等级
+        by_risk_q = await self.db.execute(
+            select(
+                SaleOrder.risk_level,
+                func.count(SaleOrder.id),
+            ).group_by(SaleOrder.risk_level)
+        )
+        by_risk_level = [
+            RiskDimensionItem(
+                name=row[0] or "未评估",
+                total_count=row[1],
+                red_count=row[1] if row[0] == "red" else 0,
+                yellow_count=row[1] if row[0] == "yellow" else 0,
+                blue_count=row[1] if row[0] == "blue" else 0,
+                green_count=row[1] if row[0] == "green" else 0,
+            )
+            for row in by_risk_q.all()
+        ]
+
+        # 按风险因子分布（基于 risk_factors JSONB）
+        by_factor = []
+        factor_rows_q = await self.db.execute(
+            select(SaleOrder.risk_factors, SaleOrder.risk_level)
+            .where(SaleOrder.risk_factors != None)
+        )
+        factor_data = factor_rows_q.all()
+
+        factor_stats: dict[str, dict] = {}
+        for factors_json, risk_level in factor_data:
+            if not factors_json or not isinstance(factors_json, dict):
+                continue
+            for fkey, fval in factors_json.items():
+                if fkey not in FACTOR_LABELS:
+                    continue
+                if fkey not in factor_stats:
+                    factor_stats[fkey] = {"red": 0, "yellow": 0, "blue": 0, "green": 0, "total": 0, "score_sum": 0}
+                factor_stats[fkey]["total"] += 1
+                factor_stats[fkey]["score_sum"] += float(fval or 0)
+                if risk_level == "red":
+                    factor_stats[fkey]["red"] += 1
+                elif risk_level == "yellow":
+                    factor_stats[fkey]["yellow"] += 1
+                elif risk_level == "blue":
+                    factor_stats[fkey]["blue"] += 1
+                else:
+                    factor_stats[fkey]["green"] += 1
+
+        for fkey in FACTOR_LABELS:
+            st = factor_stats.get(fkey, {"red": 0, "yellow": 0, "blue": 0, "green": 0, "total": 0, "score_sum": 0})
+            avg = round(st["score_sum"] / st["total"], 1) if st["total"] > 0 else 0.0
+            by_factor.append(RiskFactorDistributionItem(
+                factor=fkey,
+                factor_label=FACTOR_LABELS[fkey],
+                red_count=st["red"],
+                yellow_count=st["yellow"],
+                blue_count=st["blue"],
+                green_count=st["green"],
+                total_count=st["total"],
+                avg_score=avg,
+            ))
+
+        return OrderRiskDistributionData(
+            by_customer=by_customer,
+            by_product=by_product,
+            by_owner=by_owner,
+            by_department=by_department,
+            by_risk_level=by_risk_level,
+            by_factor=by_factor,
+        )
+
+    # ===== 闭环达成看板 =====
+
+    async def get_closure_achievement(self) -> ClosureAchievement:
+        today = date.today()
+        seven_days_ago = today - timedelta(days=7)
+        thirty_days_ago = today - timedelta(days=30)
+
+        # 新增异常（近7天）
+        new_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(RiskIssue.created_at >= seven_days_ago)
+        )
+        new_issues = new_q.scalar() or 0
+
+        # 已关闭异常（近7天）
+        closed_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(
+                RiskIssue.closed_at != None,
+                RiskIssue.closed_at >= seven_days_ago,
+            )
+        )
+        closed_issues = closed_q.scalar() or 0
+
+        # 逾期异常（commit_date < today 且未关闭）
+        overdue_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(
+                RiskIssue.commit_date < today,
+                RiskIssue.status.notin_(["closed", "resolved"]),
+            )
+        )
+        overdue_issues = overdue_q.scalar() or 0
+
+        # 升级异常
+        escalated_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(
+                RiskIssue.risk_level == "red",
+                RiskIssue.status.notin_(["closed", "resolved"]),
+            )
+        )
+        escalated_issues = escalated_q.scalar() or 0
+
+        # 重复异常（同一 order_no 出现多次未关闭）
+        repeated_q = await self.db.execute(
+            select(func.count(func.distinct(RiskIssue.order_no))).where(
+                RiskIssue.order_no != None,
+                RiskIssue.status.notin_(["closed", "resolved"]),
+            ).group_by(RiskIssue.order_no).having(func.count(RiskIssue.id) > 1)
+        )
+        repeated_issues = len(repeated_q.all())
+
+        # 闭环率
+        total_open_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(RiskIssue.created_at >= thirty_days_ago)
+        )
+        total_open = total_open_q.scalar() or 0
+        total_closed_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(
+                RiskIssue.closed_at != None,
+                RiskIssue.closed_at >= thirty_days_ago,
+            )
+        )
+        total_closed = total_closed_q.scalar() or 0
+        closure_rate = round(total_closed / total_open, 4) if total_open > 0 else 0.0
+
+        # 按时关闭率
+        on_time_closed_q = await self.db.execute(
+            select(func.count(RiskIssue.id)).where(
+                RiskIssue.closed_at != None,
+                RiskIssue.closed_at <= func.cast(RiskIssue.commit_date, DateTime),
+                RiskIssue.closed_at >= thirty_days_ago,
+            )
+        )
+        on_time_closed = on_time_closed_q.scalar() or 0
+        on_time_rate = round(on_time_closed / total_closed, 4) if total_closed > 0 else 0.0
+
+        # 按类型分布
+        by_type_q = await self.db.execute(
+            select(
+                RiskIssue.issue_type,
+                func.count(RiskIssue.id),
+                func.sum(case((RiskIssue.risk_level == "red", 1), else_=0)),
+                func.sum(case((RiskIssue.risk_level == "yellow", 1), else_=0)),
+                func.sum(case((RiskIssue.risk_level == "green", 1), else_=0)),
+            ).group_by(RiskIssue.issue_type).order_by(func.count(RiskIssue.id).desc()).limit(10)
+        )
+        by_type = [
+            RiskDimensionItem(
+                name=row[0] or "未知",
+                total_count=row[1],
+                red_count=row[2] or 0,
+                yellow_count=row[3] or 0,
+                green_count=row[4] or 0,
+            )
+            for row in by_type_q.all()
+        ]
+
+        # 按责任人分布
+        by_owner_q = await self.db.execute(
+            select(
+                RiskIssue.owner,
+                func.count(RiskIssue.id),
+                func.sum(case((RiskIssue.risk_level == "red", 1), else_=0)),
+                func.sum(case((RiskIssue.risk_level == "yellow", 1), else_=0)),
+                func.sum(case((RiskIssue.risk_level == "green", 1), else_=0)),
+            ).group_by(RiskIssue.owner).order_by(func.count(RiskIssue.id).desc()).limit(10)
+        )
+        by_owner = [
+            RiskDimensionItem(
+                name=row[0] or "未分配",
+                total_count=row[1],
+                red_count=row[2] or 0,
+                yellow_count=row[3] or 0,
+                green_count=row[4] or 0,
+            )
+            for row in by_owner_q.all()
+        ]
+
+        # 近7天趋势
+        trend = []
+        for i in range(7):
+            d = today - timedelta(days=6 - i)
+            day_new_q = await self.db.execute(
+                select(func.count(RiskIssue.id)).where(
+                    func.date(RiskIssue.created_at) == d
+                )
+            )
+            day_closed_q = await self.db.execute(
+                select(func.count(RiskIssue.id)).where(
+                    RiskIssue.closed_at != None,
+                    func.date(RiskIssue.closed_at) == d,
+                )
+            )
+            trend.append({
+                "date": d.isoformat(),
+                "new": day_new_q.scalar() or 0,
+                "closed": day_closed_q.scalar() or 0,
+            })
+
+        return ClosureAchievement(
+            new_issues=new_issues,
+            closed_issues=closed_issues,
+            overdue_issues=overdue_issues,
+            escalated_issues=escalated_issues,
+            repeated_issues=repeated_issues,
+            closure_rate=closure_rate,
+            on_time_rate=on_time_rate,
+            by_type=by_type,
+            by_owner=by_owner,
+            trend=trend,
+        )
+
+    # ===== 订单风险列表（原有） =====
+
+    async def get_order_risk_list(self, *, page=1, page_size=20, risk_level=None, owner=None, keyword=None, status=None, data_source=None) -> dict:
+        query = select(SaleOrder)
+        count_query = select(func.count(SaleOrder.id))
+
+        if risk_level:
+            query = query.where(SaleOrder.risk_level == risk_level)
+            count_query = count_query.where(SaleOrder.risk_level == risk_level)
+        if owner:
+            query = query.where(SaleOrder.owner == owner)
+            count_query = count_query.where(SaleOrder.owner == owner)
+        if status:
+            query = query.where(SaleOrder.status == status)
+            count_query = count_query.where(SaleOrder.status == status)
+        if data_source:
+            query = query.where(SaleOrder.data_source == data_source)
+            count_query = count_query.where(SaleOrder.data_source == data_source)
+        if keyword:
+            like_expr = f"%{keyword}%"
+            query = query.where(
+                (SaleOrder.order_no.ilike(like_expr)) | (SaleOrder.customer.ilike(like_expr))
+            )
+            count_query = count_query.where(
+                (SaleOrder.order_no.ilike(like_expr)) | (SaleOrder.customer.ilike(like_expr))
+            )
+
+        total = (await self.db.execute(count_query)).scalar() or 0
+        query = query.order_by(SaleOrder.updated_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        result = await self.db.execute(query)
+        orders = result.scalars().all()
+
+        items = []
+        for order in orders:
+            shortage_result = await self.db.execute(
+                select(func.count(MaterialDemand.id)).where(
+                    MaterialDemand.order_no == order.order_no,
+                    MaterialDemand.shortage_flag == True,
+                )
+            )
+            shortage_count = shortage_result.scalar() or 0
+            items.append(OrderRiskRow(
+                order_no=order.order_no,
+                line_no=order.line_no,
+                customer=order.customer,
+                product_code=order.product_code,
+                product_name=order.product_name,
+                order_qty=order.order_qty,
+                promised_date=order.promised_date,
+                planned_start_date=order.planned_start_date,
+                owner=order.owner,
+                status=order.status,
+                risk_level=order.risk_level,
+                shortage_count=shortage_count,
+            ))
+
+        from app.schemas.common import PageResult
+        return PageResult(total=total, page=page, page_size=page_size, items=items)
+
+    # ===== 风险分布（原有） =====
+
+    async def get_risk_distribution(self) -> list[RiskDistribution]:
+        result = await self.db.execute(
+            select(RiskIssue.risk_level, RiskIssue.issue_type, func.count(RiskIssue.id))
+            .group_by(RiskIssue.risk_level, RiskIssue.issue_type)
+        )
+        return [
+            RiskDistribution(risk_level=row[0], issue_type=row[1], count=row[2])
+            for row in result.all()
+        ]

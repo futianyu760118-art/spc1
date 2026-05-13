@@ -1,0 +1,1150 @@
+#!/usr/bin/env python3
+"""
+SPC v2 Database Initialization Script
+Initialize database tables and seed data for supply chain collaboration platform
+"""
+
+import asyncio
+import json
+import sys
+from datetime import datetime, date
+from pathlib import Path
+
+# Add project root to Python path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
+
+from sqlalchemy import text, select
+from sqlalchemy.orm import Session
+from app.core.database import engine, Base, AsyncSessionLocal
+from app.core.config import get_settings
+from app.core.security import get_password_hash
+from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.order.eta_update import ETAUpdate
+from app.models.order.run_order import RunOrder
+from app.models.material.material_demand import MaterialDemand
+from app.models.material.purchase_order import PurchaseOrder
+from app.models.material.binding import OrderMaterialPoBinding
+from app.models.material.receipt_batch import ReceiptBatch
+from app.models.material.material_issue import MaterialIssue
+from app.models.material.long_lead_material import LongLeadMaterial
+from app.models.material.purchase_invoice import PurchaseInvoice
+from app.models.production.process_progress import ProcessProgress
+from app.models.production.process_exception import ProcessException
+from app.models.exception.risk_issue import RiskIssue
+from app.models.exception.issue_log import IssueLog
+from app.models.exception.change_log import ChangeLog
+from app.models.exception.quality_issue import QualityIssue
+from app.models.rules.risk_rule import RiskRule
+from app.models.rules.inspection_rule import InspectionRule
+from app.models.rules.node_standard import NodeStandard
+from app.models.rules.responsibility_map import ResponsibilityMap
+from app.models.rules.status_dictionary import StatusDictionary
+from app.models.masterdata.user import SysUser, SysRole
+from app.models.masterdata.audit_log import AuditLog
+from app.models.masterdata.field_mapping import FieldMapping
+from app.models.masterdata.sync_sql_config import SyncSqlConfig
+from app.models.masterdata.sync_log import SyncLog
+from app.models.masterdata.file_asset import FileAsset
+from app.models.masterdata.feedback import Feedback
+
+settings = get_settings()
+
+
+class DatabaseInitializer:
+    def __init__(self):
+        self.engine = engine
+        self.settings = settings
+
+    def create_database(self):
+        """Create database if not exists"""
+        print("Creating database...")
+        try:
+            # Extract database name from DATABASE_URL_SYNC
+            from urllib.parse import urlparse
+            db_url = urlparse(self.settings.DATABASE_URL_SYNC)
+            db_name = db_url.path.lstrip('/')  # Remove leading slash
+
+            # Connect to postgres database to create the target database
+            from sqlalchemy import create_engine
+
+            postgres_url = self.settings.DATABASE_URL_SYNC.replace(f"/{db_name}", "/postgres")
+            sync_engine = create_engine(postgres_url)
+
+            with sync_engine.connect() as conn:
+                conn.execute(text("COMMIT"))  # End any transaction
+                result = conn.execute(text(f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"))
+                if not result.fetchone():
+                    conn.execute(text(f"CREATE DATABASE {db_name}"))
+                    print(f"Database '{db_name}' created successfully")
+                else:
+                    print(f"Database '{db_name}' already exists")
+                conn.close()
+        except Exception as e:
+            print(f"Error creating database: {e}")
+            raise
+
+    async def create_tables(self):
+        """Create all tables"""
+        print("Creating tables...")
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        print("Tables created successfully")
+
+    async def migrate_columns(self):
+        """为已有表补充新增字段（ALTER TABLE ADD COLUMN IF NOT EXISTS）"""
+        print("Checking for missing columns...")
+        new_columns = {
+            "sale_order": {
+                "line_no": "VARCHAR(32) NOT NULL DEFAULT ''",
+                "customer": "VARCHAR(128)",
+                "customer_code": "VARCHAR(64)",
+                "product_code": "VARCHAR(64)",
+                "product_name": "VARCHAR(256)",
+                "order_qty": "NUMERIC(15,2)",
+                "completed_qty": "NUMERIC(15,2)",
+                "promised_date": "DATE",
+                "planned_start_date": "DATE",
+                "batch_no": "VARCHAR(128)",
+                "department": "VARCHAR(64)",
+                "audit_date": "DATE",
+                "owner": "VARCHAR(64)",
+                "status": "VARCHAR(32) NOT NULL DEFAULT 'open'",
+                "risk_level": "VARCHAR(16)",
+                "extra_data": "JSONB",
+                "data_source": "VARCHAR(32)",
+                "delivery_completed_date": "DATE",
+                "customer_grade": "VARCHAR(16)",
+                "shipping_plan": "DATE",
+                "customer_inspection_date": "DATE",
+                "inspection_result": "VARCHAR(64)",
+                "packaging_status": "VARCHAR(128)",
+                "bom_return_date": "DATE",
+                "material_ready_date": "DATE",
+                "shipping_status_desc": "VARCHAR(512)",
+                "procurement_status": "VARCHAR(256)",
+                "material_dates": "JSONB",
+                "front_process_date": "DATE",
+                "first_article_date": "DATE",
+                "assembly_start_date": "DATE",
+                "assembly_complete_date": "DATE",
+                "remark": "TEXT",
+                "order_date": "DATE",
+                "risk_score": "NUMERIC(5,2)",
+                "risk_factors": "JSONB",
+                "risk_assessed_at": "TIMESTAMP",
+            },
+            "sale_order_line": {
+                "sale_order_id": "INTEGER REFERENCES sale_order(id)",
+                "erp_line_id": "VARCHAR(64)",
+                "order_no": "VARCHAR(64) NOT NULL DEFAULT ''",
+                "line_no": "VARCHAR(32) NOT NULL DEFAULT ''",
+                "product_code": "VARCHAR(64)",
+                "product_name": "VARCHAR(256)",
+                "order_qty": "NUMERIC(15,2)",
+                "promised_date": "DATE",
+                "planned_start_date": "DATE",
+                "batch_no": "VARCHAR(128)",
+                "status": "VARCHAR(32) NOT NULL DEFAULT 'open'",
+            },
+            "purchase_order": {
+                "detail_id": "INTEGER NOT NULL DEFAULT 1",
+                "order_no": "VARCHAR(64)",
+                "spec_model": "VARCHAR(256)",
+                "unit": "VARCHAR(32)",
+                "received_qty": "NUMERIC(15,2)",
+                "arrival_hour_note": "VARCHAR(256)",
+                "inspection_date": "DATE",
+            },
+            "process_progress": {
+                "product_code": "VARCHAR(64)",
+                "line_no": "VARCHAR(32)",
+            },
+            "material_demand": {
+                "data_source": "VARCHAR(32)",
+            },
+            "scm_customer": {
+                "data_source": "VARCHAR(32)",
+            },
+            "scm_supplier": {
+                "data_source": "VARCHAR(32)",
+            },
+            "scm_material": {
+                "data_source": "VARCHAR(32)",
+                "material_id": "VARCHAR(50) UNIQUE",
+                "parent_id": "VARCHAR(50)",
+                "is_deleted": "INTEGER DEFAULT 0",
+            },
+            "scm_sku": {
+                "data_source": "VARCHAR(32)",
+            },
+            "scm_product": {
+                "data_source": "VARCHAR(32)",
+            },
+            "scm_warehouse": {
+                "data_source": "VARCHAR(32)",
+            },
+            "scm_process": {
+                "data_source": "VARCHAR(32)",
+            },
+            "scm_organization": {
+                "data_source": "VARCHAR(32)",
+            },
+            "scm_employee": {
+                "data_source": "VARCHAR(32)",
+            },
+            "quality_issue": {
+                "submit_dept": "VARCHAR(64)",
+                "submit_date": "DATE",
+                "submitter": "VARCHAR(64)",
+                "product_code": "VARCHAR(64)",
+                "product_name": "VARCHAR(128)",
+                "process": "VARCHAR(64)",
+                "defect_type": "VARCHAR(64)",
+                "root_cause": "TEXT",
+                "description": "TEXT",
+                "batch_qty": "INTEGER",
+                "sample_qty": "INTEGER",
+                "defect_qty": "INTEGER",
+            },
+        }
+        # 删除已废弃的列
+        drop_columns = {
+            "long_lead_material": ["material_name", "lead_time_days"],
+            "quality_issue": [
+                "year", "week_no", "department", "category", "issue_date",
+                "reporter", "content", "node", "audit_person", "audit_score",
+                "is_project", "material_code", "process_type", "resolved_at",
+            ],
+        }
+        added = 0
+        async with self.engine.begin() as conn:
+            for table, columns in new_columns.items():
+                for col, col_type in columns.items():
+                    try:
+                        await conn.execute(text(
+                            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {col_type}"
+                        ))
+                        added += 1
+                    except Exception as e:
+                        print(f"  Column {table}.{col} skipped: {e}")
+            # 删除废弃列
+            for table, cols in drop_columns.items():
+                for col in cols:
+                    try:
+                        await conn.execute(text(
+                            f"ALTER TABLE {table} DROP COLUMN IF EXISTS {col}"
+                        ))
+                        added += 1
+                    except Exception as e:
+                        print(f"  Drop {table}.{col} skipped: {e}")
+        print(f"Column migration completed ({added} statements executed)")
+
+        # 创建唯一约束
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sale_order_line_order_erp ON sale_order_line (order_no, erp_line_id)"
+                ))
+                print("  Unique constraint uq_sale_order_line_order_erp ensured")
+            except Exception as e:
+                print(f"  Unique constraint skipped: {e}")
+
+    async def backfill_sale_order_id(self):
+        """Backfill sale_order_id on sale_order_line by matching order_no"""
+        print("Backfilling sale_order_id on sale_order_line...")
+        async with self.engine.begin() as conn:
+            result = await conn.execute(text(
+                "SELECT COUNT(*) FROM sale_order_line WHERE sale_order_id IS NULL"
+            ))
+            null_count = result.scalar() or 0
+            if null_count > 0:
+                await conn.execute(text("""
+                    UPDATE sale_order_line sol
+                    SET sale_order_id = so.id
+                    FROM sale_order so
+                    WHERE sol.sale_order_id IS NULL
+                      AND sol.order_no = so.order_no
+                """))
+                print(f"  Backfilled {null_count} rows")
+            else:
+                print("  No rows need backfilling")
+
+    async def seed_roles(self):
+        """Seed / update system roles"""
+        print("Seeding system roles...")
+        async with AsyncSessionLocal() as session:
+            try:
+                roles_data = [
+                    {
+                        "role_code": "admin",
+                        "role_name": "系统管理员",
+                        "permissions": {
+                            "dashboard": ["create", "read", "update", "delete"],
+                            "orders.list": ["create", "read", "update", "delete", "import"],
+                            "orders.run_orders": ["create", "read", "update", "delete", "import"],
+                            "orders.risk_pool": ["create", "read", "update", "delete", "import"],
+                            "materials.purchase_plan": ["create", "read", "update", "delete", "import"],
+                            "materials.issues": ["create", "read", "update", "delete", "import"],
+                            "materials.long_lead": ["create", "read", "update", "delete", "import"],
+                            "materials.kit_analysis": ["create", "read", "update", "delete", "import"],
+                            "materials.supplier_risk": ["create", "read", "update", "delete", "import"],
+                            "materials.supplier_payment": ["create", "read", "update", "delete", "import"],
+                            "production.overview": ["create", "read", "update", "delete", "import"],
+                            "production.front_process": ["create", "read", "update", "delete", "import"],
+                            "production.smt": ["create", "read", "update", "delete", "import"],
+                            "production.lean": ["create", "read", "update", "delete", "import"],
+                            "production.assembly": ["create", "read", "update", "delete", "import"],
+                            "production.packaging": ["create", "read", "update", "delete", "import"],
+                            "production.exceptions": ["create", "read", "update", "delete", "import"],
+                            "exceptions.pool": ["create", "read", "update", "delete", "import"],
+                            "exceptions.issue_log": ["create", "read", "update", "delete", "import"],
+                            "exceptions.change_log": ["create", "read", "update", "delete", "import"],
+                            "exceptions.quality": ["create", "read", "update", "delete", "import"],
+                            "exceptions.closure": ["create", "read", "update", "delete", "import"],
+                            "meetings": ["create", "read", "update", "delete"],
+                            "npi": ["create", "read", "update", "delete"],
+                            "rules.risk_rules": ["create", "read", "update", "delete"],
+                            "rules.inspection": ["create", "read", "update", "delete"],
+                            "rules.node_standards": ["create", "read", "update", "delete"],
+                            "rules.responsibility": ["create", "read", "update", "delete"],
+                            "rules.status_dict": ["create", "read", "update", "delete"],
+                            "masterdata.import": ["create", "read", "update", "delete", "import"],
+                            "masterdata.data": ["create", "read", "update", "delete", "import"],
+                            "masterdata.feedback": ["create", "read", "update", "delete"],
+                            "masterdata.files": ["read", "delete"],
+                            "users": ["create", "read", "update", "delete"],
+                            "audit": ["read"],
+                            "settings": ["create", "read", "update", "delete"]
+                        }
+                    },
+                    {
+                        "role_code": "planner",
+                        "role_name": "生产计划员",
+                        "permissions": {
+                            "dashboard": ["read"],
+                            "orders.list": ["read", "update"],
+                            "orders.run_orders": ["read", "update"],
+                            "orders.risk_pool": ["read", "update"],
+                            "materials.purchase_plan": ["read"],
+                            "materials.issues": ["read"],
+                            "materials.long_lead": ["read"],
+                            "materials.kit_analysis": ["read"],
+                            "materials.supplier_risk": ["read"],
+                            "materials.supplier_payment": ["read"],
+                            "production.overview": ["read", "update", "import"],
+                            "production.front_process": ["read", "update", "import"],
+                            "production.smt": ["read", "update", "import"],
+                            "production.lean": ["read", "update", "import"],
+                            "production.assembly": ["read", "update", "import"],
+                            "production.packaging": ["read", "update", "import"],
+                            "production.exceptions": ["read", "update", "import"],
+                            "exceptions.pool": ["read"],
+                            "exceptions.issue_log": ["read"],
+                            "exceptions.change_log": ["read"],
+                            "exceptions.quality": ["read"],
+                            "exceptions.closure": ["read"],
+                            "meetings": ["read"],
+                            "npi": ["read"],
+                            "masterdata.import": ["read"],
+                            "masterdata.data": ["read"],
+                            "masterdata.feedback": ["create", "read"],
+                            "audit": ["read"]
+                        }
+                    },
+                    {
+                        "role_code": "purchaser",
+                        "role_name": "采购员",
+                        "permissions": {
+                            "dashboard": ["read"],
+                            "orders.list": ["read"],
+                            "orders.run_orders": ["read"],
+                            "orders.risk_pool": ["read"],
+                            "materials.purchase_plan": ["create", "read", "update", "import"],
+                            "materials.issues": ["create", "read", "update", "import"],
+                            "materials.long_lead": ["create", "read", "update", "import"],
+                            "materials.kit_analysis": ["create", "read", "update", "import"],
+                            "materials.supplier_risk": ["create", "read", "update", "import"],
+                            "materials.supplier_payment": ["create", "read", "update", "import"],
+                            "exceptions.pool": ["read"],
+                            "exceptions.issue_log": ["read"],
+                            "exceptions.change_log": ["read"],
+                            "exceptions.quality": ["read"],
+                            "exceptions.closure": ["read"],
+                            "meetings": ["read"],
+                            "npi": ["read"],
+                            "masterdata.import": ["read"],
+                            "masterdata.data": ["read"],
+                            "masterdata.feedback": ["create", "read"],
+                            "audit": ["read"]
+                        }
+                    },
+                    {
+                        "role_code": "manager",
+                        "role_name": "供应链经理",
+                        "permissions": {
+                            "dashboard": ["read"],
+                            "orders.list": ["read", "update"],
+                            "orders.run_orders": ["read", "update"],
+                            "orders.risk_pool": ["read", "update"],
+                            "materials.purchase_plan": ["read", "update"],
+                            "materials.issues": ["read", "update"],
+                            "materials.long_lead": ["read", "update"],
+                            "materials.kit_analysis": ["read", "update"],
+                            "materials.supplier_risk": ["read", "update"],
+                            "materials.supplier_payment": ["read", "update"],
+                            "production.overview": ["read", "update"],
+                            "production.front_process": ["read", "update"],
+                            "production.smt": ["read", "update"],
+                            "production.lean": ["read", "update"],
+                            "production.assembly": ["read", "update"],
+                            "production.packaging": ["read", "update"],
+                            "production.exceptions": ["read", "update"],
+                            "exceptions.pool": ["read", "update"],
+                            "exceptions.issue_log": ["read", "update"],
+                            "exceptions.change_log": ["read", "update"],
+                            "exceptions.quality": ["read", "update"],
+                            "exceptions.closure": ["read", "update"],
+                            "meetings": ["create", "read", "update", "delete"],
+                            "npi": ["read"],
+                            "masterdata.import": ["read"],
+                            "masterdata.data": ["read"],
+                            "masterdata.feedback": ["create", "read", "update"],
+                            "audit": ["read"]
+                        }
+                    },
+                    {
+                        "role_code": "purchase_manager",
+                        "role_name": "采购经理",
+                        "permissions": {
+                            "dashboard": ["read"],
+                            "orders.list": ["read"],
+                            "orders.run_orders": ["read"],
+                            "orders.risk_pool": ["read"],
+                            "materials.purchase_plan": ["create", "read", "update", "delete", "import"],
+                            "materials.issues": ["create", "read", "update", "delete", "import"],
+                            "materials.long_lead": ["create", "read", "update", "delete", "import"],
+                            "materials.kit_analysis": ["create", "read", "update", "delete", "import"],
+                            "materials.supplier_risk": ["create", "read", "update", "delete", "import"],
+                            "materials.supplier_payment": ["create", "read", "update", "delete", "import"],
+                            "exceptions.pool": ["read", "update"],
+                            "exceptions.issue_log": ["read", "update"],
+                            "exceptions.change_log": ["read", "update"],
+                            "exceptions.quality": ["read", "update"],
+                            "exceptions.closure": ["read", "update"],
+                            "meetings": ["read"],
+                            "npi": ["read"],
+                            "masterdata.import": ["read"],
+                            "masterdata.data": ["read"],
+                            "masterdata.feedback": ["create", "read", "update"],
+                            "audit": ["read"]
+                        }
+                    }
+                ]
+
+                for role_data in roles_data:
+                    existing = await session.execute(
+                        select(SysRole).where(SysRole.role_code == role_data["role_code"])
+                    )
+                    role = existing.scalar_one_or_none()
+                    if role:
+                        role.role_name = role_data["role_name"]
+                        role.permissions = role_data["permissions"]
+                    else:
+                        session.add(SysRole(**role_data))
+
+                await session.commit()
+                print("System roles seeded/updated successfully")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding roles: {e}")
+                raise
+
+    async def seed_users(self):
+        """Seed / update system users"""
+        print("Seeding system users...")
+        async with AsyncSessionLocal() as session:
+            try:
+                # Get role IDs
+                admin_role = await session.execute(text("SELECT id FROM sys_role WHERE role_code = 'admin'"))
+                planner_role = await session.execute(text("SELECT id FROM sys_role WHERE role_code = 'planner'"))
+                purchaser_role = await session.execute(text("SELECT id FROM sys_role WHERE role_code = 'purchaser'"))
+                manager_role = await session.execute(text("SELECT id FROM sys_role WHERE role_code = 'manager'"))
+                purchase_manager_role = await session.execute(text("SELECT id FROM sys_role WHERE role_code = 'purchase_manager'"))
+
+                default_password = get_password_hash("admin123")
+                users_data = [
+                    {
+                        "username": "admin",
+                        "display_name": "系统管理员",
+                        "hashed_password": default_password,
+                        "role_id": admin_role.scalar()
+                    },
+                    {
+                        "username": "planner01",
+                        "display_name": "计划员01",
+                        "hashed_password": default_password,
+                        "role_id": planner_role.scalar()
+                    },
+                    {
+                        "username": "purchaser01",
+                        "display_name": "采购员01",
+                        "hashed_password": default_password,
+                        "role_id": purchaser_role.scalar()
+                    },
+                    {
+                        "username": "manager01",
+                        "display_name": "供应链经理",
+                        "hashed_password": default_password,
+                        "role_id": manager_role.scalar()
+                    },
+                    {
+                        "username": "purchase_mgr01",
+                        "display_name": "采购经理",
+                        "hashed_password": default_password,
+                        "role_id": purchase_manager_role.scalar()
+                    }
+                ]
+
+                for user_data in users_data:
+                    existing = await session.execute(
+                        select(SysUser).where(SysUser.username == user_data["username"])
+                    )
+                    user = existing.scalar_one_or_none()
+                    if user:
+                        user.display_name = user_data["display_name"]
+                        user.role_id = user_data["role_id"]
+                    else:
+                        session.add(SysUser(**user_data))
+
+                await session.commit()
+                print("System users seeded/updated successfully")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding users: {e}")
+                raise
+
+
+    async def seed_risk_rules(self):
+        """Seed risk rules"""
+        print("Seeding risk rules...")
+        async with AsyncSessionLocal() as session:
+            try:
+                # Check if rules already exist
+                result = await session.execute(text("SELECT COUNT(*) FROM risk_rule"))
+                if result.scalar() > 0:
+                    print("Risk rules already exist, skipping...")
+                    return
+
+                rules_data = [
+                    # ── 6 评分因子规则 ──
+                    {
+                        "rule_code": "DELIVERY_DELAY_HIGH",
+                        "rule_name": "交期延期-高风险",
+                        "rule_type": "delivery_delay",
+                        "condition_json": {"delay_days_gt": 7},
+                        "risk_level": "red",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "DELIVERY_DELAY_MEDIUM",
+                        "rule_name": "交期延期-中风险",
+                        "rule_type": "delivery_delay",
+                        "condition_json": {"delay_days_gt": 3, "delay_days_lte": 7},
+                        "risk_level": "yellow",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "SHORTAGE_HIGH",
+                        "rule_name": "欠料风险-高风险",
+                        "rule_type": "shortage",
+                        "condition_json": {"shortage_qty_gt": 100},
+                        "risk_level": "red",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "SHORTAGE_MEDIUM",
+                        "rule_name": "欠料风险-中风险",
+                        "rule_type": "shortage",
+                        "condition_json": {"shortage_qty_gt": 50, "shortage_qty_lte": 100},
+                        "risk_level": "yellow",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "ETA_DELAY_HIGH",
+                        "rule_name": "ETA延期-高风险",
+                        "rule_type": "eta_delay",
+                        "condition_json": {"delay_days_gt": 14},
+                        "risk_level": "red",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "ETA_DELAY_MEDIUM",
+                        "rule_name": "ETA延期-中风险",
+                        "rule_type": "eta_delay",
+                        "condition_json": {"delay_days_gt": 7, "delay_days_lte": 14},
+                        "risk_level": "yellow",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "PROCESS_LAG_HIGH",
+                        "rule_name": "工序滞后-高风险",
+                        "rule_type": "process_lag",
+                        "condition_json": {"threshold_days": 3},
+                        "risk_level": "red",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "QUALITY_RULE",
+                        "rule_name": "品质异常-预警",
+                        "rule_type": "quality",
+                        "condition_json": {"open_count_gt": 0},
+                        "risk_level": "yellow",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "INSPECTION_NG_RULE",
+                        "rule_name": "客检NG-预警",
+                        "rule_type": "inspection_ng",
+                        "condition_json": None,
+                        "risk_level": "red",
+                        "created_by": "admin"
+                    },
+                    # ── 2 监控规则 ──
+                    {
+                        "rule_code": "HOLIDAY_RISK_MAY",
+                        "rule_name": "五一假期风险",
+                        "rule_type": "holiday_risk",
+                        "condition_json": {"holiday_months": [5, 10], "threshold_days": 7},
+                        "risk_level": "yellow",
+                        "created_by": "admin"
+                    },
+                    {
+                        "rule_code": "LONG_LEAD_90",
+                        "rule_name": "长周期物料-90天",
+                        "rule_type": "long_lead",
+                        "condition_json": {"threshold_days": 90},
+                        "risk_level": "yellow",
+                        "created_by": "admin"
+                    },
+                ]
+
+                for rule_data in rules_data:
+                    rule = RiskRule(**rule_data)
+                    session.add(rule)
+
+                await session.commit()
+                print("Risk rules seeded successfully")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding risk rules: {e}")
+                raise
+
+    async def seed_field_mapping(self):
+        """Seed field mapping configuration"""
+        print("Seeding field mapping...")
+        async with AsyncSessionLocal() as session:
+            try:
+                # Check if mappings already exist
+                result = await session.execute(text("SELECT COUNT(*) FROM field_mapping"))
+                if result.scalar() > 0:
+                    print("Field mappings already exist, skipping...")
+                    return
+
+                mappings_data = [
+                    # ERP Order mappings
+                    {
+                        "source_system": "erp",
+                        "source_field": "ORDER_ID",
+                        "target_field": "order_no",
+                        "description": "ERP Order ID to order_no",
+                        "created_by": "admin"
+                    },
+                    {
+                        "source_system": "erp",
+                        "source_field": "LINE_NUM",
+                        "target_field": "line_no",
+                        "description": "Order line number",
+                        "created_by": "admin"
+                    },
+                    {
+                        "source_system": "erp",
+                        "source_field": "CUST_NAME",
+                        "target_field": "customer",
+                        "description": "Customer name",
+                        "created_by": "admin"
+                    },
+                    {
+                        "source_system": "erp",
+                        "source_field": "PRODUCT_CODE",
+                        "target_field": "product_code",
+                        "description": "Product/SKU code",
+                        "created_by": "admin"
+                    },
+                    # SRM PO mappings
+                    {
+                        "source_system": "srm",
+                        "source_field": "PO_NUMBER",
+                        "target_field": "po_no",
+                        "description": "SRM PO number",
+                        "created_by": "admin"
+                    },
+                    {
+                        "source_system": "srm",
+                        "source_field": "MATERIAL_CODE",
+                        "target_field": "material_code",
+                        "description": "Material code",
+                        "created_by": "admin"
+                    },
+                    {
+                        "source_system": "srm",
+                        "source_field": "SUPPLIER_CODE",
+                        "target_field": "supplier_code",
+                        "description": "Supplier code",
+                        "created_by": "admin"
+                    }
+                ]
+
+                for mapping_data in mappings_data:
+                    mapping = FieldMapping(**mapping_data)
+                    session.add(mapping)
+
+                await session.commit()
+                print("Field mapping seeded successfully")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding field mapping: {e}")
+                raise
+
+    async def seed_sample_data(self):
+        """Seed comprehensive sample data for dashboard visualization"""
+        print("Seeding sample business data...")
+        async with AsyncSessionLocal() as session:
+            try:
+                result = await session.execute(text("SELECT COUNT(*) FROM sale_order"))
+                if result.scalar() > 0:
+                    print("Sample data already exists, skipping...")
+                    return
+
+                # ============================================================
+                # 订单行 — 3 条示例数据 (红/黄/绿)
+                # ============================================================
+                orders_data = [
+                    # --- 红色高风险 ---
+                    {"order_no": "SO-2026-001", "line_no": "10", "customer": "华为技术", "customer_code": "C-HW001", "product_code": "P001", "product_name": "5G基站滤波器", "order_qty": 5000, "promised_date": date(2026, 4, 15), "planned_start_date": date(2026, 4, 1), "department": "销售一部", "audit_date": date(2026, 3, 10), "batch_no": "P001-HW-001-01", "owner": "planner01", "status": "open", "risk_level": "red", "data_source": "erp"},
+                    # --- 黄色中风险 ---
+                    {"order_no": "SO-2026-006", "line_no": "10", "customer": "大疆创新", "customer_code": "C-DJI01", "product_code": "P006", "product_name": "飞控主板", "order_qty": 1200, "promised_date": date(2026, 5, 5), "planned_start_date": date(2026, 4, 20), "department": "销售一部", "audit_date": date(2026, 3, 25), "batch_no": "P006-DJI-001-01", "owner": "planner01", "status": "open", "risk_level": "yellow", "data_source": "erp"},
+                    # --- 绿色正常 ---
+                    {"order_no": "SO-2026-011", "line_no": "10", "customer": "海康威视", "customer_code": "C-HIK01", "product_code": "P012", "product_name": "网络硬盘录像机", "order_qty": 2000, "promised_date": date(2026, 5, 25), "planned_start_date": date(2026, 5, 8), "department": "销售三部", "audit_date": date(2026, 4, 8), "batch_no": "P012-HIK-002-01", "owner": "planner01", "status": "open", "risk_level": "green", "data_source": "erp"},
+                ]
+
+                for d in orders_data:
+                    header_data = {
+                        "order_no": d["order_no"],
+                        "customer": d.get("customer"),
+                        "customer_code": d.get("customer_code"),
+                        "department": d.get("department"),
+                        "audit_date": d.get("audit_date"),
+                        "owner": d.get("owner"),
+                        "status": d.get("status", "open"),
+                        "risk_level": d.get("risk_level"),
+                        "data_source": d.get("data_source"),
+                    }
+                    order_obj = SaleOrder(**header_data)
+                    session.add(order_obj)
+                    await session.flush()  # get order_obj.id
+
+                    line_data = {
+                        "sale_order_id": order_obj.id,
+                        "order_no": d["order_no"],
+                        "line_no": d["line_no"],
+                        "product_code": d.get("product_code"),
+                        "product_name": d.get("product_name"),
+                        "order_qty": d.get("order_qty"),
+                        "promised_date": d.get("promised_date"),
+                        "planned_start_date": d.get("planned_start_date"),
+                        "batch_no": d.get("batch_no"),
+                        "status": d.get("status", "open"),
+                    }
+                    session.add(SaleOrderLine(**line_data))
+
+                await session.flush()
+
+                # ============================================================
+                # 物料需求 — 仅保留 3 个订单的物料
+                # ============================================================
+                materials_data = [
+                    # SO-001 (红)
+                    {"order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-PCB-001", "material_name": "高频PCB板", "req_qty": 5000, "req_date": date(2026, 3, 25), "allocated_qty": 2000, "shortage_qty": 3000, "shortage_flag": True},
+                    {"order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-IC-001", "material_name": "射频芯片 QFN48", "req_qty": 5000, "req_date": date(2026, 3, 28), "allocated_qty": 1000, "shortage_qty": 4000, "shortage_flag": True},
+                    {"order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-CON-001", "material_name": "SMA连接器", "req_qty": 10000, "req_date": date(2026, 3, 28), "allocated_qty": 10000, "shortage_qty": 0, "shortage_flag": False},
+                    # SO-006 (黄)
+                    {"order_no": "SO-2026-006", "line_no": "10", "material_code": "MC-IC-004", "material_name": "IMU传感器 6轴", "req_qty": 1200, "req_date": date(2026, 4, 12), "allocated_qty": 800, "shortage_qty": 400, "shortage_flag": True},
+                    {"order_no": "SO-2026-006", "line_no": "10", "material_code": "MC-PCB-002", "material_name": "8层HDI板", "req_qty": 1200, "req_date": date(2026, 4, 12), "allocated_qty": 1200, "shortage_qty": 0, "shortage_flag": False},
+                    # SO-011 (绿)
+                    {"order_no": "SO-2026-011", "line_no": "10", "material_code": "MC-HDD-001", "material_name": "企业级硬盘 4TB", "req_qty": 8000, "req_date": date(2026, 5, 1), "allocated_qty": 8000, "shortage_qty": 0, "shortage_flag": False},
+                ]
+
+                for d in materials_data:
+                    session.add(MaterialDemand(**d))
+
+                await session.flush()
+
+                # ============================================================
+                # 采购订单 — 仅保留 6 个订单的物料对应的 PO
+                # ============================================================
+                po_data = [
+                    {"po_no": "PO-2026-001", "material_code": "MC-IC-001", "supplier_code": "S-QCOM", "supplier_name": "高通半导体", "material_type_name": "芯片", "material_name": "射频芯片 QFN48", "po_qty": 4000, "po_price": 12.5, "po_date": date(2026, 3, 20), "po_status": "placed", "eta": date(2026, 4, 28), "original_eta": date(2026, 4, 20), "owner": "purchaser01", "data_source": "erp"},
+                    {"po_no": "PO-2026-007", "material_code": "MC-IC-004", "supplier_code": "S-INV", "supplier_name": "InvenSense", "material_type_name": "芯片", "material_name": "IMU传感器 6轴", "po_qty": 400, "po_price": 22.0, "po_date": date(2026, 3, 18), "po_status": "accepted", "eta": date(2026, 4, 22), "original_eta": date(2026, 4, 18), "owner": "purchaser01", "data_source": "erp"},
+                    {"po_no": "PO-2026-010", "material_code": "MC-PCB-001", "supplier_code": "S-SLPCB", "supplier_name": "深南电路", "material_type_name": "PCB", "material_name": "高频PCB板", "po_qty": 3000, "po_price": 25.0, "po_date": date(2026, 3, 12), "po_status": "in_production", "eta": date(2026, 4, 18), "original_eta": date(2026, 4, 12), "owner": "purchaser01", "data_source": "erp"},
+                    {"po_no": "PO-2026-017", "material_code": "MC-CON-001", "supplier_code": "S-AMP2", "supplier_name": "安费诺连接器", "material_type_name": "连接器", "material_name": "SMA连接器", "po_qty": 10000, "po_price": 1.5, "po_date": date(2026, 3, 8), "po_status": "shipped", "eta": date(2026, 4, 9), "original_eta": date(2026, 4, 8), "owner": "purchaser01", "data_source": "erp"},
+                    {"po_no": "PO-2026-019", "material_code": "MC-PCB-002", "supplier_code": "S-SLPCB", "supplier_name": "深南电路", "material_type_name": "PCB", "material_name": "8层HDI板", "po_qty": 1200, "po_price": 45.0, "po_date": date(2026, 3, 8), "po_status": "partial_received", "eta": date(2026, 4, 8), "original_eta": date(2026, 4, 8), "actual_arrival_date": date(2026, 4, 8), "owner": "purchaser01", "data_source": "erp"},
+                    {"po_no": "PO-2026-021", "material_code": "MC-HDD-001", "supplier_code": "S-WD", "supplier_name": "西部数据", "material_type_name": "存储", "material_name": "企业级硬盘 4TB", "po_qty": 8000, "po_price": 85.0, "po_date": date(2026, 3, 1), "po_status": "received", "eta": date(2026, 4, 1), "original_eta": date(2026, 4, 1), "actual_arrival_date": date(2026, 4, 1), "owner": "purchaser01", "data_source": "erp"},
+                ]
+
+                for d in po_data:
+                    session.add(PurchaseOrder(**d))
+
+                await session.flush()
+
+                # ============================================================
+                # 绑定关系 — 仅保留 3 个订单的绑定
+                # ============================================================
+                from app.models.material.binding import OrderMaterialPoBinding
+                bindings_data = [
+                    {"order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-PCB-001", "po_no": "PO-2026-010", "bound_qty": 3000, "bind_status": "bound", "bind_source": "auto_rule"},
+                    {"order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-IC-001", "po_no": "PO-2026-001", "bound_qty": 4000, "bind_status": "bound", "bind_source": "auto_rule"},
+                    {"order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-CON-001", "po_no": "PO-2026-017", "bound_qty": 10000, "bind_status": "bound", "bind_source": "auto_rule"},
+                    {"order_no": "SO-2026-006", "line_no": "10", "material_code": "MC-IC-004", "po_no": "PO-2026-007", "bound_qty": 400, "bind_status": "bound", "bind_source": "auto_rule"},
+                    {"order_no": "SO-2026-006", "line_no": "10", "material_code": "MC-PCB-002", "po_no": "PO-2026-019", "bound_qty": 1200, "bind_status": "bound", "bind_source": "auto_rule"},
+                    {"order_no": "SO-2026-011", "line_no": "10", "material_code": "MC-HDD-001", "po_no": "PO-2026-021", "bound_qty": 8000, "bind_status": "bound", "bind_source": "auto_rule"},
+                ]
+
+                for d in bindings_data:
+                    session.add(OrderMaterialPoBinding(**d))
+
+                await session.flush()
+
+                # ============================================================
+                # 异常问题 — 仅保留 3 个订单的异常
+                # ============================================================
+                _seed_date = "20260415"
+                issues_data = [
+                    # delivery_delay
+                    {"issue_no": f"DD-{_seed_date}-0001", "issue_type": "delivery_delay", "risk_level": "red", "order_no": "SO-2026-001", "description": "交期延期8天，承诺4/15未交付", "owner": "planner01", "status": "open"},
+                    # shortage
+                    {"issue_no": f"SH-{_seed_date}-0001", "issue_type": "shortage", "risk_level": "red", "order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-PCB-001", "description": "高频PCB板欠料3000片", "owner": "planner01", "status": "open"},
+                    {"issue_no": f"SH-{_seed_date}-0002", "issue_type": "shortage", "risk_level": "red", "order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-IC-001", "description": "射频芯片欠料4000片", "owner": "planner01", "status": "open"},
+                    {"issue_no": f"SH-{_seed_date}-0003", "issue_type": "shortage", "risk_level": "yellow", "order_no": "SO-2026-006", "line_no": "10", "material_code": "MC-IC-004", "description": "IMU传感器欠料400片", "owner": "planner01", "status": "open"},
+                    # eta_delay
+                    {"issue_no": f"ED-{_seed_date}-0001", "issue_type": "eta_delay", "risk_level": "red", "order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-IC-001", "po_no": "PO-2026-001", "description": "射频芯片ETA延期8天，原4/20改为4/28", "owner": "purchaser01", "status": "open"},
+                    # process_lag
+                    {"issue_no": f"PL-{_seed_date}-0001", "issue_type": "process_lag", "risk_level": "red", "order_no": "SO-2026-001", "description": "贴片工序卡点，等待物料到位", "owner": "production01", "status": "open"},
+                    # quality
+                    {"issue_no": f"QL-{_seed_date}-0001", "issue_type": "quality", "risk_level": "yellow", "order_no": "SO-2026-006", "description": "IMU传感器来料不良2条品质异常未关闭", "owner": "quality01", "status": "open"},
+                    # inspection_ng
+                    {"issue_no": f"IN-{_seed_date}-0001", "issue_type": "inspection_ng", "risk_level": "red", "order_no": "SO-2026-011", "description": "客检结果NG，需返工处理", "owner": "quality01", "status": "open"},
+                    # holiday_risk
+                    {"issue_no": f"HR-{_seed_date}-0001", "issue_type": "holiday_risk", "risk_level": "yellow", "order_no": "SO-2026-001", "line_no": "10", "material_code": "MC-PCB-001", "po_no": "PO-2026-010", "description": "深南电路五一假期停产7天，影响PCB交付", "owner": "planner01", "status": "open"},
+                    # long_lead
+                    {"issue_no": f"LL-{_seed_date}-0001", "issue_type": "long_lead", "risk_level": "yellow", "material_code": "MC-IC-001", "description": "射频芯片交期120天超过阈值90天", "owner": "purchaser01", "status": "open"},
+                ]
+
+                for d in issues_data:
+                    session.add(RiskIssue(**d))
+
+                await session.commit()
+                print(f"Sample data seeded: {len(orders_data)} orders, {len(materials_data)} materials, {len(po_data)} POs, {len(bindings_data)} bindings, {len(issues_data)} issues")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding sample data: {e}")
+                raise
+
+    async def seed_sync_sql_config(self):
+        """Seed ERP sync SQL configuration templates (upsert missing types)"""
+        print("Seeding sync SQL config...")
+        async with AsyncSessionLocal() as session:
+            try:
+                from app.models.masterdata.sync_sql_config import SyncSqlConfig
+                import json
+
+                # 查询已存在的 sync_type，只插入缺失的
+                existing = await session.execute(select(SyncSqlConfig.sync_type))
+                existing_types = set(existing.scalars().all())
+
+                configs = [
+                    SyncSqlConfig(
+                        sync_type="orders",
+                        description="订单行数据 — 从ERP销售订单表拉取",
+                        sql_text="""select ROW_NUMBER()Over(ORDER BY FContractNo)  as rowId,FContractNo 销售合同单号,FContractName 客户名称,b.FEntryID 订单行号,f.FNumber  客户,c.FNumber 产品代码,c.FName 产品名称,b.FQuantity 订单数量,d.FName 部门,a.FCheckDate 审核日期,b.FDELIVERYDate 交期,b.FText23 批号
+ 
+from k3sv.AIS20161019115614.dbo.t_RPContract a --销售合同主表
+left join k3sv.AIS20161019115614.dbo.t_rpContractEntry b on a.FContractID =b.FContractID  --销售合同明细
+left JOIN k3sv.AIS20161019115614.dbo.t_ICItem  c on b.FProductID =c.FItemID  --物料表获取物料名称
+left join k3sv.AIS20161019115614.dbo.t_Department d on a.FDepartment =d.FItemID  --部门表
+left join k3sv.AIS20161019115614.dbo.t_SubMessage e on b.FBase3 =e.FInterID --关联产品象限
+left join k3sv.AIS20161019115614.dbo.t_Organization f on a.FCustomer=f.FItemID --关联客户表
+ where  a.FChangeMark =0 and a.FText not like'%取消%'AND d.FName<>'研发中心'  --一般我们计算中不获取研发合同，只计算销售下单合同，销售可能存在订单变更或取消，所以过滤未取消订单
+
+ and YEAR(a.FCheckDate)=2026
+
+   order by ROW_NUMBER()Over(ORDER BY FContractNo),FContractNo ,YEAR(a.FCheckDate),month(a.FCheckDate),d.FName,c.FNumber,b.FDELIVERYDate desc
+   """.strip(),
+                        field_mapping_json=json.dumps({
+  "销售合同单号": "order_no",
+  "订单行号": "line_no",
+  "客户": "customer_code",
+  "产品代码": "product_code",
+  "产品名称": "product_name",
+  "订单数量": "order_qty",
+  "部门": "department",
+  "审核日期": "audit_date",
+  "交期": "promised_date",
+  "批号": "batch_no",
+  "客户名称": "customer"
+}),
+                        is_active=True,
+                        sync_enabled=True,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="materials",
+                        description="物料需求数据 — 从ERP的MRP运算结果拉取",
+                        sql_text="""
+SELECT
+    CAST(mr.FOrderNo AS VARCHAR(64))       AS order_no,
+    CAST(mr.FLineNo AS VARCHAR(32))        AS line_no,
+    CAST(mr.FMaterialCode AS VARCHAR(64))  AS material_code,
+    CAST(mat.FName AS VARCHAR(256))        AS material_name,
+    CAST(mr.FReqQty AS DECIMAL(15,2))      AS req_qty,
+    CAST(mr.FReqDate AS DATE)              AS req_date,
+    CAST(mr.FAllocQty AS DECIMAL(15,2))    AS allocated_qty,
+    mr.FModifyDate                         AS erp_updated_at
+FROM T_PLN_MRPRESULT mr
+LEFT JOIN T_BD_MATERIAL mat ON mr.FMaterialCode = mat.FNumber
+WHERE mr.FModifyDate >= :since
+ORDER BY mr.FOrderNo, mr.FLineNo, mr.FMaterialCode
+                        """.strip(),
+                        field_mapping_json=None,
+                        is_active=True,
+                        sync_enabled=True,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="purchase_orders",
+                        description="采购订单数据 — 从ERP采购订单表拉取",
+                        sql_text="""
+SELECT
+    CAST(po.FBillNo AS VARCHAR(64))        AS po_no,
+    CAST(poe.FMaterialCode AS VARCHAR(64)) AS material_code,
+    CAST(sup.FNumber AS VARCHAR(64))       AS supplier_code,
+    CAST(sup.FName AS VARCHAR(256))        AS supplier_name,
+    CAST(poe.FQty AS DECIMAL(15,2))        AS po_qty,
+    CASE
+        WHEN poe.FReceivedQty >= poe.FQty THEN 'received'
+        WHEN poe.FReceivedQty > 0 THEN 'partial_received'
+        WHEN po.FConfirmStatus = 'B' THEN 'accepted'
+        ELSE 'placed'
+    END                                    AS po_status,
+    CAST(poe.FDeliveryDate AS DATE)        AS eta,
+    CAST(poe.FOrigDeliveryDate AS DATE)    AS original_eta,
+    CAST(poe.FActualDate AS DATE)          AS actual_arrival_date,
+    CAST(po.FBuyer AS VARCHAR(64))         AS owner,
+    poe.FModifyDate                        AS erp_updated_at
+FROM T_PUR_ORDER po
+JOIN T_PUR_ORDERENTRY poe ON po.FID = poe.FID
+LEFT JOIN T_BD_SUPPLIER sup ON po.FSupplierId = sup.FSupplierId
+WHERE poe.FModifyDate >= :since
+ORDER BY po.FBillNo
+                        """.strip(),
+                        field_mapping_json=None,
+                        is_active=True,
+                        sync_enabled=True,
+                        created_by="admin",
+                    ),
+                    # ---- 主数据同步配置（占位，需根据实际 ERP 表结构配置 SQL 后启用） ----
+                    SyncSqlConfig(
+                        sync_type="customers",
+                        description="客户主数据 — 从ERP客户表拉取",
+                        sql_text="SELECT customer_code, customer_name, customer_short, customer_level, industry_type, credit_code, status FROM T_BD_CUSTOMER WHERE FModifyDate >= :since ORDER BY customer_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=10,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="suppliers",
+                        description="供应商主数据 — 从ERP供应商表拉取",
+                        sql_text="SELECT supplier_code, supplier_name, supplier_short, supplier_type, contact_person, contact_phone, payment_terms, status FROM T_BD_SUPPLIER WHERE FModifyDate >= :since ORDER BY supplier_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=11,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="materials_masterdata",
+                        description="物料主数据 — 从ERP物料主表拉取",
+                        sql_text="SELECT material_code, material_name, spec_model, material_type, unit_of_measure, brand, is_purchase, is_produce, status FROM T_BD_MATERIAL WHERE FModifyDate >= :since ORDER BY material_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=12,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="skus",
+                        description="SKU主数据 — 从ERP SKU表拉取",
+                        sql_text="SELECT sku_code, material_id, sku_name, attr_json, barcode, gross_weight, net_weight, volume FROM T_BD_SKU WHERE FModifyDate >= :since ORDER BY sku_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=13,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="products",
+                        description="产品主数据 — 从ERP产品表拉取",
+                        sql_text="SELECT product_code, product_line, tech_version, bom_version, default_warehouse, warranty_days FROM T_BD_PRODUCT WHERE FModifyDate >= :since ORDER BY product_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=14,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="warehouses",
+                        description="仓库主数据 — 从ERP仓库表拉取",
+                        sql_text="SELECT wh_code, wh_name, wh_type, address, manager_id, is_enabled FROM T_BD_WAREHOUSE ORDER BY wh_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1w",
+                        sync_strategy="full",
+                        sync_priority=15,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="processes",
+                        description="工序主数据 — 从ERP工序表拉取",
+                        sql_text="SELECT process_code, process_name, process_group, standard_hour, work_center, is_qc_point, description FROM T_BD_PROCESS ORDER BY process_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1w",
+                        sync_strategy="full",
+                        sync_priority=16,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="organizations",
+                        description="组织主数据 — 从ERP组织表拉取",
+                        sql_text="SELECT org_code, org_name, org_type, parent_id, leader_id, status FROM T_BD_ORGANIZATION ORDER BY org_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1w",
+                        sync_strategy="full",
+                        sync_priority=17,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="employees",
+                        description="人员主数据 — 从ERP员工表拉取",
+                        sql_text="SELECT emp_code, emp_name, org_id, position, phone, email, status FROM T_BD_EMPLOYEE WHERE FModifyDate >= :since ORDER BY emp_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=18,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="purchase_invoices",
+                        description="采购开票 — 从ERP采购发票表拉取（幂等键: invoice_no+line_no）",
+                        sql_text="-- TODO: 配置 ERP 采购开票查询 SQL，返回字段需包含: invoice_no, line_no, invoice_date, supplier_id, supplier_code, supplier_name, payment_term, settlement_method, invoice_amount, remain_payable\nSELECT NULL AS invoice_no, NULL AS line_no, NULL AS invoice_date, NULL AS supplier_id, NULL AS supplier_code, NULL AS supplier_name, NULL AS payment_term, NULL AS settlement_method, NULL AS invoice_amount, NULL AS remain_payable WHERE 1 = 0 AND :since IS NOT NULL",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=20,
+                        created_by="admin",
+                    ),
+                ]
+
+                new_configs = [c for c in configs if c.sync_type not in existing_types]
+                if not new_configs:
+                    print("Sync SQL config: all types already exist, nothing to add")
+                    return
+
+                for c in new_configs:
+                    session.add(c)
+
+                await session.commit()
+                print(f"Sync SQL config seeded: added {len(new_configs)} new types ({', '.join(c.sync_type for c in new_configs)})")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding sync SQL config: {e}")
+                raise
+
+    async def initialize_all(self):
+        """Initialize complete database"""
+        print("=" * 50)
+        print("SPC v2 Database Initialization")
+        print("=" * 50)
+        
+        try:
+            self.create_database()
+            await self.create_tables()
+            await self.migrate_columns()
+            await self.backfill_sale_order_id()
+            await self.seed_roles()
+            await self.seed_users()
+            await self.seed_risk_rules()
+            await self.seed_field_mapping()
+            await self.seed_sync_sql_config()
+            await self.seed_sample_data()
+            
+            print("=" * 50)
+            print("Database initialization completed successfully!")
+            print("=" * 50)
+            print("\nDefault login credentials:")
+            print("Username: admin")
+            print("Password: admin123")
+            print("\nOther test users:")
+            print("- planner01 / admin123")
+            print("- purchaser01 / admin123") 
+            print("- manager01 / admin123")
+            
+        except Exception as e:
+            print(f"Database initialization failed: {e}")
+            raise
+
+
+async def main():
+    """Main function"""
+    initializer = DatabaseInitializer()
+    await initializer.initialize_all()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

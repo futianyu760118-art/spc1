@@ -1,0 +1,19 @@
+from fastapi import APIRouter
+
+from app.api.v1.production.front_process import router as front_process_router
+from app.api.v1.production.smt import router as smt_router
+from app.api.v1.production.lean import router as lean_router
+from app.api.v1.production.assembly import router as assembly_router
+from app.api.v1.production.packaging import router as packaging_router
+from app.api.v1.production.overview import router as overview_router
+from app.api.v1.production.process_exceptions import router as exceptions_router
+
+router = APIRouter()
+
+router.include_router(overview_router, prefix="/overview", tags=["生产总览"])
+router.include_router(front_process_router, prefix="/front-process", tags=["前道管理"])
+router.include_router(smt_router, prefix="/smt", tags=["贴片管理"])
+router.include_router(lean_router, prefix="/lean", tags=["精益管理"])
+router.include_router(assembly_router, prefix="/assembly", tags=["组装管理"])
+router.include_router(packaging_router, prefix="/packaging", tags=["包装管理"])
+router.include_router(exceptions_router, prefix="/exceptions", tags=["工序异常池"])

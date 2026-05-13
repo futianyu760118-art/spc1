@@ -1,0 +1,431 @@
+import axios from 'axios'
+import { message } from 'antd'
+import { useAuthStore } from '../store/auth'
+
+const api = axios.create({
+  baseURL: '/api/v1',
+  timeout: 30000,
+})
+
+api.interceptors.request.use((config) => {
+  const token = useAuthStore.getState().token
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+api.interceptors.response.use(
+  (response) => {
+    const data = response.data
+    if (data.code !== 0) {
+      return Promise.reject(new Error(data.message || '请求失败'))
+    }
+    return data
+  },
+  (error) => {
+    const status = error.response?.status
+    if (status === 401) {
+      useAuthStore.getState().logout()
+      window.location.href = '/login'
+    } else if (status === 403) {
+      const detail = error.response?.data?.detail || '权限不足，无法执行此操作'
+      error.message = detail
+      message.error(detail)
+    } else if (status === 404) {
+      error.message = error.response?.data?.detail || '请求的资源不存在'
+      message.error(error.message)
+    } else if (status && status >= 500) {
+      error.message = error.response?.data?.detail || '服务器错误，请稍后重试'
+      message.error(error.message)
+    } else if (!error.response) {
+      error.message = '网络连接失败，请检查网络连接后重试'
+      message.error(error.message)
+    }
+    return Promise.reject(error)
+  },
+)
+
+export default api
+
+// ============ Auth (主数据与集成中心) ============
+export const authApi = {
+  login: (username: string, password: string) => {
+    const formData = new URLSearchParams()
+    formData.append('username', username)
+    formData.append('password', password)
+    return api.post('/masterdata/auth/login', formData, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    })
+  },
+  getMe: () => api.get('/masterdata/auth/me'),
+  changePassword: (old_password: string, new_password: string) =>
+    api.put('/masterdata/auth/change-password', { old_password, new_password }),
+}
+
+// ============ 供应链驾驶舱 ============
+export const dashboardApi = {
+  getSummary: () => api.get('/dashboard/summary'),
+  getOrders: (params: Record<string, any>) => api.get('/dashboard/orders', { params }),
+  getMaterials: (params: Record<string, any>) => api.get('/dashboard/materials', { params }),
+  getRiskDistribution: () => api.get('/dashboard/risk-distribution'),
+  getTodayOverview: () => api.get('/dashboard/today-overview'),
+  getTodayDueOrders: (params: Record<string, any>) => api.get('/dashboard/today-due-orders', { params }),
+  getRollingRisk: () => api.get('/dashboard/rolling-risk'),
+  getOrderRiskDistribution: () => api.get('/dashboard/order-risk-distribution'),
+  getClosureAchievement: () => api.get('/dashboard/closure-achievement'),
+}
+
+// ============ 订单交付中心 ============
+export const orderApi = {
+  list: (params: Record<string, any>) => api.get('/orders', { params }),
+  listDomestic: (params: Record<string, any>) => api.get('/orders/domestic', { params }),
+  listDomesticShipment: (params: Record<string, any>) => api.get('/orders/domestic-shipment', { params }),
+  listRiskPool: (params: Record<string, any>) => api.get('/orders/risk-pool', { params }),
+  getDetail: (orderNo: string, lineNo?: string) =>
+    lineNo ? api.get(`/orders/${orderNo}/lines/${lineNo}`) : api.get(`/orders/${orderNo}`),
+  update: (orderNo: string, data: Record<string, any>) => api.put(`/orders/${orderNo}`, data),
+}
+
+export const runOrderApi = {
+  list: (params: Record<string, any>) => api.get('/run-orders', { params }),
+  get: (id: number) => api.get(`/run-orders/${id}`),
+  create: (data: Record<string, any>) => api.post('/run-orders', data),
+  update: (id: number, data: Record<string, any>) => api.put(`/run-orders/${id}`, data),
+  syncFromOrder: (orderNo: string) => api.post(`/run-orders/sync-from-order/${orderNo}`),
+}
+
+// ============ 物料齐套中心 ============
+export const poApi = {
+  list: (params: Record<string, any>) => api.get('/materials', { params }),
+  get: (poNo: string) => api.get(`/materials/${poNo}`),
+  updateStatus: (poNo: string, data: { po_status: string; remark?: string }) =>
+    api.put(`/materials/${poNo}/status`, data),
+  getTimeline: (poNo: string) => api.get(`/materials/${poNo}/timeline`),
+}
+
+export const materialApi = {
+  // 采购到料计划
+  listPurchasePlan: (params: Record<string, any>) =>
+    api.get('/materials/purchase-plan', { params }),
+  createPurchasePlan: (data: Record<string, any>) =>
+    api.post('/materials/purchase-plan', data),
+  updatePurchasePlan: (id: number, data: Record<string, any>) =>
+    api.put(`/materials/purchase-plan/${id}`, data),
+  importPurchasePlan: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/materials/purchase-plan/import', fd)
+  },
+  getPurchasePlanStats: (params: Record<string, any>) =>
+    api.get('/materials/purchase-plan/stats', { params }),
+  // 问题物料
+  listIssues: (params: Record<string, any>) =>
+    api.get('/materials/issues', { params }),
+  createIssue: (data: Record<string, any>) =>
+    api.post('/materials/issues', data),
+  updateIssue: (id: number, data: Record<string, any>) =>
+    api.put(`/materials/issues/${id}`, data),
+  deleteIssue: (id: number) =>
+    api.delete(`/materials/issues/${id}`),
+  importIssues: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/materials/issues/import', fd)
+  },
+  // 长交期物料（派生视图 + 注解表）
+  listLongLead: (params: Record<string, any>) =>
+    api.get('/materials/long-lead', { params }),
+  updateLongLead: (id: number, data: Record<string, any>) =>
+    api.put(`/materials/long-lead/${id}`, data),
+  deleteLongLead: (id: number) =>
+    api.delete(`/materials/long-lead/${id}`),
+  scanLongLead: () =>
+    api.post('/materials/long-lead/scan'),
+  ensureAnnotation: (data: Record<string, any>) =>
+    api.post('/materials/long-lead/ensure-annotation', data),
+  // 齐套分析
+  getKitAnalysis: (params: Record<string, any>) =>
+    api.get('/materials/kit-analysis', { params }),
+  getOrderMaterials: (orderNo: string, params: Record<string, any>) =>
+    api.get(`/materials/kit-analysis/${orderNo}/materials`, { params }),
+  // 供应商风险
+  getSupplierRisk: (params: Record<string, any>) =>
+    api.get('/materials/supplier-risk', { params }),
+  // 供应商付款排程（基于 purchase_invoice 聚合，只读）
+  listSupplierPayment: (params: Record<string, any>) =>
+    api.get('/materials/supplier-payment', { params }),
+  getSupplierPaymentSummary: (params: Record<string, any> = {}) =>
+    api.get('/materials/supplier-payment/summary', { params }),
+}
+
+// ============ ETA (订单交付中心) ============
+export const etaApi = {
+  update: (poNo: string, data: { new_eta: string; update_reason?: string; remark?: string }) =>
+    api.put(`/orders/eta/purchase-orders/${poNo}/eta`, data),
+  getHistory: (poNo: string) => api.get(`/orders/eta/purchase-orders/${poNo}/eta-history`),
+  getPendingUpdates: (params: Record<string, any>) => api.get('/orders/eta/pending-updates', { params }),
+}
+
+// ============ 生产协同中心 ============
+export const productionApi = {
+  // 生产总览
+  getOverview: () => api.get('/production/overview'),
+  // 前道管理
+  listFrontProcess: (params: Record<string, any>) =>
+    api.get('/production/front-process', { params }),
+  createFrontProcess: (data: Record<string, any>) =>
+    api.post('/production/front-process', data),
+  updateFrontProcess: (id: number, data: Record<string, any>) =>
+    api.put(`/production/front-process/${id}`, data),
+  importFrontProcess: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/front-process/import', fd)
+  },
+  // 贴片管理
+  listSMT: (params: Record<string, any>) =>
+    api.get('/production/smt', { params }),
+  createSMT: (data: Record<string, any>) =>
+    api.post('/production/smt', data),
+  updateSMT: (id: number, data: Record<string, any>) =>
+    api.put(`/production/smt/${id}`, data),
+  importSMT: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/smt/import', fd)
+  },
+  // 精益管理
+  listLean: (params: Record<string, any>) =>
+    api.get('/production/lean', { params }),
+  createLean: (data: Record<string, any>) =>
+    api.post('/production/lean', data),
+  updateLean: (id: number, data: Record<string, any>) =>
+    api.put(`/production/lean/${id}`, data),
+  importLean: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/lean/import', fd)
+  },
+  // 组装管理
+  listAssembly: (params: Record<string, any>) =>
+    api.get('/production/assembly', { params }),
+  createAssembly: (data: Record<string, any>) =>
+    api.post('/production/assembly', data),
+  updateAssembly: (id: number, data: Record<string, any>) =>
+    api.put(`/production/assembly/${id}`, data),
+  importAssembly: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/assembly/import', fd)
+  },
+  // 包装管理
+  listPackaging: (params: Record<string, any>) =>
+    api.get('/production/packaging', { params }),
+  createPackaging: (data: Record<string, any>) =>
+    api.post('/production/packaging', data),
+  updatePackaging: (id: number, data: Record<string, any>) =>
+    api.put(`/production/packaging/${id}`, data),
+  importPackaging: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/packaging/import', fd)
+  },
+  // 工序异常池
+  listExceptions: (params: Record<string, any>) =>
+    api.get('/production/exceptions', { params }),
+  createException: (data: Record<string, any>) =>
+    api.post('/production/exceptions', data),
+  updateException: (id: number, data: Record<string, any>) =>
+    api.put(`/production/exceptions/${id}`, data),
+  deleteException: (id: number) =>
+    api.delete(`/production/exceptions/${id}`),
+}
+
+// ============ 异常与质量中心 ============
+export const riskApi = {
+  scan: () => api.post('/exceptions/risk/scan'),
+  assess: () => api.post('/exceptions/risk/assess'),
+  assessOrder: (orderNo: string) => api.post(`/exceptions/risk/assess/${orderNo}`),
+  getAssessmentResult: (orderNo: string) => api.get(`/exceptions/risk/assessment-result/${orderNo}`),
+}
+
+export const issueApi = {
+  list: (params: Record<string, any>) => api.get('/exceptions', { params }),
+  create: (data: any) => api.post('/exceptions', data),
+  update: (id: number, data: any) => api.put(`/exceptions/${id}`, data),
+}
+
+export const exceptionApi = {
+  // 异常总池
+  listPool: (params: Record<string, any>) => api.get('/exceptions/pool', { params }),
+  getClosureTracking: () => api.get('/exceptions/pool/closure-tracking'),
+  // 问题日志
+  listIssueLog: (params: Record<string, any>) => api.get('/exceptions/issue-log', { params }),
+  createIssueLog: (data: Record<string, any>) => api.post('/exceptions/issue-log', data),
+  updateIssueLog: (id: number, data: Record<string, any>) => api.put(`/exceptions/issue-log/${id}`, data),
+  deleteIssueLog: (id: number) => api.delete(`/exceptions/issue-log/${id}`),
+  importIssueLog: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/exceptions/issue-log/import', fd)
+  },
+  // 变更日志
+  listChangeLog: (params: Record<string, any>) => api.get('/exceptions/change-log', { params }),
+  createChangeLog: (data: Record<string, any>) => api.post('/exceptions/change-log', data),
+  updateChangeLog: (id: number, data: Record<string, any>) => api.put(`/exceptions/change-log/${id}`, data),
+  deleteChangeLog: (id: number) => api.delete(`/exceptions/change-log/${id}`),
+  importChangeLog: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/exceptions/change-log/import', fd)
+  },
+  // 品质异常
+  listQuality: (params: Record<string, any>) => api.get('/exceptions/quality', { params }),
+  createQuality: (data: Record<string, any>) => api.post('/exceptions/quality', data),
+  updateQuality: (id: number, data: Record<string, any>) => api.put(`/exceptions/quality/${id}`, data),
+  deleteQuality: (id: number) => api.delete(`/exceptions/quality/${id}`),
+}
+
+// ============ 主数据与集成中心 ============
+export const importExportApi = {
+  importOrders: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/masterdata/import-export/orders', formData)
+  },
+  importMaterials: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/masterdata/import-export/materials', formData)
+  },
+  importPurchaseOrders: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/masterdata/import-export/purchase-orders', formData)
+  },
+  syncData: (type: 'orders' | 'materials' | 'purchase_orders' | 'customers' | 'suppliers' | 'materials_masterdata' | 'skus' | 'products' | 'warehouses' | 'processes' | 'organizations' | 'employees' | 'purchase_invoices' | 'quality_issues' | 'all', params: { hours?: number; order_numbers?: string[] } = {}) => {
+    const queryParams = new URLSearchParams()
+    if (params.hours !== undefined) {
+      queryParams.append('hours', params.hours.toString())
+    }
+    if (params.order_numbers && params.order_numbers.length > 0) {
+      params.order_numbers.forEach(order => queryParams.append('order_numbers', order))
+    }
+    const queryString = queryParams.toString()
+    return api.post(`/masterdata/sync/${type}${queryString ? `?${queryString}` : ''}`)
+  },
+  getSyncStatus: () =>
+    api.get('/masterdata/sync/status'),
+  getSyncConfigStatus: () =>
+    api.get('/masterdata/sync/config-status'),
+  getErpOrders: () =>
+    api.get('/masterdata/sync/erp-orders'),
+  getSyncTask: (taskId: string) =>
+    api.get(`/masterdata/sync/task/${taskId}`),
+  listSyncTasks: (params?: { sync_type?: string; status?: string; limit?: number }) => {
+    const queryParams = new URLSearchParams()
+    if (params?.sync_type) queryParams.append('sync_type', params.sync_type)
+    if (params?.status) queryParams.append('status', params.status)
+    if (params?.limit) queryParams.append('limit', params.limit.toString())
+    const qs = queryParams.toString()
+    return api.get(`/masterdata/sync/tasks${qs ? `?${qs}` : ''}`)
+  },
+  exportWeeklyReport: () =>
+    api.get('/masterdata/import-export/weekly-report', { responseType: 'blob' }),
+  exportIssues: () =>
+    api.get('/masterdata/import-export/issues', { responseType: 'blob' }),
+}
+
+// ============ 规则配置中心 ============
+export const ruleApi = {
+  list: () => api.get('/rules'),
+  create: (data: any) => api.post('/rules', data),
+  update: (id: number, data: any) => api.put(`/rules/${id}`, data),
+}
+
+export const inspectionRuleApi = {
+  list: (params: Record<string, any> = {}) => api.get('/rules/inspections', { params }),
+  create: (data: any) => api.post('/rules/inspections', data),
+  update: (id: number, data: any) => api.put(`/rules/inspections/${id}`, data),
+  delete: (id: number) => api.delete(`/rules/inspections/${id}`),
+}
+
+export const nodeStandardApi = {
+  list: (params: Record<string, any> = {}) => api.get('/rules/node-standards', { params }),
+  create: (data: any) => api.post('/rules/node-standards', data),
+  update: (id: number, data: any) => api.put(`/rules/node-standards/${id}`, data),
+  delete: (id: number) => api.delete(`/rules/node-standards/${id}`),
+}
+
+export const responsibilityApi = {
+  list: (params: Record<string, any> = {}) => api.get('/rules/responsibilities', { params }),
+  create: (data: any) => api.post('/rules/responsibilities', data),
+  update: (id: number, data: any) => api.put(`/rules/responsibilities/${id}`, data),
+  delete: (id: number) => api.delete(`/rules/responsibilities/${id}`),
+}
+
+export const statusDictApi = {
+  list: (params: Record<string, any> = {}) => api.get('/rules/status-dict', { params }),
+  create: (data: any) => api.post('/rules/status-dict', data),
+  update: (id: number, data: any) => api.put(`/rules/status-dict/${id}`, data),
+  delete: (id: number) => api.delete(`/rules/status-dict/${id}`),
+}
+
+// ============ 审计日志 (主数据与集成中心) ============
+export const auditApi = {
+  list: (params: Record<string, any>) => api.get('/masterdata/audit/logs', { params }),
+}
+
+// ============ Pilot ============
+export const pilotApi = {
+  getConfig: () => api.get('/pilot/config'),
+  updateConfig: (items: any[]) => api.put('/pilot/config', { items }),
+}
+
+// ============ 通用文件服务 ============
+export const fileApi = {
+  upload: (file: File, namespace = 'misc') => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return api.post(`/files/upload?namespace=${encodeURIComponent(namespace)}`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+  list: (params: Record<string, any> = {}) => api.get('/files', { params }),
+  stats: () => api.get('/files/stats'),
+  remove: (id: number) => api.delete(`/files/${id}`),
+  cleanupOrphans: (days = 7) => api.post(`/files/cleanup-orphans?days=${days}`),
+  downloadUrl: (key: string) => `/api/v1/files/download/${key}`,
+}
+
+// ============ 问题反馈 (主数据与集成中心) ============
+export const feedbackApi = {
+  list: (params: Record<string, any> = {}) => api.get('/masterdata/feedback', { params }),
+  get: (id: number) => api.get(`/masterdata/feedback/${id}`),
+  create: (data: Record<string, any>) => api.post('/masterdata/feedback', data),
+  update: (id: number, data: Record<string, any>) => api.put(`/masterdata/feedback/${id}`, data),
+  reply: (id: number, data: { reply?: string; status?: string }) =>
+    api.post(`/masterdata/feedback/${id}/reply`, data),
+  updateStatus: (id: number, status: string) =>
+    api.patch(`/masterdata/feedback/${id}/status`, { status }),
+  remove: (id: number) => api.delete(`/masterdata/feedback/${id}`),
+}
+
+// ============ 智能助手 ============
+export const assistantApi = {
+  chat: (message: string, sessionId?: string) =>
+    api.post('/assistant/chat', { message, session_id: sessionId }),
+  listSkills: () => api.get('/assistant/skills'),
+}
+
+// ============ 用户管理 (主数据与集成中心) ============
+export const userApi = {
+  list: () => api.get('/masterdata/users'),
+  roles: () => api.get('/masterdata/users/roles'),
+  createRole: (data: { role_code: string; role_name: string; permissions?: Record<string, string[]> }) =>
+    api.post('/masterdata/users/roles', data),
+  updateRole: (id: number, data: { role_name?: string; permissions?: Record<string, string[]> }) =>
+    api.put(`/masterdata/users/roles/${id}`, data),
+  deleteRole: (id: number) => api.delete(`/masterdata/users/roles/${id}`),
+  create: (data: { username: string; display_name?: string; password: string; role_id: number; is_active?: boolean }) =>
+    api.post('/masterdata/users', data),
+  update: (id: number, data: { display_name?: string; role_id?: number; is_active?: boolean }) =>
+    api.put(`/masterdata/users/${id}`, data),
+  resetPassword: (id: number, new_password: string) =>
+    api.put(`/masterdata/users/${id}/password`, { new_password }),
+  delete: (id: number) => api.delete(`/masterdata/users/${id}`),
+  batchGrant: (data: { role_ids: number[]; permissions: Record<string, string[]>; mode: 'grant' | 'revoke' | 'replace' }) =>
+    api.post('/masterdata/users/roles/batch-grant', data),
+}
