@@ -113,7 +113,7 @@ export default function DomesticShipment() {
         const displayValue = afterDash.replace(/^0+/, '').padStart(3, '0')
         return (
           <Tooltip title={v}>
-            <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 12 }}>{displayValue}</a>
+            <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
           </Tooltip>
         )
       },
@@ -187,12 +187,12 @@ export default function DomesticShipment() {
           <Col span={8} key={i}>
             <Card size="small" className="card-modern" style={{ padding: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: card.color }}>
+                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'calc(1.25rem * var(--font-size-scale))', color: card.color }}>
                   {card.icon}
                 </div>
                 <div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{card.title}</div>
+                  <div style={{ fontSize: 'calc(1.375rem * var(--font-size-scale))', fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
+                  <div style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))', color: '#64748b' }}>{card.title}</div>
                 </div>
               </div>
             </Card>

@@ -194,7 +194,7 @@ export default function OrderRiskPool() {
         const displayValue = afterDash.replace(/^0+/, '').padStart(3, '0')
         return (
           <Tooltip title={v}>
-            <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 12 }}>{displayValue}</a>
+            <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
           </Tooltip>
         )
       },
@@ -249,7 +249,7 @@ export default function OrderRiskPool() {
             const color = val >= max * 0.6 ? '#e11d48' : val >= max * 0.3 ? '#f59e0b' : '#10b981'
             return (
               <Col xs={12} sm={8} md={4} key={key}>
-                <div style={{ fontSize: 11, color: '#64748b', marginBottom: 2 }}>{label}</div>
+                <div style={{ fontSize: 'calc(0.6875rem * var(--font-size-scale))', color: '#64748b', marginBottom: 2 }}>{label}</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <Progress percent={pct} size="small" strokeColor={color} showInfo={false} style={{ width: 50, marginBottom: 0 }} />
                   <span style={{ fontSize: 12, fontWeight: 600, color }}>{val}/{max}</span>
@@ -259,7 +259,7 @@ export default function OrderRiskPool() {
           })}
           {r.risk_assessed_at && (
             <Col xs={24} style={{ marginTop: 4 }}>
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>评估时间: {formatDateTime(r.risk_assessed_at)}</span>
+              <span style={{ fontSize: 'calc(0.6875rem * var(--font-size-scale))', color: '#94a3b8' }}>评估时间: {formatDateTime(r.risk_assessed_at)}</span>
             </Col>
           )}
         </Row>
@@ -281,12 +281,12 @@ export default function OrderRiskPool() {
           <Col xs={12} sm={8} md={4} key={i}>
             <Card size="small" className="card-modern" style={{ padding: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: card.color }}>
+                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'calc(1.25rem * var(--font-size-scale))', color: card.color }}>
                   {card.icon}
                 </div>
                 <div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{card.title}</div>
+                  <div style={{ fontSize: 'calc(1.375rem * var(--font-size-scale))', fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
+                  <div style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))', color: '#64748b' }}>{card.title}</div>
                 </div>
               </div>
             </Card>

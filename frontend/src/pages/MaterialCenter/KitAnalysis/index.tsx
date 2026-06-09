@@ -1,18 +1,29 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Table, Card, Row, Col, Input, Select, Button, Tag, Progress, Tooltip, message, Switch } from 'antd'
-import { SearchOutlined, ShoppingOutlined, PieChartOutlined, WarningOutlined, ExclamationCircleOutlined, CheckCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Table, Card, Row, Col, Input, Select, Button, Tag, Progress, Tooltip, message, Switch, DatePicker, InputNumber, Space } from 'antd'
+import { SearchOutlined, ShoppingOutlined, PieChartOutlined, WarningOutlined, ExclamationCircleOutlined, CheckCircleOutlined, ReloadOutlined, FilterOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import { materialApi } from '@/services/api'
 
 interface MaterialItem {
   material_code: string
   material_name: string | null
+  material_property: number | null
+  material_property_label: string | null
+  material_type: string | null
   supplier_name: string | null
   order_qty: number | null
+  shortage_qty: number | null
+  req_date: string | null
+  po_no: string | null
+  po_count: number
   received_qty: number | null
   eta: string | null
+  first_eta: string | null
+  latest_eta: string | null
   actual_arrival_date: string | null
   inspection_date: string | null
   status: string
+  status_label: string | null
   is_stagnant: boolean
   stagnant_qty: number | null
 }
@@ -23,6 +34,8 @@ interface KitItem {
   received_materials: number
   inspected_materials: number
   pending_inspection: number
+  not_ordered_materials: number
+  overdue_materials: number
   stagnant_materials: number
   kit_rate: number
   risk_level: string
@@ -34,11 +47,28 @@ const RISK_COLOR: Record<string, string> = { red: '#e11d48', yellow: '#f59e0b', 
 const RISK_LABEL: Record<string, string> = { red: '缺料严重', yellow: '部分齐套', green: '齐套' }
 
 const MATERIAL_STATUS: Record<string, { label: string; color: string }> = {
+  not_ordered: { label: '未下单', color: 'default' },
+  self_made_unlinked: { label: '自制未排产/未关联', color: 'blue' },
   inspected: { label: '已检验', color: 'success' },
   arrived: { label: '已到料', color: 'processing' },
   overdue: { label: '逾期未到', color: 'error' },
   pending: { label: '待到料', color: 'default' },
 }
+
+const MATERIAL_PROPERTY_OPTIONS = [
+  { value: 1, label: '外购' },
+  { value: 2, label: '自制' },
+  { value: 3, label: '委外加工' },
+  { value: 5, label: '虚拟件' },
+  { value: 6, label: '特征类' },
+  { value: 7, label: '配置类' },
+  { value: 8, label: '规划类' },
+  { value: 9, label: '组装件' },
+]
+
+const MATERIAL_PROPERTY_MAP = Object.fromEntries(MATERIAL_PROPERTY_OPTIONS.map(item => [item.value, item.label]))
+
+const DEFAULT_MATERIAL_FILTERS = { status: 'not_ordered,self_made_unlinked,pending,overdue' }
 
 export default function KitAnalysis() {
   const [data, setData] = useState<KitItem[]>([])
@@ -46,11 +76,12 @@ export default function KitAnalysis() {
   const [orderNo, setOrderNo] = useState('')
   const [onlyPendingShipment, setOnlyPendingShipment] = useState(true)
   const [riskLevelFilter, setRiskLevelFilter] = useState<string | null>(null)
+  const [promisedDateRange, setPromisedDateRange] = useState<[string, string] | null>(null)
   const [expandedKeys, setExpandedKeys] = useState<string[]>([])
   const [sortBy, setSortBy] = useState<string>('')
   const [sortOrder, setSortOrder] = useState<string>('')
   const [materialsLoading, setMaterialsLoading] = useState<Record<string, boolean>>({})
-  const [materialFilters, setMaterialFilters] = useState<Record<string, { status?: string; supplier?: string; sortBy?: string; sortOrder?: string }>>({})
+  const [materialFilters, setMaterialFilters] = useState<Record<string, Record<string, any>>>({})
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
   const [statistics, setStatistics] = useState({ redCount: 0, yellowCount: 0, greenCount: 0, avgKitRate: 0 })
 
@@ -64,6 +95,7 @@ export default function KitAnalysis() {
         ...(sortBy ? { sort_by: sortBy, sort_order: sortOrder || 'asc' } : {}),
         ...(riskLevelFilter ? { risk_level: riskLevelFilter } : {}),
         only_pending_shipment: onlyPendingShipment,
+        ...(promisedDateRange ? { promised_date_start: promisedDateRange[0], promised_date_end: promisedDateRange[1] } : {}),
         page: currentPage,
         page_size: currentPageSize,
       })
@@ -80,7 +112,7 @@ export default function KitAnalysis() {
     } finally {
       setLoading(false)
     }
-  }, [orderNo, sortBy, sortOrder, pagination.current, pagination.pageSize, onlyPendingShipment, riskLevelFilter])
+  }, [orderNo, sortBy, sortOrder, pagination.current, pagination.pageSize, onlyPendingShipment, riskLevelFilter, promisedDateRange])
 
   const handlePaginationChange = useCallback((page: number, pageSize: number) => {
     setPagination(prev => ({ ...prev, current: page, pageSize }))
@@ -97,14 +129,31 @@ export default function KitAnalysis() {
     handleFilterChange()
   }, [handleFilterChange])
 
-  const loadMaterials = useCallback(async (orderNo: string, statusFilter?: string[], supplierFilter?: string, sortBy?: string, sortOrder?: string) => {
+  const loadMaterials = useCallback(async (orderNo: string, filters: Record<string, any> = {}) => {
     setMaterialsLoading(prev => ({ ...prev, [orderNo]: true }))
     try {
-      const res: any = await materialApi.getOrderMaterials(orderNo, {
-        ...(statusFilter && statusFilter.length > 0 ? { status: statusFilter.join(',') } : {}),
-        ...(supplierFilter ? { supplier: supplierFilter } : {}),
-        ...(sortBy ? { sort_by: sortBy, sort_order: sortOrder || 'asc' } : {}),
-      })
+      const params: any = {}
+      if (filters.material_code) params.material_code = filters.material_code
+      if (filters.material_name) params.material_name = filters.material_name
+      if (filters.material_property) params.material_property = filters.material_property
+      if (filters.material_type) params.material_type = filters.material_type
+      if (filters.supplier) params.supplier = filters.supplier
+      if (filters.order_qty_min) params.order_qty_min = filters.order_qty_min
+      if (filters.order_qty_max) params.order_qty_max = filters.order_qty_max
+      if (filters.received_qty_min) params.received_qty_min = filters.received_qty_min
+      if (filters.received_qty_max) params.received_qty_max = filters.received_qty_max
+      if (filters.eta_start) params.eta_start = filters.eta_start
+      if (filters.eta_end) params.eta_end = filters.eta_end
+      if (filters.actual_arrival_date_start) params.actual_arrival_date_start = filters.actual_arrival_date_start
+      if (filters.actual_arrival_date_end) params.actual_arrival_date_end = filters.actual_arrival_date_end
+      if (filters.inspection_date_start) params.inspection_date_start = filters.inspection_date_start
+      if (filters.inspection_date_end) params.inspection_date_end = filters.inspection_date_end
+      if (filters.status) params.status = filters.status
+      if (filters.is_stagnant) params.is_stagnant = filters.is_stagnant
+      if (filters.sortBy) params.sort_by = filters.sortBy
+      if (filters.sortOrder) params.sort_order = filters.sortOrder
+
+      const res: any = await materialApi.getOrderMaterials(orderNo, params)
       setData(prev => prev.map(item =>
         item.order_no === orderNo ? { ...item, materials: res.data } : item
       ))
@@ -117,17 +166,16 @@ export default function KitAnalysis() {
 
   const handleExpand = useCallback(async (expanded: boolean, record: KitItem) => {
     if (expanded && !record.materials) {
-      const filters = materialFilters[record.order_no] || {}
-      await loadMaterials(record.order_no, filters.status ? [filters.status] : undefined, filters.supplier, filters.sortBy, filters.sortOrder)
+      const filters = materialFilters[record.order_no] || DEFAULT_MATERIAL_FILTERS
+      await loadMaterials(record.order_no, filters)
     }
   }, [loadMaterials, materialFilters])
 
-  const handleMaterialFilterChange = useCallback((orderNo: string, key: string, value: string) => {
+  const handleMaterialFilterChange = useCallback((orderNo: string, filters: Record<string, any>) => {
     setMaterialFilters(prev => ({
       ...prev,
-      [orderNo]: { ...prev[orderNo], [key]: value }
+      [orderNo]: filters
     }))
-    // 清除物料缓存，强制重新加载
     setData(prev => prev.map(item =>
       item.order_no === orderNo ? { ...item, materials: undefined } : item
     ))
@@ -138,7 +186,6 @@ export default function KitAnalysis() {
       ...prev,
       [orderNo]: { ...prev[orderNo], sortBy: sortField, sortOrder }
     }))
-    // 清除物料缓存，强制重新加载
     setData(prev => prev.map(item =>
       item.order_no === orderNo ? { ...item, materials: undefined } : item
     ))
@@ -146,75 +193,143 @@ export default function KitAnalysis() {
 
   useEffect(() => { load() }, [load])
 
-  const materialColumns = [
+  const textFilterDropdown = (placeholder: string) => ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+    <div style={{ padding: 8 }}>
+      <Input
+        placeholder={placeholder}
+        value={selectedKeys[0]}
+        onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
+        onPressEnter={confirm}
+        style={{ width: 188, marginBottom: 8, display: 'block' }}
+      />
+      <Button type="primary" onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>搜索</Button>
+      <Button onClick={() => { clearFilters?.(); confirm() }} size="small" style={{ width: 90 }}>重置</Button>
+    </div>
+  )
+
+  const numberRangeFilterDropdown = (minPlaceholder: string, maxPlaceholder: string) => ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+    <div style={{ padding: 8 }}>
+      <Space direction="vertical" size={8}>
+        <InputNumber placeholder={minPlaceholder} value={selectedKeys[0]} onChange={v => setSelectedKeys([v, selectedKeys[1]].filter(x => x !== undefined && x !== null && x !== ''))} style={{ width: 188 }} />
+        <InputNumber placeholder={maxPlaceholder} value={selectedKeys[1]} onChange={v => setSelectedKeys([selectedKeys[0], v].filter(x => x !== undefined && x !== null && x !== ''))} style={{ width: 188 }} />
+        <div>
+          <Button type="primary" onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>筛选</Button>
+          <Button onClick={() => { clearFilters?.(); confirm() }} size="small" style={{ width: 90 }}>重置</Button>
+        </div>
+      </Space>
+    </div>
+  )
+
+  const dateRangeFilterDropdown = () => ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+    <div style={{ padding: 8 }}>
+      <DatePicker.RangePicker
+        value={selectedKeys && selectedKeys.length === 2 ? [dayjs(selectedKeys[0]), dayjs(selectedKeys[1])] : null}
+        onChange={(dates) => {
+          if (dates && dates[0] && dates[1]) setSelectedKeys([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')])
+          else setSelectedKeys([])
+        }}
+        style={{ marginBottom: 8, display: 'block', width: 220 }}
+      />
+      <Button type="primary" onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>筛选</Button>
+      <Button onClick={() => { clearFilters?.(); confirm() }} size="small" style={{ width: 90 }}>重置</Button>
+    </div>
+  )
+
+  const getMaterialColumns = (orderNo: string) => {
+    const currentFilters = materialFilters[orderNo]
+    const statusFilteredValue = currentFilters
+      ? (currentFilters.status ? String(currentFilters.status).split(',') : null)
+      : DEFAULT_MATERIAL_FILTERS.status.split(',')
+
+    return [
     {
       title: '物料代码', dataIndex: 'material_code', width: 180, ellipsis: true, sorter: true,
+      filterDropdown: textFilterDropdown('物料代码'),
+      filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
       render: (v: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span>,
     },
-    { title: '物料名称', dataIndex: 'material_name', width: 180, ellipsis: true, sorter: true },
     {
-      title: '供应商', dataIndex: 'supplier_name', width: 130, ellipsis: true, sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder="供应商名称"
-            value={selectedKeys[0]}
-            onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            onPressEnter={confirm}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-          />
-          <Button type="primary" onClick={confirm} size="small" style={{ width: 90, marginRight: 8 }}>
-            搜索
-          </Button>
-          <Button onClick={clearFilters} size="small" style={{ width: 90 }}>
-            重置
-          </Button>
-        </div>
-      ),
+      title: '物料名称', dataIndex: 'material_name', width: 180, ellipsis: true, sorter: true,
+      filterDropdown: textFilterDropdown('物料名称'),
       filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
-    },
-    {
-      title: '需求量', dataIndex: 'order_qty', width: 80, sorter: true,
-      render: (v: number | null) => v ?? '-',
-    },
-    {
-      title: '收料量', dataIndex: 'received_qty', width: 80, sorter: true,
-      render: (v: number | null) => v != null ? <span style={{ color: '#16a34a' }}>{v}</span> : <span style={{ color: '#cbd5e1' }}>0</span>,
-    },
-    {
-      title: 'ETA', dataIndex: 'eta', width: 100, sorter: true,
-      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
-    },
-    {
-      title: '实际到料时间', dataIndex: 'actual_arrival_date', width: 120, sorter: true,
-      render: (v: string | null) => v ? <span style={{ color: '#16a34a' }}>{v}</span> : <span style={{ color: '#cbd5e1' }}>-</span>,
-    },
-    {
-      title: '检验日期', dataIndex: 'inspection_date', width: 100, sorter: true,
-      render: (v: string | null) => v ? <span style={{ color: '#6366f1' }}>{v}</span> : <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     {
       title: '状态', dataIndex: 'status', width: 90, sorter: true,
       filters: [
+        { text: '未下单', value: 'not_ordered' },
+        { text: '自制未排产/未关联', value: 'self_made_unlinked' },
         { text: '已检验', value: 'inspected' },
         { text: '已到料', value: 'arrived' },
         { text: '逾期未到', value: 'overdue' },
         { text: '待到料', value: 'pending' },
       ],
+      filteredValue: statusFilteredValue,
       filterMultiple: true,
-      render: (v: string) => {
+      render: (v: string, row: MaterialItem) => {
         const s = MATERIAL_STATUS[v] || { label: v, color: 'default' }
-        return <Tag color={s.color}>{s.label}</Tag>
+        return <Tag color={s.color}>{row.status_label || s.label}</Tag>
       },
     },
     {
+      title: '物料属性', dataIndex: 'material_property', width: 90, sorter: true,
+      filters: MATERIAL_PROPERTY_OPTIONS.map(opt => ({ text: opt.label, value: String(opt.value) })),
+      filterMultiple: true,
+      render: (v: number | null) => v ? (MATERIAL_PROPERTY_MAP[v] || v) : <span style={{ color: '#cbd5e1' }}>-</span>,
+    },
+    {
+      title: '物料类型', dataIndex: 'material_type', width: 110, ellipsis: true, sorter: true,
+      filterDropdown: textFilterDropdown('物料类型'),
+      filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+    },
+    {
+      title: '供应商', dataIndex: 'supplier_name', width: 130, ellipsis: true, sorter: true,
+      filterDropdown: textFilterDropdown('供应商名称'),
+      filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+    },
+    {
+      title: '需求量', dataIndex: 'order_qty', width: 80, sorter: true,
+      filterDropdown: numberRangeFilterDropdown('最小需求量', '最大需求量'),
+      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+      render: (v: number | null) => v ?? '-',
+    },
+    {
+      title: '收料量', dataIndex: 'received_qty', width: 80, sorter: true,
+      filterDropdown: numberRangeFilterDropdown('最小收料量', '最大收料量'),
+      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+      render: (v: number | null) => v != null ? <span style={{ color: '#16a34a' }}>{v}</span> : <span style={{ color: '#cbd5e1' }}>0</span>,
+    },
+    {
+      title: 'ETA', dataIndex: 'eta', width: 100, sorter: true,
+      filterDropdown: dateRangeFilterDropdown(),
+      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+    },
+    {
+      title: '实际到料时间', dataIndex: 'actual_arrival_date', width: 120, sorter: true,
+      filterDropdown: dateRangeFilterDropdown(),
+      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+      render: (v: string | null) => v ? <span style={{ color: '#16a34a' }}>{v}</span> : <span style={{ color: '#cbd5e1' }}>-</span>,
+    },
+    {
+      title: '检验日期', dataIndex: 'inspection_date', width: 100, sorter: true,
+      filterDropdown: dateRangeFilterDropdown(),
+      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+      render: (v: string | null) => v ? <span style={{ color: '#6366f1' }}>{v}</span> : <span style={{ color: '#cbd5e1' }}>-</span>,
+    },
+    {
       title: '呆滞', dataIndex: 'is_stagnant', width: 80, sorter: true,
+      filters: [
+        { text: '呆滞', value: 'true' },
+        { text: '非呆滞', value: 'false' },
+      ],
+      filterMultiple: false,
       render: (v: boolean, row: MaterialItem) => {
         if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
         return <Tooltip title={`超量 ${row.stagnant_qty}，收料${row.received_qty} > 需求${row.order_qty}`}><Tag color="warning">呆滞 +{row.stagnant_qty}</Tag></Tooltip>
       },
     },
-  ]
+    ]
+  }
 
   const columns = [
     {
@@ -231,6 +346,26 @@ export default function KitAnalysis() {
       key: 'promised_date',
       width: 120,
       sorter: true,
+      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+        <div style={{ padding: 8 }}>
+          <DatePicker.RangePicker
+            value={selectedKeys && selectedKeys.length === 2 ? [dayjs(selectedKeys[0]), dayjs(selectedKeys[1])] : null}
+            onChange={(dates) => {
+              if (dates && dates[0] && dates[1]) {
+                setSelectedKeys([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')])
+              } else {
+                setSelectedKeys([])
+              }
+            }}
+            style={{ marginBottom: 8, display: 'block', width: 220 }}
+          />
+          <div>
+            <Button type="primary" onClick={() => { confirm(); setPromisedDateRange(selectedKeys.length === 2 ? [selectedKeys[0], selectedKeys[1]] : null); setPagination(prev => ({ ...prev, current: 1 })) }} size="small" style={{ width: 90, marginRight: 8 }}>确定</Button>
+            <Button onClick={() => { clearFilters?.(); setPromisedDateRange(null); setPagination(prev => ({ ...prev, current: 1 })) }} size="small" style={{ width: 90 }}>重置</Button>
+          </div>
+        </div>
+      ),
+      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
       render: (date: string | null) => date || '-',
     },
     {
@@ -306,12 +441,12 @@ export default function KitAnalysis() {
           <Col flex={1} key={i}>
             <Card size="small" className="card-modern" style={{ padding: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: card.color }}>
+                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'calc(1.25rem * var(--font-size-scale))', color: card.color }}>
                   {card.icon}
                 </div>
                 <div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{card.title}</div>
+                  <div style={{ fontSize: 'calc(1.375rem * var(--font-size-scale))', fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
+                  <div style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))', color: '#64748b' }}>{card.title}</div>
                 </div>
               </div>
             </Card>
@@ -363,7 +498,7 @@ export default function KitAnalysis() {
                 <Table
                   rowKey="material_code"
                   dataSource={row.materials || []}
-                  columns={materialColumns}
+                  columns={getMaterialColumns(row.order_no)}
                   pagination={false}
                   size="small"
                   scroll={{ x: 900 }}
@@ -371,16 +506,32 @@ export default function KitAnalysis() {
                   onChange={(_pagination, tableFilters: any, sorter: any) => {
                     const sortField = sorter.field as string | undefined
                     const sortDir = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : ''
-
-                    // Handle filters
-                    const statusFilter = tableFilters.status || []
-                    const supplierFilter = tableFilters.supplier_name?.[0]
-                    handleMaterialFilterChange(row.order_no, 'status', statusFilter.length > 0 ? statusFilter[0] : '')
-                    handleMaterialFilterChange(row.order_no, 'supplier', supplierFilter || '')
-                    handleMaterialSortChange(row.order_no, sortField || '', sortDir)
-
-                    // Load materials with current filters and sort
-                    loadMaterials(row.order_no, statusFilter.length > 0 ? statusFilter : undefined, supplierFilter, sortField || '', sortDir)
+                    const nextFilters: Record<string, any> = {
+                      material_code: tableFilters.material_code?.[0],
+                      material_name: tableFilters.material_name?.[0],
+                      material_property: tableFilters.material_property?.length ? tableFilters.material_property.join(',') : undefined,
+                      material_type: tableFilters.material_type?.[0],
+                      supplier: tableFilters.supplier_name?.[0],
+                      order_qty_min: tableFilters.order_qty?.[0],
+                      order_qty_max: tableFilters.order_qty?.[1],
+                      received_qty_min: tableFilters.received_qty?.[0],
+                      received_qty_max: tableFilters.received_qty?.[1],
+                      eta_start: tableFilters.eta?.[0],
+                      eta_end: tableFilters.eta?.[1],
+                      actual_arrival_date_start: tableFilters.actual_arrival_date?.[0],
+                      actual_arrival_date_end: tableFilters.actual_arrival_date?.[1],
+                      inspection_date_start: tableFilters.inspection_date?.[0],
+                      inspection_date_end: tableFilters.inspection_date?.[1],
+                      status: tableFilters.status?.length ? tableFilters.status.join(',') : undefined,
+                      is_stagnant: tableFilters.is_stagnant?.[0],
+                      sortBy: sortField || '',
+                      sortOrder: sortDir,
+                    }
+                    Object.keys(nextFilters).forEach(key => {
+                      if (nextFilters[key] === undefined || nextFilters[key] === null || nextFilters[key] === '') delete nextFilters[key]
+                    })
+                    handleMaterialFilterChange(row.order_no, nextFilters)
+                    loadMaterials(row.order_no, nextFilters)
                   }}
                 />
               </div>

@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect } from 'react'
-import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom'
-import { Layout, Menu, Button, Dropdown, Space, Breadcrumb, Modal, Form, Input, message, Result } from 'antd'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, Tabs, List, Tag, Typography, notification as antNotification } from 'antd'
 import {
   DashboardOutlined,
   ShoppingCartOutlined,
@@ -12,7 +12,6 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   UserOutlined,
-  HomeOutlined,
   BellOutlined,
   FileTextOutlined,
   UnorderedListOutlined,
@@ -29,20 +28,24 @@ import {
   AccountBookOutlined,
   MessageOutlined,
   FolderOpenOutlined,
+  NotificationOutlined,
+  CheckOutlined,
+  SoundOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
-import { authApi } from '../services/api'
-import FeedbackButton from '../pages/MasterDataCenter/FeedbackManagement/FeedbackButton'
-import { FloatingAssistant } from '../components/Assistant'
+import { authApi, notificationApi } from '../services/api'
+import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
+import ShareButton from '../components/ShareButton'
+import { FloatingAssistant, TopBarAssistant } from '../components/Assistant'
+import FontSizeSetting from '../components/FontSizeSetting'
 
 const { Sider, Content } = Layout
 
-// ---------- Menu definition with permission-based visibility ----------
 type PermissionAwareItem = {
   key: string
   icon?: React.ReactNode
   label: string
-  permission?: string  // resource name — menu item visible if user has resource.read
+  permission?: string
   children?: PermissionAwareItem[]
 }
 
@@ -80,6 +83,7 @@ const allMenuItems: PermissionAwareItem[] = [
     permission: 'production',
     children: [
       { key: '/production-overview', icon: <DashboardOutlined />, label: '生产总览', permission: 'production.overview' },
+      { key: '/schedule-plans', icon: <ProjectOutlined />, label: '计划排产', permission: 'production.schedule_plans' },
       { key: '/front-process', icon: <ContainerOutlined />, label: '前道管理', permission: 'production.front_process' },
       { key: '/smt', icon: <ExperimentOutlined />, label: '贴片管理', permission: 'production.smt' },
       { key: '/lean', icon: <AuditOutlined />, label: '精益管理', permission: 'production.lean' },
@@ -98,6 +102,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/issue-log', icon: <FileTextOutlined />, label: '问题日志', permission: 'exceptions.issue_log' },
       { key: '/change-log', icon: <SwapOutlined />, label: '变更日志', permission: 'exceptions.change_log' },
       { key: '/quality-issues', icon: <AuditOutlined />, label: '品质异常', permission: 'exceptions.quality' },
+      { key: '/product-samples', icon: <FileTextOutlined />, label: '产品封样', permission: 'exceptions.product_samples' },
       { key: '/closure-tracking', icon: <AuditOutlined />, label: '闭环跟踪', permission: 'exceptions.closure' },
     ],
   },
@@ -126,38 +131,41 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/risk-rules', icon: <SettingOutlined />, label: '预警规则', permission: 'rules.risk_rules' },
       { key: '/inspection-rules', icon: <AuditOutlined />, label: '点检规则', permission: 'rules.inspection' },
       { key: '/node-standards', icon: <ContainerOutlined />, label: '节点标准', permission: 'rules.node_standards' },
+      { key: '/order-standards', icon: <FileTextOutlined />, label: '订单标准', permission: 'rules.order_standards' },
+      { key: '/work-instructions', icon: <AuditOutlined />, label: '作业指导书', permission: 'rules.work_instructions' },
       { key: '/responsibility-map', icon: <TeamOutlined />, label: '责任归属', permission: 'rules.responsibility' },
       { key: '/status-dict', icon: <AppstoreOutlined />, label: '状态字典', permission: 'rules.status_dict' },
     ],
   },
   {
-    key: 'masterdata-center',
+    key: 'basicdata-center',
     icon: <DatabaseOutlined />,
-    label: '主数据与集成中心',
+    label: '基础数据与集成中心',
     children: [
-      { key: '/import', icon: <ImportOutlined />, label: '数据集成', permission: 'masterdata.import' },
+      { key: '/import', icon: <ImportOutlined />, label: '数据集成', permission: 'basicdata.import' },
       {
-        key: 'masterdata-management',
+        key: 'basicdata-management',
         icon: <DatabaseOutlined />,
-        label: '主数据管理',
-        permission: 'masterdata.data',
+        label: '基础数据管理',
+        permission: 'basicdata.data',
         children: [
-          { key: '/masterdata/customers', icon: <UserOutlined />, label: '客户主数据', permission: 'masterdata.data' },
-          { key: '/masterdata/suppliers', icon: <ShoppingCartOutlined />, label: '供应商主数据', permission: 'masterdata.data' },
-          { key: '/masterdata/materials', icon: <AppstoreOutlined />, label: '物料主数据', permission: 'masterdata.data' },
-          { key: '/masterdata/skus', icon: <ContainerOutlined />, label: 'SKU主数据', permission: 'masterdata.data' },
-          { key: '/masterdata/products', icon: <FileTextOutlined />, label: '产品主数据', permission: 'masterdata.data' },
-          { key: '/masterdata/warehouses', icon: <ContainerOutlined />, label: '仓库主数据', permission: 'masterdata.data' },
-          { key: '/masterdata/processes', icon: <RocketOutlined />, label: '工序主数据', permission: 'masterdata.data' },
-          { key: '/masterdata/organizations', icon: <TeamOutlined />, label: '组织主数据', permission: 'masterdata.data' },
-          { key: '/masterdata/employees', icon: <UserOutlined />, label: '人员主数据', permission: 'masterdata.data' },
+          { key: '/basicdata/customers', icon: <UserOutlined />, label: '客户', permission: 'basicdata.data' },
+          { key: '/basicdata/suppliers', icon: <ShoppingCartOutlined />, label: '供应商', permission: 'basicdata.data' },
+          { key: '/basicdata/materials', icon: <AppstoreOutlined />, label: '物料', permission: 'basicdata.data' },
+          { key: '/basicdata/skus', icon: <ContainerOutlined />, label: 'SKU', permission: 'basicdata.data' },
+          { key: '/basicdata/products', icon: <FileTextOutlined />, label: '产品', permission: 'basicdata.data' },
+          { key: '/basicdata/warehouses', icon: <ContainerOutlined />, label: '仓库', permission: 'basicdata.data' },
+          { key: '/basicdata/processes', icon: <RocketOutlined />, label: '工序', permission: 'basicdata.data' },
+          { key: '/basicdata/organizations', icon: <TeamOutlined />, label: '组织', permission: 'basicdata.data' },
+          { key: '/basicdata/employees', icon: <UserOutlined />, label: '人员', permission: 'basicdata.data' },
         ],
       },
       { key: '/users', icon: <UserOutlined />, label: '用户管理', permission: 'users' },
       { key: '/audit', icon: <AuditOutlined />, label: '审计日志', permission: 'audit' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
-      { key: '/masterdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'masterdata.feedback' },
-      { key: '/masterdata/files', icon: <FolderOpenOutlined />, label: '文件管理', permission: 'masterdata.files' },
+      { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
+      { key: '/basicdata/files', icon: <FolderOpenOutlined />, label: '文件管理', permission: 'basicdata.files' },
+      { key: '/announcements', icon: <NotificationOutlined />, label: '公告管理', permission: 'announcements' },
     ],
   },
 ]
@@ -165,20 +173,31 @@ const allMenuItems: PermissionAwareItem[] = [
 function filterMenuByPermission(items: PermissionAwareItem[], hasPermission: (resource: string, action: string) => boolean): PermissionAwareItem[] {
   return items
     .map(item => {
-      // Parent group: visibility determined by visible children, not parent's own coarse permission
       if (item.children) {
         const filtered = filterMenuByPermission(item.children, hasPermission)
         if (filtered.length > 0) return { ...item, children: filtered }
         return null
       }
-      // Leaf item: check own permission (fallback to parent resource handled inside hasPermission)
       if (!item.permission || hasPermission(item.permission, 'read')) return item
       return null
     })
     .filter(Boolean) as PermissionAwareItem[]
 }
 
-// Strip custom `permission` field to produce clean Ant Design MenuProps items
+function filterMenuByPath(items: PermissionAwareItem[], targetPath: string): PermissionAwareItem[] {
+  return items
+    .map(item => {
+      if (item.children) {
+        const filtered = filterMenuByPath(item.children, targetPath)
+        if (filtered.length > 0) return { ...item, children: filtered }
+        return null
+      }
+      if (item.key === targetPath) return item
+      return null
+    })
+    .filter(Boolean) as PermissionAwareItem[]
+}
+
 function toAntdItems(items: PermissionAwareItem[]): any[] {
   return items.map(({ permission: _perm, children, ...rest }) => ({
     ...rest,
@@ -186,102 +205,6 @@ function toAntdItems(items: PermissionAwareItem[]): any[] {
   }))
 }
 
-// Map path → display label
-const breadcrumbMap: Record<string, string> = {
-  '/dashboard': '供应链驾驶舱',
-  '/orders': '订单总控台',
-  '/run-orders': '跑单管理',
-  '/order-risk-pool': '订单风险池',
-  '/purchase-plan': '采购到料计划',
-  '/material-issues': '问题物料池',
-  '/long-lead-materials': '长交期物料池',
-  '/kit-analysis': '齐套分析',
-  '/supplier-risk': '供应商风险分析',
-  '/supplier-payment': '供应商付款排程',
-  '/issues': '异常总池',
-  '/issue-log': '问题日志',
-  '/change-log': '变更日志',
-  '/quality-issues': '品质异常',
-  '/closure-tracking': '闭环跟踪',
-  '/production-overview': '生产总览',
-  '/front-process': '前道管理',
-  '/smt': '贴片管理',
-  '/lean': '精益管理',
-  '/assembly': '组装管理',
-  '/packaging': '包装管理',
-  '/process-exceptions': '工序异常池',
-  '/meetings': '会议与行动项',
-  '/npi': '项目总览',
-  '/import': '数据集成',
-  '/masterdata/customers': '客户主数据',
-  '/masterdata/suppliers': '供应商主数据',
-  '/masterdata/materials': '物料主数据',
-  '/masterdata/skus': 'SKU主数据',
-  '/masterdata/products': '产品主数据',
-  '/masterdata/warehouses': '仓库主数据',
-  '/masterdata/processes': '工序主数据',
-  '/masterdata/organizations': '组织主数据',
-  '/masterdata/employees': '人员主数据',
-  '/risk-rules': '预警规则',
-  '/inspection-rules': '点检规则',
-  '/node-standards': '节点标准',
-  '/responsibility-map': '责任归属',
-  '/status-dict': '状态字典',
-  '/users': '用户管理',
-  '/audit': '审计日志',
-  '/sync-config': '同步SQL配置',
-  '/masterdata/feedback': '问题反馈',
-  '/masterdata/files': '文件管理',
-}
-
-// Map path → parent group label (for breadcrumb nesting)
-const parentGroupMap: Record<string, string> = {
-  '/orders': '订单交付中心',
-  '/run-orders': '订单交付中心',
-  '/order-risk-pool': '订单交付中心',
-  '/purchase-plan': '物料齐套中心',
-  '/material-issues': '物料齐套中心',
-  '/long-lead-materials': '物料齐套中心',
-  '/kit-analysis': '物料齐套中心',
-  '/supplier-risk': '物料齐套中心',
-  '/supplier-payment': '物料齐套中心',
-  '/production-overview': '生产协同中心',
-  '/front-process': '生产协同中心',
-  '/smt': '生产协同中心',
-  '/lean': '生产协同中心',
-  '/assembly': '生产协同中心',
-  '/packaging': '生产协同中心',
-  '/process-exceptions': '生产协同中心',
-  '/issues': '异常与质量中心',
-  '/issue-log': '异常与质量中心',
-  '/change-log': '异常与质量中心',
-  '/quality-issues': '异常与质量中心',
-  '/closure-tracking': '异常与质量中心',
-  '/meetings': '会议与任务中心',
-  '/npi': '新品/NPI项目中心',
-  '/risk-rules': '规则配置中心',
-  '/inspection-rules': '规则配置中心',
-  '/node-standards': '规则配置中心',
-  '/responsibility-map': '规则配置中心',
-  '/status-dict': '规则配置中心',
-  '/import': '主数据与集成中心',
-  '/masterdata/customers': '主数据管理',
-  '/masterdata/suppliers': '主数据管理',
-  '/masterdata/materials': '主数据管理',
-  '/masterdata/skus': '主数据管理',
-  '/masterdata/products': '主数据管理',
-  '/masterdata/warehouses': '主数据管理',
-  '/masterdata/processes': '主数据管理',
-  '/masterdata/organizations': '主数据管理',
-  '/masterdata/employees': '主数据管理',
-  '/users': '主数据与集成中心',
-  '/audit': '主数据与集成中心',
-  '/sync-config': '主数据与集成中心',
-  '/masterdata/feedback': '主数据与集成中心',
-  '/masterdata/files': '主数据与集成中心',
-}
-
-// Map path → parent group menu key (for auto-expanding sub-menus)
 const pathToGroupKey: Record<string, string> = {
   '/orders': 'order-delivery',
   '/run-orders': 'order-delivery',
@@ -293,6 +216,7 @@ const pathToGroupKey: Record<string, string> = {
   '/supplier-risk': 'material-center',
   '/supplier-payment': 'material-center',
   '/production-overview': 'production-center',
+  '/schedule-plans': 'production-center',
   '/front-process': 'production-center',
   '/smt': 'production-center',
   '/lean': 'production-center',
@@ -303,32 +227,35 @@ const pathToGroupKey: Record<string, string> = {
   '/issue-log': 'exception-center',
   '/change-log': 'exception-center',
   '/quality-issues': 'exception-center',
+  '/product-samples': 'exception-center',
   '/closure-tracking': 'exception-center',
   '/meetings': 'meeting-center',
   '/npi': 'npi-center',
   '/risk-rules': 'rules-center',
   '/inspection-rules': 'rules-center',
   '/node-standards': 'rules-center',
+  '/order-standards': 'rules-center',
+  '/work-instructions': 'rules-center',
   '/responsibility-map': 'rules-center',
   '/status-dict': 'rules-center',
-  '/import': 'masterdata-center',
-  '/masterdata/customers': 'masterdata-management',
-  '/masterdata/suppliers': 'masterdata-management',
-  '/masterdata/materials': 'masterdata-management',
-  '/masterdata/skus': 'masterdata-management',
-  '/masterdata/products': 'masterdata-management',
-  '/masterdata/warehouses': 'masterdata-management',
-  '/masterdata/processes': 'masterdata-management',
-  '/masterdata/organizations': 'masterdata-management',
-  '/masterdata/employees': 'masterdata-management',
-  '/users': 'masterdata-center',
-  '/audit': 'masterdata-center',
-  '/sync-config': 'masterdata-center',
-  '/masterdata/feedback': 'masterdata-center',
-  '/masterdata/files': 'masterdata-center',
+  '/import': 'basicdata-center',
+  '/basicdata/customers': 'basicdata-management',
+  '/basicdata/suppliers': 'basicdata-management',
+  '/basicdata/materials': 'basicdata-management',
+  '/basicdata/skus': 'basicdata-management',
+  '/basicdata/products': 'basicdata-management',
+  '/basicdata/warehouses': 'basicdata-management',
+  '/basicdata/processes': 'basicdata-management',
+  '/basicdata/organizations': 'basicdata-management',
+  '/basicdata/employees': 'basicdata-management',
+  '/users': 'basicdata-center',
+  '/audit': 'basicdata-center',
+  '/sync-config': 'basicdata-center',
+  '/basicdata/feedback': 'basicdata-center',
+  '/basicdata/files': 'basicdata-center',
+  '/announcements': 'basicdata-center',
 }
 
-// Path → required permission for route-level access control
 const pathToPermission: Record<string, string> = {
   '/dashboard': 'dashboard',
   '/orders': 'orders.list',
@@ -346,8 +273,10 @@ const pathToPermission: Record<string, string> = {
   '/issue-log': 'exceptions.issue_log',
   '/change-log': 'exceptions.change_log',
   '/quality-issues': 'exceptions.quality',
+  '/product-samples': 'exceptions.product_samples',
   '/closure-tracking': 'exceptions.closure',
   '/production-overview': 'production.overview',
+  '/schedule-plans': 'production.schedule_plans',
   '/front-process': 'production.front_process',
   '/smt': 'production.smt',
   '/lean': 'production.lean',
@@ -356,55 +285,148 @@ const pathToPermission: Record<string, string> = {
   '/process-exceptions': 'production.exceptions',
   '/meetings': 'meetings',
   '/npi': 'npi',
-  '/import': 'masterdata.import',
+  '/import': 'basicdata.import',
   '/risk-rules': 'rules.risk_rules',
   '/inspection-rules': 'rules.inspection',
   '/node-standards': 'rules.node_standards',
+  '/order-standards': 'rules.order_standards',
+  '/work-instructions': 'rules.work_instructions',
   '/responsibility-map': 'rules.responsibility',
   '/status-dict': 'rules.status_dict',
   '/users': 'users',
   '/audit': 'audit',
   '/sync-config': 'settings',
-  '/masterdata/customers': 'masterdata.data',
-  '/masterdata/suppliers': 'masterdata.data',
-  '/masterdata/materials': 'masterdata.data',
-  '/masterdata/skus': 'masterdata.data',
-  '/masterdata/products': 'masterdata.data',
-  '/masterdata/warehouses': 'masterdata.data',
-  '/masterdata/processes': 'masterdata.data',
-  '/masterdata/organizations': 'masterdata.data',
-  '/masterdata/employees': 'masterdata.data',
-  '/masterdata/feedback': 'masterdata.feedback',
-  '/masterdata/files': 'masterdata.files',
+  '/basicdata/customers': 'basicdata.data',
+  '/basicdata/suppliers': 'basicdata.data',
+  '/basicdata/materials': 'basicdata.data',
+  '/basicdata/skus': 'basicdata.data',
+  '/basicdata/products': 'basicdata.data',
+  '/basicdata/warehouses': 'basicdata.data',
+  '/basicdata/processes': 'basicdata.data',
+  '/basicdata/organizations': 'basicdata.data',
+  '/basicdata/employees': 'basicdata.data',
+  '/basicdata/feedback': 'basicdata.feedback',
+  '/basicdata/files': 'basicdata.files',
+  '/announcements': 'announcements',
 }
 
 function getRequiredPermission(pathname: string): string | undefined {
   if (pathToPermission[pathname]) return pathToPermission[pathname]
-  // 订单详情页 /orders/:orderNo/lines/:lineNo
   if (pathname.startsWith('/orders/')) return 'orders.list'
   return undefined
 }
 
 export default function MainLayout() {
-  const [collapsed, setCollapsed] = useState(false)
+  const { currentUser, logout, hasPermission, isShareUser, getShareTargetPath, exitShare, originalToken, setAuth } = useAuthStore()
   const navigate = useNavigate()
   const location = useLocation()
-  const logout = useAuthStore((s: any) => s.logout)
-  const user = useAuthStore((s: any) => s.user)
-  const token = useAuthStore((s: any) => s.token)
-  const setAuth = useAuthStore((s: any) => s.setAuth)
-  const hasPermission = useAuthStore((s: any) => s.hasPermission)
+  const [collapsed, setCollapsed] = useState(false)
+  const [bellOpen, setBellOpen] = useState(false)
+  const [notifTab, setNotifTab] = useState('announcement_system')
+  const [notifList, setNotifList] = useState<any[]>([])
+  const [notifLoading, setNotifLoading] = useState(false)
+  const [unreadTotal, setUnreadTotal] = useState(0)
+  const [unreadByType, setUnreadByType] = useState<Record<string, number>>({})
   const [pwdModalOpen, setPwdModalOpen] = useState(false)
   const [pwdForm] = Form.useForm()
+  const toastShown = useRef(false)
 
-  // Refresh permissions on mount in case role was modified while user was logged in
+  const fetchUnreadCount = useCallback(async () => {
+    if (!originalToken || isShareUser()) return
+    try {
+      const res: any = await notificationApi.unreadCount()
+      setUnreadTotal(res.data?.total || 0)
+      setUnreadByType(res.data?.by_type || {})
+    } catch { /* silent */ }
+  }, [originalToken, isShareUser])
+
+  const fetchNotifList = useCallback(async (tab?: string) => {
+    if (!originalToken || isShareUser()) return
+    setNotifLoading(true)
+    try {
+      const activeTab = tab || notifTab
+      const params: Record<string, any> = { page_size: 30 }
+      if (activeTab === 'announcement_system') {
+        const [annRes, sysRes] = await Promise.all([
+          notificationApi.list({ ...params, type: 'announcement' }),
+          notificationApi.list({ ...params, type: 'system' })
+        ])
+        const items = [...(annRes.data?.items || []), ...(sysRes.data?.items || [])]
+        items.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        setNotifList(items)
+      } else if (activeTab === 'alert') {
+        const res: any = await notificationApi.list(params)
+        const items = (res.data?.items || []).filter((n: any) => n.type !== 'announcement' && n.type !== 'system')
+        setNotifList(items)
+      }
+    } catch { /* silent */ }
+    setNotifLoading(false)
+  }, [originalToken, isShareUser, notifTab])
+
   useEffect(() => {
-    if (!token) return
+    if (!originalToken || isShareUser()) return
     authApi.getMe()
-      .then((res: any) => setAuth(token, res.data))
-      .catch(() => { /* getMe failure handled by axios interceptor (401 → logout) */ })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+      .then((res: any) => {
+        if (res.data) {
+          setAuth(originalToken, res.data)
+        }
+      })
+      .catch(() => {})
+  }, [originalToken, isShareUser, setAuth])
+
+  useEffect(() => {
+    if (!originalToken || isShareUser()) return
+    fetchUnreadCount()
+    const timer = setInterval(fetchUnreadCount, 60000)
+    return () => clearInterval(timer)
+  }, [originalToken, isShareUser, fetchUnreadCount])
+
+  useEffect(() => {
+    if (!originalToken || isShareUser() || toastShown.current) return
+    if (sessionStorage.getItem('notif_toast_shown')) { toastShown.current = true; return }
+    const showToast = async () => {
+      try {
+        const res: any = await notificationApi.list({ is_read: false, page_size: 5 })
+        const items = (res.data?.items || []).filter((n: any) => n.priority === 'important' || n.priority === 'urgent')
+        if (items.length > 0) {
+          antNotification.info({
+            message: '您有新的公告',
+            description: items.map((n: any) => n.title).join('、'),
+            placement: 'topRight',
+            duration: 8,
+            onClick: () => { setBellOpen(true) },
+          })
+        }
+      } catch { /* silent */ }
+      toastShown.current = true
+      sessionStorage.setItem('notif_toast_shown', '1')
+    }
+    const t = setTimeout(showToast, 2000)
+    return () => clearTimeout(t)
+  }, [originalToken, isShareUser])
+
+  useEffect(() => {
+    if (bellOpen) fetchNotifList(notifTab)
+  }, [bellOpen, notifTab, fetchNotifList])
+
+  const handleMarkRead = async (id: number) => {
+    await notificationApi.markRead(id)
+    setNotifList(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n))
+    fetchUnreadCount()
+  }
+
+  const handleMarkAllRead = async () => {
+    if (notifTab === 'announcement_system') {
+      await Promise.all([
+        notificationApi.markAllRead('announcement'),
+        notificationApi.markAllRead('system')
+      ])
+    } else {
+      await notificationApi.markAllRead(notifTab)
+    }
+    setNotifList(prev => prev.map(n => ({ ...n, is_read: true })))
+    fetchUnreadCount()
+  }
 
   const handleChangePassword = async () => {
     try {
@@ -418,163 +440,181 @@ export default function MainLayout() {
     }
   }
 
-  // Permission-aware menu items — depend on user so menu re-renders when permissions refresh
-  const menuItems = useMemo(() => toAntdItems(filterMenuByPermission(allMenuItems, hasPermission)), [hasPermission, user])
+  const menuItems = useMemo(() => {
+    if (isShareUser()) {
+      const targetPath = getShareTargetPath()
+      if (targetPath) {
+        return toAntdItems(filterMenuByPath(allMenuItems, targetPath))
+      }
+      return []
+    }
+    return toAntdItems(filterMenuByPermission(allMenuItems, hasPermission))
+  }, [hasPermission, currentUser, isShareUser, getShareTargetPath])
 
-  // Auto-open parent sub-menu for the current path
   const openKeys = useMemo(() => {
     const gk = pathToGroupKey[location.pathname]
     return gk ? [gk] : []
   }, [location.pathname])
 
-  const breadcrumbItems = useMemo(() => {
-    const items: { title: React.ReactNode }[] = [
-      { title: <Link to="/dashboard"><HomeOutlined /> <span style={{ marginLeft: 4 }}>首页</span></Link> },
-    ]
-    const path = location.pathname
-    if (path !== '/dashboard') {
-      // Insert parent group breadcrumb if applicable
-      const parentLabel = parentGroupMap[path]
-      if (parentLabel) {
-        items.push({ title: parentLabel })
-      }
-      const label = breadcrumbMap[path]
-      if (label) {
-        items.push({ title: label })
-      } else if (path.startsWith('/orders/')) {
-        items.push({ title: <Link to="/orders">订单交付中心</Link> })
-        items.push({ title: '订单详情' })
-      }
-    }
-    return items
-  }, [location.pathname])
-
   return (
     <Layout className="min-h-screen" style={{ background: '#f0f4f8' }}>
-      {/* ===== 左侧菜单 ===== */}
-      <Sider
-        trigger={null}
-        collapsible
-        collapsed={collapsed}
-        width={256}
-        className="sidebar-modern"
-        style={{
-          overflowY: 'auto',
-          height: '100vh',
-          position: 'fixed',
-          left: 0,
-          top: 0,
-          bottom: 0,
-          zIndex: 10,
-        }}
-      >
-        {/* Logo Section */}
-        <div 
-          className="flex items-center gap-3 px-6" 
-          style={{ 
-            height: 72, 
-            paddingTop: 16,
-            paddingBottom: 16,
+      {!isShareUser() && (
+        <Sider
+          trigger={null}
+          collapsible
+          collapsed={collapsed}
+          width={256}
+          className="sidebar-modern"
+          style={{
+            overflowY: 'auto',
+            height: '100vh',
+            position: 'fixed',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            zIndex: 10,
           }}
         >
-          <div 
-            style={{ 
-              width: 40, 
-              height: 40, 
-              borderRadius: 12, 
-              background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%)',
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'center', 
-              flexShrink: 0,
-              boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)'
-            }}
-          >
-            <span style={{ color: '#fff', fontWeight: 700, fontSize: 16, letterSpacing: 1 }}>S</span>
-          </div>
-          {!collapsed && (
-            <div className="flex flex-col">
-              <span 
-                className="font-bold" 
-                style={{ 
-                  color: '#fff',
-                  fontSize: 18, 
-                  letterSpacing: 0.5,
-                }}
-              >
-                SPC 中台
-              </span>
-              <span 
-                style={{ 
-                  color: '#94a3b8', 
-                  fontSize: 11, 
-                  fontWeight: 400,
-                  letterSpacing: 1,
-                  textTransform: 'uppercase'
-                }}
-              >
-                供应链协同
-              </span>
+          <div className="flex items-center gap-3 px-6" style={{ height: 72, paddingTop: 16, paddingBottom: 16 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)' }}>
+              <span style={{ color: '#fff', fontWeight: 700, fontSize: 'calc(1rem * var(--font-size-scale))', letterSpacing: 1 }}>S</span>
             </div>
-          )}
-        </div>
-
-        {/* Menu */}
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[location.pathname]}
-          defaultOpenKeys={openKeys}
-          items={menuItems}
-          onClick={({ key }) => navigate(key)}
-        />
-      </Sider>
-
-      <Layout style={{ marginLeft: collapsed ? 80 : 256, transition: 'margin-left .2s', minHeight: '100vh' }}>
-        {/* ===== 顶部导航 ===== */}
-        <div className="header-bar" style={{ position: 'sticky', top: 0, zIndex: 9 }}>
-          <Space size="middle">
-            <Button
-              type="text"
-              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-              onClick={() => setCollapsed(!collapsed)}
-              style={{ fontSize: 16, width: 36, height: 36, borderRadius: 10 }}
-            />
-          </Space>
-          <Space size="middle">
-            <FeedbackButton />
-            <Button type="text" icon={<BellOutlined />} style={{ fontSize: 16, width: 36, height: 36, borderRadius: 10, color: '#64748b' }} />
-            <Dropdown
-              menu={{
-                items: [
-                  { key: 'change-pwd', icon: <KeyOutlined />, label: '修改密码' },
-                  { type: 'divider' as const },
-                  { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
-                ],
-                onClick: ({ key }) => {
-                  if (key === 'logout') { logout(); navigate('/login') }
-                  if (key === 'change-pwd') { pwdForm.resetFields(); setPwdModalOpen(true) }
-                },
-              }}
-            >
-              <Space className="cursor-pointer" style={{ padding: '4px 12px', borderRadius: 10 }}>
-                <div style={{ width: 30, height: 30, borderRadius: 8, background: 'linear-gradient(135deg, #6366f1, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <UserOutlined style={{ color: '#fff', fontSize: 13 }} />
-                </div>
-                <span style={{ color: '#334155', fontSize: 13, fontWeight: 500 }}>
-                  {user?.display_name || user?.username || '用户'}
+            {!collapsed && (
+              <div className="flex flex-col">
+                <span className="font-bold" style={{ color: '#fff', fontSize: 'calc(1.125rem * var(--font-size-scale))', letterSpacing: 0.5 }}>
+                  SPC 中台
                 </span>
-              </Space>
-            </Dropdown>
+                <span style={{ color: '#94a3b8', fontSize: 'calc(0.6875rem * var(--font-size-scale))', fontWeight: 400, letterSpacing: 1, textTransform: 'uppercase' }}>
+                  供应链协同
+                </span>
+              </div>
+            )}
+          </div>
+
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[location.pathname]}
+            defaultOpenKeys={openKeys}
+            items={menuItems}
+            onClick={({ key }) => navigate(key)}
+          />
+        </Sider>
+      )}
+
+      <Layout style={{ marginLeft: !isShareUser() && collapsed ? 80 : (!isShareUser() ? 256 : 0), transition: 'margin-left .2s', minHeight: '100vh' }}>
+        <div className="header-bar" style={{ position: 'sticky', top: 0, zIndex: 9 }}>
+          {!isShareUser() && (
+            <Space size="middle">
+              <Button
+                type="text"
+                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                onClick={() => setCollapsed(!collapsed)}
+                style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', width: 36, height: 36, borderRadius: 10 }}
+              />
+            </Space>
+          )}
+          <Space size="middle">
+            {!isShareUser() && <ShareButton />}
+            <FeedbackButton />
+            <TopBarAssistant />
+            <FontSizeSetting />
+            <Popover
+              open={bellOpen}
+              onOpenChange={setBellOpen}
+              trigger="click"
+              placement="bottomRight"
+              overlayStyle={{ width: 380 }}
+              content={
+                <div style={{ margin: '-12px -16px' }}>
+                  <Tabs
+                    activeKey={notifTab}
+                    onChange={setNotifTab}
+                    centered
+                    size="small"
+                    style={{ marginBottom: 0 }}
+                    items={[
+                      {
+                        key: 'announcement_system',
+                        label: <span style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}><SoundOutlined /> 公告系统 {(unreadByType['announcement'] || 0) + (unreadByType['system'] || 0) > 0 ? <Badge count={(unreadByType['announcement'] || 0) + (unreadByType['system'] || 0)} size="small" offset={[4, -2]} /> : null}</span>,
+                      },
+                      {
+                        key: 'alert',
+                        label: <span style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}><WarningOutlined /> 提醒 {(unreadByType['material_alert'] || 0) + (unreadByType['exception_alert'] || 0) > 0 ? <Badge count={(unreadByType['material_alert'] || 0) + (unreadByType['exception_alert'] || 0)} size="small" offset={[4, -2]} /> : null}</span>,
+                      },
+                    ]}
+                  />
+                  <List
+                    loading={notifLoading}
+                    dataSource={notifList}
+                    locale={{ emptyText: '暂无消息' }}
+                    style={{ maxHeight: 360, overflowY: 'auto', padding: '0 12px' }}
+                    renderItem={(item: any) => (
+                      <List.Item
+                        key={item.id}
+                        style={{ cursor: 'pointer', padding: '10px 4px', opacity: item.is_read ? 0.55 : 1 }}
+                        onClick={() => { if (!item.is_read) handleMarkRead(item.id) }}
+                      >
+                        <List.Item.Meta
+                          title={
+                            <Space size={4}>
+                              {!item.is_read && <Badge status="processing" />}
+                              <Typography.Text style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }} strong={!item.is_read}>{item.title}</Typography.Text>
+                              {item.priority === 'urgent' && <Tag color="red" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', lineHeight: '18px' }}>紧急</Tag>}
+                              {item.priority === 'important' && <Tag color="gold" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', lineHeight: '18px' }}>重要</Tag>}
+                            </Space>
+                          }
+                          description={<Typography.Text type="secondary" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>{item.created_at}</Typography.Text>}
+                        />
+                      </List.Item>
+                    )}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderTop: '1px solid #f0f0f0' }}>
+                    <Button type="link" size="small" icon={<CheckOutlined />} onClick={handleMarkAllRead} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>全部已读</Button>
+                    <Button type="link" size="small" onClick={() => { setBellOpen(false); navigate('/announcements') }} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>查看全部</Button>
+                  </div>
+                </div>
+              }
+            >
+              <Badge count={unreadTotal} size="small" offset={[-4, 4]}>
+                <Button type="text" icon={<BellOutlined />} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', width: 36, height: 36, borderRadius: 10, color: '#64748b' }} />
+              </Badge>
+            </Popover>
+            {isShareUser() ? (
+              <Button
+                type="primary"
+                icon={<LogoutOutlined />}
+                onClick={() => { exitShare(); navigate('/dashboard') }}
+              >
+                退出分享
+              </Button>
+            ) : (
+              <Dropdown
+                menu={{
+                  items: [
+                    { key: 'change-pwd', icon: <KeyOutlined />, label: '修改密码' },
+                    { type: 'divider' as const },
+                    { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === 'logout') { logout(); navigate('/login') }
+                    if (key === 'change-pwd') { pwdForm.resetFields(); setPwdModalOpen(true) }
+                  },
+                }}
+              >
+                <Space className="cursor-pointer" style={{ padding: '4px 12px', borderRadius: 10 }}>
+                  <div style={{ width: 30, height: 30, borderRadius: 8, background: 'linear-gradient(135deg, #6366f1, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <UserOutlined style={{ color: '#fff', fontSize: 'calc(0.875rem * var(--font-size-scale))' }} />
+                  </div>
+                  <span style={{ color: '#334155', fontSize: 'calc(0.875rem * var(--font-size-scale))', fontWeight: 500 }}>
+                    {currentUser && 'display_name' in currentUser ? (currentUser.display_name || currentUser.username) : '用户'}
+                  </span>
+                </Space>
+              </Dropdown>
+            )}
           </Space>
         </div>
 
-        {/* ===== 面包屑 ===== */}
-        <div style={{ padding: '14px 24px 0' }}>
-          <Breadcrumb items={breadcrumbItems} style={{ fontSize: 13 }} />
-        </div>
-
-        {/* ===== 修改密码弹窗 ===== */}
         <Modal
           title="修改密码"
           open={pwdModalOpen}
@@ -609,24 +649,10 @@ export default function MainLayout() {
           </Form>
         </Modal>
 
-        {/* ===== 页面内容 ===== */}
-        <Content style={{ padding: '16px 24px 24px' }}>
-          {(() => {
-            const requiredPerm = getRequiredPermission(location.pathname)
-            const hasAccess = !requiredPerm || hasPermission(requiredPerm, 'read')
-            if (hasAccess) return <Outlet />
-            return (
-              <Result
-                status="403"
-                title="403"
-                subTitle="抱歉，您没有访问该页面的权限。"
-                extra={<Button type="primary" onClick={() => navigate('/dashboard')}>返回首页</Button>}
-              />
-            )
-          })()}
+        <Content style={{ padding: '12px 24px 24px' }}>
+          <Outlet />
         </Content>
       </Layout>
-      <FloatingAssistant />
     </Layout>
   )
 }

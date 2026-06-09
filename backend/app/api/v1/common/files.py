@@ -15,9 +15,9 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.security import PermissionChecker
 from app.core.storage import get_storage
-from app.models.masterdata.file_asset import FileAsset
+from app.models.basicdata.file_asset import FileAsset
 from app.schemas.common import ResponseModel
-from app.schemas.masterdata.file_asset import FileAssetOut, FileStatsOut
+from app.schemas.basicdata.file_asset import FileAssetOut, FileStatsOut
 from app.services.common.file_service import FileService
 
 router = APIRouter()
@@ -75,16 +75,34 @@ async def list_files(
     uploader: Optional[str] = None,
     keyword: Optional[str] = None,
     is_orphan: Optional[bool] = None,
-    current_user: dict = Depends(PermissionChecker("masterdata.files", "read")),
+    sort_by: Optional[str] = Query(None, description="排序字段"),
+    sort_order: Optional[str] = Query(None, description="排序方向 asc/desc"),
+    current_user: dict = Depends(PermissionChecker("basicdata.files", "read")),
     db: AsyncSession = Depends(get_db),
 ):
+    SORTABLE = {
+        'name': FileAsset.name,
+        'size': FileAsset.size,
+        'mime': FileAsset.mime,
+        'namespace': FileAsset.namespace,
+        'biz_ref': FileAsset.biz_ref,
+        'uploader_name': FileAsset.uploader_name,
+        'uploaded_at': FileAsset.uploaded_at,
+    }
+
     conds = [FileAsset.deleted_at.is_(None)]
     if namespace:
-        conds.append(FileAsset.namespace == namespace)
+        namespaces = [n.strip() for n in namespace.split(",") if n.strip()]
+        if namespaces:
+            conds.append(FileAsset.namespace.in_(namespaces))
     if mime:
-        conds.append(FileAsset.mime.ilike(f"%{mime}%"))
+        mimes = [m.strip() for m in mime.split(",") if m.strip()]
+        if mimes:
+            conds.append(FileAsset.mime.in_(mimes))
     if uploader:
-        conds.append(FileAsset.uploader_name.ilike(f"%{uploader}%"))
+        uploaders = [u.strip() for u in uploader.split(",") if u.strip()]
+        if uploaders:
+            conds.append(FileAsset.uploader_name.in_(uploaders))
     if keyword:
         like = f"%{keyword}%"
         conds.append(or_(
@@ -99,8 +117,19 @@ async def list_files(
         select(func.count()).select_from(base.subquery())
     )).scalar() or 0
 
+    # 排序
+    order_clauses = []
+    if sort_by and sort_by in SORTABLE:
+        col = SORTABLE[sort_by]
+        if sort_order == 'desc':
+            order_clauses.append(col.desc().nullslast())
+        else:
+            order_clauses.append(col.asc().nullslast())
+    if not order_clauses:
+        order_clauses = [FileAsset.uploaded_at.desc()]
+
     rows = (await db.execute(
-        base.order_by(FileAsset.uploaded_at.desc())
+        base.order_by(*order_clauses)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )).scalars().all()
@@ -116,7 +145,7 @@ async def list_files(
 # ---------- 统计 ----------
 @router.get("/stats", response_model=ResponseModel[FileStatsOut])
 async def file_stats(
-    current_user: dict = Depends(PermissionChecker("masterdata.files", "read")),
+    current_user: dict = Depends(PermissionChecker("basicdata.files", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     svc = FileService(db)
@@ -128,7 +157,7 @@ async def file_stats(
 @router.delete("/{asset_id}", response_model=ResponseModel[dict])
 async def delete_file(
     asset_id: int,
-    current_user: dict = Depends(PermissionChecker("masterdata.files", "delete")),
+    current_user: dict = Depends(PermissionChecker("basicdata.files", "delete")),
     db: AsyncSession = Depends(get_db),
 ):
     svc = FileService(db)
@@ -143,7 +172,7 @@ async def delete_file(
 @router.post("/cleanup-orphans", response_model=ResponseModel[dict])
 async def cleanup_orphans(
     days: int = Query(7, ge=0, le=365),
-    current_user: dict = Depends(PermissionChecker("masterdata.files", "delete")),
+    current_user: dict = Depends(PermissionChecker("basicdata.files", "delete")),
     db: AsyncSession = Depends(get_db),
 ):
     svc = FileService(db)

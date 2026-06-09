@@ -167,7 +167,16 @@ src/
 - 侧边栏渐变 `linear-gradient(180deg, #1e1b4b, #312e81)`
 - Glassmorphism：半透明白 `rgba(255,255,255,.55)`
 
-### 5.5 组件编写
+### 5.5 字体大小统一规范
+- **全局配置**：使用 CSS 变量 `--font-size-scale`（默认值 1），通过 `useThemeStore` 管理
+- **Ant Design 组件**：自动继承全局配置，无需额外处理（`ConfigProvider` 已设置 `fontSize: 14 * fontSizeScale`）
+- **自定义样式**：在 `index.css` 或组件样式中使用 `calc(base_size * var(--font-size-scale))` 格式
+- **内联样式**：使用 `style={{ fontSize: 'calc(1rem * var(--font-size-scale))' }}`
+- **TailwindCSS**：配合 CSS 变量使用，避免硬编码固定字体大小
+- **禁止**：在页面组件中硬编码固定字体大小值（如 `fontSize: 14px`），必须使用 CSS 变量实现可缩放
+- **动态调整**：用户可通过 `FontSizeSetting` 组件调整全局缩放比例，所有使用该变量的页面会自动同步
+
+### 5.6 组件编写
 - 函数式组件 + hooks
 - 页面目录 `index.tsx` 为入口，子组件放 `components/`
 - 表格优先 ProTable，表单优先 ProForm，日期用 dayjs

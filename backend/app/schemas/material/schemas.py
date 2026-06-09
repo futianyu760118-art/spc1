@@ -14,7 +14,9 @@ class PurchaseOrderOut(BaseModel):
     material_code: str
     supplier_code: Optional[str] = None
     supplier_name: Optional[str] = None
+    supplier_account: Optional[str] = None
     material_type_name: Optional[str] = None
+    material_property: Optional[int] = None
     material_name: Optional[str] = None
     po_qty: Optional[float] = None
     po_price: Optional[float] = None
@@ -35,6 +37,8 @@ class PurchaseOrderOut(BaseModel):
     inspection_date: Optional[date] = None
     is_stagnant: bool = False
     stagnant_qty: Optional[float] = None
+    # 缺料差异：po_qty - received_qty，正数表示缺料
+    shortage_qty: Optional[float] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -47,7 +51,9 @@ class PurchaseOrderCreate(BaseModel):
     material_code: str
     supplier_code: Optional[str] = None
     supplier_name: Optional[str] = None
+    supplier_account: Optional[str] = None
     material_type_name: Optional[str] = None
+    material_property: Optional[int] = None
     material_name: Optional[str] = None
     po_qty: Optional[float] = None
     po_price: Optional[float] = None
@@ -69,6 +75,12 @@ class PurchaseOrderUpdate(BaseModel):
     detail_id: Optional[int] = None
     supplier_code: Optional[str] = None
     supplier_name: Optional[str] = None
+    supplier_account: Optional[str] = None
+    material_property: Optional[int] = None
+    material_name: Optional[str] = None
+    spec_model: Optional[str] = None
+    unit: Optional[str] = None
+    order_no: Optional[str] = None
     po_qty: Optional[float] = None
     po_price: Optional[float] = None
     eta: Optional[date] = None
@@ -79,6 +91,17 @@ class PurchaseOrderUpdate(BaseModel):
     received_qty: Optional[float] = None
     arrival_hour_note: Optional[str] = None
     inspection_date: Optional[date] = None
+
+
+class PurchaseOrderBatchUpdate(BaseModel):
+    """批量更新采购到料计划（交货时间 + 责任人）"""
+    ids: List[int]
+    eta: Optional[date] = None
+    owner: Optional[str] = None
+    supplier_account: Optional[str] = None
+    actual_arrival_date: Optional[date] = None
+    inspection_date: Optional[date] = None
+    clear_fields: Optional[List[str]] = None
 
 
 class POStatusUpdate(BaseModel):
@@ -214,13 +237,23 @@ class LongLeadDerivedItem(BaseModel):
 class KitAnalysisMaterialItem(BaseModel):
     material_code: str
     material_name: Optional[str] = None
+    material_property: Optional[int] = None
+    material_property_label: Optional[str] = None
+    material_type: Optional[str] = None
     supplier_name: Optional[str] = None
     order_qty: Optional[float] = None
+    shortage_qty: Optional[float] = None
+    req_date: Optional[date] = None
+    po_no: Optional[str] = None
+    po_count: int = 0
     received_qty: Optional[float] = None
     eta: Optional[date] = None
+    first_eta: Optional[date] = None
+    latest_eta: Optional[date] = None
     actual_arrival_date: Optional[date] = None
     inspection_date: Optional[date] = None
     status: str
+    status_label: Optional[str] = None
     is_stagnant: bool = False
     stagnant_qty: Optional[float] = None
 
@@ -231,6 +264,8 @@ class KitAnalysisItem(BaseModel):
     received_materials: int
     inspected_materials: int
     pending_inspection: int
+    not_ordered_materials: int = 0
+    overdue_materials: int = 0
     stagnant_materials: int = 0
     kit_rate: float
     risk_level: str
@@ -275,6 +310,16 @@ class PurchasePlanStats(BaseModel):
 
 # ============ 供应商付款排程（基于 purchase_invoice 聚合） ============
 
+class InvoiceDetail(BaseModel):
+    invoice_no: str = ''
+    line_no: str = ''
+    invoice_date: Optional[str] = None
+    payment_term: str = ''
+    settlement_method: str = ''
+    invoice_amount: float = 0.0
+    remain_payable: float = 0.0
+
+
 class SupplierPaymentOut(BaseModel):
     supplier_code: str
     supplier_name: Optional[str] = None
@@ -284,7 +329,9 @@ class SupplierPaymentOut(BaseModel):
     payment_method: Optional[str] = None
     total_payable: Optional[float] = None
     monthly_due: Optional[float] = None
+    monthly_bill: Optional[float] = None
     payment_month: Optional[str] = None
+    invoices: List[InvoiceDetail] = []
 
     model_config = {"from_attributes": True}
 

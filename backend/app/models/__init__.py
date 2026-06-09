@@ -14,12 +14,15 @@ from app.models.material.purchase_invoice import PurchaseInvoice
 # 生产协同中心
 from app.models.production.process_progress import ProcessProgress
 from app.models.production.process_exception import ProcessException
+from app.models.production.schedule_plan import ProductionSchedulePlan
 
 # 异常与质量中心
 from app.models.exception.risk_issue import RiskIssue
 from app.models.exception.issue_log import IssueLog
 from app.models.exception.change_log import ChangeLog
 from app.models.exception.quality_issue import QualityIssue
+
+from app.models.common.business_document import BusinessDocument, BusinessDocumentVersion
 
 # 规则配置中心
 from app.models.rules.risk_rule import RiskRule
@@ -28,14 +31,15 @@ from app.models.rules.node_standard import NodeStandard
 from app.models.rules.responsibility_map import ResponsibilityMap
 from app.models.rules.status_dictionary import StatusDictionary
 
-# 主数据与集成中心
-from app.models.masterdata.user import SysUser, SysRole
-from app.models.masterdata.audit_log import AuditLog
-from app.models.masterdata.field_mapping import FieldMapping
-from app.models.masterdata.sync_sql_config import SyncSqlConfig  # noqa: F401
-from app.models.masterdata.sync_log import SyncLog  # noqa: F401
-from app.models.masterdata.file_asset import FileAsset  # noqa: F401
-from app.models.masterdata.feedback import Feedback  # noqa: F401
+# 基础数据与集成中心
+from app.models.basicdata.user import SysUser, SysRole
+from app.models.basicdata.audit_log import AuditLog
+from app.models.basicdata.field_mapping import FieldMapping
+from app.models.basicdata.sync_sql_config import SyncSqlConfig  # noqa: F401
+from app.models.basicdata.sync_log import SyncLog  # noqa: F401
+from app.models.basicdata.file_asset import FileAsset  # noqa: F401
+from app.models.basicdata.feedback import Feedback  # noqa: F401
+from app.models.basicdata.announcement import Announcement, Notification  # noqa: F401
 
 __all__ = [
     # 订单交付中心
@@ -53,18 +57,21 @@ __all__ = [
     # 生产协同中心
     "ProcessProgress",
     "ProcessException",
+    "ProductionSchedulePlan",
     # 异常与质量中心
     "RiskIssue",
     "IssueLog",
     "ChangeLog",
     "QualityIssue",
+    "BusinessDocument",
+    "BusinessDocumentVersion",
     # 规则配置中心
     "RiskRule",
     "InspectionRule",
     "NodeStandard",
     "ResponsibilityMap",
     "StatusDictionary",
-    # 主数据与集成中心
+    # 基础数据与集成中心
     "SysUser",
     "SysRole",
     "AuditLog",
@@ -73,4 +80,6 @@ __all__ = [
     "SyncLog",
     "FileAsset",
     "Feedback",
+    "Announcement",
+    "Notification",
 ]

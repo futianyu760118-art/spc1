@@ -11,7 +11,7 @@ from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.storage import get_storage
-from app.models.masterdata.file_asset import FileAsset
+from app.models.basicdata.file_asset import FileAsset
 
 
 class FileService:

@@ -7,8 +7,8 @@ from typing import Optional
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel, PageResult
-from app.schemas.exception.schemas import ExceptionPoolItem, ClosureTrackingData
-from app.services.exception.exception_pool_service import get_exception_pool, get_closure_tracking
+from app.schemas.exception.schemas import ExceptionPoolItem, ClosureTrackingData, ClosureDetailItem
+from app.services.exception.exception_pool_service import get_exception_pool, get_closure_tracking, get_closure_person_details
 
 router = APIRouter()
 
@@ -33,8 +33,25 @@ async def list_exception_pool(
 
 @router.get("/closure-tracking", response_model=ResponseModel[ClosureTrackingData])
 async def get_closure_tracking_view(
+    source_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    owner: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query("asc"),
     current_user: dict = Depends(PermissionChecker("exceptions.closure", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    data = await get_closure_tracking(db)
+    data = await get_closure_tracking(db, source_type=source_type, status=status, owner=owner, sort_by=sort_by, sort_order=sort_order)
     return ResponseModel(data=data)
+
+
+@router.get("/closure-tracking/person-details", response_model=ResponseModel[list[ClosureDetailItem]])
+async def get_closure_tracking_person_details(
+    owner: str = Query(...),
+    source_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    current_user: dict = Depends(PermissionChecker("exceptions.closure", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    details = await get_closure_person_details(db, owner=owner, source_type=source_type, status=status)
+    return ResponseModel(data=details)

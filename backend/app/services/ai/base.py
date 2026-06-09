@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Type
+from typing import Any, AsyncIterator, Dict, List, Optional, Type
 
 from pydantic import BaseModel
 
@@ -18,6 +18,29 @@ class ChatOptions:
     temperature: float = 0.7
     max_tokens: int = 2048
     timeout: int = 30
+
+
+@dataclass
+class ToolCall:
+    """LLM 返回的工具调用请求"""
+    id: str
+    name: str
+    arguments: Dict[str, Any]
+
+
+@dataclass
+class ToolResult:
+    """工具执行结果，回传给 LLM"""
+    tool_call_id: str
+    name: str
+    content: str  # JSON string
+
+
+@dataclass
+class ChatWithToolsResult:
+    """chat_with_tools 的返回值"""
+    text: Optional[str] = None       # LLM 直接文本回复（无 tool call 时）
+    tool_calls: List[ToolCall] = field(default_factory=list)  # LLM 请求的工具调用
 
 
 class NotSupportedError(Exception):
@@ -43,6 +66,25 @@ class LLMProvider(ABC):
     async def chat(self, messages: List[ChatMessage], options: Optional[ChatOptions] = None) -> str:
         """多轮对话，返回 assistant 文本"""
         ...
+
+    async def chat_stream(
+        self,
+        messages: List[ChatMessage],
+        options: Optional[ChatOptions] = None,
+    ) -> AsyncIterator[str]:
+        """流式对话，逐 token 返回文本。默认实现：调用 chat 后一次性 yield。"""
+        result = await self.chat(messages, options)
+        yield result
+
+    async def chat_with_tools(
+        self,
+        messages: List[ChatMessage],
+        tools: List[Dict[str, Any]],
+        options: Optional[ChatOptions] = None,
+    ) -> ChatWithToolsResult:
+        """带工具定义的对话，LLM 可选择调用工具或直接回复。
+        默认实现抛 NotSupportedError，由具体 provider 覆盖。"""
+        raise NotSupportedError(f"{self.name} 不支持 chat_with_tools")
 
     async def structured_output(
         self,

@@ -31,6 +31,7 @@ from app.models.material.long_lead_material import LongLeadMaterial
 from app.models.material.purchase_invoice import PurchaseInvoice
 from app.models.production.process_progress import ProcessProgress
 from app.models.production.process_exception import ProcessException
+from app.models.production.schedule_plan import ProductionSchedulePlan
 from app.models.exception.risk_issue import RiskIssue
 from app.models.exception.issue_log import IssueLog
 from app.models.exception.change_log import ChangeLog
@@ -40,13 +41,14 @@ from app.models.rules.inspection_rule import InspectionRule
 from app.models.rules.node_standard import NodeStandard
 from app.models.rules.responsibility_map import ResponsibilityMap
 from app.models.rules.status_dictionary import StatusDictionary
-from app.models.masterdata.user import SysUser, SysRole
-from app.models.masterdata.audit_log import AuditLog
-from app.models.masterdata.field_mapping import FieldMapping
-from app.models.masterdata.sync_sql_config import SyncSqlConfig
-from app.models.masterdata.sync_log import SyncLog
-from app.models.masterdata.file_asset import FileAsset
-from app.models.masterdata.feedback import Feedback
+from app.models.common.business_document import BusinessDocument, BusinessDocumentVersion
+from app.models.basicdata.user import SysUser, SysRole
+from app.models.basicdata.audit_log import AuditLog
+from app.models.basicdata.field_mapping import FieldMapping
+from app.models.basicdata.sync_sql_config import SyncSqlConfig
+from app.models.basicdata.sync_log import SyncLog
+from app.models.basicdata.file_asset import FileAsset
+from app.models.basicdata.feedback import Feedback
 
 settings = get_settings()
 
@@ -102,6 +104,7 @@ class DatabaseInitializer:
                 "product_code": "VARCHAR(64)",
                 "product_name": "VARCHAR(256)",
                 "order_qty": "NUMERIC(15,2)",
+                "order_amount": "NUMERIC(15,2)",
                 "completed_qty": "NUMERIC(15,2)",
                 "promised_date": "DATE",
                 "planned_start_date": "DATE",
@@ -142,6 +145,7 @@ class DatabaseInitializer:
                 "product_code": "VARCHAR(64)",
                 "product_name": "VARCHAR(256)",
                 "order_qty": "NUMERIC(15,2)",
+                "order_amount": "NUMERIC(15,2)",
                 "promised_date": "DATE",
                 "planned_start_date": "DATE",
                 "batch_no": "VARCHAR(128)",
@@ -162,6 +166,10 @@ class DatabaseInitializer:
             },
             "material_demand": {
                 "data_source": "VARCHAR(32)",
+                "material_property": "INTEGER",
+                "material_type_name": "VARCHAR(64)",
+                "spec_model": "VARCHAR(256)",
+                "unit": "VARCHAR(32)",
             },
             "scm_customer": {
                 "data_source": "VARCHAR(32)",
@@ -189,11 +197,20 @@ class DatabaseInitializer:
             },
             "scm_organization": {
                 "data_source": "VARCHAR(32)",
+                "oa_org_id": "VARCHAR(64)",
             },
             "scm_employee": {
                 "data_source": "VARCHAR(32)",
+                "oa_user_id": "VARCHAR(64) UNIQUE",
+                "login_id": "VARCHAR(64)",
+            },
+            "sys_user": {
+                "login_version": "INTEGER NOT NULL DEFAULT 0",
+                "last_token_jti": "VARCHAR(64)",
+                "last_login_time": "TIMESTAMP",
             },
             "quality_issue": {
+                "erp_quality_id": "VARCHAR(64)",
                 "submit_dept": "VARCHAR(64)",
                 "submit_date": "DATE",
                 "submitter": "VARCHAR(64)",
@@ -249,6 +266,20 @@ class DatabaseInitializer:
                 print("  Unique constraint uq_sale_order_line_order_erp ensured")
             except Exception as e:
                 print(f"  Unique constraint skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_quality_issue_erp_quality_id ON quality_issue (erp_quality_id) WHERE erp_quality_id IS NOT NULL"
+                ))
+                print("  Unique constraint uq_quality_issue_erp_quality_id ensured")
+            except Exception as e:
+                print(f"  Quality issue unique constraint skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_employee_oa_user_id ON scm_employee (oa_user_id) WHERE oa_user_id IS NOT NULL"
+                ))
+                print("  Unique constraint uq_scm_employee_oa_user_id ensured")
+            except Exception as e:
+                print(f"  Employee oa_user_id unique constraint skipped: {e}")
 
     async def backfill_sale_order_id(self):
         """Backfill sale_order_id on sale_order_line by matching order_no"""
@@ -297,10 +328,12 @@ class DatabaseInitializer:
                             "production.assembly": ["create", "read", "update", "delete", "import"],
                             "production.packaging": ["create", "read", "update", "delete", "import"],
                             "production.exceptions": ["create", "read", "update", "delete", "import"],
+                            "production.schedule_plans": ["create", "read", "update", "delete"],
                             "exceptions.pool": ["create", "read", "update", "delete", "import"],
                             "exceptions.issue_log": ["create", "read", "update", "delete", "import"],
                             "exceptions.change_log": ["create", "read", "update", "delete", "import"],
                             "exceptions.quality": ["create", "read", "update", "delete", "import"],
+                            "exceptions.product_samples": ["create", "read", "update", "delete"],
                             "exceptions.closure": ["create", "read", "update", "delete", "import"],
                             "meetings": ["create", "read", "update", "delete"],
                             "npi": ["create", "read", "update", "delete"],
@@ -309,10 +342,13 @@ class DatabaseInitializer:
                             "rules.node_standards": ["create", "read", "update", "delete"],
                             "rules.responsibility": ["create", "read", "update", "delete"],
                             "rules.status_dict": ["create", "read", "update", "delete"],
-                            "masterdata.import": ["create", "read", "update", "delete", "import"],
-                            "masterdata.data": ["create", "read", "update", "delete", "import"],
-                            "masterdata.feedback": ["create", "read", "update", "delete"],
-                            "masterdata.files": ["read", "delete"],
+                            "rules.order_standards": ["create", "read", "update", "delete"],
+                            "rules.work_instructions": ["create", "read", "update", "delete"],
+                            "basicdata.import": ["create", "read", "update", "delete", "import"],
+                            "basicdata.data": ["create", "read", "update", "delete", "import"],
+                            "basicdata.feedback": ["create", "read", "update", "delete"],
+                            "basicdata.files": ["read", "delete"],
+                            "announcements": ["create", "read", "update", "delete"],
                             "users": ["create", "read", "update", "delete"],
                             "audit": ["read"],
                             "settings": ["create", "read", "update", "delete"]
@@ -339,16 +375,19 @@ class DatabaseInitializer:
                             "production.assembly": ["read", "update", "import"],
                             "production.packaging": ["read", "update", "import"],
                             "production.exceptions": ["read", "update", "import"],
+                            "production.schedule_plans": ["read", "update"],
                             "exceptions.pool": ["read"],
                             "exceptions.issue_log": ["read"],
                             "exceptions.change_log": ["read"],
                             "exceptions.quality": ["read"],
+                            "exceptions.product_samples": ["read", "update"],
                             "exceptions.closure": ["read"],
                             "meetings": ["read"],
                             "npi": ["read"],
-                            "masterdata.import": ["read"],
-                            "masterdata.data": ["read"],
-                            "masterdata.feedback": ["create", "read"],
+                            "basicdata.import": ["read"],
+                            "basicdata.data": ["read"],
+                            "basicdata.feedback": ["create", "read"],
+                            "announcements": ["read"],
                             "audit": ["read"]
                         }
                     },
@@ -373,9 +412,10 @@ class DatabaseInitializer:
                             "exceptions.closure": ["read"],
                             "meetings": ["read"],
                             "npi": ["read"],
-                            "masterdata.import": ["read"],
-                            "masterdata.data": ["read"],
-                            "masterdata.feedback": ["create", "read"],
+                            "basicdata.import": ["read"],
+                            "basicdata.data": ["read"],
+                            "basicdata.feedback": ["create", "read"],
+                            "announcements": ["read"],
                             "audit": ["read"]
                         }
                     },
@@ -407,9 +447,10 @@ class DatabaseInitializer:
                             "exceptions.closure": ["read", "update"],
                             "meetings": ["create", "read", "update", "delete"],
                             "npi": ["read"],
-                            "masterdata.import": ["read"],
-                            "masterdata.data": ["read"],
-                            "masterdata.feedback": ["create", "read", "update"],
+                            "basicdata.import": ["read"],
+                            "basicdata.data": ["read"],
+                            "basicdata.feedback": ["create", "read", "update"],
+                            "announcements": ["read"],
                             "audit": ["read"]
                         }
                     },
@@ -434,9 +475,10 @@ class DatabaseInitializer:
                             "exceptions.closure": ["read", "update"],
                             "meetings": ["read"],
                             "npi": ["read"],
-                            "masterdata.import": ["read"],
-                            "masterdata.data": ["read"],
-                            "masterdata.feedback": ["create", "read", "update"],
+                            "basicdata.import": ["read"],
+                            "basicdata.data": ["read"],
+                            "basicdata.feedback": ["create", "read", "update"],
+                            "announcements": ["read"],
                             "audit": ["read"]
                         }
                     }
@@ -870,7 +912,7 @@ class DatabaseInitializer:
         print("Seeding sync SQL config...")
         async with AsyncSessionLocal() as session:
             try:
-                from app.models.masterdata.sync_sql_config import SyncSqlConfig
+                from app.models.basicdata.sync_sql_config import SyncSqlConfig
                 import json
 
                 # 查询已存在的 sync_type，只插入缺失的
@@ -967,10 +1009,10 @@ ORDER BY po.FBillNo
                         sync_enabled=True,
                         created_by="admin",
                     ),
-                    # ---- 主数据同步配置（占位，需根据实际 ERP 表结构配置 SQL 后启用） ----
+                    # ---- 基础数据同步配置（占位，需根据实际 ERP 表结构配置 SQL 后启用） ----
                     SyncSqlConfig(
                         sync_type="customers",
-                        description="客户主数据 — 从ERP客户表拉取",
+                        description="客户 — 从ERP客户表拉取",
                         sql_text="SELECT customer_code, customer_name, customer_short, customer_level, industry_type, credit_code, status FROM T_BD_CUSTOMER WHERE FModifyDate >= :since ORDER BY customer_code",
                         field_mapping_json=None,
                         is_active=False,
@@ -982,7 +1024,7 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="suppliers",
-                        description="供应商主数据 — 从ERP供应商表拉取",
+                        description="供应商 — 从ERP供应商表拉取",
                         sql_text="SELECT supplier_code, supplier_name, supplier_short, supplier_type, contact_person, contact_phone, payment_terms, status FROM T_BD_SUPPLIER WHERE FModifyDate >= :since ORDER BY supplier_code",
                         field_mapping_json=None,
                         is_active=False,
@@ -994,7 +1036,7 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="materials_masterdata",
-                        description="物料主数据 — 从ERP物料主表拉取",
+                        description="物料 — 从ERP物料主表拉取",
                         sql_text="SELECT material_code, material_name, spec_model, material_type, unit_of_measure, brand, is_purchase, is_produce, status FROM T_BD_MATERIAL WHERE FModifyDate >= :since ORDER BY material_code",
                         field_mapping_json=None,
                         is_active=False,
@@ -1006,7 +1048,7 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="skus",
-                        description="SKU主数据 — 从ERP SKU表拉取",
+                        description="SKU — 从ERP SKU表拉取",
                         sql_text="SELECT sku_code, material_id, sku_name, attr_json, barcode, gross_weight, net_weight, volume FROM T_BD_SKU WHERE FModifyDate >= :since ORDER BY sku_code",
                         field_mapping_json=None,
                         is_active=False,
@@ -1018,7 +1060,7 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="products",
-                        description="产品主数据 — 从ERP产品表拉取",
+                        description="产品 — 从ERP产品表拉取",
                         sql_text="SELECT product_code, product_line, tech_version, bom_version, default_warehouse, warranty_days FROM T_BD_PRODUCT WHERE FModifyDate >= :since ORDER BY product_code",
                         field_mapping_json=None,
                         is_active=False,
@@ -1030,7 +1072,7 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="warehouses",
-                        description="仓库主数据 — 从ERP仓库表拉取",
+                        description="仓库 — 从ERP仓库表拉取",
                         sql_text="SELECT wh_code, wh_name, wh_type, address, manager_id, is_enabled FROM T_BD_WAREHOUSE ORDER BY wh_code",
                         field_mapping_json=None,
                         is_active=False,
@@ -1042,7 +1084,7 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="processes",
-                        description="工序主数据 — 从ERP工序表拉取",
+                        description="工序 — 从ERP工序表拉取",
                         sql_text="SELECT process_code, process_name, process_group, standard_hour, work_center, is_qc_point, description FROM T_BD_PROCESS ORDER BY process_code",
                         field_mapping_json=None,
                         is_active=False,
@@ -1054,9 +1096,11 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="organizations",
-                        description="组织主数据 — 从ERP组织表拉取",
-                        sql_text="SELECT org_code, org_name, org_type, parent_id, leader_id, status FROM T_BD_ORGANIZATION ORDER BY org_code",
-                        field_mapping_json=None,
+                        description="组织 — 从ERP组织表拉取",
+                        sql_text="SELECT org_code, org_name, oa_org_id, org_type, parent_id, leader_id, status FROM T_BD_ORGANIZATION ORDER BY org_code",
+                        field_mapping_json=json.dumps({
+                            "oa_org_id": "oa_org_id",
+                        }),
                         is_active=False,
                         sync_enabled=False,
                         sync_interval="1w",
@@ -1066,9 +1110,11 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="employees",
-                        description="人员主数据 — 从ERP员工表拉取",
-                        sql_text="SELECT emp_code, emp_name, org_id, position, phone, email, status FROM T_BD_EMPLOYEE WHERE FModifyDate >= :since ORDER BY emp_code",
-                        field_mapping_json=None,
+                        description="人员 — 从ERP员工表拉取",
+                        sql_text="SELECT emp_code, emp_name, org_id, login_id, position, phone, email, status FROM T_BD_EMPLOYEE WHERE FModifyDate >= :since ORDER BY emp_code",
+                        field_mapping_json=json.dumps({
+                            "login_id": "login_id",
+                        }),
                         is_active=False,
                         sync_enabled=False,
                         sync_interval="1d",

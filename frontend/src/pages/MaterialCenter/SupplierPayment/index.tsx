@@ -1,15 +1,27 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Table, Input, Button, message, Row, Col, Card, DatePicker } from 'antd'
+import { Table, Input, Button, message, Row, Col, Card, DatePicker, Dropdown } from 'antd'
 import {
   SearchOutlined, ReloadOutlined, AccountBookOutlined,
   DollarOutlined, BankOutlined, LeftOutlined, RightOutlined,
+  DownloadOutlined, DownOutlined, CalendarOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
 import zhCN from 'antd/locale/zh_CN'
 import { materialApi } from '../../../services/api'
+import { useExport } from '../../../hooks/useExport'
 
 dayjs.locale('zh-cn')
+
+interface InvoiceDetail {
+  invoice_no: string
+  line_no: string
+  invoice_date: string | null
+  payment_term: string
+  settlement_method: string
+  invoice_amount: number
+  remain_payable: number
+}
 
 interface SupplierPaymentRow {
   supplier_code: string
@@ -21,6 +33,7 @@ interface SupplierPaymentRow {
   total_payable: number | null
   monthly_due: number | null
   payment_month: string | null
+  invoices: InvoiceDetail[]
 }
 
 interface Summary {
@@ -43,8 +56,22 @@ export default function SupplierPayment() {
   const [pageSize, setPageSize] = useState(20)
   const [supplier, setSupplier] = useState('')
   const [monthFilter, setMonthFilter] = useState<dayjs.Dayjs | null>(dayjs())
+  const [invoiceDateRange, setInvoiceDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
   const [sortBy, setSortBy] = useState<string>('')
   const [sortOrder, setSortOrder] = useState<string>('')
+  const { exporting, exportData } = useExport()
+
+  const handleExport = (format: 'xlsx' | 'csv') => {
+    const month = (monthFilter || dayjs()).format('YYYY-MM')
+    const params: Record<string, any> = { format }
+    if (month) params.payment_month = month
+    if (supplier) params.supplier_name = supplier
+    if (invoiceDateRange?.[0]) params.invoice_date_start = invoiceDateRange[0].format('YYYY-MM-DD')
+    if (invoiceDateRange?.[1]) params.invoice_date_end = invoiceDateRange[1].format('YYYY-MM-DD')
+    if (sortBy) { params.sort_by = sortBy; params.sort_order = sortOrder || 'asc' }
+    const ext = format === 'csv' ? 'csv' : 'xlsx'
+    exportData('/api/v1/materials/supplier-payment/export', params, `供应商付款排程.${ext}`)
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -53,11 +80,15 @@ export default function SupplierPayment() {
       const listParams: Record<string, any> = { page, page_size: pageSize }
       if (month) listParams.payment_month = month
       if (supplier) listParams.supplier_name = supplier
+      if (invoiceDateRange?.[0]) listParams.invoice_date_start = invoiceDateRange[0].format('YYYY-MM-DD')
+      if (invoiceDateRange?.[1]) listParams.invoice_date_end = invoiceDateRange[1].format('YYYY-MM-DD')
       if (sortBy) { listParams.sort_by = sortBy; listParams.sort_order = sortOrder || 'asc' }
 
       const sumParams: Record<string, any> = {}
       if (month) sumParams.payment_month = month
       if (supplier) sumParams.supplier_name = supplier
+      if (invoiceDateRange?.[0]) sumParams.invoice_date_start = invoiceDateRange[0].format('YYYY-MM-DD')
+      if (invoiceDateRange?.[1]) sumParams.invoice_date_end = invoiceDateRange[1].format('YYYY-MM-DD')
 
       const [listRes, sumRes]: any[] = await Promise.all([
         materialApi.listSupplierPayment(listParams),
@@ -71,7 +102,7 @@ export default function SupplierPayment() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, supplier, monthFilter, sortBy, sortOrder])
+  }, [page, pageSize, supplier, monthFilter, invoiceDateRange, sortBy, sortOrder])
 
   useEffect(() => { load() }, [load])
 
@@ -130,12 +161,12 @@ export default function SupplierPayment() {
           <Col flex={1} key={i}>
             <Card size="small" className="card-modern" style={{ padding: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: card.color }}>
+                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'calc(1.25rem * var(--font-size-scale))', color: card.color }}>
                   {card.icon}
                 </div>
                 <div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{card.title}</div>
+                  <div style={{ fontSize: 'calc(1.375rem * var(--font-size-scale))', fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
+                  <div style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))', color: '#64748b' }}>{card.title}</div>
                 </div>
               </div>
             </Card>
@@ -156,6 +187,17 @@ export default function SupplierPayment() {
               allowClear
             />
           </Col>
+          {/* <Col>
+            <DatePicker.RangePicker
+              placeholder={['到票开始日期', '到票结束日期']}
+              value={invoiceDateRange}
+              onChange={v => { setInvoiceDateRange(v); setPage(1) }}
+              style={{ width: 260 }}
+              allowClear
+              locale={zhCN.DatePicker}
+              format="YYYY-MM-DD"
+            />
+          </Col> */}
           <Col>
             <Button.Group>
               <Button
@@ -165,7 +207,7 @@ export default function SupplierPayment() {
               />
               <DatePicker
                 picker="month"
-                placeholder="到票月份"
+                placeholder="排款月份"
                 value={monthFilter}
                 onChange={v => { setMonthFilter(v || dayjs()); setPage(1) }}
                 style={{ width: 140 }}
@@ -186,12 +228,22 @@ export default function SupplierPayment() {
           </Col>
           <Col flex="auto" />
           <Col>
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'xlsx', label: '导出 Excel', icon: <DownloadOutlined /> },
+                  { key: 'csv', label: '导出 CSV', icon: <DownloadOutlined /> },
+                ],
+                onClick: ({ key }) => handleExport(key as 'xlsx' | 'csv'),
+              }}
+            >
+              <Button icon={<DownloadOutlined />} loading={exporting}>导出 <DownOutlined /></Button>
+            </Dropdown>
+          </Col>
+          <Col>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
           </Col>
         </Row>
-        <div style={{ marginTop: 8, fontSize: 12, color: '#64748b' }}>
-          数据来源：基于 <code>purchase_invoice</code> 表按 <code>supplier_code</code> 聚合。月到期应付 = 到票日期在所选月份的发票 SUM(remain_payable)；总应付 = 该供应商所有发票 SUM(remain_payable)；排款月 = 到票日期 + 账期天数；仅显示所选到票月有发票的供应商。
-        </div>
       </div>
 
       {/* 表格 */}
@@ -203,6 +255,32 @@ export default function SupplierPayment() {
           loading={loading}
           size="small"
           scroll={{ x: 1000 }}
+          expandable={{
+            expandedRowRender: (record: SupplierPaymentRow) => {
+              if (!record.invoices?.length) return <div style={{ padding: '8px 16px', color: '#94a3b8' }}>暂无发票明细</div>
+              const invCols = [
+                { title: '发票号码', dataIndex: 'invoice_no', width: 120 },
+                { title: '行号', dataIndex: 'line_no', width: 80 },
+                { title: '到票日期', dataIndex: 'invoice_date', width: 110 },
+                { title: '账期', dataIndex: 'payment_term', width: 100 },
+                { title: '结算方式', dataIndex: 'settlement_method', width: 110 },
+                { title: '开票金额', dataIndex: 'invoice_amount', width: 120, align: 'right' as const,
+                  render: (v: number) => v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+                { title: '剩余应付', dataIndex: 'remain_payable', width: 120, align: 'right' as const,
+                  render: (v: number) => <span style={{ color: v > 0 ? '#e11d48' : '#16a34a' }}>{v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> },
+              ]
+              return (
+                <Table
+                  rowKey="line_no"
+                  dataSource={record.invoices}
+                  columns={invCols}
+                  size="small"
+                  pagination={false}
+                  style={{ margin: '8px 0' }}
+                />
+              )
+            },
+          }}
           pagination={{
             current: page,
             pageSize,

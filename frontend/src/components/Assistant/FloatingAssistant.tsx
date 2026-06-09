@@ -6,7 +6,7 @@ import { useAssistantChat } from './useAssistantChat'
 
 const FloatingAssistant: React.FC = () => {
   const [open, setOpen] = useState(false)
-  const { messages, loading, send, skills, loadSkills, clearMessages } = useAssistantChat()
+  const { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming } = useAssistantChat()
 
   useEffect(() => {
     if (open && skills.length === 0) {
@@ -19,7 +19,7 @@ const FloatingAssistant: React.FC = () => {
       <FloatButton
         icon={<RobotOutlined />}
         type="primary"
-        tooltip="智能助手"
+        tooltip="AI智能助手"
         style={{ right: 24, bottom: 24, width: 48, height: 48 }}
         onClick={() => setOpen(true)}
         badge={{ dot: false }}
@@ -28,14 +28,13 @@ const FloatingAssistant: React.FC = () => {
         title={
           <span>
             <RobotOutlined style={{ marginRight: 8 }} />
-            智能操作助手
+            AI智能助手
           </span>
         }
         placement="right"
         width={480}
         open={open}
         onClose={() => setOpen(false)}
-        bodyStyle={{ padding: 0, display: 'flex', flexDirection: 'column' }}
         styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } }}
       >
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -45,6 +44,7 @@ const FloatingAssistant: React.FC = () => {
             skills={skills}
             onSend={send}
             onClear={clearMessages}
+            onStop={stopStreaming}
           />
         </div>
       </Drawer>

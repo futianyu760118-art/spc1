@@ -1,14 +1,14 @@
 """refactor long_lead_material: drop material_name/lead_time_days, add po_date to purchase_order
 
 Revision ID: refactor_long_lead
-Revises: fix_sale_order_unique_index
+Revises: fix_order_no_idx
 Create Date: 2026-04-21
 """
 from alembic import op
 import sqlalchemy as sa
 
 revision = 'refactor_long_lead'
-down_revision = 'fix_sale_order_unique_index'
+down_revision = 'fix_order_no_idx'
 branch_labels = None
 depends_on = None
 

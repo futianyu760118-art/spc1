@@ -135,7 +135,7 @@ export default function DomesticOrders() {
         const displayValue = afterDash.replace(/^0+/, '').padStart(3, '0')
         return (
           <Tooltip title={v}>
-            <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 12 }}>{displayValue}</a>
+            <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
           </Tooltip>
         )
       },

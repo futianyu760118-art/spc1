@@ -2,7 +2,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.masterdata.audit_log import AuditLog
+from app.models.basicdata.audit_log import AuditLog
 
 
 async def log_audit(

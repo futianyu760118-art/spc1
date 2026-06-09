@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.api.v1 import api_router
-from app.services.masterdata.sync_scheduler import scheduler  # noqa: F401
+from app.services.basicdata.sync_scheduler import scheduler  # noqa: F401
 from app.services.exception.risk_scheduler import risk_scheduler  # noqa: F401
 
 

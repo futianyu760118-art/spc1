@@ -1,27 +1,31 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
-  Table, Tag, Input, Select, Button, Space, message, Modal, Form,
-  DatePicker, Upload, Tooltip, Row, Col, Card,
+  Table, Tag, Input, InputNumber, Select, Button, Space, message, Modal, Form,
+  DatePicker, Upload, Tooltip, Row, Col, Card, Dropdown,
 } from 'antd'
 import {
-  SearchOutlined, ReloadOutlined, UploadOutlined, PlusOutlined, EditOutlined,
+  SearchOutlined, FilterOutlined, ReloadOutlined, UploadOutlined, PlusOutlined, EditOutlined,
   ShoppingOutlined, ClockCircleOutlined, CheckCircleOutlined,
   WarningOutlined, ExclamationCircleOutlined, StopOutlined,
+  DownloadOutlined, DownOutlined, MessageOutlined, CopyOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { materialApi, orderApi } from '../../../services/api'
 import { formatDate } from '../../../utils'
+import { useExport } from '../../../hooks/useExport'
 
 interface PlanRow {
   id: number
   po_no: string
   supplier_name: string | null
+  supplier_account: string | null
   material_code: string
   material_name: string | null
   spec_model: string | null
   unit: string | null
   po_qty: number | null
   received_qty: number | null
+  original_eta: string | null
   eta: string | null
   order_no: string | null
   actual_arrival_date: string | null
@@ -30,6 +34,7 @@ interface PlanRow {
   po_status: string
   is_stagnant: boolean
   stagnant_qty: number | null
+  shortage_qty: number | null
   owner: string | null
   po_date: string | null
 }
@@ -42,14 +47,45 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   stagnant: { label: '呆滞物料', color: 'warning' },
 }
 
+const MATERIAL_PROPERTY_OPTIONS = [
+  { value: 1, label: '外购' },
+  { value: 2, label: '自制' },
+  { value: 3, label: '委外加工' },
+  { value: 5, label: '虚拟件' },
+  { value: 6, label: '特征类' },
+  { value: 7, label: '配置类' },
+  { value: 8, label: '规划类' },
+  { value: 9, label: '组装件' },
+]
+
+const MATERIAL_PROPERTY_MAP = Object.fromEntries(MATERIAL_PROPERTY_OPTIONS.map(item => [item.value, item.label]))
+
 export default function PurchasePlan() {
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const [data, setData] = useState<PlanRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [filters, setFilters] = useState({ keyword: '', po_status: [] as string[] })
+  const [filters, setFilters] = useState({
+    keyword: '',
+    po_status: [] as string[],
+    supplier_name: '',
+    supplier_account: '',
+    material_code: '',
+    material_name: '',
+    spec_model: '',
+    unit: '',
+    owner: '',
+    order_no: '',
+    arrival_hour_note: '',
+    po_date: null as [string, string] | null,
+    eta: null as [string, string] | null,
+    actual_arrival_date: null as [string, string] | null,
+    inspection_date: null as [string, string] | null,
+    po_qty: null as [number, number] | null,
+    received_qty: null as [number, number] | null,
+    only_shortage: false,
+  })
   const [sortBy, setSortBy] = useState<string>('')
   const [sortOrder, setSortOrder] = useState<string>('')
   const [editModal, setEditModal] = useState(false)
@@ -58,7 +94,39 @@ export default function PurchasePlan() {
   const [orderList, setOrderList] = useState<any[]>([])
   const [orderLoading, setOrderLoading] = useState(false)
   const [form] = Form.useForm()
+  const [batchForm] = Form.useForm()
   const uploadRef = useRef<any>(null)
+  const { exporting, exportData } = useExport()
+  const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
+  const [batchEditModal, setBatchEditModal] = useState(false)
+  const [contactModal, setContactModal] = useState(false)
+  const [contactRecord, setContactRecord] = useState<PlanRow | null>(null)
+  const [contactText, setContactText] = useState('')
+  const [savingCell, setSavingCell] = useState<string | null>(null)
+  const [editingCell, setEditingCell] = useState<string | null>(null)
+
+  const apiFilterParams = useMemo(() => {
+    const p: Record<string, any> = {}
+    if (filters.keyword) p.keyword = filters.keyword
+    if (filters.po_status.length) p.po_status = filters.po_status.join(',')
+    const textKeys = ['supplier_name', 'supplier_account', 'material_code', 'material_name', 'spec_model', 'unit', 'owner', 'order_no', 'arrival_hour_note'] as const
+    textKeys.forEach(k => { if (filters[k]) p[k] = filters[k] })
+    if (filters.po_date) { p.po_date_start = filters.po_date[0]; p.po_date_end = filters.po_date[1] }
+    if (filters.eta) { p.eta_start = filters.eta[0]; p.eta_end = filters.eta[1] }
+    if (filters.actual_arrival_date) { p.actual_arrival_start = filters.actual_arrival_date[0]; p.actual_arrival_end = filters.actual_arrival_date[1] }
+    if (filters.inspection_date) { p.inspection_start = filters.inspection_date[0]; p.inspection_end = filters.inspection_date[1] }
+    if (filters.po_qty) { p.po_qty_min = filters.po_qty[0]; p.po_qty_max = filters.po_qty[1] }
+    if (filters.received_qty) { p.received_qty_min = filters.received_qty[0]; p.received_qty_max = filters.received_qty[1] }
+    if (filters.only_shortage) p.only_shortage = true
+    return p
+  }, [filters])
+
+  const handleExport = (format: 'xlsx' | 'csv') => {
+    const params: Record<string, any> = { format, ...apiFilterParams }
+    if (sortBy) { params.sort_by = sortBy; params.sort_order = sortOrder || 'asc' }
+    const ext = format === 'csv' ? 'csv' : 'xlsx'
+    exportData(`/api/v1/materials/purchase-plan/export`, params, `采购到料计划.${ext}`)
+  }
   const [stats, setStats] = useState({ total: 0, pending: 0, arrived: 0, inspected: 0, overdue: 0, stagnant: 0 })
 
   const load = useCallback(async () => {
@@ -66,8 +134,7 @@ export default function PurchasePlan() {
     try {
       const res: any = await materialApi.listPurchasePlan({
         page, page_size: pageSize,
-        ...(filters.keyword ? { keyword: filters.keyword } : {}),
-        ...(filters.po_status.length ? { po_status: filters.po_status.join(',') } : {}),
+        ...apiFilterParams,
         ...(sortBy ? { sort_by: sortBy, sort_order: sortOrder || 'asc' } : {}),
       })
       setData(res.data.items)
@@ -77,7 +144,7 @@ export default function PurchasePlan() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, filters, sortBy, sortOrder])
+  }, [page, pageSize, apiFilterParams, sortBy, sortOrder])
 
   const loadOrders = useCallback(async (keyword = '') => {
     setOrderLoading(true)
@@ -95,12 +162,12 @@ export default function PurchasePlan() {
 
   const loadStats = useCallback(async () => {
     try {
-      const res: any = await materialApi.getPurchasePlanStats({})
+      const res: any = await materialApi.getPurchasePlanStats(apiFilterParams)
       setStats(res.data)
     } catch (e: any) {
       console.error('加载统计数据失败', e)
     }
-  }, [])
+  }, [apiFilterParams])
 
   useEffect(() => { loadStats() }, [loadStats])
 
@@ -109,6 +176,7 @@ export default function PurchasePlan() {
     loadOrders()
     form.setFieldsValue({
       supplier_name: row.supplier_name,
+      supplier_account: row.supplier_account,
       material_code: row.material_code,
       material_name: row.material_name,
       spec_model: row.spec_model,
@@ -130,6 +198,7 @@ export default function PurchasePlan() {
       if (!editRecord) return
       const payload: Record<string, any> = {
         supplier_name: values.supplier_name,
+        supplier_account: values.supplier_account || null,
         material_name: values.material_name,
         spec_model: values.spec_model,
         unit: values.unit,
@@ -152,12 +221,119 @@ export default function PurchasePlan() {
     }
   }
 
+  const handleCellSave = async (row: PlanRow, field: keyof PlanRow, value: any) => {
+    const cellKey = `${row.id}-${String(field)}`
+    if (savingCell) return
+    setSavingCell(cellKey)
+    try {
+      const payload = { [field]: value ?? null }
+      const res: any = await materialApi.updatePurchasePlan(row.id, payload)
+      setData(prev => prev.map(item => (item.id === row.id ? { ...item, ...res.data } : item)))
+      loadStats()
+      message.success('保存成功')
+    } catch (e: any) {
+      message.error(e.message || '保存失败')
+    } finally {
+      setSavingCell(null)
+    }
+  }
+
+  const editableText = (field: keyof PlanRow) => (value: string | null, row: PlanRow) => {
+    const cellKey = `${row.id}-${String(field)}`
+    const isEditing = editingCell === cellKey
+    return (
+      isEditing ? (
+        <Input
+          size="small"
+          defaultValue={value || ''}
+          disabled={savingCell === cellKey}
+          autoFocus
+          onBlur={e => {
+            const next = e.target.value.trim()
+            if ((value || '') !== next) handleCellSave(row, field, next || null)
+            setEditingCell(null)
+          }}
+          onPressEnter={e => e.currentTarget.blur()}
+        />
+      ) : (
+        <div
+          onClick={() => !savingCell && setEditingCell(cellKey)}
+          style={{ cursor: 'pointer', padding: '4px 8px', minHeight: '24px' }}
+        >
+          {value || <span style={{ color: '#cbd5e1' }}>-</span>}
+        </div>
+      )
+    )
+  }
+
+  const editableNumber = (field: keyof PlanRow, min = 0) => (value: number | null, row: PlanRow) => {
+    const cellKey = `${row.id}-${String(field)}`
+    const isEditing = editingCell === cellKey
+    return (
+      isEditing ? (
+        <InputNumber
+          size="small"
+          min={min}
+          defaultValue={value ?? undefined}
+          disabled={savingCell === cellKey}
+          style={{ width: '100%' }}
+          autoFocus
+          onBlur={e => {
+            const raw = e.target.value
+            const next = raw === '' ? null : Number(raw)
+            if ((value ?? null) !== next && (next == null || !Number.isNaN(next))) handleCellSave(row, field, next)
+            setEditingCell(null)
+          }}
+          onPressEnter={e => e.currentTarget.blur()}
+        />
+      ) : (
+        <div
+          onClick={() => !savingCell && setEditingCell(cellKey)}
+          style={{ cursor: 'pointer', padding: '4px 8px', textAlign: 'right' }}
+        >
+          {value != null ? value : <span style={{ color: '#cbd5e1' }}>-</span>}
+        </div>
+      )
+    )
+  }
+
+  const editableDate = (field: keyof PlanRow) => (value: string | null, row: PlanRow) => {
+    const cellKey = `${row.id}-${String(field)}`
+    const isEditing = editingCell === cellKey
+    return (
+      isEditing ? (
+        <DatePicker
+          size="small"
+          value={value ? dayjs(value) : null}
+          disabled={savingCell === cellKey}
+          style={{ width: '100%' }}
+          autoFocus
+          onChange={(d) => {
+            handleCellSave(row, field, d ? d.format('YYYY-MM-DD') : null)
+            setEditingCell(null)
+          }}
+          onOpenChange={(open) => {
+            if (!open) setEditingCell(null)
+          }}
+        />
+      ) : (
+        <div
+          onClick={() => !savingCell && setEditingCell(cellKey)}
+          style={{ cursor: 'pointer', padding: '4px 8px' }}
+        >
+          {value ? dayjs(value).format('YYYY-MM-DD') : <span style={{ color: '#cbd5e1' }}>-</span>}
+        </div>
+      )
+    )
+  }
+
   const handleAdd = async (values: any) => {
     try {
       const payload = {
         po_no: `CSV-MANUAL-${Date.now()}`,
         material_code: values.material_code,
         supplier_name: values.supplier_name,
+        supplier_account: values.supplier_account || null,
         material_name: values.material_name,
         spec_model: values.spec_model,
         unit: values.unit,
@@ -192,76 +368,259 @@ export default function PurchasePlan() {
     return false
   }
 
+  const handleBatchEdit = async (values: any) => {
+    try {
+      const payload: {
+        ids: number[]
+        eta?: string
+        owner?: string
+        supplier_account?: string
+        actual_arrival_date?: string
+        inspection_date?: string
+        clear_fields?: string[]
+      } = { ids: selectedRowKeys }
+      if (values.eta) payload.eta = dayjs(values.eta).format('YYYY-MM-DD')
+      if (values.owner !== undefined && values.owner !== '') payload.owner = values.owner
+      if (values.supplier_account !== undefined && values.supplier_account !== '') payload.supplier_account = values.supplier_account
+      if (values.actual_arrival_date) payload.actual_arrival_date = dayjs(values.actual_arrival_date).format('YYYY-MM-DD')
+      if (values.inspection_date) payload.inspection_date = dayjs(values.inspection_date).format('YYYY-MM-DD')
+      payload.clear_fields = values.clear_fields || []
+      if (
+        !payload.eta
+        && !payload.owner
+        && !payload.supplier_account
+        && !payload.actual_arrival_date
+        && !payload.inspection_date
+        && (!payload.clear_fields || payload.clear_fields.length === 0)
+      ) {
+        message.warning('请至少填写一个更新字段或选择清空字段')
+        return
+      }
+      await materialApi.batchUpdatePurchasePlan(payload)
+      message.success(`批量更新成功，共更新 ${selectedRowKeys.length} 条记录`)
+      setBatchEditModal(false)
+      batchForm.resetFields()
+      setSelectedRowKeys([])
+      load()
+      loadStats()
+    } catch (e: any) {
+      message.error(e.message)
+    }
+  }
+
+  const buildSupplierMessage = (row: PlanRow) => {
+    return [
+      `${row.supplier_name || '供应商'}，您好：`,
+      '请确认以下物料的交付安排。',
+      `采购单号：${row.po_no || '-'}`,
+      `物料：${row.material_code}${row.material_name ? ` / ${row.material_name}` : ''}`,
+      `规格型号：${row.spec_model || '-'}`,
+      `关联订单：${row.order_no || '-'}`,
+      `计划数量：${row.po_qty ?? '-'}${row.unit || ''}`,
+      `已收数量：${row.received_qty ?? 0}${row.unit || ''}`,
+      `缺料数量：${row.shortage_qty && row.shortage_qty > 0 ? row.shortage_qty : '-'}`,
+      `承诺交货日期：${row.eta ? formatDate(row.eta) : '-'}`,
+      '请回复最新交期、可交数量及异常原因，谢谢。',
+    ].join('\n')
+  }
+
+  const openContact = (row: PlanRow) => {
+    setContactRecord(row)
+    setContactText(buildSupplierMessage(row))
+    setContactModal(true)
+  }
+
+  const copyContactText = async () => {
+    try {
+      await navigator.clipboard.writeText(contactText)
+      message.success('沟通内容已复制')
+    } catch {
+      message.error('复制失败，请手动复制')
+    }
+  }
+
+  const getTextFilterProps = (dataIndex: string) => ({
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+      <div style={{ padding: 8 }}>
+        <Input
+          placeholder="输入筛选内容"
+          value={selectedKeys[0]}
+          onChange={e => setSelectedKeys(e.target.value ? [e.target.value] : [])}
+          onPressEnter={() => { confirm(); setPage(1) }}
+          style={{ marginBottom: 8, display: 'block', width: 188 }}
+        />
+        <Space>
+          <Button type="primary" onClick={() => { confirm(); setPage(1) }} icon={<SearchOutlined />} size="small" style={{ width: 90 }}>搜索</Button>
+          <Button onClick={() => { clearFilters?.(); confirm(); setPage(1) }} size="small" style={{ width: 90 }}>重置</Button>
+        </Space>
+      </div>
+    ),
+    filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+    filteredValue: (filters as any)[dataIndex] ? [(filters as any)[dataIndex]] : null,
+  })
+
+  const getDateFilterProps = (dataIndex: string) => ({
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+      <div style={{ padding: 8 }}>
+        <DatePicker.RangePicker
+          value={selectedKeys && selectedKeys.length === 2 ? [dayjs(selectedKeys[0]), dayjs(selectedKeys[1])] : null}
+          onChange={(dates) => {
+            if (dates && dates[0] && dates[1]) {
+              setSelectedKeys([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')])
+            } else {
+              setSelectedKeys([])
+            }
+          }}
+          style={{ marginBottom: 8 }}
+        />
+        <div>
+          <Space>
+            <Button type="primary" onClick={() => { confirm(); setPage(1) }} size="small" style={{ width: 90 }}>确定</Button>
+            <Button onClick={() => { clearFilters?.(); confirm(); setPage(1) }} size="small" style={{ width: 90 }}>重置</Button>
+          </Space>
+        </div>
+      </div>
+    ),
+    filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+    filteredValue: (filters as any)[dataIndex] || null,
+  })
+
+  const getNumberFilterProps = (dataIndex: string) => ({
+    filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+      <div style={{ padding: 8 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+          <InputNumber
+            placeholder="最小值"
+            value={selectedKeys?.[0]}
+            onChange={v => setSelectedKeys(v != null ? [v, selectedKeys?.[1]] : [undefined, selectedKeys?.[1]])}
+            style={{ width: 90 }}
+          />
+          <span style={{ lineHeight: '32px' }}>-</span>
+          <InputNumber
+            placeholder="最大值"
+            value={selectedKeys?.[1]}
+            onChange={v => setSelectedKeys([selectedKeys?.[0], v != null ? v : undefined])}
+            style={{ width: 90 }}
+          />
+        </div>
+        <Space>
+          <Button type="primary" onClick={() => { confirm(); setPage(1) }} size="small" style={{ width: 90 }}>确定</Button>
+          <Button onClick={() => { clearFilters?.(); confirm(); setPage(1) }} size="small" style={{ width: 90 }}>重置</Button>
+        </Space>
+      </div>
+    ),
+    filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1677ff' : undefined }} />,
+    filteredValue: (filters as any)[dataIndex] || null,
+  })
+
+  const getSelectFilterProps = (dataIndex: string, options: { value: number; label: string }[]) => ({
+    filters: options.map(option => ({ text: option.label, value: option.value })),
+    filteredValue: (filters as any)[dataIndex] !== undefined ? [(filters as any)[dataIndex]] : null,
+  })
+
   const columns = [
     {
       title: '供应商', dataIndex: 'supplier_name', maxWidth: 100, ellipsis: true, fixed: 'left' as const, sorter: true,
+      ...getTextFilterProps('supplier_name'),
       onCell: () => ({ style: { maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }),
-      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+      render: editableText('supplier_name'),
+    },
+    {
+      title: '供应商账号', dataIndex: 'supplier_account', width: 120, sorter: true,
+      ...getTextFilterProps('supplier_account'),
+      render: editableText('supplier_account'),
     },
     {
       title: '物料长代码', dataIndex: 'material_code', maxWidth: 100, ellipsis: true, fixed: 'left' as const, sorter: true,
+      ...getTextFilterProps('material_code'),
       onCell: () => ({ style: { maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }),
       render: (v: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span>,
     },
     {
       title: '物料名称', dataIndex: 'material_name', maxWidth: 100, ellipsis: true, fixed: 'left' as const, sorter: true,
+      ...getTextFilterProps('material_name'),
       onCell: () => ({ style: { maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }),
-      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+      render: editableText('material_name'),
+    },
+    {
+      title: '物料属性', dataIndex: 'material_property', width: 90, sorter: true,
+      ...getSelectFilterProps('material_property', MATERIAL_PROPERTY_OPTIONS),
+      render: (v: number | null) => v ? (MATERIAL_PROPERTY_MAP[v] || v) : <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     { title: '规格型号', dataIndex: 'spec_model', maxWidth: 150, ellipsis: true, sorter: true,
+      ...getTextFilterProps('spec_model'),
       onCell: () => ({ style: { maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }),
+      render: editableText('spec_model'),
     },
-    { title: '单位', dataIndex: 'unit', width: 60 },
+    { title: '单位', dataIndex: 'unit', width: 60,
+      ...getTextFilterProps('unit'),
+      render: editableText('unit'),
+    },
     {
-      title: '下单日期', dataIndex: 'po_date', width: 100, sorter: true,
+      title: '下单日期', dataIndex: 'po_date', width: 120, sorter: true,
+      ...getDateFilterProps('po_date'),
       render: (v: string | null) => v ? formatDate(v) : <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     {
       title: '数量', dataIndex: 'po_qty', width: 80,
-      render: (v: number | null) => v ?? '-',
+      ...getNumberFilterProps('po_qty'),
+      render: editableNumber('po_qty'),
       sorter: true,
     },
     {
       title: <Tooltip title="实际入库数量">收料数量</Tooltip>, dataIndex: 'received_qty', width: 90,
-      render: (v: number | null) => v ?? <span style={{ color: '#cbd5e1' }}>0</span>,
+      ...getNumberFilterProps('received_qty'),
+      render: editableNumber('received_qty'),
       sorter: true,
     },
     {
-      title: <Tooltip title="供应商承诺交货日期">交货日期</Tooltip>, dataIndex: 'eta', width: 100,
-      render: (v: string | null) => {
-        if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
-        const isOverdue = v < today
-        return <span style={{ color: isOverdue ? '#e11d48' : undefined }}>{formatDate(v)}</span>
+      title: <Tooltip title="计划数量 - 收料数量，正数表示缺料">缺料</Tooltip>, dataIndex: 'shortage_qty', width: 80,
+      filters: [{ text: '仅看缺料', value: 'shortage' }],
+      filteredValue: filters.only_shortage ? ['shortage'] as (string | number | boolean)[] : null,
+      render: (v: number | null, row: PlanRow) => {
+        if (v == null || v <= 0) return <span style={{ color: '#cbd5e1' }}>-</span>
+        return <Tooltip title={`计划${row.po_qty} - 收料${row.received_qty ?? 0} = 缺${v}`}>
+          <span style={{ color: '#e11d48', fontWeight: 500 }}>-{v}</span>
+        </Tooltip>
       },
+    },
+    {
+      title: <Tooltip title="同步或导入带入的原始交货日期">同步交期</Tooltip>, dataIndex: 'original_eta', width: 120,
+      render: (v: string | null) => v ? formatDate(v) : <span style={{ color: '#cbd5e1' }}>-</span>,
+      sorter: true,
+    },
+    {
+      title: <Tooltip title="供应商承诺交货日期">交货日期</Tooltip>, dataIndex: 'eta', width: 120,
+      ...getDateFilterProps('eta'),
+      render: editableDate('eta'),
       sorter: true,
     },
     {
       title: <Tooltip title="关联生产订单号">订单号</Tooltip>, dataIndex: 'order_no', width: 80,
-      render: (v: string | null) => {
-        if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
-        const lastDashIndex = v.lastIndexOf('-')
-        const afterDash = lastDashIndex !== -1 ? v.substring(lastDashIndex + 1) : v
-        const displayValue = afterDash.replace(/^0+/, '').padStart(3, '0')
-        return <Tooltip title={v}>{displayValue}</Tooltip>
-      },
+      ...getTextFilterProps('order_no'),
+      render: editableText('order_no'),
       sorter: true,
     },
     {
-      title: <Tooltip title="实际入库日期">到料时间</Tooltip>, dataIndex: 'actual_arrival_date', width: 110,
-      render: (v: string | null) => v ? <span style={{ color: '#16a34a' }}>{formatDate(v)}</span> : <span style={{ color: '#cbd5e1' }}>-</span>,
+      title: <Tooltip title="实际入库日期">到料时间</Tooltip>, dataIndex: 'actual_arrival_date', width: 120,
+      ...getDateFilterProps('actual_arrival_date'),
+      render: editableDate('actual_arrival_date'),
       sorter: true,
     },
     {
       title: '小时节点', dataIndex: 'arrival_hour_note', ellipsis: true,
-      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+      ...getTextFilterProps('arrival_hour_note'),
+      render: editableText('arrival_hour_note'),
     },
     {
       title: '责任人', dataIndex: 'owner', width: 80, fixed: 'right' as const, sorter: true,
-      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+      ...getTextFilterProps('owner'),
+      render: editableText('owner'),
     },
     {
-      title: <Tooltip title="检验单日期">检验日期</Tooltip>, dataIndex: 'inspection_date', width: 110,
-      render: (v: string | null) => v ? <span style={{ color: '#6366f1' }}>{formatDate(v)}</span> : <span style={{ color: '#cbd5e1' }}>-</span>,
+      title: <Tooltip title="检验单日期">检验日期</Tooltip>, dataIndex: 'inspection_date', width: 120,
+      ...getDateFilterProps('inspection_date'),
+      render: editableDate('inspection_date'),
       sorter: true,
     },
     {
@@ -283,9 +642,16 @@ export default function PurchasePlan() {
       },
     },
     {
-      title: '操作', width: 50, fixed: 'right' as const,
+      title: '操作', width: 88, fixed: 'right' as const,
       render: (_: any, row: PlanRow) => (
-        <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+        <Space size={4}>
+          <Tooltip title="和供应商沟通">
+            <Button size="small" icon={<MessageOutlined />} onClick={() => openContact(row)} />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+          </Tooltip>
+        </Space>
       ),
     },
   ]
@@ -309,12 +675,12 @@ export default function PurchasePlan() {
               style={{ padding: 0 }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: card.color }}>
+                <div style={{ width: 44, height: 44, borderRadius: 10, background: `${card.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 'calc(1.25rem * var(--font-size-scale))', color: card.color }}>
                   {card.icon}
                 </div>
                 <div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{card.title}</div>
+                  <div style={{ fontSize: 'calc(1.375rem * var(--font-size-scale))', fontWeight: 700, color: '#1e293b' }}>{card.value}</div>
+                  <div style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))', color: '#64748b' }}>{card.title}</div>
                 </div>
               </div>
             </Card>
@@ -337,7 +703,23 @@ export default function PurchasePlan() {
           <Col flex="auto" />
           <Col>
             <Space>
+              {selectedRowKeys.length > 0 && (
+                <Button type="primary" icon={<EditOutlined />} onClick={() => setBatchEditModal(true)}>
+                  批量编辑 ({selectedRowKeys.length})
+                </Button>
+              )}
               <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+              <Dropdown
+                menu={{
+                  items: [
+                    { key: 'xlsx', label: '导出 Excel', icon: <DownloadOutlined /> },
+                    { key: 'csv', label: '导出 CSV', icon: <DownloadOutlined /> },
+                  ],
+                  onClick: ({ key }) => handleExport(key as 'xlsx' | 'csv'),
+                }}
+              >
+                <Button icon={<DownloadOutlined />} loading={exporting}>导出 <DownOutlined /></Button>
+              </Dropdown>
               <Upload beforeUpload={(f) => { handleImport(f); return false }} showUploadList={false} accept=".csv">
                 <Button icon={<UploadOutlined />}>导入CSV</Button>
               </Upload>
@@ -354,6 +736,10 @@ export default function PurchasePlan() {
           dataSource={data}
           columns={columns}
           loading={loading}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys as number[]),
+          }}
           scroll={{ x: 'max-content', y: 'calc(100vh - 380px)' }}
           size="small"
           tableLayout="fixed"
@@ -364,13 +750,39 @@ export default function PurchasePlan() {
             style: { padding: '0 16px' },
           }}
           onChange={(pagination, tableFilters, sorter: any) => {
-            // 分页
             setPage(pagination.current || 1)
             setPageSize(pagination.pageSize || 20)
-            // 状态筛选 → 服务端筛选（合并 po_status 和 is_stagnant 列的筛选）
+            // 状态筛选（合并 po_status 和 is_stagnant）
             const statusFilter = (tableFilters?.po_status as string[] | undefined) || []
             const stagnantFilter = (tableFilters?.is_stagnant as string[] | undefined) || []
-            setFilters(prev => ({ ...prev, po_status: [...statusFilter, ...stagnantFilter] }))
+            // 文本列筛选
+            const textKeys = ['supplier_name', 'supplier_account', 'material_code', 'material_name', 'spec_model', 'unit', 'owner', 'order_no', 'arrival_hour_note'] as const
+            const textUpdates: Record<string, string> = {}
+            textKeys.forEach(k => { textUpdates[k] = (tableFilters?.[k]?.[0] as string) || '' })
+            const materialProperty = tableFilters?.material_property?.[0] as number | undefined
+            // 日期范围列筛选
+            const dateKeys = ['po_date', 'eta', 'actual_arrival_date', 'inspection_date'] as const
+            const dateUpdates: Record<string, [string, string] | null> = {}
+            dateKeys.forEach(k => {
+              const v = tableFilters?.[k] as string[] | null
+              dateUpdates[k] = v && v.length === 2 ? [v[0], v[1]] : null
+            })
+            // 数值范围列筛选
+            const numKeys = ['po_qty', 'received_qty'] as const
+            const numUpdates: Record<string, [number, number] | null> = {}
+            numKeys.forEach(k => {
+              const v = tableFilters?.[k] as (number | undefined)[] | null
+              numUpdates[k] = v && (v[0] != null || v[1] != null) ? [v[0] as number, v[1] as number] : null
+            })
+            setFilters(prev => ({
+              ...prev,
+              ...textUpdates,
+              material_property: materialProperty,
+              ...dateUpdates,
+              ...numUpdates,
+              po_status: [...statusFilter, ...stagnantFilter],
+              only_shortage: ((tableFilters?.shortage_qty as string[] | undefined) || []).includes('shortage'),
+            } as typeof prev))
             // 排序
             const sortField = sorter.field as string | undefined
             const sortDir = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : ''
@@ -380,6 +792,27 @@ export default function PurchasePlan() {
         />
         </div>
       </div>
+
+      <Modal
+        title={`供应商沟通${contactRecord?.supplier_name ? ` - ${contactRecord.supplier_name}` : ''}`}
+        open={contactModal}
+        onCancel={() => setContactModal(false)}
+        width={620}
+        footer={[
+          <Button key="copy" type="primary" icon={<CopyOutlined />} onClick={copyContactText}>复制内容</Button>,
+          <Button key="close" onClick={() => setContactModal(false)}>关闭</Button>,
+        ]}
+      >
+        <Row gutter={12} style={{ marginBottom: 12 }}>
+          <Col span={12}><span style={{ color: '#64748b' }}>供应商账号</span><div>{contactRecord?.supplier_account || '-'}</div></Col>
+          <Col span={12}><span style={{ color: '#64748b' }}>负责人</span><div>{contactRecord?.owner || '-'}</div></Col>
+        </Row>
+        <Input.TextArea
+          value={contactText}
+          onChange={e => setContactText(e.target.value)}
+          rows={10}
+        />
+      </Modal>
 
       <Modal
         title="新增采购到料计划"
@@ -396,6 +829,11 @@ export default function PurchasePlan() {
               </Form.Item>
             </Col>
             <Col span={12}>
+              <Form.Item name="supplier_account" label="供应商账号">
+                <Input placeholder="用于供应商登录/同步" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
               <Form.Item name="material_code" label="物料长代码" rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
@@ -403,6 +841,11 @@ export default function PurchasePlan() {
             <Col span={12}>
               <Form.Item name="material_name" label="物料名称">
                 <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="material_property" label="物料属性">
+                <Select allowClear options={MATERIAL_PROPERTY_OPTIONS} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -460,6 +903,11 @@ export default function PurchasePlan() {
               </Form.Item>
             </Col>
             <Col span={12}>
+              <Form.Item name="supplier_account" label="供应商账号">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
               <Form.Item name="material_code" label="物料长代码">
                 <Input disabled />
               </Form.Item>
@@ -467,6 +915,11 @@ export default function PurchasePlan() {
             <Col span={12}>
               <Form.Item name="material_name" label="物料名称">
                 <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="material_property" label="物料属性">
+                <Select allowClear options={MATERIAL_PROPERTY_OPTIONS} />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -534,6 +987,47 @@ export default function PurchasePlan() {
               </Form.Item>
             </Col>
           </Row>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`批量编辑（已选 ${selectedRowKeys.length} 条）`}
+        open={batchEditModal}
+        onCancel={() => { setBatchEditModal(false); batchForm.resetFields() }}
+        onOk={() => batchForm.submit()}
+        width={400}
+      >
+        <Form form={batchForm} layout="vertical" onFinish={handleBatchEdit}>
+          <p style={{ color: '#64748b', marginBottom: 16 }}>已选择 {selectedRowKeys.length} 条。仅填写需要修改的字段，留空则不修改。</p>
+          <Form.Item name="eta" label="交货时间">
+            <DatePicker style={{ width: '100%' }} placeholder="选择交货日期" />
+          </Form.Item>
+          <Form.Item name="owner" label="责任人">
+            <Input placeholder="输入责任人" />
+          </Form.Item>
+          <Form.Item name="supplier_account" label="供应商账号">
+            <Input placeholder="输入供应商账号" />
+          </Form.Item>
+          <Form.Item name="actual_arrival_date" label="到料时间">
+            <DatePicker style={{ width: '100%' }} placeholder="选择到料日期" />
+          </Form.Item>
+          <Form.Item name="inspection_date" label="检验日期">
+            <DatePicker style={{ width: '100%' }} placeholder="选择检验日期" />
+          </Form.Item>
+          <Form.Item name="clear_fields" label="清空字段">
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="选择要清空的字段"
+              options={[
+                { label: '交货时间', value: 'eta' },
+                { label: '责任人', value: 'owner' },
+                { label: '供应商账号', value: 'supplier_account' },
+                { label: '到料时间', value: 'actual_arrival_date' },
+                { label: '检验日期', value: 'inspection_date' },
+              ]}
+            />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

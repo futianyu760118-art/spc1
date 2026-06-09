@@ -1,19 +1,25 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, asc, desc, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from sqlalchemy.orm import selectinload
-from datetime import date
+from datetime import date, datetime
+import io
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.material.material_demand import MaterialDemand
+from app.models.material.purchase_order import PurchaseOrder
 from app.models.material.binding import OrderMaterialPoBinding
+from app.models.basicdata.customer import Customer
 from app.schemas.common import ResponseModel, PageResult
 from app.models.exception.risk_issue import RiskIssue
-from app.schemas.order.schemas import SaleOrderOut, SaleOrderUpdate, OrderCreate, OrderDetailOut, MaterialDemandOut, BindingOut, PODetail, RiskIssueOut, SaleOrderListOut, SaleOrderLineOut
+from app.schemas.order.schemas import SaleOrderOut, SaleOrderUpdate, OrderCreate, OrderDetailOut, MaterialDemandOut, BindingOut, PODetail, RiskIssueOut, SaleOrderListOut, SaleOrderLineOut, OrderProductMaterialsOut
+from app.services.common.export_service import GenericExportService, ExportColumn
+from app.services.order.order_materials_service import get_order_product_materials
 
 router = APIRouter()
 
@@ -24,6 +30,7 @@ SORTABLE_COLUMNS = {
     'customer_code': SaleOrder.customer_code,
     'order_no': SaleOrder.order_no,
     'order_qty': SaleOrder.order_qty,
+    'order_amount': SaleOrder.order_amount,
     'order_date': SaleOrder.order_date,
     'promised_date': SaleOrder.promised_date,
     'shipping_plan': SaleOrder.shipping_plan,
@@ -37,6 +44,118 @@ SORTABLE_COLUMNS = {
     'assembly_complete_date': SaleOrder.assembly_complete_date,
     'risk_score': SaleOrder.risk_score,
 }
+
+
+def _customer_grade_expr():
+    return func.coalesce(
+        func.nullif(func.trim(Customer.customer_level), ''),
+        func.nullif(func.trim(SaleOrder.customer_grade), ''),
+    )
+
+
+def _customer_grade_filter_expr(grades: list[str]):
+    expr = _customer_grade_expr()
+    normalized_grades = set()
+    for grade in grades:
+        text = _clean_text(grade)
+        if not text:
+            continue
+        normalized_grades.add(text)
+        if len(text) == 1 and text.upper() in {'A', 'B', 'C', 'D'}:
+            upper = text.upper()
+            normalized_grades.update({upper, f'{upper}级', f'{upper}类', f'{upper}类客户'})
+        elif text[0].upper() in {'A', 'B', 'C', 'D'} and ('类' in text or '级' in text):
+            upper = text[0].upper()
+            normalized_grades.update({upper, f'{upper}级', f'{upper}类', f'{upper}类客户'})
+    grade_values = list(normalized_grades)
+    if len(grade_values) == 1:
+        return expr == grade_values[0]
+    return expr.in_(grade_values)
+
+
+def _resolve_sort_expr(query, sort_by: str, customer_joined: bool = False):
+    if sort_by == 'customer_grade':
+        if not customer_joined:
+            query = query.outerjoin(Customer, Customer.customer_code == SaleOrder.customer_code)
+        return query, _customer_grade_expr()
+    return query, SORTABLE_COLUMNS[sort_by]
+
+
+def _clean_text(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _effective_customer_grade(order: SaleOrder, customer_master: Optional[Customer] = None):
+    customer_level = _clean_text(customer_master.customer_level if customer_master else None)
+    return customer_level or _clean_text(order.customer_grade)
+
+
+def _kit_risk_level(kit_rate: float) -> str:
+    if kit_rate >= 1.0:
+        return "green"
+    if kit_rate >= 0.8:
+        return "yellow"
+    return "red"
+
+
+def _kit_status(risk_level: str) -> str:
+    return {
+        "green": "齐套",
+        "yellow": "部分齐套",
+        "red": "缺料严重",
+    }.get(risk_level, risk_level)
+
+
+async def _get_order_kit_map(db: AsyncSession, order_nos: list[str]) -> dict[str, dict]:
+    if not order_nos:
+        return {}
+
+    result = await db.execute(
+        select(
+            PurchaseOrder.order_no,
+            PurchaseOrder.material_code,
+            func.max(
+                case(
+                    (
+                        (PurchaseOrder.actual_arrival_date.isnot(None))
+                        | (PurchaseOrder.inspection_date.isnot(None))
+                        | (PurchaseOrder.received_qty > 0),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("received"),
+        )
+        .where(
+            PurchaseOrder.order_no.in_(order_nos),
+            PurchaseOrder.material_code.isnot(None),
+        )
+        .group_by(PurchaseOrder.order_no, PurchaseOrder.material_code)
+    )
+
+    grouped: dict[str, dict[str, int]] = {}
+    for row in result.all():
+        if not row.order_no:
+            continue
+        grouped.setdefault(row.order_no, {})[row.material_code] = int(row.received or 0)
+
+    kit_map: dict[str, dict] = {}
+    for order_no, materials in grouped.items():
+        total = len(materials)
+        received = sum(1 for value in materials.values() if value)
+        kit_rate = round(received / total, 4) if total else 0
+        risk_level = _kit_risk_level(kit_rate)
+        kit_map[order_no] = {
+            "kit_rate": kit_rate,
+            "kit_status": _kit_status(risk_level),
+            "kit_risk_level": risk_level,
+            "kit_total_materials": total,
+            "kit_received_materials": received,
+        }
+    return kit_map
 
 
 @router.get("", response_model=ResponseModel[PageResult[SaleOrderListOut]])
@@ -61,6 +180,21 @@ async def list_orders(
     shipping_plan_end: Optional[str] = Query(None, description="出货计划结束日期 YYYY-MM-DD"),
     order_date_start: Optional[str] = Query(None, description="下单时间开始日期 YYYY-MM-DD"),
     order_date_end: Optional[str] = Query(None, description="下单时间结束日期 YYYY-MM-DD"),
+    customer_inspection_date_start: Optional[str] = Query(None, description="客检日期开始 YYYY-MM-DD"),
+    customer_inspection_date_end: Optional[str] = Query(None, description="客检日期结束 YYYY-MM-DD"),
+    planned_start_date_start: Optional[str] = Query(None, description="计划开始日期开始 YYYY-MM-DD"),
+    planned_start_date_end: Optional[str] = Query(None, description="计划开始日期结束 YYYY-MM-DD"),
+    material_ready_date_start: Optional[str] = Query(None, description="物料就绪日期开始 YYYY-MM-DD"),
+    material_ready_date_end: Optional[str] = Query(None, description="物料就绪日期结束 YYYY-MM-DD"),
+    front_process_date_start: Optional[str] = Query(None, description="前制程日期开始 YYYY-MM-DD"),
+    front_process_date_end: Optional[str] = Query(None, description="前制程日期结束 YYYY-MM-DD"),
+    first_article_date_start: Optional[str] = Query(None, description="首件日期开始 YYYY-MM-DD"),
+    first_article_date_end: Optional[str] = Query(None, description="首件日期结束 YYYY-MM-DD"),
+    assembly_start_date_start: Optional[str] = Query(None, description="组装开始日期开始 YYYY-MM-DD"),
+    assembly_start_date_end: Optional[str] = Query(None, description="组装开始日期结束 YYYY-MM-DD"),
+    assembly_complete_date_start: Optional[str] = Query(None, description="组装完成日期开始 YYYY-MM-DD"),
+    assembly_complete_date_end: Optional[str] = Query(None, description="组装完成日期结束 YYYY-MM-DD"),
+    order_type: Optional[str] = Query(None, description="订单类型，多选逗号分隔：big（大单，HJ开头）, sample（样品单，HJY开头）"),
     sort_by: Optional[str] = Query("promised_date", description="排序字段"),
     sort_order: Optional[str] = Query("asc", description="排序方向 asc/desc"),
     current_user: dict = Depends(PermissionChecker("orders.list", "read")),
@@ -68,6 +202,7 @@ async def list_orders(
 ):
     query = select(SaleOrder)
     count_query = select(func.count(SaleOrder.id))
+    customer_grade_joined = False
 
     if risk_level:
         levels = [x.strip() for x in risk_level.split(',') if x.strip()]
@@ -86,12 +221,11 @@ async def list_orders(
         count_query = count_query.where(SaleOrder.customer.ilike(like_expr))
     if customer_grade:
         grades = [x.strip() for x in customer_grade.split(',') if x.strip()]
-        if len(grades) == 1:
-            query = query.where(SaleOrder.customer_grade == grades[0])
-            count_query = count_query.where(SaleOrder.customer_grade == grades[0])
-        elif grades:
-            query = query.where(SaleOrder.customer_grade.in_(grades))
-            count_query = count_query.where(SaleOrder.customer_grade.in_(grades))
+        if grades:
+            grade_filter = _customer_grade_filter_expr(grades)
+            query = query.outerjoin(Customer, Customer.customer_code == SaleOrder.customer_code).where(grade_filter)
+            count_query = count_query.outerjoin(Customer, Customer.customer_code == SaleOrder.customer_code).where(grade_filter)
+            customer_grade_joined = True
     if data_source:
         query = query.where(SaleOrder.data_source == data_source)
         count_query = count_query.where(SaleOrder.data_source == data_source)
@@ -143,23 +277,84 @@ async def list_orders(
             query = query.where(SaleOrder.delivery_completed_date.is_(None))
             count_query = count_query.where(SaleOrder.delivery_completed_date.is_(None))
     if promised_date_start:
-        query = query.where(SaleOrder.promised_date >= promised_date_start)
-        count_query = count_query.where(SaleOrder.promised_date >= promised_date_start)
+        query = query.where(SaleOrder.promised_date >= datetime.strptime(promised_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.promised_date >= datetime.strptime(promised_date_start, '%Y-%m-%d').date())
     if promised_date_end:
-        query = query.where(SaleOrder.promised_date <= promised_date_end)
-        count_query = count_query.where(SaleOrder.promised_date <= promised_date_end)
+        query = query.where(SaleOrder.promised_date <= datetime.strptime(promised_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.promised_date <= datetime.strptime(promised_date_end, '%Y-%m-%d').date())
     if shipping_plan_start:
-        query = query.where(SaleOrder.shipping_plan >= shipping_plan_start)
-        count_query = count_query.where(SaleOrder.shipping_plan >= shipping_plan_start)
+        query = query.where(SaleOrder.shipping_plan >= datetime.strptime(shipping_plan_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.shipping_plan >= datetime.strptime(shipping_plan_start, '%Y-%m-%d').date())
     if shipping_plan_end:
-        query = query.where(SaleOrder.shipping_plan <= shipping_plan_end)
-        count_query = count_query.where(SaleOrder.shipping_plan <= shipping_plan_end)
+        query = query.where(SaleOrder.shipping_plan <= datetime.strptime(shipping_plan_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.shipping_plan <= datetime.strptime(shipping_plan_end, '%Y-%m-%d').date())
     if order_date_start:
-        query = query.where(SaleOrder.order_date >= order_date_start)
-        count_query = count_query.where(SaleOrder.order_date >= order_date_start)
+        query = query.where(SaleOrder.order_date >= datetime.strptime(order_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.order_date >= datetime.strptime(order_date_start, '%Y-%m-%d').date())
     if order_date_end:
-        query = query.where(SaleOrder.order_date <= order_date_end)
-        count_query = count_query.where(SaleOrder.order_date <= order_date_end)
+        query = query.where(SaleOrder.order_date <= datetime.strptime(order_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.order_date <= datetime.strptime(order_date_end, '%Y-%m-%d').date())
+    if customer_inspection_date_start:
+        query = query.where(SaleOrder.customer_inspection_date >= datetime.strptime(customer_inspection_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.customer_inspection_date >= datetime.strptime(customer_inspection_date_start, '%Y-%m-%d').date())
+    if customer_inspection_date_end:
+        query = query.where(SaleOrder.customer_inspection_date <= datetime.strptime(customer_inspection_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.customer_inspection_date <= datetime.strptime(customer_inspection_date_end, '%Y-%m-%d').date())
+    if planned_start_date_start:
+        query = query.where(SaleOrder.planned_start_date >= datetime.strptime(planned_start_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.planned_start_date >= datetime.strptime(planned_start_date_start, '%Y-%m-%d').date())
+    if planned_start_date_end:
+        query = query.where(SaleOrder.planned_start_date <= datetime.strptime(planned_start_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.planned_start_date <= datetime.strptime(planned_start_date_end, '%Y-%m-%d').date())
+    if material_ready_date_start:
+        query = query.where(SaleOrder.material_ready_date >= datetime.strptime(material_ready_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.material_ready_date >= datetime.strptime(material_ready_date_start, '%Y-%m-%d').date())
+    if material_ready_date_end:
+        query = query.where(SaleOrder.material_ready_date <= datetime.strptime(material_ready_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.material_ready_date <= datetime.strptime(material_ready_date_end, '%Y-%m-%d').date())
+    if front_process_date_start:
+        query = query.where(SaleOrder.front_process_date >= datetime.strptime(front_process_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.front_process_date >= datetime.strptime(front_process_date_start, '%Y-%m-%d').date())
+    if front_process_date_end:
+        query = query.where(SaleOrder.front_process_date <= datetime.strptime(front_process_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.front_process_date <= datetime.strptime(front_process_date_end, '%Y-%m-%d').date())
+    if first_article_date_start:
+        query = query.where(SaleOrder.first_article_date >= datetime.strptime(first_article_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.first_article_date >= datetime.strptime(first_article_date_start, '%Y-%m-%d').date())
+    if first_article_date_end:
+        query = query.where(SaleOrder.first_article_date <= datetime.strptime(first_article_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.first_article_date <= datetime.strptime(first_article_date_end, '%Y-%m-%d').date())
+    if assembly_start_date_start:
+        query = query.where(SaleOrder.assembly_start_date >= datetime.strptime(assembly_start_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.assembly_start_date >= datetime.strptime(assembly_start_date_start, '%Y-%m-%d').date())
+    if assembly_start_date_end:
+        query = query.where(SaleOrder.assembly_start_date <= datetime.strptime(assembly_start_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.assembly_start_date <= datetime.strptime(assembly_start_date_end, '%Y-%m-%d').date())
+    if assembly_complete_date_start:
+        query = query.where(SaleOrder.assembly_complete_date >= datetime.strptime(assembly_complete_date_start, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.assembly_complete_date >= datetime.strptime(assembly_complete_date_start, '%Y-%m-%d').date())
+    if assembly_complete_date_end:
+        query = query.where(SaleOrder.assembly_complete_date <= datetime.strptime(assembly_complete_date_end, '%Y-%m-%d').date())
+        count_query = count_query.where(SaleOrder.assembly_complete_date <= datetime.strptime(assembly_complete_date_end, '%Y-%m-%d').date())
+    if order_type:
+        types = [x.strip() for x in order_type.split(',') if x.strip()]
+        if types:
+            from sqlalchemy import or_
+            type_filters = []
+            for t in types:
+                if t == 'big':
+                    # 大单：HJ开头，排除HJY开头
+                    type_filters.append(SaleOrder.order_no.ilike('HJ%') & ~SaleOrder.order_no.ilike('HJY%'))
+                elif t == 'sample':
+                    # 样品单：HJY开头
+                    type_filters.append(SaleOrder.order_no.ilike('HJY%'))
+            if type_filters:
+                if len(type_filters) == 1:
+                    query = query.where(type_filters[0])
+                    count_query = count_query.where(type_filters[0])
+                else:
+                    query = query.where(or_(*type_filters))
+                    count_query = count_query.where(or_(*type_filters))
     if keyword:
         like_expr = f"%{keyword}%"
         query = query.where(
@@ -172,17 +367,135 @@ async def list_orders(
     total_result = await db.execute(count_query)
     total = total_result.scalar()
 
-    # 全局风险等级统计（用于统计卡片）
-    global_stats_query = select(
+    # 基于筛选条件的统计（用于表格底部合计）
+    # 使用与主查询相同的筛选条件
+    stats_query = select(
         func.count(SaleOrder.id).label('total'),
         func.sum(case((SaleOrder.risk_level == 'red', 1), else_=0)).label('red_count'),
         func.sum(case((SaleOrder.risk_level == 'yellow', 1), else_=0)).label('yellow_count'),
         func.sum(case((SaleOrder.risk_level == 'blue', 1), else_=0)).label('blue_count'),
         func.sum(case((SaleOrder.risk_level == 'green', 1), else_=0)).label('green_count'),
+        func.sum(SaleOrder.order_qty).label('order_qty_total'),
+        func.sum(SaleOrder.order_amount).label('order_amount_total'),
     )
-    # 全局统计不受 keyword/risk_level/status 等筛选影响
-    global_stats_result = await db.execute(global_stats_query)
-    global_stats = global_stats_result.first()
+    # 应用与主查询相同的筛选条件
+    if risk_level:
+        levels = [x.strip() for x in risk_level.split(',') if x.strip()]
+        if len(levels) == 1:
+            stats_query = stats_query.where(SaleOrder.risk_level == levels[0])
+        elif levels:
+            stats_query = stats_query.where(SaleOrder.risk_level.in_(levels))
+    if owner:
+        stats_query = stats_query.where(SaleOrder.owner == owner)
+    if customer:
+        like_expr = f"%{customer}%"
+        stats_query = stats_query.where(SaleOrder.customer.ilike(like_expr))
+    if customer_grade:
+        grades = [x.strip() for x in customer_grade.split(',') if x.strip()]
+        if grades:
+            stats_query = stats_query.outerjoin(Customer, Customer.customer_code == SaleOrder.customer_code).where(
+                _customer_grade_filter_expr(grades)
+            )
+    if data_source:
+        stats_query = stats_query.where(SaleOrder.data_source == data_source)
+    if department:
+        departments = [x.strip() for x in department.split(',') if x.strip()]
+        if len(departments) == 1:
+            stats_query = stats_query.where(SaleOrder.department == departments[0])
+        elif departments:
+            stats_query = stats_query.where(SaleOrder.department.in_(departments))
+    if status:
+        statuses = [x.strip() for x in status.split(',') if x.strip()]
+        if len(statuses) == 1:
+            stats_query = stats_query.where(SaleOrder.status == statuses[0])
+        elif statuses:
+            stats_query = stats_query.where(SaleOrder.status.in_(statuses))
+    if inspection_result:
+        results = [x.strip() for x in inspection_result.split(',') if x.strip()]
+        if len(results) == 1:
+            stats_query = stats_query.where(SaleOrder.inspection_result == results[0])
+        elif results:
+            stats_query = stats_query.where(SaleOrder.inspection_result.in_(results))
+    if packaging_status:
+        statuses = [x.strip() for x in packaging_status.split(',') if x.strip()]
+        if len(statuses) == 1:
+            stats_query = stats_query.where(SaleOrder.packaging_status == statuses[0])
+        elif statuses:
+            stats_query = stats_query.where(SaleOrder.packaging_status.in_(statuses))
+    if procurement_status:
+        statuses = [x.strip() for x in procurement_status.split(',') if x.strip()]
+        if len(statuses) == 1:
+            stats_query = stats_query.where(SaleOrder.procurement_status == statuses[0])
+        elif statuses:
+            stats_query = stats_query.where(SaleOrder.procurement_status.in_(statuses))
+    if delivery_completed:
+        if delivery_completed == 'yes':
+            stats_query = stats_query.where(SaleOrder.delivery_completed_date.isnot(None))
+        elif delivery_completed == 'no':
+            stats_query = stats_query.where(SaleOrder.delivery_completed_date.is_(None))
+    if promised_date_start:
+        stats_query = stats_query.where(SaleOrder.promised_date >= datetime.strptime(promised_date_start, '%Y-%m-%d').date())
+    if promised_date_end:
+        stats_query = stats_query.where(SaleOrder.promised_date <= datetime.strptime(promised_date_end, '%Y-%m-%d').date())
+    if shipping_plan_start:
+        stats_query = stats_query.where(SaleOrder.shipping_plan >= datetime.strptime(shipping_plan_start, '%Y-%m-%d').date())
+    if shipping_plan_end:
+        stats_query = stats_query.where(SaleOrder.shipping_plan <= datetime.strptime(shipping_plan_end, '%Y-%m-%d').date())
+    if order_date_start:
+        stats_query = stats_query.where(SaleOrder.order_date >= datetime.strptime(order_date_start, '%Y-%m-%d').date())
+    if order_date_end:
+        stats_query = stats_query.where(SaleOrder.order_date <= datetime.strptime(order_date_end, '%Y-%m-%d').date())
+    if customer_inspection_date_start:
+        stats_query = stats_query.where(SaleOrder.customer_inspection_date >= datetime.strptime(customer_inspection_date_start, '%Y-%m-%d').date())
+    if customer_inspection_date_end:
+        stats_query = stats_query.where(SaleOrder.customer_inspection_date <= datetime.strptime(customer_inspection_date_end, '%Y-%m-%d').date())
+    if planned_start_date_start:
+        stats_query = stats_query.where(SaleOrder.planned_start_date >= datetime.strptime(planned_start_date_start, '%Y-%m-%d').date())
+    if planned_start_date_end:
+        stats_query = stats_query.where(SaleOrder.planned_start_date <= datetime.strptime(planned_start_date_end, '%Y-%m-%d').date())
+    if material_ready_date_start:
+        stats_query = stats_query.where(SaleOrder.material_ready_date >= datetime.strptime(material_ready_date_start, '%Y-%m-%d').date())
+    if material_ready_date_end:
+        stats_query = stats_query.where(SaleOrder.material_ready_date <= datetime.strptime(material_ready_date_end, '%Y-%m-%d').date())
+    if front_process_date_start:
+        stats_query = stats_query.where(SaleOrder.front_process_date >= datetime.strptime(front_process_date_start, '%Y-%m-%d').date())
+    if front_process_date_end:
+        stats_query = stats_query.where(SaleOrder.front_process_date <= datetime.strptime(front_process_date_end, '%Y-%m-%d').date())
+    if first_article_date_start:
+        stats_query = stats_query.where(SaleOrder.first_article_date >= datetime.strptime(first_article_date_start, '%Y-%m-%d').date())
+    if first_article_date_end:
+        stats_query = stats_query.where(SaleOrder.first_article_date <= datetime.strptime(first_article_date_end, '%Y-%m-%d').date())
+    if assembly_start_date_start:
+        stats_query = stats_query.where(SaleOrder.assembly_start_date >= datetime.strptime(assembly_start_date_start, '%Y-%m-%d').date())
+    if assembly_start_date_end:
+        stats_query = stats_query.where(SaleOrder.assembly_start_date <= datetime.strptime(assembly_start_date_end, '%Y-%m-%d').date())
+    if assembly_complete_date_start:
+        stats_query = stats_query.where(SaleOrder.assembly_complete_date >= datetime.strptime(assembly_complete_date_start, '%Y-%m-%d').date())
+    if assembly_complete_date_end:
+        stats_query = stats_query.where(SaleOrder.assembly_complete_date <= datetime.strptime(assembly_complete_date_end, '%Y-%m-%d').date())
+    if order_type:
+        types = [x.strip() for x in order_type.split(',') if x.strip()]
+        if types:
+            type_filters = []
+            for t in types:
+                if t == 'big':
+                    type_filters.append(SaleOrder.order_no.ilike('HJ%') & ~SaleOrder.order_no.ilike('HJY%'))
+                elif t == 'sample':
+                    type_filters.append(SaleOrder.order_no.ilike('HJY%'))
+            if type_filters:
+                if len(type_filters) == 1:
+                    stats_query = stats_query.where(type_filters[0])
+                else:
+                    from sqlalchemy import or_
+                    stats_query = stats_query.where(or_(*type_filters))
+    if keyword:
+        like_expr = f"%{keyword}%"
+        stats_query = stats_query.where(
+            (SaleOrder.order_no.ilike(like_expr)) | (SaleOrder.customer.ilike(like_expr)) | (SaleOrder.product_name.ilike(like_expr))
+        )
+
+    stats_result = await db.execute(stats_query)
+    stats = stats_result.first()
 
     # 欠料统计
     shortage_stats_result = await db.execute(
@@ -194,7 +507,7 @@ async def list_orders(
     # 构建排序子句
     order_clauses = []
     if sort_by and sort_by in SORTABLE_COLUMNS:
-        col = SORTABLE_COLUMNS[sort_by]
+        query, col = _resolve_sort_expr(query, sort_by, customer_joined=customer_grade_joined)
         if sort_order == 'desc':
             order_clauses.append(col.desc().nullslast())
         else:
@@ -212,7 +525,16 @@ async def list_orders(
     orders = result.scalars().all()
 
     order_nos = [order.order_no for order in orders]
+    customer_codes = {order.customer_code for order in orders if order.customer_code}
+    customer_map: dict[str, Customer] = {}
+    if customer_codes:
+        customer_result = await db.execute(
+            select(Customer).where(Customer.customer_code.in_(customer_codes))
+        )
+        customer_map = {customer.customer_code: customer for customer in customer_result.scalars().all()}
+
     shortage_map: dict[str, int] = {}
+    kit_map: dict[str, dict] = {}
     if order_nos:
         shortage_result = await db.execute(
             select(
@@ -226,33 +548,317 @@ async def list_orders(
             .group_by(MaterialDemand.order_no)
         )
         shortage_map = {row.order_no: row.cnt for row in shortage_result.all()}
+        kit_map = await _get_order_kit_map(db, order_nos)
 
     items = []
     for order in orders:
         promised_dates = [line.promised_date for line in order.lines if line.promised_date]
         planned_dates = [line.planned_start_date for line in order.lines if line.planned_start_date]
         order_dict = SaleOrderOut.model_validate(order).model_dump()
+        customer_master = customer_map.get(order.customer_code or "")
         order_dict.update(
+            customer=order.customer or (customer_master.customer_short or customer_master.customer_name if customer_master else None),
+            customer_grade=_effective_customer_grade(order, customer_master),
             product_count=len({line.product_code for line in order.lines if line.product_code}),
             line_count=len(order.lines),
             shortage_count=shortage_map.get(order.order_no, 0),
+            **kit_map.get(order.order_no, {}),
             promised_date=order.promised_date or (min(promised_dates) if promised_dates else None),
             planned_start_date=order.planned_start_date or (min(planned_dates) if planned_dates else None),
         )
         items.append(SaleOrderListOut(**order_dict))
 
     page_result = PageResult(total=total, page=page, page_size=page_size, items=items)
-    # 将全局统计添加到返回数据中
+    # 将基于筛选条件的统计添加到返回数据中
     page_result.stats = {
-        'total': global_stats.total or 0,
-        'red_count': global_stats.red_count or 0,
-        'yellow_count': global_stats.yellow_count or 0,
-        'blue_count': global_stats.blue_count or 0,
-        'green_count': global_stats.green_count or 0,
+        'total': stats.total or 0,
+        'red_count': stats.red_count or 0,
+        'yellow_count': stats.yellow_count or 0,
+        'blue_count': stats.blue_count or 0,
+        'green_count': stats.green_count or 0,
         'shortage_count': shortage_stats.shortage_count or 0,
+        'order_qty_total': stats.order_qty_total or 0,
+        'order_amount_total': stats.order_amount_total or 0,
     }
 
     return ResponseModel(data=page_result)
+
+
+ORDER_EXPORT_COLUMNS = [
+    ExportColumn('department', '销售部门', 12),
+    ExportColumn('delivery_completed_date', '发货完成', 12),
+    ExportColumn('customer_grade', '客户等级', 10),
+    ExportColumn('customer_code', '客户', 20),
+    ExportColumn('order_no', '订单号', 16),
+    ExportColumn('risk_level', '风险等级', 10),
+    ExportColumn('order_qty', '数量', 10),
+    ExportColumn('completed_qty', '完成数量', 10),
+    ExportColumn('order_date', '下单时间', 12),
+    ExportColumn('promised_date', '合同交期', 12),
+    ExportColumn('shipping_plan', '出货计划', 12),
+    ExportColumn('customer_inspection_date', '客户验货时间', 14),
+    ExportColumn('planned_start_date', '上线时间', 12),
+    ExportColumn('inspection_result', '客检结果', 10),
+    ExportColumn('packaging_status', '包装完成状况', 14),
+    ExportColumn('bom_return_date', 'BOM 回收', 12),
+    ExportColumn('material_ready_date', '料齐套时间', 12),
+    ExportColumn('shipping_status_desc', '发货状态即时说明', 18),
+    ExportColumn('procurement_status', '采购物料齐套', 14),
+    ExportColumn('front_process_date', '前道', 12),
+    ExportColumn('first_article_date', '首件检验日期', 14),
+    ExportColumn('assembly_start_date', '组装上线日期', 14),
+    ExportColumn('assembly_complete_date', '组装完成日期', 14),
+    ExportColumn('remark', '备注', 20),
+]
+
+
+# ── 订单导出 ──
+@router.get("/export")
+async def export_orders(
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    columns: Optional[str] = Query(None, description="要导出的列名，逗号分隔。如不传则导出所有列"),
+    risk_level: Optional[str] = Query(None, description="风险等级，多选逗号分隔如 red,yellow"),
+    keyword: Optional[str] = Query(None),
+    owner: Optional[str] = Query(None),
+    customer: Optional[str] = Query(None),
+    customer_grade: Optional[str] = Query(None, description="客户等级，多选逗号分隔如 A,B"),
+    data_source: Optional[str] = Query(None),
+    department: Optional[str] = Query(None, description="销售部门，多选逗号分隔"),
+    status: Optional[str] = Query(None, description="订单状态，多选逗号分隔"),
+    inspection_result: Optional[str] = Query(None, description="客检结果，多选逗号分隔"),
+    packaging_status: Optional[str] = Query(None, description="包装状态，多选逗号分隔"),
+    procurement_status: Optional[str] = Query(None, description="采购状态，多选逗号分隔"),
+    delivery_completed: Optional[str] = Query(None, description="发货完成状态：yes/no"),
+    promised_date_start: Optional[str] = Query(None, description="合同交期开始日期 YYYY-MM-DD"),
+    promised_date_end: Optional[str] = Query(None, description="合同交期结束日期 YYYY-MM-DD"),
+    shipping_plan_start: Optional[str] = Query(None, description="出货计划开始日期 YYYY-MM-DD"),
+    shipping_plan_end: Optional[str] = Query(None, description="出货计划结束日期 YYYY-MM-DD"),
+    order_date_start: Optional[str] = Query(None, description="下单时间开始日期 YYYY-MM-DD"),
+    order_date_end: Optional[str] = Query(None, description="下单时间结束日期 YYYY-MM-DD"),
+    customer_inspection_date_start: Optional[str] = Query(None, description="客检日期开始 YYYY-MM-DD"),
+    customer_inspection_date_end: Optional[str] = Query(None, description="客检日期结束 YYYY-MM-DD"),
+    planned_start_date_start: Optional[str] = Query(None, description="计划开始日期开始 YYYY-MM-DD"),
+    planned_start_date_end: Optional[str] = Query(None, description="计划开始日期结束 YYYY-MM-DD"),
+    material_ready_date_start: Optional[str] = Query(None, description="物料就绪日期开始 YYYY-MM-DD"),
+    material_ready_date_end: Optional[str] = Query(None, description="物料就绪日期结束 YYYY-MM-DD"),
+    front_process_date_start: Optional[str] = Query(None, description="前制程日期开始 YYYY-MM-DD"),
+    front_process_date_end: Optional[str] = Query(None, description="前制程日期结束 YYYY-MM-DD"),
+    first_article_date_start: Optional[str] = Query(None, description="首件日期开始 YYYY-MM-DD"),
+    first_article_date_end: Optional[str] = Query(None, description="首件日期结束 YYYY-MM-DD"),
+    assembly_start_date_start: Optional[str] = Query(None, description="组装开始日期开始 YYYY-MM-DD"),
+    assembly_start_date_end: Optional[str] = Query(None, description="组装开始日期结束 YYYY-MM-DD"),
+    assembly_complete_date_start: Optional[str] = Query(None, description="组装完成日期开始 YYYY-MM-DD"),
+    assembly_complete_date_end: Optional[str] = Query(None, description="组装完成日期结束 YYYY-MM-DD"),
+    order_type: Optional[str] = Query(None, description="订单类型，多选逗号分隔：big（大单，HJ开头）, sample（样品单，HJY开头）"),
+    sort_by: Optional[str] = Query("promised_date", description="排序字段"),
+    sort_order: Optional[str] = Query("asc", description="排序方向 asc/desc"),
+    current_user: dict = Depends(PermissionChecker("orders.list", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """导出订单列表（支持筛选 + 排序 + 列选择，不分页）"""
+    query = select(SaleOrder)
+    customer_grade_joined = False
+
+    if risk_level:
+        levels = [x.strip() for x in risk_level.split(',') if x.strip()]
+        if len(levels) == 1:
+            query = query.where(SaleOrder.risk_level == levels[0])
+        elif levels:
+            query = query.where(SaleOrder.risk_level.in_(levels))
+    if owner:
+        query = query.where(SaleOrder.owner == owner)
+    if customer:
+        like_expr = f"%{customer}%"
+        query = query.where(SaleOrder.customer.ilike(like_expr))
+    if customer_grade:
+        grades = [x.strip() for x in customer_grade.split(',') if x.strip()]
+        if grades:
+            query = query.outerjoin(Customer, Customer.customer_code == SaleOrder.customer_code).where(
+                _customer_grade_filter_expr(grades)
+            )
+            customer_grade_joined = True
+    if data_source:
+        query = query.where(SaleOrder.data_source == data_source)
+    if department:
+        departments = [x.strip() for x in department.split(',') if x.strip()]
+        if len(departments) == 1:
+            query = query.where(SaleOrder.department == departments[0])
+        elif departments:
+            query = query.where(SaleOrder.department.in_(departments))
+    if status:
+        statuses = [x.strip() for x in status.split(',') if x.strip()]
+        if len(statuses) == 1:
+            query = query.where(SaleOrder.status == statuses[0])
+        elif statuses:
+            query = query.where(SaleOrder.status.in_(statuses))
+    if inspection_result:
+        results = [x.strip() for x in inspection_result.split(',') if x.strip()]
+        if len(results) == 1:
+            query = query.where(SaleOrder.inspection_result == results[0])
+        elif results:
+            query = query.where(SaleOrder.inspection_result.in_(results))
+    if packaging_status:
+        statuses = [x.strip() for x in packaging_status.split(',') if x.strip()]
+        if len(statuses) == 1:
+            query = query.where(SaleOrder.packaging_status == statuses[0])
+        elif statuses:
+            query = query.where(SaleOrder.packaging_status.in_(statuses))
+    if procurement_status:
+        statuses = [x.strip() for x in procurement_status.split(',') if x.strip()]
+        if len(statuses) == 1:
+            query = query.where(SaleOrder.procurement_status == statuses[0])
+        elif statuses:
+            query = query.where(SaleOrder.procurement_status.in_(statuses))
+    if delivery_completed:
+        if delivery_completed == 'yes':
+            query = query.where(SaleOrder.delivery_completed_date.isnot(None))
+        elif delivery_completed == 'no':
+            query = query.where(SaleOrder.delivery_completed_date.is_(None))
+    if promised_date_start:
+        query = query.where(SaleOrder.promised_date >= datetime.strptime(promised_date_start, '%Y-%m-%d').date())
+    if promised_date_end:
+        query = query.where(SaleOrder.promised_date <= datetime.strptime(promised_date_end, '%Y-%m-%d').date())
+    if shipping_plan_start:
+        query = query.where(SaleOrder.shipping_plan >= datetime.strptime(shipping_plan_start, '%Y-%m-%d').date())
+    if shipping_plan_end:
+        query = query.where(SaleOrder.shipping_plan <= datetime.strptime(shipping_plan_end, '%Y-%m-%d').date())
+    if order_date_start:
+        query = query.where(SaleOrder.order_date >= datetime.strptime(order_date_start, '%Y-%m-%d').date())
+    if order_date_end:
+        query = query.where(SaleOrder.order_date <= datetime.strptime(order_date_end, '%Y-%m-%d').date())
+    if customer_inspection_date_start:
+        query = query.where(SaleOrder.customer_inspection_date >= datetime.strptime(customer_inspection_date_start, '%Y-%m-%d').date())
+    if customer_inspection_date_end:
+        query = query.where(SaleOrder.customer_inspection_date <= datetime.strptime(customer_inspection_date_end, '%Y-%m-%d').date())
+    if planned_start_date_start:
+        query = query.where(SaleOrder.planned_start_date >= datetime.strptime(planned_start_date_start, '%Y-%m-%d').date())
+    if planned_start_date_end:
+        query = query.where(SaleOrder.planned_start_date <= datetime.strptime(planned_start_date_end, '%Y-%m-%d').date())
+    if material_ready_date_start:
+        query = query.where(SaleOrder.material_ready_date >= datetime.strptime(material_ready_date_start, '%Y-%m-%d').date())
+    if material_ready_date_end:
+        query = query.where(SaleOrder.material_ready_date <= datetime.strptime(material_ready_date_end, '%Y-%m-%d').date())
+    if front_process_date_start:
+        query = query.where(SaleOrder.front_process_date >= datetime.strptime(front_process_date_start, '%Y-%m-%d').date())
+    if front_process_date_end:
+        query = query.where(SaleOrder.front_process_date <= datetime.strptime(front_process_date_end, '%Y-%m-%d').date())
+    if first_article_date_start:
+        query = query.where(SaleOrder.first_article_date >= datetime.strptime(first_article_date_start, '%Y-%m-%d').date())
+    if first_article_date_end:
+        query = query.where(SaleOrder.first_article_date <= datetime.strptime(first_article_date_end, '%Y-%m-%d').date())
+    if assembly_start_date_start:
+        query = query.where(SaleOrder.assembly_start_date >= datetime.strptime(assembly_start_date_start, '%Y-%m-%d').date())
+    if assembly_start_date_end:
+        query = query.where(SaleOrder.assembly_start_date <= datetime.strptime(assembly_start_date_end, '%Y-%m-%d').date())
+    if assembly_complete_date_start:
+        query = query.where(SaleOrder.assembly_complete_date >= datetime.strptime(assembly_complete_date_start, '%Y-%m-%d').date())
+    if assembly_complete_date_end:
+        query = query.where(SaleOrder.assembly_complete_date <= datetime.strptime(assembly_complete_date_end, '%Y-%m-%d').date())
+    if order_type:
+        types = [x.strip() for x in order_type.split(',') if x.strip()]
+        if types:
+            from sqlalchemy import or_
+            type_filters = []
+            for t in types:
+                if t == 'big':
+                    type_filters.append(SaleOrder.order_no.ilike('HJ%') & ~SaleOrder.order_no.ilike('HJY%'))
+                elif t == 'sample':
+                    type_filters.append(SaleOrder.order_no.ilike('HJY%'))
+            if type_filters:
+                if len(type_filters) == 1:
+                    query = query.where(type_filters[0])
+                else:
+                    query = query.where(or_(*type_filters))
+    if keyword:
+        like_expr = f"%{keyword}%"
+        query = query.where(
+            (SaleOrder.order_no.ilike(like_expr)) | (SaleOrder.customer.ilike(like_expr)) | (SaleOrder.product_name.ilike(like_expr))
+        )
+
+    order_clauses = []
+    if sort_by and sort_by in SORTABLE_COLUMNS:
+        query, col = _resolve_sort_expr(query, sort_by, customer_joined=customer_grade_joined)
+        if sort_order == 'desc':
+            order_clauses.append(col.desc().nullslast())
+        else:
+            order_clauses.append(col.asc().nullslast())
+    if not order_clauses:
+        order_clauses = [SaleOrder.promised_date.asc().nullslast(), SaleOrder.id.desc()]
+
+    query = query.options(selectinload(SaleOrder.lines)).order_by(*order_clauses)
+    result = await db.execute(query)
+    orders = result.scalars().all()
+
+    customer_codes = {order.customer_code for order in orders if order.customer_code}
+    customer_map: dict[str, Customer] = {}
+    if customer_codes:
+        customer_result = await db.execute(
+            select(Customer).where(Customer.customer_code.in_(customer_codes))
+        )
+        customer_map = {customer.customer_code: customer for customer in customer_result.scalars().all()}
+
+    export_rows = []
+    for order in orders:
+        customer_master = customer_map.get(order.customer_code or "")
+        promised_dates = [line.promised_date for line in order.lines if line.promised_date]
+        planned_dates = [line.planned_start_date for line in order.lines if line.planned_start_date]
+        sale_order_out = SaleOrderOut.model_validate(order)
+        order_dict = sale_order_out.model_dump()
+        order_dict.update(
+            product_count=len({line.product_code for line in order.lines if line.product_code}),
+            line_count=len(order.lines),
+            promised_date=order.promised_date or (min(promised_dates) if promised_dates else None),
+            planned_start_date=order.planned_start_date or (min(planned_dates) if planned_dates else None),
+        )
+        export_rows.append({
+            'department': order.department or '',
+            'delivery_completed_date': str(order.delivery_completed_date) if order.delivery_completed_date else '',
+            'customer_grade': _effective_customer_grade(order, customer_master) or '',
+            'customer_code': order.customer_code or '',
+            'order_no': order.order_no or '',
+            'risk_level': order.risk_level or '',
+            'order_qty': order.order_qty if order.order_qty is not None else '',
+            'completed_qty': order.completed_qty if order.completed_qty is not None else '',
+            'order_date': str(order.order_date) if order.order_date else '',
+            'promised_date': str(order_dict.get('promised_date')) if order_dict.get('promised_date') else '',
+            'shipping_plan': str(order.shipping_plan) if order.shipping_plan else '',
+            'customer_inspection_date': str(order.customer_inspection_date) if order.customer_inspection_date else '',
+            'planned_start_date': str(order_dict.get('planned_start_date')) if order_dict.get('planned_start_date') else '',
+            'inspection_result': order.inspection_result or '',
+            'packaging_status': order.packaging_status or '',
+            'bom_return_date': str(order.bom_return_date) if order.bom_return_date else '',
+            'material_ready_date': str(order.material_ready_date) if order.material_ready_date else '',
+            'shipping_status_desc': order.shipping_status_desc or '',
+            'procurement_status': order.procurement_status or '',
+            'front_process_date': str(order.front_process_date) if order.front_process_date else '',
+            'first_article_date': str(order.first_article_date) if order.first_article_date else '',
+            'assembly_start_date': str(order.assembly_start_date) if order.assembly_start_date else '',
+            'assembly_complete_date': str(order.assembly_complete_date) if order.assembly_complete_date else '',
+            'remark': order.remark or '',
+        })
+
+    if columns:
+        selected_columns = [c.strip() for c in columns.split(',') if c.strip()]
+        export_columns = [col for col in ORDER_EXPORT_COLUMNS if col.key in selected_columns]
+    else:
+        export_columns = ORDER_EXPORT_COLUMNS
+
+    svc = GenericExportService(export_columns, export_rows, sheet_name='订单总控台')
+
+    if format == 'csv':
+        output = svc.to_csv()
+        return StreamingResponse(
+            output,
+            media_type='text/csv; charset=utf-8',
+            headers={"Content-Disposition": "attachment; filename=orders_export.csv"},
+        )
+    else:
+        output = svc.to_xlsx()
+        return StreamingResponse(
+            output,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={"Content-Disposition": "attachment; filename=orders_export.xlsx"},
+        )
 
 
 # ── 内销订单 ──
@@ -287,7 +893,7 @@ async def list_domestic_orders(
     # 构建排序子句
     order_clauses = []
     if sort_by and sort_by in SORTABLE_COLUMNS:
-        col = SORTABLE_COLUMNS[sort_by]
+        query, col = _resolve_sort_expr(query, sort_by)
         if sort_order == 'desc':
             order_clauses.append(col.desc().nullslast())
         else:
@@ -352,7 +958,7 @@ async def list_domestic_shipment(
     # 构建排序子句
     order_clauses = []
     if sort_by and sort_by in SORTABLE_COLUMNS:
-        col = SORTABLE_COLUMNS[sort_by]
+        query, col = _resolve_sort_expr(query, sort_by)
         if sort_order == 'desc':
             order_clauses.append(col.desc().nullslast())
         else:
@@ -437,7 +1043,7 @@ async def list_risk_pool(
     # 构建排序子句
     order_clauses = []
     if sort_by and sort_by in SORTABLE_COLUMNS:
-        col = SORTABLE_COLUMNS[sort_by]
+        query, col = _resolve_sort_expr(query, sort_by)
         if sort_order == 'desc':
             order_clauses.append(col.desc().nullslast())
         else:
@@ -472,6 +1078,21 @@ async def list_risk_pool(
     }
 
     return ResponseModel(data=page_result)
+
+
+@router.get("/{order_no}/product-materials", response_model=ResponseModel[list[OrderProductMaterialsOut]])
+async def get_order_product_materials_view(
+    order_no: str,
+    line_no: Optional[str] = Query(None),
+    current_user: dict = Depends(PermissionChecker("orders.list", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    items = await get_order_product_materials(db, order_no=order_no, line_no=line_no)
+    if not items:
+        exists = await db.execute(select(SaleOrder.id).where(SaleOrder.order_no == order_no))
+        if not exists.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="订单不存在")
+    return ResponseModel(data=items)
 
 
 @router.get("/{order_no}", response_model=ResponseModel[OrderDetailOut])

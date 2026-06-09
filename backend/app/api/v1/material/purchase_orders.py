@@ -7,7 +7,7 @@ from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
 from app.models.material.purchase_order import PurchaseOrder
-from app.models.masterdata.audit_log import AuditLog
+from app.models.basicdata.audit_log import AuditLog
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.material.schemas import (
     PurchaseOrderOut, PurchaseOrderCreate, PurchaseOrderUpdate,

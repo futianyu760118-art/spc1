@@ -1,4 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import React from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { ConfigProvider, Result, Button } from 'antd'
 import MainLayout from './layouts/MainLayout'
 import Dashboard from './pages/Dashboard/index'
 import OrderList from './pages/OrderDelivery/OrderList/index'
@@ -18,20 +20,22 @@ import ExceptionPool from './pages/ExceptionCenter/ExceptionPool/index'
 import IssueLogView from './pages/ExceptionCenter/IssueLogView/index'
 import ChangeLogView from './pages/ExceptionCenter/ChangeLogView/index'
 import QualityIssues from './pages/ExceptionCenter/QualityIssues/index'
+import ProductSamples from './pages/ExceptionCenter/ProductSamples/index'
 import ClosureTracking from './pages/ExceptionCenter/ClosureTracking/index'
-import DataImport from './pages/MasterDataCenter/DataIntegration/index'
-import { RiskRules, InspectionRules, NodeStandards, ResponsibilityMap, StatusDictionary } from './pages/RulesCenter'
-import { UserManagement, AuditLog, SyncSqlConfig, FeedbackManagement, FileManagement } from './pages/MasterDataCenter'
-import Customers from './pages/MasterDataCenter/Customers'
-import Suppliers from './pages/MasterDataCenter/Suppliers'
-import Materials from './pages/MasterDataCenter/Materials'
-import SKUs from './pages/MasterDataCenter/SKUs'
-import Products from './pages/MasterDataCenter/Products'
-import Warehouses from './pages/MasterDataCenter/Warehouses'
-import Processes from './pages/MasterDataCenter/Processes'
-import Organizations from './pages/MasterDataCenter/Organizations'
-import Employees from './pages/MasterDataCenter/Employees'
+import DataImport from './pages/BasicDataCenter/DataIntegration/index'
+import { RiskRules, InspectionRules, NodeStandards, ResponsibilityMap, StatusDictionary, OrderStandards, WorkInstructions } from './pages/RulesCenter'
+import { UserManagement, AuditLog, SyncSqlConfig, FeedbackManagement, FileManagement, AnnouncementManagement } from './pages/BasicDataCenter'
+import Customers from './pages/BasicDataCenter/Customers'
+import Suppliers from './pages/BasicDataCenter/Suppliers'
+import Materials from './pages/BasicDataCenter/Materials'
+import SKUs from './pages/BasicDataCenter/SKUs'
+import Products from './pages/BasicDataCenter/Products'
+import Warehouses from './pages/BasicDataCenter/Warehouses'
+import Processes from './pages/BasicDataCenter/Processes'
+import Organizations from './pages/BasicDataCenter/Organizations'
+import Employees from './pages/BasicDataCenter/Employees'
 import ProductionOverview from './pages/ProductionCenter/ProductionOverview/index'
+import SchedulePlans from './pages/ProductionCenter/SchedulePlans/index'
 import FrontProcess from './pages/ProductionCenter/FrontProcess/index'
 import SMT from './pages/ProductionCenter/SMT/index'
 import Lean from './pages/ProductionCenter/Lean/index'
@@ -41,24 +45,79 @@ import ProcessExceptions from './pages/ProductionCenter/ProcessExceptions/index'
 import MeetingCenter from './pages/MeetingCenter/index'
 import NPICenter from './pages/NPICenter/index'
 import Login from './pages/Login'
+import ShareAccess from './pages/ShareAccess'
 import { useAuthStore } from './store/auth'
+import { useThemeStore } from './store/theme'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const token = useAuthStore((s) => s.token)
+  const token = useAuthStore((s) => s.currentToken)
   if (!token) return <Navigate to="/login" replace />
   return <>{children}</>
 }
 
-export default function App() {
+// 检查分享用户是否有权访问当前路径
+function ShareRouteGuard({ children }: { children: React.ReactNode }) {
+  const { isShareUser, getShareTargetPath } = useAuthStore()
+  const location = useLocation()
+
+  if (!isShareUser()) return <>{children}</>
+
+  const targetPath = getShareTargetPath()
+  if (!targetPath) return <>{children}</>
+
+  const currentPath = location.pathname
+
+  // 动态路由匹配（如 /orders/:orderNo/lines/:lineNo）
+  if (targetPath.includes(':')) {
+    const prefix = targetPath.split('/:')[0]
+    if (currentPath.startsWith(prefix)) return <>{children}</>
+  }
+
+  // 精确匹配
+  if (currentPath === targetPath) return <>{children}</>
+
+  // 子路径匹配（如 /basicdata/customers 匹配 /basicdata）
+  if (currentPath.startsWith(targetPath)) return <>{children}</>
+
+  // 不匹配：显示无权限
   return (
-    <BrowserRouter>
-      <Routes>
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      <Result
+        status="403"
+        title="无访问权限"
+        subTitle="您只能访问分享的页面，其他页面无权查看"
+      />
+    </div>
+  )
+}
+
+export default function App() {
+  const { fontSizeScale } = useThemeStore()
+
+  // Apply font scale to root element
+  React.useEffect(() => {
+    document.documentElement.style.setProperty('--font-size-scale', fontSizeScale.toString())
+  }, [fontSizeScale])
+
+  return (
+    <ConfigProvider
+      theme={{
+        token: {
+          fontSize: 14 * fontSizeScale,
+        },
+      }}
+    >
+      <BrowserRouter>
+        <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/share/:token" element={<ShareAccess />} />
         <Route
           path="/"
           element={
             <PrivateRoute>
-              <MainLayout />
+              <ShareRouteGuard>
+                <MainLayout />
+              </ShareRouteGuard>
             </PrivateRoute>
           }
         >
@@ -80,9 +139,11 @@ export default function App() {
           <Route path="issue-log" element={<IssueLogView />} />
           <Route path="change-log" element={<ChangeLogView />} />
           <Route path="quality-issues" element={<QualityIssues />} />
+          <Route path="product-samples" element={<ProductSamples />} />
           <Route path="closure-tracking" element={<ClosureTracking />} />
           <Route path="production" element={<Navigate to="/production-overview" replace />} />
           <Route path="production-overview" element={<ProductionOverview />} />
+          <Route path="schedule-plans" element={<SchedulePlans />} />
           <Route path="front-process" element={<FrontProcess />} />
           <Route path="smt" element={<SMT />} />
           <Route path="lean" element={<Lean />} />
@@ -97,23 +158,28 @@ export default function App() {
           <Route path="node-standards" element={<NodeStandards />} />
           <Route path="responsibility-map" element={<ResponsibilityMap />} />
           <Route path="status-dict" element={<StatusDictionary />} />
+          <Route path="order-standards" element={<OrderStandards />} />
+          <Route path="work-instructions" element={<WorkInstructions />} />
           <Route path="users" element={<UserManagement />} />
           <Route path="audit" element={<AuditLog />} />
           <Route path="sync-config" element={<SyncSqlConfig />} />
-          <Route path="masterdata" element={<Navigate to="/masterdata/customers" replace />} />
-          <Route path="masterdata/customers" element={<Customers />} key="customers" />
-          <Route path="masterdata/suppliers" element={<Suppliers />} key="suppliers" />
-          <Route path="masterdata/materials" element={<Materials />} key="materials" />
-          <Route path="masterdata/skus" element={<SKUs />} key="skus" />
-          <Route path="masterdata/products" element={<Products />} key="products" />
-          <Route path="masterdata/warehouses" element={<Warehouses />} key="warehouses" />
-          <Route path="masterdata/processes" element={<Processes />} key="processes" />
-          <Route path="masterdata/organizations" element={<Organizations />} key="organizations" />
-          <Route path="masterdata/employees" element={<Employees />} key="employees" />
-          <Route path="masterdata/feedback" element={<FeedbackManagement />} key="feedback" />
-          <Route path="masterdata/files" element={<FileManagement />} key="files" />
+          <Route path="basicdata" element={<Navigate to="/basicdata/customers" replace />} />
+          <Route path="masterdata" element={<Navigate to="/basicdata/customers" replace />} />
+          <Route path="basicdata/customers" element={<Customers />} key="customers" />
+          <Route path="basicdata/suppliers" element={<Suppliers />} key="suppliers" />
+          <Route path="basicdata/materials" element={<Materials />} key="materials" />
+          <Route path="basicdata/skus" element={<SKUs />} key="skus" />
+          <Route path="basicdata/products" element={<Products />} key="products" />
+          <Route path="basicdata/warehouses" element={<Warehouses />} key="warehouses" />
+          <Route path="basicdata/processes" element={<Processes />} key="processes" />
+          <Route path="basicdata/organizations" element={<Organizations />} key="organizations" />
+          <Route path="basicdata/employees" element={<Employees />} key="employees" />
+          <Route path="basicdata/feedback" element={<FeedbackManagement />} key="feedback" />
+          <Route path="basicdata/files" element={<FileManagement />} key="files" />
+          <Route path="announcements" element={<AnnouncementManagement />} key="announcements" />
         </Route>
       </Routes>
     </BrowserRouter>
+    </ConfigProvider>
   )
 }

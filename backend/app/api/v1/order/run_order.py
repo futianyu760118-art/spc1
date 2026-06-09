@@ -50,11 +50,12 @@ async def list_run_orders(
     # 从 sale_order 表查询，左连接 run_order 表判断是否已同步
     query = select(
         SaleOrder,
+        RunOrder,
         RunOrder.id.label('run_order_id'),
         case((RunOrder.id.isnot(None), True), else_=False).label('is_synced')
     ).outerjoin(RunOrder, SaleOrder.order_no == RunOrder.order_no)
     
-    count_query = select(func.count(SaleOrder.id.distinct()))
+    count_query = select(func.count(SaleOrder.id.distinct())).outerjoin(RunOrder, SaleOrder.order_no == RunOrder.order_no)
 
     if order_type:
         types = [x.strip() for x in order_type.split(',') if x.strip()]
@@ -114,33 +115,38 @@ async def list_run_orders(
     items = []
     for row in result.all():
         sale_order = row[0]
+        run_order = row[1]
         is_synced = row.is_synced
-        # 从 sale_order 映射到 RunOrderOut
-        item = RunOrderOut(
-            id=row.run_order_id,
-            customer_code=sale_order.customer_code,
-            order_no=sale_order.order_no,
-            order_qty=float(sale_order.order_qty) if sale_order.order_qty else None,
-            order_type=sale_order.order_nature,
-            contract_date=sale_order.order_date,
-            delivery_date=sale_order.promised_date,
-            run_date=None,
-            run_days=None,
-            order_amount=None,
-            packaging_not_released=None,
-            po_placed_date=sale_order.order_date,
-            material_ready_date=sale_order.material_ready_date,
-            procurement_cycle=None,
-            completed_date=None,
-            shipped_date=None,
-            order_status=None,
-            delay_reason=None,
-            remark=sale_order.remark,
-            is_domestic=False,
-            is_synced=is_synced,
-            created_at=sale_order.created_at,
-            updated_at=sale_order.updated_at,
-        )
+        if run_order:
+            item = RunOrderOut.model_validate(run_order)
+            item.is_synced = True
+        else:
+            # 从 sale_order 映射到 RunOrderOut
+            item = RunOrderOut(
+                id=None,
+                customer_code=sale_order.customer_code,
+                order_no=sale_order.order_no,
+                order_qty=float(sale_order.order_qty) if sale_order.order_qty else None,
+                order_type=sale_order.order_nature,
+                contract_date=sale_order.order_date,
+                delivery_date=sale_order.promised_date,
+                run_date=None,
+                run_days=None,
+                order_amount=None,
+                packaging_not_released=None,
+                po_placed_date=sale_order.order_date,
+                material_ready_date=sale_order.material_ready_date,
+                procurement_cycle=None,
+                completed_date=None,
+                shipped_date=None,
+                order_status=None,
+                delay_reason=None,
+                remark=sale_order.remark,
+                is_domestic=False,
+                is_synced=is_synced,
+                created_at=sale_order.created_at,
+                updated_at=sale_order.updated_at,
+            )
         items.append(item)
 
     page_result = PageResult(total=total, page=page, page_size=page_size, items=items)
@@ -242,5 +248,4 @@ async def update_run_order(
     await db.commit()
     await db.refresh(run_order)
     return ResponseModel(data=RunOrderOut.model_validate(run_order))
-
 

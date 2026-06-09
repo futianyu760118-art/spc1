@@ -12,7 +12,7 @@ from app.models.exception.risk_issue import RiskIssue
 from app.models.exception.quality_issue import QualityIssue
 from app.models.production.process_progress import ProcessProgress
 from app.models.rules.risk_rule import RiskRule
-from app.models.masterdata.audit_log import AuditLog
+from app.models.basicdata.audit_log import AuditLog
 
 
 # ── 因子定义 ──

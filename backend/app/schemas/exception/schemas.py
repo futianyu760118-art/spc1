@@ -120,6 +120,7 @@ class ChangeLogUpdate(BaseModel):
 
 class QualityIssueOut(BaseModel):
     id: int
+    erp_quality_id: Optional[str] = None
     issue_no: str
     status: str
     remark: Optional[str] = None
@@ -138,6 +139,18 @@ class QualityIssueOut(BaseModel):
     batch_qty: Optional[int] = None
     sample_qty: Optional[int] = None
     defect_qty: Optional[int] = None
+    improvement_countermeasures: Optional[str] = None
+    improvement_countermeasures_date: Optional[date] = None
+    temporary_countermeasure: Optional[str] = None
+    temporary_countermeasure_date: Optional[date] = None
+    preliminary_analysis: Optional[str] = None
+    preliminary_analysis_person: Optional[str] = None
+    root_cause_analysis_person: Optional[str] = None
+    audit_comment: Optional[str] = None
+    auditor: Optional[str] = None
+    quality_manager_approval: Optional[str] = None
+    general_manager_approval: Optional[str] = None
+    missed_inspector: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -145,6 +158,7 @@ class QualityIssueOut(BaseModel):
 
 
 class QualityIssueCreate(BaseModel):
+    erp_quality_id: Optional[str] = None
     submit_dept: Optional[str] = None
     submit_date: Optional[date] = None
     submitter: Optional[str] = None
@@ -160,11 +174,24 @@ class QualityIssueCreate(BaseModel):
     batch_qty: Optional[int] = None
     sample_qty: Optional[int] = None
     defect_qty: Optional[int] = None
+    improvement_countermeasures: Optional[str] = None
+    improvement_countermeasures_date: Optional[date] = None
+    temporary_countermeasure: Optional[str] = None
+    temporary_countermeasure_date: Optional[date] = None
+    preliminary_analysis: Optional[str] = None
+    preliminary_analysis_person: Optional[str] = None
+    root_cause_analysis_person: Optional[str] = None
+    audit_comment: Optional[str] = None
+    auditor: Optional[str] = None
+    quality_manager_approval: Optional[str] = None
+    general_manager_approval: Optional[str] = None
+    missed_inspector: Optional[str] = None
     status: Optional[str] = 'open'
     remark: Optional[str] = None
 
 
 class QualityIssueUpdate(BaseModel):
+    erp_quality_id: Optional[str] = None
     submit_dept: Optional[str] = None
     submit_date: Optional[date] = None
     submitter: Optional[str] = None
@@ -180,6 +207,18 @@ class QualityIssueUpdate(BaseModel):
     batch_qty: Optional[int] = None
     sample_qty: Optional[int] = None
     defect_qty: Optional[int] = None
+    improvement_countermeasures: Optional[str] = None
+    improvement_countermeasures_date: Optional[date] = None
+    temporary_countermeasure: Optional[str] = None
+    temporary_countermeasure_date: Optional[date] = None
+    preliminary_analysis: Optional[str] = None
+    preliminary_analysis_person: Optional[str] = None
+    root_cause_analysis_person: Optional[str] = None
+    audit_comment: Optional[str] = None
+    auditor: Optional[str] = None
+    quality_manager_approval: Optional[str] = None
+    general_manager_approval: Optional[str] = None
+    missed_inspector: Optional[str] = None
     status: Optional[str] = None
     remark: Optional[str] = None
 
@@ -219,6 +258,17 @@ class ClosureByPersonItem(BaseModel):
     in_progress_count: int
     closed_count: int
     overdue_count: int
+
+
+class ClosureDetailItem(BaseModel):
+    source_type: str
+    source_id: int
+    source_no: str
+    title: Optional[str] = None
+    status: str
+    owner: Optional[str] = None
+    order_no: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 
 class ClosureTrackingData(BaseModel):

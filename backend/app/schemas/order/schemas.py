@@ -15,6 +15,7 @@ class SaleOrderOut(BaseModel):
     product_code: Optional[str] = None
     product_name: Optional[str] = None
     order_qty: Optional[float] = None
+    order_amount: Optional[float] = None
     completed_qty: Optional[float] = None
     promised_date: Optional[date] = None
     planned_start_date: Optional[date] = None
@@ -62,7 +63,9 @@ class SaleOrderLineOut(BaseModel):
     line_no: Optional[str] = None
     product_code: Optional[str] = None
     product_name: Optional[str] = None
+    product_model: Optional[str] = None
     order_qty: Optional[float] = None
+    order_amount: Optional[float] = None
     promised_date: Optional[date] = None
     planned_start_date: Optional[date] = None
     batch_no: Optional[str] = None
@@ -75,6 +78,11 @@ class SaleOrderListOut(SaleOrderOut):
     product_count: int = 0
     line_count: int = 0
     shortage_count: int = 0
+    kit_rate: Optional[float] = None
+    kit_status: Optional[str] = None
+    kit_risk_level: Optional[str] = None
+    kit_total_materials: int = 0
+    kit_received_materials: int = 0
 
 
 class SaleOrderUpdate(BaseModel):
@@ -84,9 +92,11 @@ class SaleOrderUpdate(BaseModel):
     owner: Optional[str] = None
     status: Optional[str] = None
     completed_qty: Optional[float] = None
+    order_amount: Optional[float] = None
     risk_level: Optional[str] = None
     order_nature: Optional[str] = None
     order_date: Optional[date] = None
+    planned_start_date: Optional[date] = None
     delivery_completed_date: Optional[date] = None
     customer_grade: Optional[str] = None
     shipping_plan: Optional[date] = None
@@ -109,7 +119,9 @@ class SaleOrderLineCreate(BaseModel):
     line_no: Optional[str] = None
     product_code: Optional[str] = None
     product_name: Optional[str] = None
+    product_model: Optional[str] = None
     order_qty: Optional[float] = None
+    order_amount: Optional[float] = None
     promised_date: Optional[date] = None
     planned_start_date: Optional[date] = None
     batch_no: Optional[str] = None
@@ -127,6 +139,10 @@ class MaterialDemandOut(BaseModel):
     line_no: Optional[str] = None
     material_code: str
     material_name: Optional[str] = None
+    material_property: Optional[int] = None
+    material_type_name: Optional[str] = None
+    spec_model: Optional[str] = None
+    unit: Optional[str] = None
     req_qty: Optional[float] = None
     req_date: Optional[date] = None
     allocated_qty: float = 0
@@ -217,6 +233,7 @@ class RunOrderOut(BaseModel):
     delay_reason: Optional[str] = None
     remark: Optional[str] = None
     is_domestic: bool = False
+    is_synced: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -282,3 +299,49 @@ class OrderDetailOut(SaleOrderOut):
     in_transit_count: int = 0
     latest_eta: Optional[date] = None
     issues: List[RiskIssueOut] = []
+
+
+class ProductMaterialItemOut(BaseModel):
+    material_code: str
+    material_name: Optional[str] = None
+    material_property: Optional[int] = None
+    material_property_label: Optional[str] = None
+    material_type: Optional[str] = None
+    spec_model: Optional[str] = None
+    unit: Optional[str] = None
+    req_qty: Optional[float] = None
+    req_date: Optional[date] = None
+    allocated_qty: float = 0
+    shortage_qty: float = 0
+    shortage_flag: bool = False
+    status: str
+    status_label: str
+    po_no: Optional[str] = None
+    supplier_name: Optional[str] = None
+    po_qty: Optional[float] = None
+    received_qty: Optional[float] = None
+    eta: Optional[date] = None
+    first_eta: Optional[date] = None
+    latest_eta: Optional[date] = None
+    actual_arrival_date: Optional[date] = None
+    inspection_date: Optional[date] = None
+    po_count: int = 0
+    is_stagnant: bool = False
+    stagnant_qty: Optional[float] = None
+
+
+class OrderProductMaterialsOut(BaseModel):
+    line_no: Optional[str] = None
+    product_code: Optional[str] = None
+    product_name: Optional[str] = None
+    product_model: Optional[str] = None
+    order_qty: Optional[float] = None
+    promised_date: Optional[date] = None
+    total_materials: int = 0
+    not_ordered_count: int = 0
+    shortage_count: int = 0
+    overdue_count: int = 0
+    arrived_count: int = 0
+    inspected_count: int = 0
+    kit_rate: float = 0
+    materials: List[ProductMaterialItemOut] = []

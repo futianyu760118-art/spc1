@@ -10,6 +10,7 @@ class QualityIssue(Base):
     __tablename__ = "quality_issue"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    erp_quality_id = Column(String(64), unique=True, index=True)
     issue_no = Column(String(64), nullable=False, unique=True)
     status = Column(String(32), nullable=False, default='open')
     remark = Column(Text)
@@ -38,6 +39,26 @@ class QualityIssue(Base):
     batch_qty = Column(Integer)               # 批量数
     sample_qty = Column(Integer)              # 抽样数量
     defect_qty = Column(Integer)              # 不良数
+
+    # 改善对策
+    improvement_countermeasures = Column(Text)  # 改善对策
+    improvement_countermeasures_date = Column(Date)  # 改善对策日期
+
+    # 临时对策
+    temporary_countermeasure = Column(Text)  # 临时对策
+    temporary_countermeasure_date = Column(Date)  # 临时对策时间
+
+    # 分析
+    preliminary_analysis = Column(Text)  # 初步分析
+    preliminary_analysis_person = Column(String(64))  # 初步分析负责人
+    root_cause_analysis_person = Column(String(64))  # 真因分析负责人
+
+    # 审批
+    audit_comment = Column(Text)  # 审核意见
+    auditor = Column(String(64))  # 审核人
+    quality_manager_approval = Column(Text)  # 品质经理审批
+    general_manager_approval = Column(Text)  # 总经理审批
+    missed_inspector = Column(String(64))  # 漏检人
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

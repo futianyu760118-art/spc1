@@ -8,7 +8,7 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().token
+  const token = useAuthStore.getState().currentToken
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -25,9 +25,28 @@ api.interceptors.response.use(
   },
   (error) => {
     const status = error.response?.status
+    const forceLogout = error.response?.headers?.['x-force-logout']
     if (status === 401) {
-      useAuthStore.getState().logout()
-      window.location.href = '/login'
+      const detail = error.response?.data?.detail || '登录已过期'
+      error.message = detail
+      const { isShareUser, exitShare, logout } = useAuthStore.getState()
+      if (isShareUser()) {
+        message.warning(detail, 2)
+        setTimeout(() => {
+          exitShare()
+          window.location.href = '/login'
+        }, 1500)
+      } else if (forceLogout === 'true') {
+        message.warning(detail, 2)
+        setTimeout(() => {
+          logout()
+          window.location.href = '/login'
+        }, 1500)
+      } else {
+        message.error(detail)
+        logout()
+        window.location.href = '/login'
+      }
     } else if (status === 403) {
       const detail = error.response?.data?.detail || '权限不足，无法执行此操作'
       error.message = detail
@@ -48,19 +67,21 @@ api.interceptors.response.use(
 
 export default api
 
-// ============ Auth (主数据与集成中心) ============
+// ============ Auth (基础数据与集成中心) ============
 export const authApi = {
   login: (username: string, password: string) => {
     const formData = new URLSearchParams()
     formData.append('username', username)
     formData.append('password', password)
-    return api.post('/masterdata/auth/login', formData, {
+    return api.post('/basicdata/auth/login', formData, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     })
   },
-  getMe: () => api.get('/masterdata/auth/me'),
+  getMe: () => api.get('/basicdata/auth/me'),
   changePassword: (old_password: string, new_password: string) =>
-    api.put('/masterdata/auth/change-password', { old_password, new_password }),
+    api.put('/basicdata/auth/change-password', { old_password, new_password }),
+  updatePreferences: (font_size_scale: string) =>
+    api.put('/basicdata/auth/preferences', { font_size_scale }),
 }
 
 // ============ 供应链驾驶舱 ============
@@ -84,7 +105,11 @@ export const orderApi = {
   listRiskPool: (params: Record<string, any>) => api.get('/orders/risk-pool', { params }),
   getDetail: (orderNo: string, lineNo?: string) =>
     lineNo ? api.get(`/orders/${orderNo}/lines/${lineNo}`) : api.get(`/orders/${orderNo}`),
+  getProductMaterials: (orderNo: string, params: Record<string, any> = {}) =>
+    api.get(`/orders/${orderNo}/product-materials`, { params }),
   update: (orderNo: string, data: Record<string, any>) => api.put(`/orders/${orderNo}`, data),
+  exportOrders: (params: Record<string, any>) =>
+    api.get('/orders/export', { params, responseType: 'blob' }),
 }
 
 export const runOrderApi = {
@@ -112,12 +137,24 @@ export const materialApi = {
     api.post('/materials/purchase-plan', data),
   updatePurchasePlan: (id: number, data: Record<string, any>) =>
     api.put(`/materials/purchase-plan/${id}`, data),
+  batchUpdatePurchasePlan: (data: {
+    ids: number[]
+    eta?: string
+    owner?: string
+    supplier_account?: string
+    actual_arrival_date?: string
+    inspection_date?: string
+    clear_fields?: string[]
+  }) =>
+    api.put('/materials/purchase-plan/batch', data),
   importPurchasePlan: (file: File) => {
     const fd = new FormData(); fd.append('file', file)
     return api.post('/materials/purchase-plan/import', fd)
   },
   getPurchasePlanStats: (params: Record<string, any>) =>
     api.get('/materials/purchase-plan/stats', { params }),
+  exportPurchasePlan: (params: Record<string, any>) =>
+    api.get('/materials/purchase-plan/export', { params, responseType: 'blob' }),
   // 问题物料
   listIssues: (params: Record<string, any>) =>
     api.get('/materials/issues', { params }),
@@ -169,6 +206,10 @@ export const etaApi = {
 export const productionApi = {
   // 生产总览
   getOverview: () => api.get('/production/overview'),
+  listSchedulePlans: (params: Record<string, any>) => api.get('/production/schedule-plans', { params }),
+  createSchedulePlan: (data: Record<string, any>) => api.post('/production/schedule-plans', data),
+  updateSchedulePlan: (id: number, data: Record<string, any>) => api.put(`/production/schedule-plans/${id}`, data),
+  deleteSchedulePlan: (id: number) => api.delete(`/production/schedule-plans/${id}`),
   // 前道管理
   listFrontProcess: (params: Record<string, any>) =>
     api.get('/production/front-process', { params }),
@@ -252,7 +293,9 @@ export const issueApi = {
 export const exceptionApi = {
   // 异常总池
   listPool: (params: Record<string, any>) => api.get('/exceptions/pool', { params }),
-  getClosureTracking: () => api.get('/exceptions/pool/closure-tracking'),
+  getClosureTracking: (params?: Record<string, any>) => api.get('/exceptions/pool/closure-tracking', { params }),
+  getClosureTrackingPersonDetails: (params: { owner: string; source_type?: string; status?: string }) =>
+    api.get('/exceptions/pool/closure-tracking/person-details', { params }),
   // 问题日志
   listIssueLog: (params: Record<string, any>) => api.get('/exceptions/issue-log', { params }),
   createIssueLog: (data: Record<string, any>) => api.post('/exceptions/issue-log', data),
@@ -272,28 +315,51 @@ export const exceptionApi = {
     return api.post('/exceptions/change-log/import', fd)
   },
   // 品质异常
-  listQuality: (params: Record<string, any>) => api.get('/exceptions/quality', { params }),
+  listQuality: (params: Record<string, any>) => {
+    const queryParams = new URLSearchParams()
+    Object.entries(params).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(item => queryParams.append(key, String(item)))
+      } else if (value !== undefined && value !== null && value !== '') {
+        queryParams.append(key, String(value))
+      }
+    })
+    const qs = queryParams.toString()
+    return api.get(`/exceptions/quality${qs ? `?${qs}` : ''}`)
+  },
+  getQualityStatistics: (params: Record<string, any>) => {
+    const queryParams = new URLSearchParams()
+    Object.entries(params).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(item => queryParams.append(key, String(item)))
+      } else if (value !== undefined && value !== null && value !== '') {
+        queryParams.append(key, String(value))
+      }
+    })
+    const qs = queryParams.toString()
+    return api.get(`/exceptions/quality/statistics${qs ? `?${qs}` : ''}`)
+  },
   createQuality: (data: Record<string, any>) => api.post('/exceptions/quality', data),
   updateQuality: (id: number, data: Record<string, any>) => api.put(`/exceptions/quality/${id}`, data),
   deleteQuality: (id: number) => api.delete(`/exceptions/quality/${id}`),
 }
 
-// ============ 主数据与集成中心 ============
+// ============ 基础数据与集成中心 ============
 export const importExportApi = {
   importOrders: (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('/masterdata/import-export/orders', formData)
+    return api.post('/basicdata/import-export/orders', formData)
   },
   importMaterials: (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('/masterdata/import-export/materials', formData)
+    return api.post('/basicdata/import-export/materials', formData)
   },
   importPurchaseOrders: (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('/masterdata/import-export/purchase-orders', formData)
+    return api.post('/basicdata/import-export/purchase-orders', formData)
   },
   syncData: (type: 'orders' | 'materials' | 'purchase_orders' | 'customers' | 'suppliers' | 'materials_masterdata' | 'skus' | 'products' | 'warehouses' | 'processes' | 'organizations' | 'employees' | 'purchase_invoices' | 'quality_issues' | 'all', params: { hours?: number; order_numbers?: string[] } = {}) => {
     const queryParams = new URLSearchParams()
@@ -304,28 +370,28 @@ export const importExportApi = {
       params.order_numbers.forEach(order => queryParams.append('order_numbers', order))
     }
     const queryString = queryParams.toString()
-    return api.post(`/masterdata/sync/${type}${queryString ? `?${queryString}` : ''}`)
+    return api.post(`/basicdata/sync/${type}${queryString ? `?${queryString}` : ''}`)
   },
   getSyncStatus: () =>
-    api.get('/masterdata/sync/status'),
+    api.get('/basicdata/sync/status'),
   getSyncConfigStatus: () =>
-    api.get('/masterdata/sync/config-status'),
+    api.get('/basicdata/sync/config-status'),
   getErpOrders: () =>
-    api.get('/masterdata/sync/erp-orders'),
+    api.get('/basicdata/sync/erp-orders'),
   getSyncTask: (taskId: string) =>
-    api.get(`/masterdata/sync/task/${taskId}`),
+    api.get(`/basicdata/sync/task/${taskId}`),
   listSyncTasks: (params?: { sync_type?: string; status?: string; limit?: number }) => {
     const queryParams = new URLSearchParams()
     if (params?.sync_type) queryParams.append('sync_type', params.sync_type)
     if (params?.status) queryParams.append('status', params.status)
     if (params?.limit) queryParams.append('limit', params.limit.toString())
     const qs = queryParams.toString()
-    return api.get(`/masterdata/sync/tasks${qs ? `?${qs}` : ''}`)
+    return api.get(`/basicdata/sync/tasks${qs ? `?${qs}` : ''}`)
   },
   exportWeeklyReport: () =>
-    api.get('/masterdata/import-export/weekly-report', { responseType: 'blob' }),
+    api.get('/basicdata/import-export/weekly-report', { responseType: 'blob' }),
   exportIssues: () =>
-    api.get('/masterdata/import-export/issues', { responseType: 'blob' }),
+    api.get('/basicdata/import-export/issues', { responseType: 'blob' }),
 }
 
 // ============ 规则配置中心 ============
@@ -333,6 +399,27 @@ export const ruleApi = {
   list: () => api.get('/rules'),
   create: (data: any) => api.post('/rules', data),
   update: (id: number, data: any) => api.put(`/rules/${id}`, data),
+}
+
+export const documentApi = {
+  listProductSamples: (params: Record<string, any> = {}) => api.get('/exceptions/product-samples', { params }),
+  createProductSample: (data: Record<string, any>) => api.post('/exceptions/product-samples', data),
+  updateProductSample: (id: number, data: Record<string, any>) => api.put(`/exceptions/product-samples/${id}`, data),
+  deleteProductSample: (id: number) => api.delete(`/exceptions/product-samples/${id}`),
+  listProductSampleVersions: (id: number) => api.get(`/exceptions/product-samples/${id}/versions`),
+  publishProductSampleVersion: (id: number, data: Record<string, any>) => api.post(`/exceptions/product-samples/${id}/versions`, data),
+  listOrderStandards: (params: Record<string, any> = {}) => api.get('/rules/order-standards', { params }),
+  createOrderStandard: (data: Record<string, any>) => api.post('/rules/order-standards', data),
+  updateOrderStandard: (id: number, data: Record<string, any>) => api.put(`/rules/order-standards/${id}`, data),
+  deleteOrderStandard: (id: number) => api.delete(`/rules/order-standards/${id}`),
+  listOrderStandardVersions: (id: number) => api.get(`/rules/order-standards/${id}/versions`),
+  publishOrderStandardVersion: (id: number, data: Record<string, any>) => api.post(`/rules/order-standards/${id}/versions`, data),
+  listWorkInstructions: (params: Record<string, any> = {}) => api.get('/rules/work-instructions', { params }),
+  createWorkInstruction: (data: Record<string, any>) => api.post('/rules/work-instructions', data),
+  updateWorkInstruction: (id: number, data: Record<string, any>) => api.put(`/rules/work-instructions/${id}`, data),
+  deleteWorkInstruction: (id: number) => api.delete(`/rules/work-instructions/${id}`),
+  listWorkInstructionVersions: (id: number) => api.get(`/rules/work-instructions/${id}/versions`),
+  publishWorkInstructionVersion: (id: number, data: Record<string, any>) => api.post(`/rules/work-instructions/${id}/versions`, data),
 }
 
 export const inspectionRuleApi = {
@@ -363,9 +450,9 @@ export const statusDictApi = {
   delete: (id: number) => api.delete(`/rules/status-dict/${id}`),
 }
 
-// ============ 审计日志 (主数据与集成中心) ============
+// ============ 审计日志 (基础数据与集成中心) ============
 export const auditApi = {
-  list: (params: Record<string, any>) => api.get('/masterdata/audit/logs', { params }),
+  list: (params: Record<string, any>) => api.get('/basicdata/audit/logs', { params }),
 }
 
 // ============ Pilot ============
@@ -390,42 +477,88 @@ export const fileApi = {
   downloadUrl: (key: string) => `/api/v1/files/download/${key}`,
 }
 
-// ============ 问题反馈 (主数据与集成中心) ============
+// ============ 问题反馈 (基础数据与集成中心) ============
 export const feedbackApi = {
-  list: (params: Record<string, any> = {}) => api.get('/masterdata/feedback', { params }),
-  get: (id: number) => api.get(`/masterdata/feedback/${id}`),
-  create: (data: Record<string, any>) => api.post('/masterdata/feedback', data),
-  update: (id: number, data: Record<string, any>) => api.put(`/masterdata/feedback/${id}`, data),
+  list: (params: Record<string, any> = {}) => api.get('/basicdata/feedback', { params }),
+  get: (id: number) => api.get(`/basicdata/feedback/${id}`),
+  create: (data: Record<string, any>) => api.post('/basicdata/feedback', data),
+  update: (id: number, data: Record<string, any>) => api.put(`/basicdata/feedback/${id}`, data),
   reply: (id: number, data: { reply?: string; status?: string }) =>
-    api.post(`/masterdata/feedback/${id}/reply`, data),
+    api.post(`/basicdata/feedback/${id}/reply`, data),
   updateStatus: (id: number, status: string) =>
-    api.patch(`/masterdata/feedback/${id}/status`, { status }),
-  remove: (id: number) => api.delete(`/masterdata/feedback/${id}`),
+    api.patch(`/basicdata/feedback/${id}/status`, { status }),
+  remove: (id: number) => api.delete(`/basicdata/feedback/${id}`),
 }
 
 // ============ 智能助手 ============
 export const assistantApi = {
-  chat: (message: string, sessionId?: string) =>
-    api.post('/assistant/chat', { message, session_id: sessionId }),
+  chat: (message: string, sessionId?: string, conversationHistory?: any[]) =>
+    api.post('/assistant/chat', { 
+      message, 
+      session_id: sessionId,
+      conversation_history: conversationHistory 
+    }),
+  chatStream: (message: string, sessionId?: string, conversationHistory?: any[]) => {
+    const token = useAuthStore.getState().currentToken
+    return fetch('/api/v1/assistant/chat/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        message,
+        session_id: sessionId,
+        conversation_history: conversationHistory,
+      }),
+    })
+  },
   listSkills: () => api.get('/assistant/skills'),
 }
 
-// ============ 用户管理 (主数据与集成中心) ============
+// ============ 公告管理 (基础数据与集成中心) ============
+export const announcementApi = {
+  list: (params: Record<string, any> = {}) => api.get('/basicdata/announcements', { params }),
+  create: (data: Record<string, any>) => api.post('/basicdata/announcements', data),
+  update: (id: number, data: Record<string, any>) => api.put(`/basicdata/announcements/${id}`, data),
+  remove: (id: number) => api.delete(`/basicdata/announcements/${id}`),
+  publish: (id: number) => api.post(`/basicdata/announcements/${id}/publish`),
+}
+
+// ============ 通知中心 ============
+export const notificationApi = {
+  list: (params: Record<string, any> = {}) => api.get('/notifications', { params }),
+  unreadCount: () => api.get('/notifications/unread-count'),
+  markRead: (id: number) => api.post(`/notifications/${id}/read`),
+  markAllRead: (type?: string) => api.post('/notifications/read-all', null, { params: type ? { type } : {} }),
+  create: (data: { title: string; content: string; type?: string; priority?: string }) => api.post('/notifications', data),
+}
+
+// ============ 用户管理 (基础数据与集成中心) ============
 export const userApi = {
-  list: () => api.get('/masterdata/users'),
-  roles: () => api.get('/masterdata/users/roles'),
+  list: (params?: any) => api.get('/basicdata/users', { params }),
+  roles: () => api.get('/basicdata/users/roles'),
   createRole: (data: { role_code: string; role_name: string; permissions?: Record<string, string[]> }) =>
-    api.post('/masterdata/users/roles', data),
+    api.post('/basicdata/users/roles', data),
   updateRole: (id: number, data: { role_name?: string; permissions?: Record<string, string[]> }) =>
-    api.put(`/masterdata/users/roles/${id}`, data),
-  deleteRole: (id: number) => api.delete(`/masterdata/users/roles/${id}`),
+    api.put(`/basicdata/users/roles/${id}`, data),
+  deleteRole: (id: number) => api.delete(`/basicdata/users/roles/${id}`),
   create: (data: { username: string; display_name?: string; password: string; role_id: number; is_active?: boolean }) =>
-    api.post('/masterdata/users', data),
+    api.post('/basicdata/users', data),
   update: (id: number, data: { display_name?: string; role_id?: number; is_active?: boolean }) =>
-    api.put(`/masterdata/users/${id}`, data),
+    api.put(`/basicdata/users/${id}`, data),
   resetPassword: (id: number, new_password: string) =>
-    api.put(`/masterdata/users/${id}/password`, { new_password }),
-  delete: (id: number) => api.delete(`/masterdata/users/${id}`),
+    api.put(`/basicdata/users/${id}/password`, { new_password }),
+  delete: (id: number) => api.delete(`/basicdata/users/${id}`),
   batchGrant: (data: { role_ids: number[]; permissions: Record<string, string[]>; mode: 'grant' | 'revoke' | 'replace' }) =>
-    api.post('/masterdata/users/roles/batch-grant', data),
+    api.post('/basicdata/users/roles/batch-grant', data),
+}
+
+// ============ 页面分享 ============
+export const shareApi = {
+  create: (data: { target_path: string; target_params?: object; expires_in?: string; permissions?: string[] }) =>
+    api.post('/share', data),
+  verify: (token: string) => api.get(`/share/${token}`),
+  list: () => api.get('/share/list'),
+  revoke: (id: number) => api.delete(`/share/${id}`),
 }

@@ -145,6 +145,59 @@ class ProcessProgressUpdate(BaseModel):
     status: Optional[str] = None
 
 
+# ============ Production schedule plans ============
+
+class ProductionSchedulePlanOut(BaseModel):
+    id: int
+    department: str
+    plan_date: date
+    order_no: Optional[str] = None
+    product_code: Optional[str] = None
+    model_code: Optional[str] = None
+    quantity: Optional[float] = None
+    owner: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    priority: str
+    status: str
+    remark: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ProductionSchedulePlanCreate(BaseModel):
+    department: str
+    plan_date: date
+    order_no: Optional[str] = None
+    product_code: Optional[str] = None
+    model_code: Optional[str] = None
+    quantity: Optional[float] = None
+    owner: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    priority: str = "normal"
+    status: str = "planned"
+    remark: Optional[str] = None
+
+
+class ProductionSchedulePlanUpdate(BaseModel):
+    department: Optional[str] = None
+    plan_date: Optional[date] = None
+    order_no: Optional[str] = None
+    product_code: Optional[str] = None
+    model_code: Optional[str] = None
+    quantity: Optional[float] = None
+    owner: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    remark: Optional[str] = None
+
+
 # ============ 工序异常 ============
 
 class ProcessExceptionOut(BaseModel):

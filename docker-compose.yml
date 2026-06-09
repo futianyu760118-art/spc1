@@ -4,6 +4,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      TZ: Asia/Shanghai
       DATABASE_URL: ${DATABASE_URL}
       DATABASE_URL_SYNC: ${DATABASE_URL_SYNC}
       ERP_DB_URL: ${ERP_DB_URL}
@@ -14,6 +15,14 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       STORAGE_LOCAL_ROOT: ${STORAGE_LOCAL_ROOT:-/app/uploads}
+      # AI Service Configuration
+      AI_DEFAULT_PROVIDER: ${AI_DEFAULT_PROVIDER:-rule_based}
+      AI_OPENAI_API_KEY: ${AI_OPENAI_API_KEY}
+      AI_OPENAI_MODEL: ${AI_OPENAI_MODEL}
+      AI_OPENAI_BASE_URL: ${AI_OPENAI_BASE_URL}
+      AI_DASHSCOPE_API_KEY: ${AI_DASHSCOPE_API_KEY}
+      AI_DASHSCOPE_MODEL: ${AI_DASHSCOPE_MODEL}
+      AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-30}
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
     command: >

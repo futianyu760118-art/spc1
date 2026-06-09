@@ -13,7 +13,7 @@ interface RiskBadgeProps {
 export default function RiskBadge({ level, onClick }: RiskBadgeProps) {
   if (!level || !riskConfig[level]) {
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 10px', borderRadius: 20, background: 'rgba(0,0,0,.04)', color: '#94a3b8', fontSize: 12 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 10px', borderRadius: 20, background: 'rgba(0,0,0,.04)', color: '#94a3b8', fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#cbd5e1' }} />
         未评估
       </span>
@@ -30,7 +30,7 @@ export default function RiskBadge({ level, onClick }: RiskBadgeProps) {
         borderRadius: 20,
         background: bg,
         color: text,
-        fontSize: 12,
+        fontSize: 'calc(0.75rem * var(--font-size-scale))',
         fontWeight: 500,
         cursor: onClick ? 'pointer' : 'default',
       }}

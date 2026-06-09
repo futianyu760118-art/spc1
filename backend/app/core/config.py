@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ERP_DB_SCHEMA: str = "dbo"  # ERP 中间表所在 schema
     ERP_SYNC_BATCH_SIZE: int = 500  # 每批次同步条数
     ERP_SYNC_ENABLED: bool = False  # 是否启用 ERP 同步
+    ERP_SYNC_DEFAULT_PASSWORD: str = "admin123"  # 自动创建用户的默认密码
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

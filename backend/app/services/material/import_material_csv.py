@@ -103,7 +103,7 @@ async def import_purchase_plan_csv(filepath: str, db: AsyncSession) -> dict:
         unit = (row[4] or '').strip() if len(row) > 4 else None
         po_qty = _parse_float(row[5] if len(row) > 5 else '')
         received_qty = _parse_float(row[6] if len(row) > 6 else '')
-        eta = _parse_date(row[7] if len(row) > 7 else '')
+        source_eta = _parse_date(row[7] if len(row) > 7 else '')
         order_no = (row[8] or '').strip() if len(row) > 8 else None
         actual_arrival_date = _parse_date(row[9] if len(row) > 9 else '')
         arrival_hour_note = (row[10] or '').strip() if len(row) > 10 else None
@@ -116,7 +116,7 @@ async def import_purchase_plan_csv(filepath: str, db: AsyncSession) -> dict:
             po_status = 'inspected'
         elif actual_arrival_date:
             po_status = 'arrived'
-        elif eta and eta < today:
+        elif source_eta and source_eta < today:
             po_status = 'overdue'
         else:
             po_status = 'pending'
@@ -137,18 +137,26 @@ async def import_purchase_plan_csv(filepath: str, db: AsyncSession) -> dict:
 
         if existing:
             existing.supplier_name = supplier_name
+            existing.supplier_account = existing.supplier_account
             existing.material_name = material_name or existing.material_name
             existing.spec_model = spec_model
             existing.unit = unit
             existing.po_qty = po_qty
             existing.received_qty = received_qty
-            existing.eta = eta
+            existing.original_eta = source_eta
             existing.order_no = order_no
             existing.actual_arrival_date = actual_arrival_date
             existing.arrival_hour_note = arrival_hour_note
             existing.inspection_date = inspection_date
             existing.po_date = po_date
-            existing.po_status = po_status
+            if inspection_date:
+                existing.po_status = 'inspected'
+            elif actual_arrival_date:
+                existing.po_status = 'arrived'
+            elif existing.eta and existing.eta < today:
+                existing.po_status = 'overdue'
+            else:
+                existing.po_status = 'pending'
             updated += 1
         else:
             po_no = _gen_po_no(supplier_name, material_code)
@@ -164,12 +172,14 @@ async def import_purchase_plan_csv(filepath: str, db: AsyncSession) -> dict:
                 detail_id=detail_id,
                 material_code=material_code,
                 supplier_name=supplier_name,
+                supplier_account=None,
                 material_name=material_name,
                 spec_model=spec_model,
                 unit=unit,
                 po_qty=po_qty,
                 received_qty=received_qty,
-                eta=eta,
+                eta=source_eta,
+                original_eta=source_eta,
                 order_no=order_no,
                 actual_arrival_date=actual_arrival_date,
                 arrival_hour_note=arrival_hour_note,
@@ -339,5 +349,3 @@ async def import_long_lead_csv(filepath: str, db: AsyncSession) -> dict:
 
     await db.flush()
     return {'created': created, 'updated': updated, 'skipped': skipped}
-
-

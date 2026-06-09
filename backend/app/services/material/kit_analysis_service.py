@@ -1,42 +1,189 @@
-"""物料齐套中心 — 齐套分析服务"""
+"""Material kit analysis service."""
 
 from datetime import date
 from typing import Optional, List
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
+from decimal import Decimal
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.material.material_demand import MaterialDemand
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.order.sale_order import SaleOrder
 from app.schemas.material.schemas import KitAnalysisItem, KitAnalysisMaterialItem
-
-
-def _material_status(row: PurchaseOrder) -> str:
-    if row.inspection_date:
-        return 'inspected'
-    if row.actual_arrival_date or (row.received_qty and row.received_qty > 0):
-        return 'arrived'
-    if row.eta and row.eta < date.today():
-        return 'overdue'
-    return 'pending'
+from app.services.order.order_materials_service import get_order_product_materials
 
 
 def _kit_risk_level(kit_rate: float) -> str:
     if kit_rate >= 1.0:
-        return 'green'
+        return "green"
     if kit_rate >= 0.8:
-        return 'yellow'
-    return 'red'
+        return "yellow"
+    return "red"
 
 
 KIT_SORT_KEYS = {
-    'order_no', 'kit_rate', 'total_materials', 'received_materials',
-    'inspected_materials', 'pending_inspection', 'stagnant_materials', 'risk_level',
+    "order_no",
+    "kit_rate",
+    "total_materials",
+    "received_materials",
+    "inspected_materials",
+    "pending_inspection",
+    "not_ordered_materials",
+    "overdue_materials",
+    "stagnant_materials",
+    "risk_level",
+    "promised_date",
 }
 
 MATERIAL_SORT_KEYS = {
-    'material_code', 'material_name', 'supplier_name', 'order_qty',
-    'received_qty', 'eta', 'inspection_date', 'status', 'is_stagnant',
+    "material_code",
+    "material_name",
+    "material_property",
+    "material_type",
+    "supplier_name",
+    "order_qty",
+    "received_qty",
+    "eta",
+    "actual_arrival_date",
+    "inspection_date",
+    "status",
+    "is_stagnant",
 }
+
+
+def _to_float(value) -> Optional[float]:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _sum_decimal(values) -> Optional[Decimal]:
+    total = Decimal("0")
+    seen = False
+    for value in values:
+        if value is not None:
+            total += value
+            seen = True
+    return total if seen else None
+
+
+def _pick_first(values):
+    return next((value for value in values if value not in (None, "")), None)
+
+
+def _po_status(po_group: list[PurchaseOrder]) -> str:
+    if any(po.inspection_date for po in po_group):
+        return "inspected"
+    if any(po.actual_arrival_date for po in po_group):
+        return "arrived"
+    received_qty = _sum_decimal([po.received_qty for po in po_group])
+    if received_qty is not None and received_qty > 0:
+        return "arrived"
+    etas = [po.eta for po in po_group if po.eta]
+    if etas and min(etas) < date.today():
+        return "overdue"
+    return "pending"
+
+
+def _status_label(status: str) -> str:
+    return {
+        "pending": "待到料",
+        "overdue": "逾期未到",
+        "arrived": "已到料",
+        "inspected": "已检验",
+    }.get(status, status)
+
+
+async def _get_po_material_items(db: AsyncSession, order_no: str) -> list[KitAnalysisMaterialItem]:
+    result = await db.execute(
+        select(PurchaseOrder)
+        .where(PurchaseOrder.order_no == order_no)
+        .order_by(PurchaseOrder.material_code, PurchaseOrder.eta)
+    )
+    pos = result.scalars().all()
+
+    po_groups: dict[str, list[PurchaseOrder]] = {}
+    for po in pos:
+        if po.material_code:
+            po_groups.setdefault(po.material_code, []).append(po)
+
+    items: list[KitAnalysisMaterialItem] = []
+    for material_code, po_group in po_groups.items():
+        etas = [po.eta for po in po_group if po.eta]
+        arrivals = [po.actual_arrival_date for po in po_group if po.actual_arrival_date]
+        inspections = [po.inspection_date for po in po_group if po.inspection_date]
+        po_qty = _sum_decimal([po.po_qty for po in po_group])
+        received_qty = _sum_decimal([po.received_qty for po in po_group])
+        stagnant_qty = (
+            received_qty - po_qty
+            if received_qty is not None and po_qty is not None and received_qty > po_qty
+            else None
+        )
+        status = _po_status(po_group)
+
+        items.append(KitAnalysisMaterialItem(
+            material_code=material_code,
+            material_name=_pick_first([po.material_name for po in po_group]),
+            material_property=_pick_first([po.material_property for po in po_group]),
+            material_property_label=None,
+            material_type=_pick_first([po.material_type_name for po in po_group]),
+            supplier_name=_pick_first([po.supplier_name for po in po_group]),
+            order_qty=_to_float(po_qty),
+            shortage_qty=_to_float(po_qty - received_qty) if po_qty is not None and received_qty is not None and po_qty > received_qty else None,
+            req_date=None,
+            po_no=", ".join(dict.fromkeys([po.po_no for po in po_group if po.po_no])) or None,
+            po_count=len(po_group),
+            received_qty=_to_float(received_qty),
+            eta=min(etas) if etas else None,
+            first_eta=min(etas) if etas else None,
+            latest_eta=max(etas) if etas else None,
+            actual_arrival_date=max(arrivals) if arrivals else None,
+            inspection_date=max(inspections) if inspections else None,
+            status=status,
+            status_label=_status_label(status),
+            is_stagnant=stagnant_qty is not None,
+            stagnant_qty=_to_float(stagnant_qty),
+        ))
+
+    return items
+
+
+async def _get_order_material_items(db: AsyncSession, order_no: str) -> list[KitAnalysisMaterialItem]:
+    product_groups = await get_order_product_materials(db, order_no)
+    items = [
+        KitAnalysisMaterialItem(
+            material_code=material.material_code,
+            material_name=material.material_name,
+            material_property=material.material_property,
+            material_property_label=material.material_property_label,
+            material_type=material.material_type,
+            supplier_name=material.supplier_name,
+            order_qty=material.req_qty,
+            shortage_qty=material.shortage_qty,
+            req_date=material.req_date,
+            po_no=material.po_no,
+            po_count=material.po_count,
+            received_qty=material.received_qty,
+            eta=material.eta,
+            first_eta=material.first_eta,
+            latest_eta=material.latest_eta,
+            actual_arrival_date=material.actual_arrival_date,
+            inspection_date=material.inspection_date,
+            status=material.status,
+            status_label=material.status_label,
+            is_stagnant=material.is_stagnant,
+            stagnant_qty=material.stagnant_qty,
+        )
+        for group in product_groups
+        for material in group.materials
+    ]
+
+    po_items = await _get_po_material_items(db, order_no)
+    known_material_codes = {item.material_code for item in items}
+    items.extend(item for item in po_items if item.material_code not in known_material_codes)
+    return items
 
 
 async def get_kit_analysis(
@@ -48,113 +195,184 @@ async def get_kit_analysis(
     page: int = 1,
     page_size: int = 20,
     only_pending_shipment: bool = False,
+    promised_date_start: Optional[str] = None,
+    promised_date_end: Optional[str] = None,
 ) -> dict:
-    """按订单号聚合采购到料计划数据，计算齐套率（支持分页）"""
-    query = select(PurchaseOrder)
+    """Summarize material kit status by order, using one batched PO scan."""
+    po_query = select(
+        PurchaseOrder.order_no,
+        PurchaseOrder.material_code,
+        PurchaseOrder.po_qty,
+        PurchaseOrder.received_qty,
+        PurchaseOrder.eta,
+        PurchaseOrder.actual_arrival_date,
+        PurchaseOrder.inspection_date,
+    ).where(PurchaseOrder.order_no.is_not(None))
     if order_no:
-        query = query.where(PurchaseOrder.order_no.ilike(f'%{order_no}%'))
+        po_query = po_query.where(PurchaseOrder.order_no.ilike(f"%{order_no}%"))
 
-    # 仅显示发货未完成的订单
-    if only_pending_shipment:
-        pending_orders_subq = select(SaleOrder.order_no).where(SaleOrder.delivery_completed_date.is_(None)).distinct()
-        query = query.where(PurchaseOrder.order_no.in_(pending_orders_subq))
+    po_result = await db.execute(po_query)
+    material_groups: dict[tuple[str, str], dict] = {}
+    for row in po_result:
+        if not row.order_no or not row.material_code:
+            continue
+        key = (row.order_no, row.material_code)
+        group = material_groups.setdefault(
+            key,
+            {
+                "po_qty": Decimal("0"),
+                "has_po_qty": False,
+                "received_qty": Decimal("0"),
+                "has_received_qty": False,
+                "eta": None,
+                "actual_arrival_date": None,
+                "inspection_date": None,
+            },
+        )
+        if row.po_qty is not None:
+            group["po_qty"] += row.po_qty
+            group["has_po_qty"] = True
+        if row.received_qty is not None:
+            group["received_qty"] += row.received_qty
+            group["has_received_qty"] = True
+        if row.eta and (group["eta"] is None or row.eta < group["eta"]):
+            group["eta"] = row.eta
+        if row.actual_arrival_date and (
+            group["actual_arrival_date"] is None
+            or row.actual_arrival_date > group["actual_arrival_date"]
+        ):
+            group["actual_arrival_date"] = row.actual_arrival_date
+        if row.inspection_date and (
+            group["inspection_date"] is None
+            or row.inspection_date > group["inspection_date"]
+        ):
+            group["inspection_date"] = row.inspection_date
 
-    result = await db.execute(query.order_by(PurchaseOrder.order_no))
-    rows = result.scalars().all()
+    order_nos = sorted({current_order_no for current_order_no, _ in material_groups})
 
-    # 按 order_no 分组，无订单号时使用material_code作为分组key避免合并
-    groups: dict[str, list[PurchaseOrder]] = {}
-    for row in rows:
-        key = row.order_no if row.order_no else f'NO_ORDER-{row.material_code}'
-        groups.setdefault(key, []).append(row)
-
-    # 获取订单的合同交期
-    order_nos = [k for k in groups.keys() if not k.startswith('NO_ORDER-')]
     promised_dates: dict[str, date | None] = {}
+    pending_shipment_orders: set[str] = set()
+    sale_order_nos: set[str] = set()
     if order_nos:
         sale_order_result = await db.execute(
-            select(SaleOrder.order_no, SaleOrder.promised_date)
+            select(SaleOrder.order_no, SaleOrder.promised_date, SaleOrder.delivery_completed_date)
             .where(SaleOrder.order_no.in_(order_nos))
             .distinct()
         )
-        promised_dates = {row.order_no: row.promised_date for row in sale_order_result}
+        for row in sale_order_result:
+            sale_order_nos.add(row.order_no)
+            promised_dates.setdefault(row.order_no, row.promised_date)
+            if row.delivery_completed_date is None:
+                pending_shipment_orders.add(row.order_no)
+
+    if only_pending_shipment:
+        order_nos = [
+            current_order_no
+            for current_order_no in order_nos
+            if current_order_no not in sale_order_nos or current_order_no in pending_shipment_orders
+        ]
+
+    if promised_date_start or promised_date_end:
+        start = date.fromisoformat(promised_date_start) if promised_date_start else None
+        end = date.fromisoformat(promised_date_end) if promised_date_end else None
+        filtered_order_nos = []
+        for current_order_no in order_nos:
+            promised_date = promised_dates.get(current_order_no)
+            if promised_date is None:
+                continue
+            if start and promised_date < start:
+                continue
+            if end and promised_date > end:
+                continue
+            filtered_order_nos.append(current_order_no)
+        order_nos = filtered_order_nos
 
     items: List[KitAnalysisItem] = []
-    for on, group_rows in groups.items():
-        total = len(group_rows)
+    per_order: dict[str, list[dict]] = {}
+    for (current_order_no, _), material_group in material_groups.items():
+        per_order.setdefault(current_order_no, []).append(material_group)
 
-        # 按物料种类计算覆盖率（木桶效应）：每种物料 received_qty >= po_qty 才算满足
-        def _is_material_met(r: PurchaseOrder) -> bool:
-            if r.po_qty and r.po_qty > 0:
-                return r.received_qty is not None and r.received_qty >= r.po_qty
-            # po_qty 为空/0 时，有到料即算满足
-            return r.actual_arrival_date is not None or (r.received_qty is not None and r.received_qty > 0)
+    for current_order_no in order_nos:
+        order_materials = per_order.get(current_order_no, [])
+        total = len(order_materials)
+        received_count = 0
+        inspected_count = 0
+        pending_inspection_count = 0
+        overdue_count = 0
+        stagnant_count = 0
 
-        met_count = sum(1 for r in group_rows if _is_material_met(r))
-        kit_rate = round(met_count / total, 4) if total > 0 else 0.0
+        for material_group in order_materials:
+            inspected = material_group["inspection_date"] is not None
+            arrived = (
+                material_group["actual_arrival_date"] is not None
+                or (
+                    material_group["has_received_qty"]
+                    and material_group["received_qty"] > 0
+                )
+            )
+            if inspected:
+                inspected_count += 1
+            if arrived or inspected:
+                received_count += 1
+            if arrived and not inspected:
+                pending_inspection_count += 1
+            if not arrived and not inspected and material_group["eta"] and material_group["eta"] < date.today():
+                overdue_count += 1
+            if (
+                material_group["has_po_qty"]
+                and material_group["has_received_qty"]
+                and material_group["received_qty"] > material_group["po_qty"]
+            ):
+                stagnant_count += 1
 
-        received = met_count
-        inspected = sum(1 for r in group_rows if r.inspection_date)
-        pending_insp = sum(
-            1 for r in group_rows if r.actual_arrival_date and not r.inspection_date
-        )
-
-        rl = _kit_risk_level(kit_rate)
-        if risk_level and rl != risk_level:
+        met_count = received_count
+        kit_rate = round(met_count / total, 4) if total else 0
+        current_risk_level = _kit_risk_level(kit_rate)
+        if risk_level and current_risk_level != risk_level:
             continue
 
-        stagnant_count = sum(
-            1 for r in group_rows
-            if r.received_qty is not None and r.po_qty is not None and r.received_qty > r.po_qty
-        )
-
         items.append(KitAnalysisItem(
-            order_no=on,
+            order_no=current_order_no,
             total_materials=total,
-            received_materials=received,
-            inspected_materials=inspected,
-            pending_inspection=pending_insp,
+            received_materials=received_count,
+            inspected_materials=inspected_count,
+            pending_inspection=pending_inspection_count,
+            not_ordered_materials=0,
+            overdue_materials=overdue_count,
             stagnant_materials=stagnant_count,
             kit_rate=kit_rate,
-            risk_level=rl,
-            promised_date=promised_dates.get(on) if not on.startswith('NO_ORDER-') else None,
+            risk_level=current_risk_level,
+            promised_date=promised_dates.get(current_order_no),
         ))
 
     if sort_by and sort_by in KIT_SORT_KEYS:
-        reverse = sort_order == 'desc'
-        # Use type-aware defaults: numeric fields use 0, string fields use ''
-        def sort_key(x):
-            val = getattr(x, sort_by, None)
-            if val is None:
-                if sort_by == 'kit_rate':
-                    return (True, 0.0)
-                return (True, '')
-            return (False, val)
+        reverse = sort_order == "desc"
+
+        def sort_key(item):
+            value = getattr(item, sort_by, None)
+            if value is None:
+                return (True, 0)
+            return (False, value)
+
         items.sort(key=sort_key, reverse=reverse)
     else:
-        items.sort(key=lambda x: x.kit_rate)
+        items.sort(key=lambda item: item.kit_rate)
 
     total_count = len(items)
     start_idx = (page - 1) * page_size
     end_idx = start_idx + page_size
     paginated_items = items[start_idx:end_idx]
 
-    # Calculate statistics for all items
-    red_count = sum(1 for item in items if item.risk_level == 'red')
-    yellow_count = sum(1 for item in items if item.risk_level == 'yellow')
-    green_count = sum(1 for item in items if item.risk_level == 'green')
-    avg_kit_rate = round(sum(item.kit_rate for item in items) / len(items) * 100) if items else 0
-
     return {
-        'items': paginated_items,
-        'total': total_count,
-        'page': page,
-        'page_size': page_size,
-        'statistics': {
-            'red_count': red_count,
-            'yellow_count': yellow_count,
-            'green_count': green_count,
-            'avg_kit_rate': avg_kit_rate,
+        "items": paginated_items,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "statistics": {
+            "red_count": sum(1 for item in items if item.risk_level == "red"),
+            "yellow_count": sum(1 for item in items if item.risk_level == "yellow"),
+            "green_count": sum(1 for item in items if item.risk_level == "green"),
+            "avg_kit_rate": round(sum(item.kit_rate for item in items) / len(items) * 100) if items else 0,
         },
     }
 
@@ -162,52 +380,88 @@ async def get_kit_analysis(
 async def get_order_materials(
     db: AsyncSession,
     order_no: str,
+    material_code_filter: Optional[str] = None,
+    material_name_filter: Optional[str] = None,
+    material_property_filter: Optional[str] = None,
+    material_type_filter: Optional[str] = None,
     status_filter: Optional[str] = None,
     supplier_filter: Optional[str] = None,
+    order_qty_min: Optional[float] = None,
+    order_qty_max: Optional[float] = None,
+    received_qty_min: Optional[float] = None,
+    received_qty_max: Optional[float] = None,
+    eta_start: Optional[str] = None,
+    eta_end: Optional[str] = None,
+    actual_arrival_date_start: Optional[str] = None,
+    actual_arrival_date_end: Optional[str] = None,
+    inspection_date_start: Optional[str] = None,
+    inspection_date_end: Optional[str] = None,
+    is_stagnant: Optional[bool] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
 ) -> List[KitAnalysisMaterialItem]:
-    """获取指定订单的物料明细，支持筛选和排序"""
-    query = select(PurchaseOrder).where(PurchaseOrder.order_no == order_no)
+    """Return complete order material details, including PO-only rows."""
+    items = await _get_order_material_items(db, order_no)
 
+    if material_code_filter:
+        needle = material_code_filter.lower()
+        items = [item for item in items if needle in item.material_code.lower()]
+    if material_name_filter:
+        needle = material_name_filter.lower()
+        items = [item for item in items if item.material_name and needle in item.material_name.lower()]
+    if material_property_filter:
+        property_values = {int(value.strip()) for value in material_property_filter.split(",") if value.strip()}
+        items = [item for item in items if item.material_property in property_values]
+    if material_type_filter:
+        needle = material_type_filter.lower()
+        items = [item for item in items if item.material_type and needle in item.material_type.lower()]
     if supplier_filter:
-        query = query.where(PurchaseOrder.supplier_name.ilike(f'%{supplier_filter}%'))
+        needle = supplier_filter.lower()
+        items = [item for item in items if item.supplier_name and needle in item.supplier_name.lower()]
+    if order_qty_min is not None:
+        items = [item for item in items if item.order_qty is not None and item.order_qty >= order_qty_min]
+    if order_qty_max is not None:
+        items = [item for item in items if item.order_qty is not None and item.order_qty <= order_qty_max]
+    if received_qty_min is not None:
+        items = [item for item in items if item.received_qty is not None and item.received_qty >= received_qty_min]
+    if received_qty_max is not None:
+        items = [item for item in items if item.received_qty is not None and item.received_qty <= received_qty_max]
+    if eta_start:
+        start = date.fromisoformat(eta_start)
+        items = [item for item in items if item.eta is not None and item.eta >= start]
+    if eta_end:
+        end = date.fromisoformat(eta_end)
+        items = [item for item in items if item.eta is not None and item.eta <= end]
+    if actual_arrival_date_start:
+        start = date.fromisoformat(actual_arrival_date_start)
+        items = [item for item in items if item.actual_arrival_date is not None and item.actual_arrival_date >= start]
+    if actual_arrival_date_end:
+        end = date.fromisoformat(actual_arrival_date_end)
+        items = [item for item in items if item.actual_arrival_date is not None and item.actual_arrival_date <= end]
+    if inspection_date_start:
+        start = date.fromisoformat(inspection_date_start)
+        items = [item for item in items if item.inspection_date is not None and item.inspection_date >= start]
+    if inspection_date_end:
+        end = date.fromisoformat(inspection_date_end)
+        items = [item for item in items if item.inspection_date is not None and item.inspection_date <= end]
+    if is_stagnant is True:
+        items = [item for item in items if item.is_stagnant]
+    elif is_stagnant is False:
+        items = [item for item in items if not item.is_stagnant]
 
-    result = await db.execute(query)
-    rows = result.scalars().all()
-
-    material_items = [
-        KitAnalysisMaterialItem(
-            material_code=r.material_code,
-            material_name=r.material_name,
-            supplier_name=r.supplier_name,
-            order_qty=float(r.po_qty) if r.po_qty else None,
-            received_qty=float(r.received_qty) if r.received_qty else None,
-            eta=r.eta,
-            actual_arrival_date=r.actual_arrival_date,
-            inspection_date=r.inspection_date,
-            status=_material_status(r),
-            is_stagnant=r.received_qty is not None and r.po_qty is not None and r.received_qty > r.po_qty,
-            stagnant_qty=float(r.received_qty - r.po_qty) if (r.received_qty is not None and r.po_qty is not None and r.received_qty > r.po_qty) else None,
-        )
-        for r in rows
-    ]
-
-    # 状态筛选（支持多个状态，逗号分隔）
     if status_filter:
-        status_list = [s.strip() for s in status_filter.split(',') if s.strip()]
-        material_items = [m for m in material_items if m.status in status_list]
+        statuses = {status.strip() for status in status_filter.split(",") if status.strip()}
+        items = [item for item in items if item.status in statuses]
 
-    # 排序
     if sort_by and sort_by in MATERIAL_SORT_KEYS:
-        reverse = sort_order == 'desc'
-        def sort_key(x):
-            val = getattr(x, sort_by, None)
-            if val is None:
-                if sort_by in ('order_qty', 'received_qty', 'stagnant_qty'):
-                    return (True, 0.0)
-                return (True, '')
-            return (False, val)
-        material_items.sort(key=sort_key, reverse=reverse)
+        reverse = sort_order == "desc"
 
-    return material_items
+        def sort_key(item):
+            value = getattr(item, sort_by, None)
+            if value is None:
+                return (True, 0)
+            return (False, value)
+
+        items.sort(key=sort_key, reverse=reverse)
+
+    return items
