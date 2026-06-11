@@ -31,6 +31,7 @@ import {
   NotificationOutlined,
   CheckOutlined,
   SoundOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { authApi, notificationApi } from '../services/api'
@@ -38,6 +39,7 @@ import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/Feedback
 import ShareButton from '../components/ShareButton'
 import { FloatingAssistant, TopBarAssistant } from '../components/Assistant'
 import FontSizeSetting from '../components/FontSizeSetting'
+import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
 
 const { Sider, Content } = Layout
 
@@ -157,6 +159,7 @@ const allMenuItems: PermissionAwareItem[] = [
           { key: '/basicdata/warehouses', icon: <ContainerOutlined />, label: '仓库', permission: 'basicdata.data' },
           { key: '/basicdata/processes', icon: <RocketOutlined />, label: '工序', permission: 'basicdata.data' },
           { key: '/basicdata/organizations', icon: <TeamOutlined />, label: '组织', permission: 'basicdata.data' },
+          { key: '/basicdata/positions', icon: <IdcardOutlined />, label: '岗位', permission: 'basicdata.data' },
           { key: '/basicdata/employees', icon: <UserOutlined />, label: '人员', permission: 'basicdata.data' },
         ],
       },
@@ -184,15 +187,31 @@ function filterMenuByPermission(items: PermissionAwareItem[], hasPermission: (re
     .filter(Boolean) as PermissionAwareItem[]
 }
 
-function filterMenuByPath(items: PermissionAwareItem[], targetPath: string): PermissionAwareItem[] {
+function filterMenuByPath(items: PermissionAwareItem[], targetPath: string, hasPermission: (resource: string, action: string) => boolean): PermissionAwareItem[] {
   return items
     .map(item => {
       if (item.children) {
-        const filtered = filterMenuByPath(item.children, targetPath)
+        const filtered = filterMenuByPath(item.children, targetPath, hasPermission)
         if (filtered.length > 0) return { ...item, children: filtered }
         return null
       }
-      if (item.key === targetPath) return item
+      if (item.key === targetPath && (!item.permission || hasPermission(item.permission, 'read'))) return item
+      return null
+    })
+    .filter(Boolean) as PermissionAwareItem[]
+}
+
+const supplierPortalPaths = new Set<string>(SUPPLIER_PORTAL_PATHS)
+
+function filterSupplierPortalMenu(items: PermissionAwareItem[], hasPermission: (resource: string, action: string) => boolean): PermissionAwareItem[] {
+  return items
+    .map(item => {
+      if (item.children) {
+        const filtered = filterSupplierPortalMenu(item.children, hasPermission)
+        if (filtered.length > 0) return { ...item, children: filtered }
+        return null
+      }
+      if (supplierPortalPaths.has(item.key) && (!item.permission || hasPermission(item.permission, 'read'))) return item
       return null
     })
     .filter(Boolean) as PermissionAwareItem[]
@@ -247,6 +266,7 @@ const pathToGroupKey: Record<string, string> = {
   '/basicdata/warehouses': 'basicdata-management',
   '/basicdata/processes': 'basicdata-management',
   '/basicdata/organizations': 'basicdata-management',
+  '/basicdata/positions': 'basicdata-management',
   '/basicdata/employees': 'basicdata-management',
   '/users': 'basicdata-center',
   '/audit': 'basicdata-center',
@@ -304,6 +324,7 @@ const pathToPermission: Record<string, string> = {
   '/basicdata/warehouses': 'basicdata.data',
   '/basicdata/processes': 'basicdata.data',
   '/basicdata/organizations': 'basicdata.data',
+  '/basicdata/positions': 'basicdata.data',
   '/basicdata/employees': 'basicdata.data',
   '/basicdata/feedback': 'basicdata.feedback',
   '/basicdata/files': 'basicdata.files',
@@ -317,7 +338,7 @@ function getRequiredPermission(pathname: string): string | undefined {
 }
 
 export default function MainLayout() {
-  const { currentUser, logout, hasPermission, isShareUser, getShareTargetPath, exitShare, originalToken, setAuth } = useAuthStore()
+  const { currentUser, logout, hasPermission, isSupplierUser, isShareUser, getShareTargetPath, exitShare, originalToken, setAuth } = useAuthStore()
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
@@ -330,18 +351,25 @@ export default function MainLayout() {
   const [pwdModalOpen, setPwdModalOpen] = useState(false)
   const [pwdForm] = Form.useForm()
   const toastShown = useRef(false)
+  const canUseTopbar = useMemo(() => ({
+    share: hasPermission('topbar.share', 'read'),
+    feedback: hasPermission('topbar.feedback', 'read'),
+    aiSearch: hasPermission('topbar.ai_search', 'read'),
+    fontSize: hasPermission('topbar.font_size', 'read'),
+    notifications: hasPermission('topbar.notifications', 'read'),
+  }), [hasPermission, currentUser])
 
   const fetchUnreadCount = useCallback(async () => {
-    if (!originalToken || isShareUser()) return
+    if (!originalToken || isShareUser() || !canUseTopbar.notifications) return
     try {
       const res: any = await notificationApi.unreadCount()
       setUnreadTotal(res.data?.total || 0)
       setUnreadByType(res.data?.by_type || {})
     } catch { /* silent */ }
-  }, [originalToken, isShareUser])
+  }, [originalToken, isShareUser, canUseTopbar.notifications])
 
   const fetchNotifList = useCallback(async (tab?: string) => {
-    if (!originalToken || isShareUser()) return
+    if (!originalToken || isShareUser() || !canUseTopbar.notifications) return
     setNotifLoading(true)
     try {
       const activeTab = tab || notifTab
@@ -361,7 +389,7 @@ export default function MainLayout() {
       }
     } catch { /* silent */ }
     setNotifLoading(false)
-  }, [originalToken, isShareUser, notifTab])
+  }, [originalToken, isShareUser, notifTab, canUseTopbar.notifications])
 
   useEffect(() => {
     if (!originalToken || isShareUser()) return
@@ -375,14 +403,14 @@ export default function MainLayout() {
   }, [originalToken, isShareUser, setAuth])
 
   useEffect(() => {
-    if (!originalToken || isShareUser()) return
+    if (!originalToken || isShareUser() || !canUseTopbar.notifications) return
     fetchUnreadCount()
     const timer = setInterval(fetchUnreadCount, 60000)
     return () => clearInterval(timer)
-  }, [originalToken, isShareUser, fetchUnreadCount])
+  }, [originalToken, isShareUser, canUseTopbar.notifications, fetchUnreadCount])
 
   useEffect(() => {
-    if (!originalToken || isShareUser() || toastShown.current) return
+    if (!originalToken || isShareUser() || !canUseTopbar.notifications || toastShown.current) return
     if (sessionStorage.getItem('notif_toast_shown')) { toastShown.current = true; return }
     const showToast = async () => {
       try {
@@ -403,7 +431,7 @@ export default function MainLayout() {
     }
     const t = setTimeout(showToast, 2000)
     return () => clearTimeout(t)
-  }, [originalToken, isShareUser])
+  }, [originalToken, isShareUser, canUseTopbar.notifications])
 
   useEffect(() => {
     if (bellOpen) fetchNotifList(notifTab)
@@ -444,13 +472,18 @@ export default function MainLayout() {
     if (isShareUser()) {
       const targetPath = getShareTargetPath()
       if (targetPath) {
-        return toAntdItems(filterMenuByPath(allMenuItems, targetPath))
+        return toAntdItems(filterMenuByPath(allMenuItems, targetPath, hasPermission))
       }
       return []
     }
+    if (isSupplierUser()) {
+      return toAntdItems(filterSupplierPortalMenu(allMenuItems, hasPermission))
+    }
     return toAntdItems(filterMenuByPermission(allMenuItems, hasPermission))
-  }, [hasPermission, currentUser, isShareUser, getShareTargetPath])
+  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath])
 
+  const requiredPermission = getRequiredPermission(location.pathname)
+  const canViewCurrentPage = !requiredPermission || hasPermission(requiredPermission, 'read')
   const openKeys = useMemo(() => {
     const gk = pathToGroupKey[location.pathname]
     return gk ? [gk] : []
@@ -515,71 +548,73 @@ export default function MainLayout() {
             </Space>
           )}
           <Space size="middle">
-            {!isShareUser() && <ShareButton />}
-            <FeedbackButton />
-            <TopBarAssistant />
-            <FontSizeSetting />
-            <Popover
-              open={bellOpen}
-              onOpenChange={setBellOpen}
-              trigger="click"
-              placement="bottomRight"
-              overlayStyle={{ width: 380 }}
-              content={
-                <div style={{ margin: '-12px -16px' }}>
-                  <Tabs
-                    activeKey={notifTab}
-                    onChange={setNotifTab}
-                    centered
-                    size="small"
-                    style={{ marginBottom: 0 }}
-                    items={[
-                      {
-                        key: 'announcement_system',
-                        label: <span style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}><SoundOutlined /> 公告系统 {(unreadByType['announcement'] || 0) + (unreadByType['system'] || 0) > 0 ? <Badge count={(unreadByType['announcement'] || 0) + (unreadByType['system'] || 0)} size="small" offset={[4, -2]} /> : null}</span>,
-                      },
-                      {
-                        key: 'alert',
-                        label: <span style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}><WarningOutlined /> 提醒 {(unreadByType['material_alert'] || 0) + (unreadByType['exception_alert'] || 0) > 0 ? <Badge count={(unreadByType['material_alert'] || 0) + (unreadByType['exception_alert'] || 0)} size="small" offset={[4, -2]} /> : null}</span>,
-                      },
-                    ]}
-                  />
-                  <List
-                    loading={notifLoading}
-                    dataSource={notifList}
-                    locale={{ emptyText: '暂无消息' }}
-                    style={{ maxHeight: 360, overflowY: 'auto', padding: '0 12px' }}
-                    renderItem={(item: any) => (
-                      <List.Item
-                        key={item.id}
-                        style={{ cursor: 'pointer', padding: '10px 4px', opacity: item.is_read ? 0.55 : 1 }}
-                        onClick={() => { if (!item.is_read) handleMarkRead(item.id) }}
-                      >
-                        <List.Item.Meta
-                          title={
-                            <Space size={4}>
-                              {!item.is_read && <Badge status="processing" />}
-                              <Typography.Text style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }} strong={!item.is_read}>{item.title}</Typography.Text>
-                              {item.priority === 'urgent' && <Tag color="red" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', lineHeight: '18px' }}>紧急</Tag>}
-                              {item.priority === 'important' && <Tag color="gold" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', lineHeight: '18px' }}>重要</Tag>}
-                            </Space>
-                          }
-                          description={<Typography.Text type="secondary" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>{item.created_at}</Typography.Text>}
-                        />
-                      </List.Item>
-                    )}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderTop: '1px solid #f0f0f0' }}>
-                    <Button type="link" size="small" icon={<CheckOutlined />} onClick={handleMarkAllRead} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>全部已读</Button>
-                    <Button type="link" size="small" onClick={() => { setBellOpen(false); navigate('/announcements') }} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>查看全部</Button>
+            {!isShareUser() && !isSupplierUser() && canUseTopbar.share && <ShareButton />}
+            {!isSupplierUser() && canUseTopbar.feedback && <FeedbackButton />}
+            {!isSupplierUser() && canUseTopbar.aiSearch && <TopBarAssistant />}
+            {canUseTopbar.fontSize && <FontSizeSetting />}
+            {canUseTopbar.notifications && (
+              <Popover
+                open={bellOpen}
+                onOpenChange={setBellOpen}
+                trigger="click"
+                placement="bottomRight"
+                overlayStyle={{ width: 380 }}
+                content={
+                  <div style={{ margin: '-12px -16px' }}>
+                    <Tabs
+                      activeKey={notifTab}
+                      onChange={setNotifTab}
+                      centered
+                      size="small"
+                      style={{ marginBottom: 0 }}
+                      items={[
+                        {
+                          key: 'announcement_system',
+                          label: <span style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}><SoundOutlined /> 公告系统 {(unreadByType['announcement'] || 0) + (unreadByType['system'] || 0) > 0 ? <Badge count={(unreadByType['announcement'] || 0) + (unreadByType['system'] || 0)} size="small" offset={[4, -2]} /> : null}</span>,
+                        },
+                        {
+                          key: 'alert',
+                          label: <span style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}><WarningOutlined /> 提醒 {(unreadByType['material_alert'] || 0) + (unreadByType['exception_alert'] || 0) > 0 ? <Badge count={(unreadByType['material_alert'] || 0) + (unreadByType['exception_alert'] || 0)} size="small" offset={[4, -2]} /> : null}</span>,
+                        },
+                      ]}
+                    />
+                    <List
+                      loading={notifLoading}
+                      dataSource={notifList}
+                      locale={{ emptyText: '暂无消息' }}
+                      style={{ maxHeight: 360, overflowY: 'auto', padding: '0 12px' }}
+                      renderItem={(item: any) => (
+                        <List.Item
+                          key={item.id}
+                          style={{ cursor: 'pointer', padding: '10px 4px', opacity: item.is_read ? 0.55 : 1 }}
+                          onClick={() => { if (!item.is_read) handleMarkRead(item.id) }}
+                        >
+                          <List.Item.Meta
+                            title={
+                              <Space size={4}>
+                                {!item.is_read && <Badge status="processing" />}
+                                <Typography.Text style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }} strong={!item.is_read}>{item.title}</Typography.Text>
+                                {item.priority === 'urgent' && <Tag color="red" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', lineHeight: '18px' }}>紧急</Tag>}
+                                {item.priority === 'important' && <Tag color="gold" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', lineHeight: '18px' }}>重要</Tag>}
+                              </Space>
+                            }
+                            description={<Typography.Text type="secondary" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>{item.created_at}</Typography.Text>}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderTop: '1px solid #f0f0f0' }}>
+                      <Button type="link" size="small" icon={<CheckOutlined />} onClick={handleMarkAllRead} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>全部已读</Button>
+                      <Button type="link" size="small" onClick={() => { setBellOpen(false); navigate('/announcements') }} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>查看全部</Button>
+                    </div>
                   </div>
-                </div>
-              }
-            >
-              <Badge count={unreadTotal} size="small" offset={[-4, 4]}>
-                <Button type="text" icon={<BellOutlined />} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', width: 36, height: 36, borderRadius: 10, color: '#64748b' }} />
-              </Badge>
-            </Popover>
+                }
+              >
+                <Badge count={unreadTotal} size="small" offset={[-4, 4]}>
+                  <Button type="text" icon={<BellOutlined />} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', width: 36, height: 36, borderRadius: 10, color: '#64748b' }} />
+                </Badge>
+              </Popover>
+            )}
             {isShareUser() ? (
               <Button
                 type="primary"
@@ -650,7 +685,15 @@ export default function MainLayout() {
         </Modal>
 
         <Content style={{ padding: '12px 24px 24px' }}>
-          <Outlet />
+          {canViewCurrentPage ? (
+            <Outlet />
+          ) : (
+            <Result
+              status="403"
+              title="无访问权限"
+              subTitle={`缺少 ${requiredPermission}.read 权限`}
+            />
+          )}
         </Content>
       </Layout>
     </Layout>

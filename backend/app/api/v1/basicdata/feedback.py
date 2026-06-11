@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
+from app.core.security import PermissionChecker
 from app.models.basicdata.feedback import Feedback
 from app.schemas.common import ResponseModel
 from app.schemas.basicdata.feedback import (
@@ -54,6 +55,10 @@ def _has_perm(user: dict, action: str) -> bool:
         if isinstance(actions, list) and action in actions:
             return True
     return False
+
+
+def _get_user_id(user: dict) -> int:
+    return int(user.get("user_id") or user["sub"])
 
 
 def _to_dicts(attachments) -> list[dict]:
@@ -187,7 +192,7 @@ async def get_feedback(
 @router.post("", response_model=ResponseModel[FeedbackOut])
 async def create_feedback(
     body: FeedbackCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(PermissionChecker("topbar.feedback", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     attachments = _to_dicts(body.attachments)
@@ -199,7 +204,7 @@ async def create_feedback(
         description=body.description,
         attachments=attachments or None,
         status="pending",
-        submitter_id=int(current_user.get("user_id")),
+        submitter_id=_get_user_id(current_user),
         submitter_name=current_user.get("username") or "",
     )
     db.add(fb)

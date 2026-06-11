@@ -31,7 +31,7 @@ def _get_user_id(current_user: dict) -> int:
 @router.post("", response_model=ResponseModel)
 async def create_notification(
     request: CreateNotificationRequest,
-    current_user: dict = Depends(PermissionChecker("dashboard", "read")),
+    current_user: dict = Depends(PermissionChecker("topbar.notifications", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     uid = _get_user_id(current_user)
@@ -57,7 +57,7 @@ async def list_notifications(
     page_size: int = Query(20, ge=1, le=100),
     type: Optional[str] = None,
     is_read: Optional[bool] = None,
-    current_user: dict = Depends(PermissionChecker("dashboard", "read")),
+    current_user: dict = Depends(PermissionChecker("topbar.notifications", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     uid = _get_user_id(current_user)
@@ -103,7 +103,7 @@ async def list_notifications(
 # ---------- 未读数量（按类型分组） ----------
 @router.get("/unread-count", response_model=ResponseModel)
 async def unread_count(
-    current_user: dict = Depends(PermissionChecker("dashboard", "read")),
+    current_user: dict = Depends(PermissionChecker("topbar.notifications", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     uid = _get_user_id(current_user)
@@ -122,7 +122,7 @@ async def unread_count(
 @router.post("/{notif_id}/read", response_model=ResponseModel)
 async def mark_read(
     notif_id: int,
-    current_user: dict = Depends(PermissionChecker("dashboard", "read")),
+    current_user: dict = Depends(PermissionChecker("topbar.notifications", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     uid = _get_user_id(current_user)
@@ -143,7 +143,7 @@ async def mark_read(
 @router.post("/read-all", response_model=ResponseModel)
 async def mark_all_read(
     type: Optional[str] = None,
-    current_user: dict = Depends(PermissionChecker("dashboard", "read")),
+    current_user: dict = Depends(PermissionChecker("topbar.notifications", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     uid = _get_user_id(current_user)

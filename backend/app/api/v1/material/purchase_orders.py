@@ -6,6 +6,7 @@ from typing import Optional
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
+from app.core.supplier_scope import get_supplier_name_scope
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.basicdata.audit_log import AuditLog
 from app.schemas.common import ResponseModel, PageResult
@@ -28,13 +29,17 @@ async def list_purchase_orders(
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "read")),
     db: AsyncSession = Depends(get_db),
 ):
+    supplier_scope = await get_supplier_name_scope(current_user, db)
     query = select(PurchaseOrder)
     count_query = select(func.count(PurchaseOrder.id))
+    if supplier_scope:
+        query = query.where(PurchaseOrder.supplier_name == supplier_scope)
+        count_query = count_query.where(PurchaseOrder.supplier_name == supplier_scope)
 
     if po_status:
         query = query.where(PurchaseOrder.po_status == po_status)
         count_query = count_query.where(PurchaseOrder.po_status == po_status)
-    if supplier_code:
+    if supplier_code and not supplier_scope:
         query = query.where(PurchaseOrder.supplier_code == supplier_code)
         count_query = count_query.where(PurchaseOrder.supplier_code == supplier_code)
     if owner:
@@ -67,7 +72,11 @@ async def get_purchase_order(
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.po_no == po_no))
+    supplier_scope = await get_supplier_name_scope(current_user, db)
+    conditions = [PurchaseOrder.po_no == po_no]
+    if supplier_scope:
+        conditions.append(PurchaseOrder.supplier_name == supplier_scope)
+    result = await db.execute(select(PurchaseOrder).where(*conditions))
     po = result.scalar_one_or_none()
     if not po:
         raise HTTPException(status_code=404, detail="PO不存在")
@@ -81,7 +90,11 @@ async def update_po_status(
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.po_no == po_no))
+    supplier_scope = await get_supplier_name_scope(current_user, db)
+    conditions = [PurchaseOrder.po_no == po_no]
+    if supplier_scope:
+        conditions.append(PurchaseOrder.supplier_name == supplier_scope)
+    result = await db.execute(select(PurchaseOrder).where(*conditions))
     po = result.scalar_one_or_none()
     if not po:
         raise HTTPException(status_code=404, detail="PO不存在")
@@ -103,7 +116,11 @@ async def get_po_timeline(
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    po_result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.po_no == po_no))
+    supplier_scope = await get_supplier_name_scope(current_user, db)
+    conditions = [PurchaseOrder.po_no == po_no]
+    if supplier_scope:
+        conditions.append(PurchaseOrder.supplier_name == supplier_scope)
+    po_result = await db.execute(select(PurchaseOrder).where(*conditions))
     po = po_result.scalar_one_or_none()
     if not po:
         raise HTTPException(status_code=404, detail="PO不存在")

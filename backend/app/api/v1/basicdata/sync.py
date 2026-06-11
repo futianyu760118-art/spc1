@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 VALID_SYNC_TYPES = [
     "orders", "order_details", "materials", "purchase_orders", "customers", "suppliers",
     "materials_masterdata", "skus", "products", "warehouses", "processes",
-    "organizations", "employees", "employee_organizations", "purchase_invoices", "quality_issues", "all",
+    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "quality_issues", "all",
 ]
 
 
@@ -82,6 +82,7 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
                 "warehouses": lambda: service.sync_warehouses(sync_params.get("since"), custom_params),
                 "processes": lambda: service.sync_processes(sync_params.get("since"), custom_params),
                 "organizations": lambda: service.sync_organizations(sync_params.get("since"), custom_params),
+                "positions": lambda: service.sync_positions(sync_params.get("since"), custom_params),
                 "employees": lambda: service.sync_employees(sync_params.get("since"), custom_params),
                 "employee_organizations": lambda: service.sync_employee_organizations(sync_params.get("since"), custom_params),
                 "purchase_invoices": lambda: service.sync_purchase_invoices(sync_params.get("since"), custom_params),
@@ -188,6 +189,7 @@ async def get_sync_config_status(
         "purchase_invoices": "采购开票",
         "quality_issues": "品质异常",
     }
+    type_labels["positions"] = "岗位"
     status = {}
     for sync_type, label in type_labels.items():
         c = config_map.get(sync_type)
@@ -354,6 +356,7 @@ async def get_sync_status(
         "employee_organizations": "员工部门关系",
         "purchase_invoices": "采购开票",
     }
+    type_labels["positions"] = "岗位"
     last_sync = {}
     for st in type_labels:
         result = await db.execute(

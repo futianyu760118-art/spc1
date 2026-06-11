@@ -13,6 +13,7 @@ import dayjs from 'dayjs'
 import { materialApi, orderApi } from '../../../services/api'
 import { formatDate } from '../../../utils'
 import { useExport } from '../../../hooks/useExport'
+import { useAuthStore } from '../../../store/auth'
 
 interface PlanRow {
   id: number
@@ -61,6 +62,8 @@ const MATERIAL_PROPERTY_OPTIONS = [
 const MATERIAL_PROPERTY_MAP = Object.fromEntries(MATERIAL_PROPERTY_OPTIONS.map(item => [item.value, item.label]))
 
 export default function PurchasePlan() {
+  const isSupplierUser = useAuthStore((s) => s.isSupplierUser)
+  const supplierReadOnly = isSupplierUser()
   const [data, setData] = useState<PlanRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -239,6 +242,9 @@ export default function PurchasePlan() {
   }
 
   const editableText = (field: keyof PlanRow) => (value: string | null, row: PlanRow) => {
+    if (supplierReadOnly) {
+      return <div style={{ padding: '4px 8px', minHeight: '24px' }}>{value || <span style={{ color: '#cbd5e1' }}>-</span>}</div>
+    }
     const cellKey = `${row.id}-${String(field)}`
     const isEditing = editingCell === cellKey
     return (
@@ -267,6 +273,9 @@ export default function PurchasePlan() {
   }
 
   const editableNumber = (field: keyof PlanRow, min = 0) => (value: number | null, row: PlanRow) => {
+    if (supplierReadOnly) {
+      return <div style={{ padding: '4px 8px', textAlign: 'right' }}>{value != null ? value : <span style={{ color: '#cbd5e1' }}>-</span>}</div>
+    }
     const cellKey = `${row.id}-${String(field)}`
     const isEditing = editingCell === cellKey
     return (
@@ -298,6 +307,9 @@ export default function PurchasePlan() {
   }
 
   const editableDate = (field: keyof PlanRow) => (value: string | null, row: PlanRow) => {
+    if (supplierReadOnly) {
+      return <div style={{ padding: '4px 8px' }}>{value ? dayjs(value).format('YYYY-MM-DD') : <span style={{ color: '#cbd5e1' }}>-</span>}</div>
+    }
     const cellKey = `${row.id}-${String(field)}`
     const isEditing = editingCell === cellKey
     return (
@@ -648,9 +660,11 @@ export default function PurchasePlan() {
           <Tooltip title="和供应商沟通">
             <Button size="small" icon={<MessageOutlined />} onClick={() => openContact(row)} />
           </Tooltip>
-          <Tooltip title="编辑">
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
-          </Tooltip>
+          {!supplierReadOnly && (
+            <Tooltip title="编辑">
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+            </Tooltip>
+          )}
         </Space>
       ),
     },
@@ -703,7 +717,7 @@ export default function PurchasePlan() {
           <Col flex="auto" />
           <Col>
             <Space>
-              {selectedRowKeys.length > 0 && (
+              {!supplierReadOnly && selectedRowKeys.length > 0 && (
                 <Button type="primary" icon={<EditOutlined />} onClick={() => setBatchEditModal(true)}>
                   批量编辑 ({selectedRowKeys.length})
                 </Button>
@@ -720,10 +734,12 @@ export default function PurchasePlan() {
               >
                 <Button icon={<DownloadOutlined />} loading={exporting}>导出 <DownOutlined /></Button>
               </Dropdown>
-              <Upload beforeUpload={(f) => { handleImport(f); return false }} showUploadList={false} accept=".csv">
-                <Button icon={<UploadOutlined />}>导入CSV</Button>
-              </Upload>
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModal(true)}>新增</Button>
+              {!supplierReadOnly && (
+                <Upload beforeUpload={(f) => { handleImport(f); return false }} showUploadList={false} accept=".csv">
+                  <Button icon={<UploadOutlined />}>导入CSV</Button>
+                </Upload>
+              )}
+              {!supplierReadOnly && <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModal(true)}>新增</Button>}
             </Space>
           </Col>
         </Row>
@@ -736,7 +752,7 @@ export default function PurchasePlan() {
           dataSource={data}
           columns={columns}
           loading={loading}
-          rowSelection={{
+          rowSelection={supplierReadOnly ? undefined : {
             selectedRowKeys,
             onChange: (keys) => setSelectedRowKeys(keys as number[]),
           }}

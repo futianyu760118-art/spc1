@@ -33,6 +33,7 @@ import Products from './pages/BasicDataCenter/Products'
 import Warehouses from './pages/BasicDataCenter/Warehouses'
 import Processes from './pages/BasicDataCenter/Processes'
 import Organizations from './pages/BasicDataCenter/Organizations'
+import Positions from './pages/BasicDataCenter/Positions'
 import Employees from './pages/BasicDataCenter/Employees'
 import ProductionOverview from './pages/ProductionCenter/ProductionOverview/index'
 import SchedulePlans from './pages/ProductionCenter/SchedulePlans/index'
@@ -173,6 +174,7 @@ export default function App() {
           <Route path="basicdata/warehouses" element={<Warehouses />} key="warehouses" />
           <Route path="basicdata/processes" element={<Processes />} key="processes" />
           <Route path="basicdata/organizations" element={<Organizations />} key="organizations" />
+          <Route path="basicdata/positions" element={<Positions />} key="positions" />
           <Route path="basicdata/employees" element={<Employees />} key="employees" />
           <Route path="basicdata/feedback" element={<FeedbackManagement />} key="feedback" />
           <Route path="basicdata/files" element={<FileManagement />} key="files" />

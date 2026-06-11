@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons'
 import type { DataNode } from 'antd/es/tree'
 import api from '../../services/api'
+import { EMPLOYEE_STATUS_OPTIONS, getEmployeeStatusMeta } from '../../constants/employeeStatus'
 
 interface Organization {
   id: number
@@ -40,11 +41,20 @@ interface Employee {
   emp_code: string
   emp_name: string
   org_id: number
+  position_id?: number
   position?: string
+  position_name?: string
   phone?: string
   email?: string
   status: number
   create_time: string
+}
+
+interface Position {
+  id: number
+  position_code: string
+  position_name: string
+  status: number
 }
 
 const OrganizationForm = ({ form, parentId }: { form: any, parentId?: number }) => (
@@ -77,7 +87,7 @@ const OrganizationForm = ({ form, parentId }: { form: any, parentId?: number }) 
   </Form>
 )
 
-const EmployeeForm = ({ form, orgId }: { form: any, orgId?: number }) => (
+const EmployeeForm = ({ form, orgId, positions }: { form: any, orgId?: number, positions: Position[] }) => (
   <Form form={form} layout="vertical" initialValues={{ org_id: orgId, status: 1 }}>
     <Form.Item name="emp_code" label="员工工号" rules={[{ required: true }]}>
       <Input placeholder="请输入员工工号" />
@@ -88,8 +98,17 @@ const EmployeeForm = ({ form, orgId }: { form: any, orgId?: number }) => (
     <Form.Item name="org_id" label="所属组织ID" rules={[{ required: true }]}>
       <InputNumber style={{ width: '100%' }} placeholder="请输入所属组织ID" />
     </Form.Item>
-    <Form.Item name="position" label="岗位名称">
-      <Input placeholder="请输入岗位名称" />
+    <Form.Item name="position_id" label="岗位">
+      <Select
+        allowClear
+        showSearch
+        placeholder="请选择岗位"
+        optionFilterProp="label"
+        options={positions.map(position => ({
+          value: position.id,
+          label: `${position.position_name} (${position.position_code})`,
+        }))}
+      />
     </Form.Item>
     <Form.Item name="phone" label="手机号">
       <Input placeholder="请输入手机号" />
@@ -99,8 +118,9 @@ const EmployeeForm = ({ form, orgId }: { form: any, orgId?: number }) => (
     </Form.Item>
     <Form.Item name="status" label="状态" initialValue={1}>
       <Select>
-        <Select.Option value={1}>在职</Select.Option>
-        <Select.Option value={0}>离职</Select.Option>
+        {EMPLOYEE_STATUS_OPTIONS.map(option => (
+          <Select.Option key={option.value} value={option.value}>{option.label}</Select.Option>
+        ))}
       </Select>
     </Form.Item>
   </Form>
@@ -141,6 +161,7 @@ export default function Organizations() {
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null)
   const [selectedOrg, setSelectedOrg] = useState<OrganizationTreeNode | null>(null)
   const [employees, setEmployees] = useState<Employee[]>([])
+  const [positions, setPositions] = useState<Position[]>([])
   const [employeesLoading, setEmployeesLoading] = useState(false)
   const [treeLoading, setTreeLoading] = useState(false)
   
@@ -197,6 +218,18 @@ export default function Organizations() {
   useEffect(() => {
     fetchTreeData()
   }, [fetchTreeData])
+
+  useEffect(() => {
+    const fetchPositions = async () => {
+      try {
+        const res: any = await api.get('/basicdata/positions', { params: { page: 1, page_size: 100, status: '1' } })
+        setPositions(res.data?.items || [])
+      } catch {
+        message.error('加载岗位列表失败')
+      }
+    }
+    fetchPositions()
+  }, [])
 
   // 辅助函数：从树数据中查找指定 key 的组织信息
   const findOrgByKey = (nodes: OrganizationTreeNode[], key: string): OrganizationTreeNode | null => {
@@ -327,7 +360,13 @@ export default function Organizations() {
   const employeeColumns = [
     { title: '员工工号', dataIndex: 'emp_code', key: 'emp_code', width: 120 },
     { title: '员工姓名', dataIndex: 'emp_name', key: 'emp_name', width: 120 },
-    { title: '岗位', dataIndex: 'position', key: 'position', width: 120 },
+    {
+      title: '岗位',
+      dataIndex: 'position_name',
+      key: 'position_name',
+      width: 140,
+      render: (_: any, record: Employee) => record.position_name || record.position || '-',
+    },
     { title: '手机号', dataIndex: 'phone', key: 'phone', width: 130 },
     { title: '邮箱', dataIndex: 'email', key: 'email' },
     { 
@@ -335,9 +374,10 @@ export default function Organizations() {
       dataIndex: 'status', 
       key: 'status', 
       width: 80,
-      render: (status: number) => (
-        <Tag color={status === 1 ? 'green' : 'red'}>{status === 1 ? '在职' : '离职'}</Tag>
-      ),
+      render: (status: number) => {
+        const meta = getEmployeeStatusMeta(status)
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      },
     },
     {
       title: '操作',
@@ -432,7 +472,7 @@ export default function Organizations() {
         onCancel={() => setEmpModalVisible(false)}
         width={600}
       >
-        <EmployeeForm form={empForm} orgId={selectedOrg?.id || undefined} />
+        <EmployeeForm form={empForm} orgId={selectedOrg?.id || undefined} positions={positions} />
       </Modal>
     </div>
   )

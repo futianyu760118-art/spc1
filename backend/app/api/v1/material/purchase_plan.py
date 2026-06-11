@@ -12,6 +12,7 @@ from typing import Optional, List
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
+from app.core.supplier_scope import get_supplier_name_scope
 from app.models.material.purchase_order import PurchaseOrder
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.material.schemas import PurchaseOrderOut, PurchaseOrderCreate, PurchaseOrderUpdate, PurchaseOrderBatchUpdate, PurchasePlanStats
@@ -278,8 +279,9 @@ async def list_purchase_plan(
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "read")),
     db: AsyncSession = Depends(get_db),
 ):
+    supplier_scope = await get_supplier_name_scope(current_user, db)
     base = _build_filters(
-        supplier_name, supplier_account, order_no, po_status, keyword,
+        None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
         material_property=material_property, spec_model=spec_model, unit=unit, owner=owner,
         arrival_hour_note=arrival_hour_note,
@@ -291,6 +293,8 @@ async def list_purchase_plan(
         received_qty_min=received_qty_min, received_qty_max=received_qty_max,
         only_shortage=only_shortage,
     )
+    if supplier_scope:
+        base.append(PurchaseOrder.supplier_name == supplier_scope)
 
     total_result = await db.execute(select(func.count(PurchaseOrder.id)).where(*base))
     total = total_result.scalar()
@@ -494,8 +498,9 @@ async def export_purchase_plan(
     db: AsyncSession = Depends(get_db),
 ):
     """导出采购到料计划（支持筛选 + 排序，不分页）"""
+    supplier_scope = await get_supplier_name_scope(current_user, db)
     base = _build_filters(
-        supplier_name, supplier_account, order_no, po_status, keyword,
+        None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
         spec_model=spec_model, unit=unit, owner=owner,
         arrival_hour_note=arrival_hour_note,
@@ -507,6 +512,8 @@ async def export_purchase_plan(
         received_qty_min=received_qty_min, received_qty_max=received_qty_max,
         only_shortage=only_shortage,
     )
+    if supplier_scope:
+        base.append(PurchaseOrder.supplier_name == supplier_scope)
     order_clauses = _build_order_clauses(sort_by, sort_order)
 
     query = select(PurchaseOrder).where(*base).order_by(*order_clauses)
@@ -585,8 +592,9 @@ async def get_purchase_plan_stats(
 ):
     """获取采购计划统计（支持筛选）"""
     today = date_type.today()
+    supplier_scope = await get_supplier_name_scope(current_user, db)
     base = _build_filters(
-        supplier_name, supplier_account, order_no, po_status, keyword,
+        None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
         spec_model=spec_model, unit=unit, owner=owner,
         arrival_hour_note=arrival_hour_note,
@@ -598,6 +606,8 @@ async def get_purchase_plan_stats(
         received_qty_min=received_qty_min, received_qty_max=received_qty_max,
         only_shortage=only_shortage,
     )
+    if supplier_scope:
+        base.append(PurchaseOrder.supplier_name == supplier_scope)
 
     # 总数
     total_result = await db.execute(select(func.count(PurchaseOrder.id)).where(*base))

@@ -69,6 +69,7 @@ const SYNC_TYPE_LABELS: Record<string, string> = {
   warehouses: '仓库',
   processes: '工序',
   organizations: '组织',
+  positions: '岗位',
   employees: '人员',
   purchase_invoices: '采购开票',
   quality_issues: '品质异常',

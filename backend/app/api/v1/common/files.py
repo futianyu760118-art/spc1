@@ -33,6 +33,15 @@ async def upload_file(
     db: AsyncSession = Depends(get_db),
 ):
     """任意登录用户均可上传。受 mime 白名单 + 大小限制约束。"""
+    if namespace == "feedback":
+        perms = current_user.get("permissions") or {}
+        if (
+            current_user.get("role") != "admin"
+            and "read" not in (perms.get("topbar.feedback") or [])
+            and "read" not in (perms.get("topbar") or [])
+        ):
+            raise HTTPException(status_code=403, detail="缺少 topbar.feedback.read 权限")
+
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="文件为空")

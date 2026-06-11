@@ -11,8 +11,12 @@ from app.core.database import get_db
 from app.core.security import PermissionChecker, get_password_hash
 from app.core.audit import log_audit
 from app.core.permissions import merge_role_permission_additions
+from app.models.basicdata.employee import Employee
+from app.models.basicdata.position import Position
+from app.models.basicdata.supplier import Supplier
 from app.models.basicdata.user import SysUser, SysRole
 from app.schemas.common import ResponseModel
+from app.services.basicdata.position_role_service import resolve_employee_role_by_code
 from app.services.common.export_service import ExportColumn, GenericExportService
 
 router = APIRouter()
@@ -20,8 +24,12 @@ router = APIRouter()
 USER_EXPORT_COLUMNS = [
     ExportColumn("username", "用户名", 18),
     ExportColumn("display_name", "显示名称", 18),
+    ExportColumn("emp_code", "员工工号", 16),
+    ExportColumn("emp_name", "员工姓名", 16),
+    ExportColumn("position_name", "岗位", 18),
     ExportColumn("role_code", "角色编码", 16),
     ExportColumn("role_name", "角色名称", 18),
+    ExportColumn("supplier_name", "绑定供应商", 24),
     ExportColumn("is_active", "状态", 10),
     ExportColumn("last_login_time", "最后登录", 18),
     ExportColumn("created_at", "创建时间", 18),
@@ -34,13 +42,17 @@ class UserCreate(BaseModel):
     username: str
     display_name: Optional[str] = None
     password: str
-    role_id: int
+    role_id: Optional[int] = None
+    emp_code: Optional[str] = None
+    supplier_name: Optional[str] = None
     is_active: bool = True
 
 
 class UserUpdate(BaseModel):
     display_name: Optional[str] = None
     role_id: Optional[int] = None
+    emp_code: Optional[str] = None
+    supplier_name: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -65,6 +77,53 @@ class BatchGrantBody(BaseModel):
     mode: str = "grant"                  # grant=并集追加; revoke=移除指定 actions; replace=用本次 actions 覆盖这些 key
 
 
+async def _resolve_role(role_id: int, db: AsyncSession) -> SysRole:
+    result = await db.execute(select(SysRole).where(SysRole.id == role_id))
+    role = result.scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=400, detail="角色不存在")
+    return role
+
+
+async def _resolve_user_role(
+    role_id: Optional[int],
+    emp_code: Optional[str],
+    db: AsyncSession,
+) -> tuple[SysRole, Optional[Employee], Optional[Position]]:
+    clean_emp_code = (emp_code or "").strip()
+    if clean_emp_code:
+        employee, position, role = await resolve_employee_role_by_code(db, clean_emp_code)
+        if not employee:
+            raise HTTPException(status_code=400, detail="关联员工不存在")
+        if role:
+            return role, employee, position
+
+    if role_id is None:
+        raise HTTPException(status_code=400, detail="请选择角色或关联有岗位的员工")
+
+    return await _resolve_role(role_id, db), employee if clean_emp_code else None, position if clean_emp_code else None
+
+
+async def _validate_supplier_binding(role: SysRole, supplier_name: Optional[str], db: AsyncSession) -> Optional[str]:
+    if role.role_code != "supplier":
+        return None
+
+    name = supplier_name or ""
+    if not name:
+        raise HTTPException(status_code=400, detail="供应商账号必须绑定供应商")
+
+    result = await db.execute(
+        select(Supplier).where(
+            Supplier.supplier_name == name,
+            Supplier.status == 1,
+        )
+    )
+    supplier = result.scalar_one_or_none()
+    if not supplier:
+        raise HTTPException(status_code=400, detail="绑定供应商不存在或已停用")
+    return supplier.supplier_name
+
+
 # ---------- 用户列表 ----------
 @router.get("", response_model=ResponseModel[list])
 async def list_users(
@@ -79,6 +138,7 @@ async def list_users(
     SORTABLE = {
         'username': SysUser.username,
         'display_name': SysUser.display_name,
+        'emp_code': SysUser.emp_code,
         'role_code': SysRole.role_code,
         'is_active': SysUser.is_active,
         'last_login_time': SysUser.last_login_time,
@@ -86,8 +146,10 @@ async def list_users(
     }
 
     query = (
-        select(SysUser, SysRole)
+        select(SysUser, SysRole, Employee, Position)
         .join(SysRole, SysUser.role_id == SysRole.id)
+        .outerjoin(Employee, SysUser.emp_code == Employee.emp_code)
+        .outerjoin(Position, Employee.position_id == Position.id)
     )
 
     if role_code:
@@ -99,7 +161,10 @@ async def list_users(
     if keyword:
         like = f"%{keyword}%"
         query = query.where(
-            (SysUser.username.ilike(like)) | (SysUser.display_name.ilike(like))
+            (SysUser.username.ilike(like))
+            | (SysUser.display_name.ilike(like))
+            | (SysUser.emp_code.ilike(like))
+            | (Employee.emp_name.ilike(like))
         )
 
     # 排序
@@ -120,15 +185,20 @@ async def list_users(
             "id": user.id,
             "username": user.username,
             "display_name": user.display_name,
+            "emp_code": user.emp_code,
+            "emp_name": employee.emp_name if employee else None,
+            "position_id": employee.position_id if employee else None,
+            "position_name": position.position_name if position else (employee.position if employee else None),
             "role_id": user.role_id,
             "role_code": role.role_code,
             "role_name": role.role_name,
+            "supplier_name": user.supplier_name,
             "is_active": user.is_active,
             "last_login_time": user.last_login_time.strftime("%Y-%m-%d %H:%M") if user.last_login_time else None,
             "created_at": user.created_at.strftime("%Y-%m-%d %H:%M") if user.created_at else None,
             "updated_at": user.updated_at.strftime("%Y-%m-%d %H:%M") if user.updated_at else None,
         }
-        for user, role in rows
+        for user, role, employee, position in rows
     ])
 
 
@@ -147,6 +217,7 @@ async def export_users(
     SORTABLE = {
         'username': SysUser.username,
         'display_name': SysUser.display_name,
+        'emp_code': SysUser.emp_code,
         'role_code': SysRole.role_code,
         'is_active': SysUser.is_active,
         'last_login_time': SysUser.last_login_time,
@@ -154,8 +225,10 @@ async def export_users(
     }
 
     query = (
-        select(SysUser, SysRole)
+        select(SysUser, SysRole, Employee, Position)
         .join(SysRole, SysUser.role_id == SysRole.id)
+        .outerjoin(Employee, SysUser.emp_code == Employee.emp_code)
+        .outerjoin(Position, Employee.position_id == Position.id)
     )
 
     if role_code:
@@ -167,7 +240,10 @@ async def export_users(
     if keyword:
         like = f"%{keyword}%"
         query = query.where(
-            (SysUser.username.ilike(like)) | (SysUser.display_name.ilike(like))
+            (SysUser.username.ilike(like))
+            | (SysUser.display_name.ilike(like))
+            | (SysUser.emp_code.ilike(like))
+            | (Employee.emp_name.ilike(like))
         )
 
     order_clauses = []
@@ -193,12 +269,16 @@ async def export_users(
         raise HTTPException(status_code=400, detail=f"无效导出字段: {', '.join(invalid_columns)}")
 
     export_rows = []
-    for user, role in rows:
+    for user, role, employee, position in rows:
         export_rows.append({
             "username": user.username,
             "display_name": user.display_name or "",
+            "emp_code": user.emp_code or "",
+            "emp_name": employee.emp_name if employee else "",
+            "position_name": position.position_name if position else (employee.position if employee else ""),
             "role_code": role.role_code,
             "role_name": role.role_name,
+            "supplier_name": user.supplier_name or "",
             "is_active": "启用" if user.is_active else "停用",
             "last_login_time": user.last_login_time.strftime("%Y-%m-%d %H:%M") if user.last_login_time else "",
             "created_at": user.created_at.strftime("%Y-%m-%d %H:%M") if user.created_at else "",
@@ -238,6 +318,45 @@ async def list_roles(
             "permissions": merge_role_permission_additions(r.role_code, r.permissions),
         }
         for r in roles
+    ])
+
+
+@router.get("/employee-options", response_model=ResponseModel[list])
+async def list_employee_options(
+    keyword: Optional[str] = Query(None),
+    current_user: dict = Depends(PermissionChecker("users", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    query = (
+        select(Employee, Position, SysRole)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(SysRole, Position.role_id == SysRole.id)
+    )
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.where(
+            or_(
+                Employee.emp_code.ilike(like),
+                Employee.emp_name.ilike(like),
+                Employee.login_id.ilike(like),
+                Position.position_name.ilike(like),
+            )
+        )
+
+    result = await db.execute(query.order_by(Employee.emp_code.asc()).limit(200))
+    return ResponseModel(data=[
+        {
+            "emp_code": employee.emp_code,
+            "emp_name": employee.emp_name,
+            "login_id": employee.login_id,
+            "position_id": employee.position_id,
+            "position_name": position.position_name if position else employee.position,
+            "role_id": role.id if role else None,
+            "role_code": role.role_code if role else None,
+            "role_name": role.role_name if role else None,
+            "status": employee.status,
+        }
+        for employee, position, role in result.all()
     ])
 
 
@@ -371,15 +490,16 @@ async def create_user(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail=f"用户名 '{body.username}' 已存在")
 
-    role = await db.execute(select(SysRole).where(SysRole.id == body.role_id))
-    if not role.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="角色不存在")
+    role, employee, _ = await _resolve_user_role(body.role_id, body.emp_code, db)
+    supplier_name = await _validate_supplier_binding(role, body.supplier_name, db)
 
     user = SysUser(
         username=body.username,
-        display_name=body.display_name,
+        display_name=body.display_name or (employee.emp_name if employee else None),
         hashed_password=get_password_hash(body.password),
-        role_id=body.role_id,
+        role_id=role.id,
+        supplier_name=supplier_name,
+        emp_code=employee.emp_code if employee else None,
         is_active=body.is_active,
     )
     db.add(user)
@@ -405,11 +525,20 @@ async def update_user(
 
     if body.display_name is not None:
         user.display_name = body.display_name
-    if body.role_id is not None:
-        role = await db.execute(select(SysRole).where(SysRole.id == body.role_id))
-        if not role.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="角色不存在")
-        user.role_id = body.role_id
+    if body.role_id is not None or body.emp_code is not None:
+        role, employee, _ = await _resolve_user_role(
+            body.role_id if body.role_id is not None else user.role_id,
+            body.emp_code if body.emp_code is not None else user.emp_code,
+            db,
+        )
+        user.supplier_name = await _validate_supplier_binding(role, body.supplier_name, db)
+        user.role_id = role.id
+        user.emp_code = employee.emp_code if employee else None
+        if employee and body.display_name is None:
+            user.display_name = employee.emp_name
+    elif body.supplier_name is not None:
+        role = await _resolve_role(user.role_id, db)
+        user.supplier_name = await _validate_supplier_binding(role, body.supplier_name, db)
     if body.is_active is not None:
         user.is_active = body.is_active
 

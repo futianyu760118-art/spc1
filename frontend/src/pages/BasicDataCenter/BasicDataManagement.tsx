@@ -7,6 +7,11 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import api from '../../services/api'
+import {
+  EMPLOYEE_STATUS_FILTERS,
+  EMPLOYEE_STATUS_OPTIONS,
+  getEmployeeStatusMeta,
+} from '../../constants/employeeStatus'
 
 // 基础数据类型定义
 interface Customer {
@@ -580,8 +585,9 @@ const EmployeeForm = ({ form }: { form: any }) => (
     </Form.Item>
     <Form.Item name="status" label="状态" initialValue={1}>
       <Select>
-        <Select.Option value={1}>在职</Select.Option>
-        <Select.Option value={0}>离职</Select.Option>
+        {EMPLOYEE_STATUS_OPTIONS.map(option => (
+          <Select.Option key={option.value} value={option.value}>{option.label}</Select.Option>
+        ))}
       </Select>
     </Form.Item>
   </Form>
@@ -715,10 +721,11 @@ export default function BasicDataManagement() {
       dataIndex: 'status',
       key: 'status',
       sorter: true,
-      filters: [{ text: '在职', value: '1' }, { text: '离职', value: '0' }],
-      render: (status: number) => (
-        <Tag color={status === 1 ? 'green' : 'red'}>{status === 1 ? '在职' : '离职'}</Tag>
-      ),
+      filters: EMPLOYEE_STATUS_FILTERS,
+      render: (status: number) => {
+        const meta = getEmployeeStatusMeta(status)
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      },
     },
   ]
 

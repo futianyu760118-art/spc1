@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker
+from app.core.supplier_scope import get_supplier_name_scope
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.material.schemas import SupplierPaymentOut, SupplierPaymentSummary
 from app.services.material.supplier_payment_service import (
@@ -33,10 +34,12 @@ async def list_supplier_payments(
     current_user: dict = Depends(PermissionChecker("materials.supplier_payment", "read")),
     db: AsyncSession = Depends(get_db),
 ):
+    supplier_scope = await get_supplier_name_scope(current_user, db)
     items, total = await get_supplier_payment_list(
         db,
         schedule_month=schedule_month,
-        supplier_name=supplier_name,
+        supplier_name=supplier_scope or supplier_name,
+        exact_supplier_name=bool(supplier_scope),
         payment_month=payment_month,
         invoice_date_start=invoice_date_start,
         invoice_date_end=invoice_date_end,
@@ -60,8 +63,9 @@ async def supplier_payment_summary(
     current_user: dict = Depends(PermissionChecker("materials.supplier_payment", "read")),
     db: AsyncSession = Depends(get_db),
 ):
+    supplier_scope = await get_supplier_name_scope(current_user, db)
     summary = await get_supplier_payment_summary(
-        db, schedule_month=schedule_month, supplier_name=supplier_name, payment_month=payment_month,
+        db, schedule_month=schedule_month, supplier_name=supplier_scope or supplier_name, exact_supplier_name=bool(supplier_scope), payment_month=payment_month,
         invoice_date_start=invoice_date_start, invoice_date_end=invoice_date_end
     )
     return ResponseModel(data=summary)
@@ -81,11 +85,13 @@ async def export_supplier_payment(
     db: AsyncSession = Depends(get_db),
 ):
     """导出供应商付款排程（支持筛选 + 排序，不分页）"""
+    supplier_scope = await get_supplier_name_scope(current_user, db)
     output, media_type, filename = await get_supplier_payment_export(
         db,
         format=format,
         schedule_month=schedule_month,
-        supplier_name=supplier_name,
+        supplier_name=supplier_scope or supplier_name,
+        exact_supplier_name=bool(supplier_scope),
         payment_month=payment_month,
         invoice_date_start=invoice_date_start,
         invoice_date_end=invoice_date_end,

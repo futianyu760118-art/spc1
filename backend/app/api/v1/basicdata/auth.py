@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,10 +14,13 @@ from app.core.audit import log_audit
 from app.core.permissions import merge_role_permission_additions
 from app.core.token_blacklist import add_token_to_blacklist
 from app.models.basicdata.user import SysUser, SysRole
+from app.models.basicdata.supplier import Supplier
 from app.schemas.basicdata.schemas import TokenResponse, UserInfo
 from app.schemas.common import ResponseModel
 
 router = APIRouter()
+
+VALID_LOGIN_TYPES = {"employee", "supplier"}
 
 
 class ChangePasswordRequest(BaseModel):
@@ -30,7 +33,15 @@ class UpdatePreferencesRequest(BaseModel):
 
 
 @router.post("/login", response_model=ResponseModel[TokenResponse])
-async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+async def login(
+    form: OAuth2PasswordRequestForm = Depends(),
+    login_type: str = Form("employee"),
+    db: AsyncSession = Depends(get_db),
+):
+    login_type = (login_type or "employee").strip().lower()
+    if login_type not in VALID_LOGIN_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="登录类型不正确")
+
     result = await db.execute(
         select(SysUser).where(SysUser.username == form.username, SysUser.is_active == True)
     )
@@ -43,6 +54,27 @@ async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = 
     if not role:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="用户角色配置异常，请联系管理员")
 
+    is_supplier_account = role.role_code == "supplier"
+    if login_type == "supplier" and not is_supplier_account:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号不是供应商账号，请选择内部员工登录")
+    if login_type == "employee" and is_supplier_account:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="当前账号为供应商账号，请选择供应商登录")
+
+    supplier_code = None
+    if is_supplier_account:
+        if not user.supplier_name:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="供应商账号未绑定供应商")
+        supplier_result = await db.execute(
+            select(Supplier).where(
+                Supplier.supplier_name == user.supplier_name,
+                Supplier.status == 1,
+            )
+        )
+        supplier = supplier_result.scalar_one_or_none()
+        if not supplier:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="绑定供应商不存在或已停用")
+        supplier_code = supplier.supplier_code
+
     old_token_jti = user.last_token_jti
 
     user.login_version = (user.login_version or 0) + 1
@@ -51,15 +83,21 @@ async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = 
 
     permissions = merge_role_permission_additions(role.role_code, role.permissions)
 
+    token_payload = {
+        "sub": str(user.id),
+        "username": user.username,
+        "role": role.role_code,
+        "permissions": permissions,
+        "login_type": login_type,
+        "supplier_name": user.supplier_name if is_supplier_account else None,
+        "login_version": user.login_version,
+        "jti": new_jti,
+    }
+    if supplier_code:
+        token_payload["supplier_code"] = supplier_code
+
     token = create_access_token(
-        data={
-            "sub": str(user.id),
-            "username": user.username,
-            "role": role.role_code,
-            "permissions": permissions,
-            "login_version": user.login_version,
-            "jti": new_jti,
-        }
+        data=token_payload
     )
 
     user.last_token_jti = new_jti
@@ -82,6 +120,15 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
     if not row:
         raise HTTPException(status_code=404, detail="用户不存在")
     user, role = row
+    supplier_code = None
+    if role.role_code == "supplier" and user.supplier_name:
+        supplier_result = await db.execute(
+            select(Supplier.supplier_code).where(
+                Supplier.supplier_name == user.supplier_name,
+                Supplier.status == 1,
+            )
+        )
+        supplier_code = supplier_result.scalar_one_or_none()
     return ResponseModel(data=UserInfo(
         id=user.id,
         username=user.username,
@@ -89,6 +136,8 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
         role_code=role.role_code,
         role_name=role.role_name,
         permissions=merge_role_permission_additions(role.role_code, role.permissions),
+        supplier_name=user.supplier_name,
+        supplier_code=supplier_code,
         font_size_scale=user.font_size_scale,
     ))
 

@@ -10,6 +10,7 @@ import 'dayjs/locale/zh-cn'
 import zhCN from 'antd/locale/zh_CN'
 import { materialApi } from '../../../services/api'
 import { useExport } from '../../../hooks/useExport'
+import { useAuthStore } from '../../../store/auth'
 
 dayjs.locale('zh-cn')
 
@@ -48,6 +49,8 @@ const fmt = (v: number | null) => {
 }
 
 export default function SupplierPayment() {
+  const isSupplierUser = useAuthStore((s) => s.isSupplierUser)
+  const supplierReadOnly = isSupplierUser()
   const [data, setData] = useState<SupplierPaymentRow[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(false)
@@ -177,7 +180,7 @@ export default function SupplierPayment() {
       {/* 筛选栏 */}
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
         <Row gutter={12} align="middle">
-          <Col>
+          {!supplierReadOnly && <Col>
             <Input
               prefix={<SearchOutlined />}
               placeholder="搜索供应商"
@@ -186,7 +189,7 @@ export default function SupplierPayment() {
               style={{ width: 200 }}
               allowClear
             />
-          </Col>
+          </Col>}
           {/* <Col>
             <DatePicker.RangePicker
               placeholder={['到票开始日期', '到票结束日期']}

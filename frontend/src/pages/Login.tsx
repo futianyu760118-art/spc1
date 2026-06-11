@@ -1,28 +1,88 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Form, Input, Button, message } from 'antd'
-import { UserOutlined, LockOutlined } from '@ant-design/icons'
+import { UserOutlined, LockOutlined, ShopOutlined, TeamOutlined } from '@ant-design/icons'
 import { authApi } from '../services/api'
 import { useAuthStore } from '../store/auth'
+import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
+
+type LoginType = 'employee' | 'supplier'
+
+interface LoginFormValues {
+  loginType: LoginType
+  username: string
+  password: string
+}
+
+const PATH_TO_PERMISSION: Record<string, string> = {
+  '/purchase-plan': 'materials.purchase_plan',
+  '/long-lead-materials': 'materials.long_lead',
+  '/supplier-risk': 'materials.supplier_risk',
+  '/supplier-payment': 'materials.supplier_payment',
+}
+
+const LOGIN_TYPE_OPTIONS: Array<{
+  label: string
+  description: string
+  value: LoginType
+  icon: ReactNode
+}> = [
+  {
+    label: '内部员工',
+    description: '企业账号',
+    value: 'employee',
+    icon: <TeamOutlined />,
+  },
+  {
+    label: '供应商',
+    description: '协作账号',
+    value: 'supplier',
+    icon: <ShopOutlined />,
+  },
+]
 
 export default function Login() {
+  const [form] = Form.useForm<LoginFormValues>()
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const setAuth = useAuthStore((s) => s.setAuth)
 
-  const onFinish = async (values: { username: string; password: string }) => {
+  const onFinish = async (values: LoginFormValues) => {
     setLoading(true)
     try {
-      const res: any = await authApi.login(values.username, values.password)
+      const res: any = await authApi.login(values.username, values.password, values.loginType)
       const token = res.data.access_token
 
       useAuthStore.getState().setAuth(token, null)
       const meRes: any = await authApi.getMe()
-      setAuth(token, meRes.data)
+      const user = meRes.data
+      const isSupplierAccount = user?.role_code === 'supplier'
+      if (values.loginType === 'supplier' && !isSupplierAccount) {
+        useAuthStore.getState().logout()
+        message.warning('当前为内部员工账号，请切换到内部员工登录')
+        return
+      }
+      if (values.loginType === 'employee' && isSupplierAccount) {
+        useAuthStore.getState().logout()
+        message.warning('当前为供应商账号，请切换到供应商登录')
+        return
+      }
+
+      setAuth(token, user)
       message.success('登录成功')
-      navigate('/dashboard')
-    } catch {
-      message.error('登录失败，请检查用户名和密码')
+      if (isSupplierAccount) {
+        const firstAllowedPath = SUPPLIER_PORTAL_PATHS.find(path => {
+          const permission = PATH_TO_PERMISSION[path]
+          return permission && useAuthStore.getState().hasPermission(permission, 'read')
+        })
+        navigate(firstAllowedPath || '/purchase-plan')
+      } else {
+        navigate('/dashboard')
+      }
+    } catch (error: any) {
+      if (!error?.response) {
+        message.error(error?.message || '登录失败，请检查用户名和密码')
+      }
     } finally {
       setLoading(false)
     }
@@ -46,7 +106,47 @@ export default function Login() {
           </p>
         </div>
 
-        <Form onFinish={onFinish} autoComplete="off" size="large">
+        <Form form={form} onFinish={onFinish} autoComplete="off" size="large" initialValues={{ loginType: 'employee' }}>
+          <Form.Item name="loginType" hidden>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            className="login-role-field"
+            shouldUpdate={(prev, current) => prev.loginType !== current.loginType}
+          >
+            {({ getFieldValue, setFieldsValue }) => {
+              const currentLoginType = (getFieldValue('loginType') || 'employee') as LoginType
+
+              return (
+                <div className="login-role-switch" role="radiogroup" aria-label="登录身份">
+                  <span
+                    className={`login-role-indicator${currentLoginType === 'supplier' ? ' is-supplier' : ''}`}
+                    aria-hidden="true"
+                  />
+                  {LOGIN_TYPE_OPTIONS.map((option) => {
+                    const isActive = currentLoginType === option.value
+
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`login-role-option${isActive ? ' is-active' : ''}`}
+                        role="radio"
+                        aria-checked={isActive}
+                        onClick={() => setFieldsValue({ loginType: option.value })}
+                      >
+                        <span className="login-role-icon">{option.icon}</span>
+                        <span className="login-role-text">
+                          <span className="login-role-label">{option.label}</span>
+                          <span className="login-role-desc">{option.description}</span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            }}
+          </Form.Item>
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
             <Input
               prefix={<UserOutlined style={{ color: '#a5b4fc' }} />}

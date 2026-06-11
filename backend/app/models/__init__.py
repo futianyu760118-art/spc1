@@ -37,6 +37,7 @@ from app.models.basicdata.audit_log import AuditLog
 from app.models.basicdata.field_mapping import FieldMapping
 from app.models.basicdata.sync_sql_config import SyncSqlConfig  # noqa: F401
 from app.models.basicdata.sync_log import SyncLog  # noqa: F401
+from app.models.basicdata.position import Position  # noqa: F401
 from app.models.basicdata.file_asset import FileAsset  # noqa: F401
 from app.models.basicdata.feedback import Feedback  # noqa: F401
 from app.models.basicdata.announcement import Announcement, Notification  # noqa: F401
@@ -78,6 +79,7 @@ __all__ = [
     "FieldMapping",
     "SyncSqlConfig",
     "SyncLog",
+    "Position",
     "FileAsset",
     "Feedback",
     "Announcement",

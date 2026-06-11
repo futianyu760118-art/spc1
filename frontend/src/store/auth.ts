@@ -8,6 +8,8 @@ interface UserInfo {
   role_code: string
   role_name: string
   permissions: Record<string, string[]> | null
+  supplier_name?: string | null
+  supplier_code?: string | null
   font_size_scale?: string | null
 }
 
@@ -40,6 +42,7 @@ interface AuthState {
   logout: () => void
   hasPermission: (resource: string, action: string) => boolean
   isAdmin: () => boolean
+  isSupplierUser: () => boolean
   isShareUser: () => boolean
   getShareTargetPath: () => string | undefined
 }
@@ -249,6 +252,11 @@ export const useAuthStore = create<AuthState>((set, get) => {
     isAdmin: () => {
       const { currentUser } = get()
       return !!(currentUser && 'role_code' in currentUser && currentUser.role_code === 'admin')
+    },
+
+    isSupplierUser: () => {
+      const { currentUser } = get()
+      return !!(currentUser && 'role_code' in currentUser && currentUser.role_code === 'supplier')
     },
     
     isShareUser: () => {

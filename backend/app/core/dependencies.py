@@ -7,6 +7,7 @@ from app.core.security import oauth2_scheme, decode_access_token
 from app.core.token_blacklist import is_token_blacklisted
 from app.core.permissions import merge_role_permission_additions
 from app.models.basicdata.user import SysUser, SysRole
+from app.models.basicdata.supplier import Supplier
 
 
 async def get_current_user(
@@ -33,6 +34,7 @@ async def get_current_user(
     user_id = payload.get("sub")
     username = payload.get("username")
     role = payload.get("role")
+    supplier_code = payload.get("supplier_code")
     token_login_version = payload.get("login_version", 0)
     token_jti = payload.get("jti")
 
@@ -80,7 +82,22 @@ async def get_current_user(
     if not isinstance(permissions, dict):
         permissions = {}
     permissions = merge_role_permission_additions(role_code, permissions)
-    return {"user_id": int(user_id), "username": username, "role": role, "permissions": permissions}
+    if role_code == "supplier" and user.supplier_name and not supplier_code:
+        supplier_result = await db.execute(
+            select(Supplier.supplier_code).where(
+                Supplier.supplier_name == user.supplier_name,
+                Supplier.status == 1,
+            )
+        )
+        supplier_code = supplier_result.scalar_one_or_none()
+    return {
+        "user_id": int(user_id),
+        "username": username,
+        "role": role_code,
+        "permissions": permissions,
+        "supplier_name": user.supplier_name,
+        "supplier_code": supplier_code,
+    }
 
 
 async def get_current_user_or_share(
@@ -109,6 +126,7 @@ async def get_current_user_or_share(
     user_id = payload.get("sub")
     username = payload.get("username")
     role = payload.get("role")
+    supplier_code = payload.get("supplier_code")
     token_login_version = payload.get("login_version", 0)
     token_jti = payload.get("jti")
 
@@ -156,4 +174,19 @@ async def get_current_user_or_share(
     if not isinstance(permissions, dict):
         permissions = {}
     permissions = merge_role_permission_additions(role_code, permissions)
-    return {"user_id": int(user_id), "username": username, "role": role, "permissions": permissions}
+    if role_code == "supplier" and user.supplier_name and not supplier_code:
+        supplier_result = await db.execute(
+            select(Supplier.supplier_code).where(
+                Supplier.supplier_name == user.supplier_name,
+                Supplier.status == 1,
+            )
+        )
+        supplier_code = supplier_result.scalar_one_or_none()
+    return {
+        "user_id": int(user_id),
+        "username": username,
+        "role": role_code,
+        "permissions": permissions,
+        "supplier_name": user.supplier_name,
+        "supplier_code": supplier_code,
+    }

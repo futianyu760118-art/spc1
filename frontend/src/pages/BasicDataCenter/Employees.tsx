@@ -7,20 +7,30 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import api from '../../services/api'
+import { EMPLOYEE_STATUS_OPTIONS, getEmployeeStatusMeta } from '../../constants/employeeStatus'
 
 interface Employee {
   id: number
   emp_code: string
   emp_name: string
   org_id: number
+  position_id?: number
   position?: string
+  position_name?: string
   phone?: string
   email?: string
   status: number
   create_time: string
 }
 
-const EmployeeForm = ({ form }: { form: any }) => (
+interface Position {
+  id: number
+  position_code: string
+  position_name: string
+  status: number
+}
+
+const EmployeeForm = ({ form, positions }: { form: any, positions: Position[] }) => (
   <Form form={form} layout="vertical">
     <Form.Item name="emp_code" label="员工工号" rules={[{ required: true }]}>
       <Input placeholder="请输入员工工号" />
@@ -31,8 +41,17 @@ const EmployeeForm = ({ form }: { form: any }) => (
     <Form.Item name="org_id" label="所属组织ID" rules={[{ required: true }]}>
       <InputNumber style={{ width: '100%' }} placeholder="请输入所属组织ID" />
     </Form.Item>
-    <Form.Item name="position" label="岗位名称">
-      <Input placeholder="请输入岗位名称" />
+    <Form.Item name="position_id" label="岗位">
+      <Select
+        allowClear
+        showSearch
+        placeholder="请选择岗位"
+        optionFilterProp="label"
+        options={positions.map(position => ({
+          value: position.id,
+          label: `${position.position_name} (${position.position_code})`,
+        }))}
+      />
     </Form.Item>
     <Form.Item name="phone" label="手机号">
       <Input placeholder="请输入手机号" />
@@ -42,8 +61,9 @@ const EmployeeForm = ({ form }: { form: any }) => (
     </Form.Item>
     <Form.Item name="status" label="状态" initialValue={1}>
       <Select>
-        <Select.Option value={1}>在职</Select.Option>
-        <Select.Option value={0}>离职</Select.Option>
+        {EMPLOYEE_STATUS_OPTIONS.map(option => (
+          <Select.Option key={option.value} value={option.value}>{option.label}</Select.Option>
+        ))}
       </Select>
     </Form.Item>
   </Form>
@@ -54,6 +74,7 @@ export default function Employees() {
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [editingItem, setEditingItem] = useState<Employee | null>(null)
+  const [positions, setPositions] = useState<Position[]>([])
   const [form] = Form.useForm()
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
 
@@ -73,6 +94,18 @@ export default function Employees() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  useEffect(() => {
+    const fetchPositions = async () => {
+      try {
+        const res: any = await api.get('/basicdata/positions', { params: { page: 1, page_size: 100, status: '1' } })
+        setPositions(res.data?.items || [])
+      } catch {
+        message.error('加载岗位列表失败')
+      }
+    }
+    fetchPositions()
+  }, [])
 
   const handleAdd = () => {
     setEditingItem(null)
@@ -118,15 +151,21 @@ export default function Employees() {
     { title: '员工工号', dataIndex: 'emp_code', key: 'emp_code' },
     { title: '员工姓名', dataIndex: 'emp_name', key: 'emp_name' },
     { title: '所属组织ID', dataIndex: 'org_id', key: 'org_id' },
-    { title: '岗位', dataIndex: 'position', key: 'position' },
+    {
+      title: '岗位',
+      dataIndex: 'position_name',
+      key: 'position_name',
+      render: (_: any, record: Employee) => record.position_name || record.position || '-',
+    },
     { title: '手机号', dataIndex: 'phone', key: 'phone' },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: number) => (
-        <Tag color={status === 1 ? 'green' : 'red'}>{status === 1 ? '在职' : '离职'}</Tag>
-      ),
+      render: (status: number) => {
+        const meta = getEmployeeStatusMeta(status)
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      },
     },
     {
       title: '操作',
@@ -181,7 +220,7 @@ export default function Employees() {
         onCancel={() => setModalVisible(false)}
         width={600}
       >
-        <EmployeeForm form={form} />
+        <EmployeeForm form={form} positions={positions} />
       </Modal>
     </div>
   )

@@ -18,11 +18,17 @@ from app.schemas.basicdata.schemas import (
     WarehouseCreate, WarehouseUpdate, WarehouseOut,
     ProcessCreate, ProcessUpdate, ProcessOut,
     OrganizationCreate, OrganizationUpdate, OrganizationOut, OrganizationTreeNode, OrganizationWithLeaderOut,
+    PositionOut,
     EmployeeCreate, EmployeeUpdate, EmployeeOut,
 )
 from app.models.basicdata import (
     Customer, Supplier, Material, SKU, Product,
-    Warehouse, Process, Organization, Employee,
+    Warehouse, Process, Organization, Employee, Position,
+)
+from app.models.basicdata.user import SysRole
+from app.services.basicdata.position_role_service import (
+    ensure_position_role,
+    sync_user_role_from_employee,
 )
 router = APIRouter()
 
@@ -39,6 +45,21 @@ def _apply_sort(query, model, sort_by: Optional[str], sort_order: Optional[str],
     if not order_clauses:
         order_clauses = [model.id.desc()]
     return query.order_by(*order_clauses)
+
+
+def _employee_out(employee: Employee, position_name: Optional[str] = None) -> EmployeeOut:
+    data = EmployeeOut.model_validate(employee)
+    data.position_name = position_name or employee.position
+    return data
+
+
+def _position_out(position: Position, role: Optional[SysRole] = None) -> PositionOut:
+    data = PositionOut.model_validate(position)
+    if role:
+        data.role_id = role.id
+        data.role_code = role.role_code
+        data.role_name = role.role_name
+    return data
 
 
 
@@ -928,6 +949,84 @@ async def delete_organization(org_id: int, db: AsyncSession = Depends(get_db), c
 
 
 # ── Employee ──
+@router.get("/positions", response_model=ResponseModel[dict])
+async def list_positions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="Search code/name"),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, description="Comma separated statuses"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data", "read")),
+):
+    SORTABLE = {
+        "position_code": Position.position_code,
+        "oa_position_id": Position.oa_position_id,
+        "position_name": Position.position_name,
+        "status": Position.status,
+        "create_time": Position.create_time,
+    }
+    query = select(Position, SysRole).outerjoin(SysRole, Position.role_id == SysRole.id)
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.where(
+            or_(
+                Position.position_code.ilike(like),
+                Position.oa_position_id.ilike(like),
+                Position.position_name.ilike(like),
+            )
+        )
+    if status:
+        statuses = [int(s.strip()) for s in status.split(",") if s.strip().isdigit()]
+        if statuses:
+            query = query.where(Position.status.in_(statuses))
+
+    count_q = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_q)).scalar() or 0
+    query = _apply_sort(query, Position, sort_by, sort_order, SORTABLE)
+    result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
+    items = [_position_out(position, role) for position, role in result.all()]
+    return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.post("/positions/ensure-roles", response_model=ResponseModel[dict])
+async def ensure_position_roles(
+    current_user: dict = Depends(PermissionChecker("users", "create")),
+    db: AsyncSession = Depends(get_db),
+):
+    stats = {"roles_created": 0, "roles_linked": 0}
+
+    result = await db.execute(select(Position).where(Position.role_id.is_(None)))
+    positions = result.scalars().all()
+    for position in positions:
+        _, role_created, linked = await ensure_position_role(db, position)
+        if role_created:
+            stats["roles_created"] += 1
+        if linked:
+            stats["roles_linked"] += 1
+
+    await db.commit()
+    return ResponseModel(data=stats)
+
+
+@router.get("/positions/{position_id}", response_model=PositionOut)
+async def get_position(
+    position_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data", "read")),
+):
+    result = await db.execute(
+        select(Position, SysRole)
+        .outerjoin(SysRole, Position.role_id == SysRole.id)
+        .where(Position.id == position_id)
+    )
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Position not found")
+    return _position_out(row[0], row[1])
+
+
 @router.get("/employees", response_model=ResponseModel[dict])
 async def list_employees(
     page: int = Query(1, ge=1),
@@ -945,11 +1044,13 @@ async def list_employees(
         'emp_code': Employee.emp_code,
         'emp_name': Employee.emp_name,
         'org_id': Employee.org_id,
+        'position_id': Employee.position_id,
         'position': Employee.position,
+        'position_name': Position.position_name,
         'phone': Employee.phone,
         'status': Employee.status,
     }
-    query = select(Employee)
+    query = select(Employee, Position.position_name).outerjoin(Position, Employee.position_id == Position.id)
     if keyword:
         like = f"%{keyword}%"
         query = query.where(or_(Employee.emp_code.ilike(like), Employee.emp_name.ilike(like)))
@@ -964,18 +1065,22 @@ async def list_employees(
     total = (await db.execute(count_q)).scalar() or 0
     query = _apply_sort(query, Employee, sort_by, sort_order, SORTABLE)
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
-    items = [EmployeeOut.model_validate(r) for r in result.scalars().all()]
+    items = [_employee_out(employee, position_name) for employee, position_name in result.all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
 @router.get("/employees/{employee_id}", response_model=EmployeeOut)
 async def get_employee(employee_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
     """查询单个人员"""
-    result = await db.execute(select(Employee).filter(Employee.id == employee_id))
-    item = result.scalar_one_or_none()
-    if not item:
-        raise HTTPException(status_code=404, detail="人员不存在")
-    return item
+    result = await db.execute(
+        select(Employee, Position.position_name)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .filter(Employee.id == employee_id)
+    )
+    row = result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return _employee_out(row[0], row[1])
 
 
 @router.post("/employees", response_model=EmployeeOut)
@@ -986,13 +1091,25 @@ async def create_employee(employee: EmployeeCreate, db: AsyncSession = Depends(g
     if existing:
         raise HTTPException(status_code=400, detail="员工工号已存在")
     
-    db_item = Employee(**employee.model_dump())
+    payload = employee.model_dump()
+    if payload.get("position_id"):
+        position_result = await db.execute(select(Position).where(Position.id == payload["position_id"]))
+        position = position_result.scalar_one_or_none()
+        if not position:
+            raise HTTPException(status_code=400, detail="Position not found")
+        payload["position"] = position.position_name
+    db_item = Employee(**payload)
     db.add(db_item)
     await db.flush()
+    await sync_user_role_from_employee(db, db_item)
     await log_audit(db, "employee", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    position_name = None
+    if db_item.position_id:
+        position_result = await db.execute(select(Position.position_name).where(Position.id == db_item.position_id))
+        position_name = position_result.scalar_one_or_none()
+    return _employee_out(db_item, position_name)
 
 
 @router.put("/employees/{employee_id}", response_model=EmployeeOut)
@@ -1004,12 +1121,23 @@ async def update_employee(employee_id: int, employee: EmployeeUpdate, db: AsyncS
         raise HTTPException(status_code=404, detail="人员不存在")
     
     update_data = employee.model_dump(exclude_unset=True)
+    if update_data.get("position_id"):
+        position_result = await db.execute(select(Position).where(Position.id == update_data["position_id"]))
+        position = position_result.scalar_one_or_none()
+        if not position:
+            raise HTTPException(status_code=400, detail="Position not found")
+        update_data["position"] = position.position_name
     await log_audit(db, "employee", db_item.id, "update", old_obj=db_item, update_data=update_data, operator=current_user["username"])
     for field, value in update_data.items():
         setattr(db_item, field, value)
+    await sync_user_role_from_employee(db, db_item)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    position_name = None
+    if db_item.position_id:
+        position_result = await db.execute(select(Position.position_name).where(Position.id == db_item.position_id))
+        position_name = position_result.scalar_one_or_none()
+    return _employee_out(db_item, position_name)
 
 
 @router.delete("/employees/{employee_id}")
@@ -1038,7 +1166,9 @@ async def get_organization_employees(
     SORTABLE = {
         'emp_code': Employee.emp_code,
         'emp_name': Employee.emp_name,
+        'position_id': Employee.position_id,
         'position': Employee.position,
+        'position_name': Position.position_name,
         'status': Employee.status,
     }
     
@@ -1055,8 +1185,22 @@ async def get_organization_employees(
         return ResponseModel(data={"items": [], "total": 0})
     
     # 员工表 org_id 存的是组织表 oa_org_id；手工组织没有 oa_org_id 时兜底使用内部 id。
-    employee_org_id = int(org.oa_org_id) if org.oa_org_id and str(org.oa_org_id).isdigit() else org.id
-    query = select(Employee).where(Employee.org_id == employee_org_id)
+    employee_org_id = None
+    if org.oa_org_id:
+        try:
+            # 尝试将 oa_org_id 转换为整数
+            employee_org_id = int(org.oa_org_id)
+        except (ValueError, TypeError):
+            # 如果转换失败，使用组织的内部 id
+            employee_org_id = org.id
+    else:
+        employee_org_id = org.id
+        
+    query = (
+        select(Employee, Position.position_name)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .where(Employee.org_id == employee_org_id)
+    )
     if keyword:
         like = f"%{keyword}%"
         query = query.where(or_(Employee.emp_code.ilike(like), Employee.emp_name.ilike(like)))
@@ -1067,5 +1211,5 @@ async def get_organization_employees(
 
     query = _apply_sort(query, Employee, None, None, SORTABLE)
     result = await db.execute(query)
-    items = [EmployeeOut.model_validate(r) for r in result.scalars().all()]
+    items = [_employee_out(employee, position_name) for employee, position_name in result.all()]
     return ResponseModel(data={"items": items, "total": len(items)})

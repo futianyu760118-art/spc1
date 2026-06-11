@@ -36,6 +36,7 @@ async def get_long_lead_pool(
     db: AsyncSession,
     keyword: Optional[str] = None,
     supplier_name: Optional[str] = None,
+    exact_supplier_name: bool = False,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
     page: int = 1,
@@ -90,9 +91,12 @@ async def get_long_lead_pool(
             | PurchaseOrder.supplier_name.ilike(like)
         )
     if supplier_name:
-        agg_query = agg_query.where(
-            PurchaseOrder.supplier_name.ilike(f'%{supplier_name}%')
-        )
+        if exact_supplier_name:
+            agg_query = agg_query.where(PurchaseOrder.supplier_name == supplier_name)
+        else:
+            agg_query = agg_query.where(
+                PurchaseOrder.supplier_name.ilike(f'%{supplier_name}%')
+            )
 
     # 执行聚合查询
     agg_result = await db.execute(agg_query)

@@ -13,7 +13,7 @@ import {
 import { importExportApi, dashboardApi, notificationApi } from '../../../services/api'
 import dayjs from 'dayjs'
 
-type SyncType = 'orders' | 'materials' | 'purchase_orders' | 'customers' | 'suppliers' | 'materials_masterdata' | 'skus' | 'products' | 'warehouses' | 'processes' | 'organizations' | 'employees' | 'purchase_invoices' | 'quality_issues'
+type SyncType = 'orders' | 'order_details' | 'materials' | 'purchase_orders' | 'customers' | 'suppliers' | 'materials_masterdata' | 'skus' | 'products' | 'warehouses' | 'processes' | 'organizations' | 'positions' | 'employees' | 'purchase_invoices' | 'quality_issues'
 
 interface SyncResult {
   synced?: number
@@ -21,7 +21,12 @@ interface SyncResult {
   updated?: number
   skipped?: number
   errors?: string[]
-  // all 类型返回嵌套结构
+  roles_created?: number
+  roles_linked?: number
+  roles_from_position?: number
+  users_created?: number
+  users_updated?: number
+  users_skipped?: number
   orders?: SyncResult
   materials?: SyncResult
   purchase_orders?: SyncResult
@@ -42,6 +47,7 @@ interface ConfigStatus {
 
 const SYNC_TYPE_LABELS: Record<string, string> = {
   orders: '销售订单',
+  order_details: '订单明细',
   materials: '物料需求',
   'purchase_orders': '采购订单',
   customers: '客户',
@@ -52,6 +58,7 @@ const SYNC_TYPE_LABELS: Record<string, string> = {
   warehouses: '仓库',
   processes: '工序',
   organizations: '组织',
+  positions: '岗位',
   employees: '人员',
   'purchase_invoices': '采购开票',
   'quality_issues': '品质异常',
@@ -60,6 +67,51 @@ const SYNC_TYPE_LABELS: Record<string, string> = {
 function SyncResultCard({ result, type }: { result: SyncResult; type: string }) {
   const errors = result.errors || []
   const hasErrors = errors.length > 0
+  const isPositions = type === 'positions'
+  const isEmployees = type === 'employees'
+  const extraItems: React.ReactNode[] = []
+
+  if (isPositions) {
+    if (result.roles_created != null) {
+      extraItems.push(
+        <Descriptions.Item key="roles_created" label="角色创建">
+          <Tag color="purple">{result.roles_created}</Tag>
+        </Descriptions.Item>
+      )
+    }
+    if (result.roles_linked != null) {
+      extraItems.push(
+        <Descriptions.Item key="roles_linked" label="岗位角色关联">
+          <Tag color="cyan">{result.roles_linked}</Tag>
+        </Descriptions.Item>
+      )
+    }
+  }
+
+  if (isEmployees) {
+    if (result.users_created != null) {
+      extraItems.push(
+        <Descriptions.Item key="users_created" label="用户创建">
+          <Tag color="purple">{result.users_created}</Tag>
+        </Descriptions.Item>
+      )
+    }
+    if (result.users_updated != null) {
+      extraItems.push(
+        <Descriptions.Item key="users_updated" label="用户更新">
+          <Tag color="geekblue">{result.users_updated}</Tag>
+        </Descriptions.Item>
+      )
+    }
+    if (result.roles_from_position != null) {
+      extraItems.push(
+        <Descriptions.Item key="roles_from_position" label="通过岗位获取角色">
+          <Tag color="cyan">{result.roles_from_position}</Tag>
+        </Descriptions.Item>
+      )
+    }
+  }
+
   return (
     <Card
       size="small"
@@ -68,7 +120,7 @@ function SyncResultCard({ result, type }: { result: SyncResult; type: string }) 
         background: hasErrors ? '#fffbe6' : '#f6ffed',
       }}
     >
-      <Descriptions size="small" column={5} style={{ marginBottom: hasErrors ? 8 : 0 }}>
+      <Descriptions size="small" column={extraItems.length > 0 ? 5 : 5} style={{ marginBottom: hasErrors ? 8 : 0 }}>
         <Descriptions.Item label="类型">
           <Tag color="blue">{SYNC_TYPE_LABELS[type] || type}</Tag>
         </Descriptions.Item>
@@ -84,6 +136,7 @@ function SyncResultCard({ result, type }: { result: SyncResult; type: string }) 
         <Descriptions.Item label="错误">
           <Tag color={hasErrors ? 'red' : 'default'}>{errors.length}</Tag>
         </Descriptions.Item>
+        {extraItems}
       </Descriptions>
       {hasErrors && (
         <Collapse
@@ -360,7 +413,7 @@ export default function DataImport() {
         return
       }
       message.info('全量同步任务已提交...')
-      const allTypes: SyncType[] = ['orders', 'materials', 'purchase_orders', 'customers', 'suppliers', 'materials_masterdata', 'skus', 'products', 'warehouses', 'processes', 'organizations', 'employees', 'purchase_invoices', 'quality_issues']
+      const allTypes: SyncType[] = ['orders', 'order_details', 'materials', 'purchase_orders', 'customers', 'suppliers', 'materials_masterdata', 'skus', 'products', 'warehouses', 'processes', 'organizations', 'positions', 'employees', 'purchase_invoices', 'quality_issues']
       allTypes.forEach(t => setSyncLoading(prev => ({ ...prev, [t]: true })))
 
       const pollTask = async () => {
@@ -568,6 +621,15 @@ export default function DataImport() {
       ),
     },
     {
+      key: 'order_details',
+      label: <span>订单明细 {syncResults['order_details'] && <Badge dot status={syncResults['order_details']?.errors?.length ? 'warning' : 'success'} />}</span>,
+      children: (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          {renderSyncCard('order_details', 'ERP 同步（主路）')}
+        </Space>
+      ),
+    },
+    {
       key: 'materials',
       label: <span>物料需求 {syncResults.materials && <Badge dot status={syncResults.materials.errors?.length ? 'warning' : 'success'} />}</span>,
       children: (
@@ -680,10 +742,31 @@ export default function DataImport() {
       ),
     },
     {
+      key: 'positions',
+      label: <span>岗位 {syncResults.positions && <Badge dot status={syncResults.positions.errors?.length ? 'warning' : 'success'} />}</span>,
+      children: (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type="info" showIcon icon={<InfoCircleOutlined />}
+            message="岗位同步会自动创建对应的系统角色"
+            description="同步岗位时，系统会根据岗位名称自动匹配权限分类并创建角色，岗位与角色自动关联。人员同步时，系统用户将通过岗位ID获取对应的角色权限。"
+            style={{ marginBottom: 0 }}
+          />
+          {renderSyncCard('positions', 'OA/ERP 同步')}
+        </Space>
+      ),
+    },
+    {
       key: 'employees',
       label: <span>人员 {syncResults.employees && <Badge dot status={syncResults.employees.errors?.length ? 'warning' : 'success'} />}</span>,
       children: (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Alert
+            type="info" showIcon icon={<InfoCircleOutlined />}
+            message="人员同步会自动创建系统用户并分配岗位角色"
+            description="同步人员时，系统会根据员工的岗位ID自动匹配对应角色，并创建或更新系统用户。请确保先同步岗位数据，再同步人员数据。"
+            style={{ marginBottom: 0 }}
+          />
           {renderSyncCard('employees', 'ERP 同步')}
         </Space>
       ),

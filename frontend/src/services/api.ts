@@ -69,10 +69,11 @@ export default api
 
 // ============ Auth (基础数据与集成中心) ============
 export const authApi = {
-  login: (username: string, password: string) => {
+  login: (username: string, password: string, loginType: 'employee' | 'supplier' = 'employee') => {
     const formData = new URLSearchParams()
     formData.append('username', username)
     formData.append('password', password)
+    formData.append('login_type', loginType)
     return api.post('/basicdata/auth/login', formData, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     })
@@ -361,7 +362,7 @@ export const importExportApi = {
     formData.append('file', file)
     return api.post('/basicdata/import-export/purchase-orders', formData)
   },
-  syncData: (type: 'orders' | 'materials' | 'purchase_orders' | 'customers' | 'suppliers' | 'materials_masterdata' | 'skus' | 'products' | 'warehouses' | 'processes' | 'organizations' | 'employees' | 'purchase_invoices' | 'quality_issues' | 'all', params: { hours?: number; order_numbers?: string[] } = {}) => {
+  syncData: (type: 'orders' | 'order_details' | 'materials' | 'purchase_orders' | 'customers' | 'suppliers' | 'materials_masterdata' | 'skus' | 'products' | 'warehouses' | 'processes' | 'organizations' | 'positions' | 'employees' | 'purchase_invoices' | 'quality_issues' | 'all', params: { hours?: number; order_numbers?: string[] } = {}) => {
     const queryParams = new URLSearchParams()
     if (params.hours !== undefined) {
       queryParams.append('hours', params.hours.toString())
@@ -538,14 +539,15 @@ export const notificationApi = {
 export const userApi = {
   list: (params?: any) => api.get('/basicdata/users', { params }),
   roles: () => api.get('/basicdata/users/roles'),
+  employeeOptions: (params?: { keyword?: string }) => api.get('/basicdata/users/employee-options', { params }),
   createRole: (data: { role_code: string; role_name: string; permissions?: Record<string, string[]> }) =>
     api.post('/basicdata/users/roles', data),
   updateRole: (id: number, data: { role_name?: string; permissions?: Record<string, string[]> }) =>
     api.put(`/basicdata/users/roles/${id}`, data),
   deleteRole: (id: number) => api.delete(`/basicdata/users/roles/${id}`),
-  create: (data: { username: string; display_name?: string; password: string; role_id: number; is_active?: boolean }) =>
+  create: (data: { username: string; display_name?: string; password: string; role_id?: number; emp_code?: string; supplier_name?: string; is_active?: boolean }) =>
     api.post('/basicdata/users', data),
-  update: (id: number, data: { display_name?: string; role_id?: number; is_active?: boolean }) =>
+  update: (id: number, data: { display_name?: string; role_id?: number; emp_code?: string; supplier_name?: string; is_active?: boolean }) =>
     api.put(`/basicdata/users/${id}`, data),
   resetPassword: (id: number, new_password: string) =>
     api.put(`/basicdata/users/${id}/password`, { new_password }),

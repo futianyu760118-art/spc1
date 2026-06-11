@@ -30,10 +30,13 @@ from app.models.basicdata.process import Process
 from app.models.basicdata.organization import Organization
 from app.models.basicdata.employee import Employee
 from app.models.basicdata.employee_organization import EmployeeOrganization
+from app.models.basicdata.position import Position
 from app.models.exception.quality_issue import QualityIssue
+from app.services.basicdata.position_role_service import ensure_position_role, resolve_role_for_employee
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+ACTIVE_EMPLOYEE_STATUSES = {0, 1, 2, 3}
 
 
 class ERPConnectionError(Exception):
@@ -1461,9 +1464,151 @@ class ERPSyncService:
     # ------------------------------------------------------------------
     # 人员同步
     # ------------------------------------------------------------------
+    async def _resolve_position_id(self, row_dict: dict) -> Optional[int]:
+        oa_position_id = str(row_dict.get("oa_position_id", "") or "").strip()
+        position_code = str(row_dict.get("position_code", "") or "").strip()
+        position_name = str(row_dict.get("position", "") or row_dict.get("position_name", "") or "").strip()
+        if position_name and not row_dict.get("position"):
+            row_dict["position"] = position_name
+
+        if oa_position_id:
+            result = await self.spc_db.execute(select(Position).where(Position.oa_position_id == oa_position_id))
+            position = result.scalar_one_or_none()
+            if position:
+                row_dict["position"] = position.position_name
+                return position.id
+
+        if position_code:
+            result = await self.spc_db.execute(select(Position).where(Position.position_code == position_code))
+            position = result.scalar_one_or_none()
+            if position:
+                row_dict["position"] = position.position_name
+                return position.id
+
+        if position_name:
+            result = await self.spc_db.execute(select(Position).where(Position.position_name == position_name))
+            positions = result.scalars().all()
+            if len(positions) == 1:
+                return positions[0].id
+            if len(positions) > 1:
+                logger.warning(f"[员工同步] 岗位名称匹配到多条记录，跳过 position_id 回填: {position_name}")
+
+        return None
+
+    async def sync_positions(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
+        """Sync positions from OA/ERP SQL config."""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": [], "roles_created": 0, "roles_linked": 0}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("positions")
+
+            params = {"since": since or datetime.now() - timedelta(days=30)}
+            if custom_params:
+                params.update(custom_params)
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"[岗位同步] 从ERP/OA获取到 {len(rows)} 条岗位记录")
+            valid_cols = self._get_model_columns(Position)
+
+            for row in rows:
+                row_dict = {}
+                try:
+                    row_dict = self._map_row(row, mapping)
+                    position_code = str(row_dict.get("position_code", "") or "").strip() or None
+                    oa_position_id = str(row_dict.get("oa_position_id", "") or "").strip() or None
+                    position_name = str(row_dict.get("position_name", "") or "").strip() or None
+                    if not (position_code or oa_position_id or position_name):
+                        stats["skipped"] += 1
+                        continue
+                    row_dict["position_code"] = position_code
+                    if "oa_position_id" in row_dict:
+                        row_dict["oa_position_id"] = oa_position_id
+                    if not row_dict.get("position_name"):
+                        row_dict["position_name"] = position_code or oa_position_id
+                    if row_dict.get("status") is None:
+                        row_dict["status"] = 1
+
+                    row_dict = self._filter_model_fields(row_dict, valid_cols)
+                    row_dict = self._coerce_row_types(row_dict, Position)
+
+                    existing = None
+                    if oa_position_id:
+                        result = await self.spc_db.execute(
+                            select(Position).where(Position.oa_position_id == oa_position_id)
+                        )
+                        existing = result.scalar_one_or_none()
+                    if not existing and position_code:
+                        result = await self.spc_db.execute(
+                            select(Position).where(Position.position_code == position_code)
+                        )
+                        existing = result.scalar_one_or_none()
+                    if not existing and position_name:
+                        result = await self.spc_db.execute(
+                            select(Position).where(Position.position_name == position_name)
+                        )
+                        positions = result.scalars().all()
+                        if len(positions) == 1:
+                            existing = positions[0]
+
+                    if existing:
+                        if getattr(existing, "data_source", None) in ("erp", None, ""):
+                            for k, v in row_dict.items():
+                                if k in ("position_code", "oa_position_id") and v is None:
+                                    continue
+                                if getattr(existing, k, None) != v and v is not None:
+                                    setattr(existing, k, v)
+                            if hasattr(existing, "data_source"):
+                                existing.data_source = "erp"
+                            stats["updated"] += 1
+                        else:
+                            stats["skipped"] += 1
+                    else:
+                        position = Position(**row_dict)
+                        if hasattr(position, "data_source"):
+                            position.data_source = "erp"
+                        self.spc_db.add(position)
+                        await self.spc_db.flush()
+                        _, rc, rl = await ensure_position_role(self.spc_db, position)
+                        if rc:
+                            stats["roles_created"] += 1
+                        if rl:
+                            stats["roles_linked"] += 1
+                        stats["created"] += 1
+
+                    if existing:
+                        _, rc, rl = await ensure_position_role(self.spc_db, existing)
+                        if rc:
+                            stats["roles_created"] += 1
+                        if rl:
+                            stats["roles_linked"] += 1
+
+                    stats["synced"] += 1
+                except Exception as e:
+                    try:
+                        await self.spc_db.rollback()
+                    except Exception:
+                        pass
+                    stats["errors"].append(
+                        f"岗位 {row_dict.get('position_code') or row_dict.get('oa_position_id') or row_dict.get('position_name')}: {e}"
+                    )
+                    await self.spc_db.begin_nested()
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"[岗位同步] 完成: {stats}, 角色创建={stats['roles_created']}, 岗位角色关联={stats['roles_linked']}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"[岗位同步] 异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
     async def sync_employees(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
         """同步人员，并自动创建/更新系统用户"""
-        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": [], "users_created": 0, "users_updated": 0, "users_skipped": 0}
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": [], "users_created": 0, "users_updated": 0, "users_skipped": 0, "roles_from_position": 0}
 
         logger.info(f"[员工同步] 开始同步人员 since={since}")
         try:
@@ -1482,11 +1627,15 @@ class ERPSyncService:
             logger.info(f"[员工同步] 从 ERP 获取到 {len(rows)} 条人员记录")
             valid_cols = self._get_model_columns(Employee)
 
-            # 查询默认角色（取第一个角色作为默认）
             from app.models.basicdata.user import SysUser, SysRole
             from app.core.security import get_password_hash
-            default_role_result = await self.spc_db.execute(select(SysRole).limit(1))
+            default_role_result = await self.spc_db.execute(
+                select(SysRole).where(SysRole.role_code == "planner")
+            )
             default_role = default_role_result.scalar_one_or_none()
+            if not default_role:
+                default_role_result = await self.spc_db.execute(select(SysRole).limit(1))
+                default_role = default_role_result.scalar_one_or_none()
             default_role_id = default_role.id if default_role else 1
 
             # 获取自动创建用户的默认密码
@@ -1495,6 +1644,11 @@ class ERPSyncService:
             for idx, row in enumerate(rows):
                 try:
                     row_dict = self._map_row(row, mapping)
+                    resolved_position_id = await self._resolve_position_id(row_dict)
+                    if resolved_position_id:
+                        row_dict["position_id"] = resolved_position_id
+                    row_dict.pop("position_code", None)
+                    row_dict.pop("position_name", None)
                     emp_code = str(row_dict.get("emp_code", "")).strip()
                     oa_user_id = str(row_dict.get("oa_user_id", "")).strip()
                     login_id = str(row_dict.get("login_id", "")).strip()
@@ -1580,6 +1734,10 @@ class ERPSyncService:
                         )
                         emp = emp_result.scalar_one_or_none()
                     if emp:
+                        matched_role, matched_position = await resolve_role_for_employee(self.spc_db, emp)
+                        target_role_id = matched_role.id if matched_role else default_role_id
+                        if matched_role and matched_position:
+                            stats["roles_from_position"] += 1
                         # 查询是否已存在关联的系统用户
                         user_result = await self.spc_db.execute(
                             select(SysUser).where(SysUser.emp_code == emp.emp_code)
@@ -1609,8 +1767,13 @@ class ERPSyncService:
                                 existing_user.display_name = emp.emp_name
                                 user_updated = True
 
+                            if existing_user.role_id != target_role_id:
+                                user_changes.append(f"role_id: {existing_user.role_id}->{target_role_id}")
+                                existing_user.role_id = target_role_id
+                                user_updated = True
+
                             # 更新 is_active 状态（根据员工状态）
-                            new_is_active = (emp.status == 1)
+                            new_is_active = emp.status in ACTIVE_EMPLOYEE_STATUSES
                             if existing_user.is_active != new_is_active:
                                 user_changes.append(f"is_active: {existing_user.is_active}->{new_is_active}")
                                 existing_user.is_active = new_is_active
@@ -1641,13 +1804,13 @@ class ERPSyncService:
                                     username=username,
                                     display_name=emp.emp_name,
                                     hashed_password=default_password,
-                                    role_id=default_role_id,
+                                    role_id=target_role_id,
                                     emp_code=emp.emp_code,
-                                    is_active=(emp.status == 1),
+                                    is_active=emp.status in ACTIVE_EMPLOYEE_STATUSES,
                                 )
                                 self.spc_db.add(new_user)
                                 stats["users_created"] += 1
-                                logger.info(f"[员工同步] 创建系统用户 username={username} emp_code={emp.emp_code} emp_name={emp.emp_name} is_active={emp.status == 1}")
+                                logger.info(f"[员工同步] 创建系统用户 username={username} emp_code={emp.emp_code} emp_name={emp.emp_name} is_active={emp.status in ACTIVE_EMPLOYEE_STATUSES}")
 
                     stats["synced"] += 1
                 except Exception as e:
@@ -1661,7 +1824,7 @@ class ERPSyncService:
 
             await self.spc_db.flush()
             await self.spc_db.commit()
-            logger.info(f"[员工同步] 完成同步: 共处理{len(rows)}条记录 created={stats['created']} updated={stats['updated']} skipped={stats['skipped']} errors={len(stats['errors'])} 用户created={stats['users_created']} updated={stats['users_updated']} skipped={stats['users_skipped']}")
+            logger.info(f"[员工同步] 完成同步: 共处理{len(rows)}条记录 created={stats['created']} updated={stats['updated']} skipped={stats['skipped']} errors={len(stats['errors'])} 用户created={stats['users_created']} updated={stats['users_updated']} skipped={stats['users_skipped']} 通过岗位获取角色={stats['roles_from_position']}")
 
         except Exception as e:
             stats["errors"].append(str(e))
@@ -2005,6 +2168,7 @@ class ERPSyncService:
             await self._connect_erp()
             results = {}
             results["orders"] = await self.sync_orders(since, None, custom_params)
+            results["order_details"] = await self.sync_order_details(since, custom_params)
             results["materials"] = await self.sync_materials(since, None, custom_params)
             results["purchase_orders"] = await self.sync_purchase_orders(since, custom_params)
             results["customers"] = await self.sync_customers(since, custom_params)
@@ -2015,6 +2179,7 @@ class ERPSyncService:
             results["warehouses"] = await self.sync_warehouses(since, custom_params)
             results["processes"] = await self.sync_processes(since, custom_params)
             results["organizations"] = await self.sync_organizations(since, custom_params)
+            results["positions"] = await self.sync_positions(since, custom_params)
             results["employees"] = await self.sync_employees(since, custom_params)
             results["employee_organizations"] = await self.sync_employee_organizations(since, custom_params)
             results["purchase_invoices"] = await self.sync_purchase_invoices(since, custom_params)

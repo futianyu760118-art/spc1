@@ -39,6 +39,7 @@ def _get_sync_type_overrides() -> dict:
     from app.models.basicdata.process import Process
     from app.models.basicdata.organization import Organization
     from app.models.basicdata.employee import Employee
+    from app.models.basicdata.position import Position
     return {
         "orders": SaleOrder,
         "order_details": SaleOrderLine,
@@ -52,6 +53,7 @@ def _get_sync_type_overrides() -> dict:
         "warehouses": Warehouse,
         "processes": Process,
         "organizations": Organization,
+        "positions": Position,
         "employees": Employee,
     }
 

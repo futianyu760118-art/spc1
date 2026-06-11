@@ -27,6 +27,7 @@ SUPPLIER_RISK_SORT_KEYS = {
 async def get_supplier_risk(
     db: AsyncSession,
     supplier: Optional[str] = None,
+    exact_supplier: bool = False,
     risk_level: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
@@ -38,7 +39,10 @@ async def get_supplier_risk(
         PurchaseOrder.supplier_name.isnot(None),
     )
     if supplier:
-        po_query = po_query.where(PurchaseOrder.supplier_name.ilike(f'%{supplier}%'))
+        if exact_supplier:
+            po_query = po_query.where(PurchaseOrder.supplier_name == supplier)
+        else:
+            po_query = po_query.where(PurchaseOrder.supplier_name.ilike(f'%{supplier}%'))
 
     po_result = await db.execute(po_query)
     pos = po_result.scalars().all()

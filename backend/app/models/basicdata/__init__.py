@@ -12,5 +12,6 @@ from app.models.basicdata.warehouse import Warehouse  # noqa: F401
 from app.models.basicdata.process import Process  # noqa: F401
 from app.models.basicdata.organization import Organization  # noqa: F401
 from app.models.basicdata.employee import Employee  # noqa: F401
+from app.models.basicdata.position import Position  # noqa: F401
 from app.models.basicdata.file_asset import FileAsset  # noqa: F401
 from app.models.basicdata.feedback import Feedback  # noqa: F401

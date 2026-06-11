@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.basicdata.user import SysUser, SysRole
+from app.models.basicdata.supplier import Supplier
 
 settings = get_settings()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_PREFIX}/auth/login")
@@ -127,6 +128,7 @@ _SHARE_PATH_TO_RESOURCE: dict[str, str] = {
     "/basicdata/warehouses": "basicdata.data",
     "/basicdata/processes": "basicdata.data",
     "/basicdata/organizations": "basicdata.data",
+    "/basicdata/positions": "basicdata.data",
     "/basicdata/employees": "basicdata.data",
     "/basicdata/feedback": "basicdata.feedback",
     "/basicdata/files": "basicdata.files",
@@ -182,11 +184,29 @@ class PermissionChecker:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无效的认证凭据")
 
         if not is_share:
-            user_result = await db.execute(select(SysUser).where(SysUser.id == int(user_id)))
-            user = user_result.scalar_one_or_none()
+            user_result = await db.execute(
+                select(SysUser, SysRole.role_code)
+                .outerjoin(SysRole, SysUser.role_id == SysRole.id)
+                .where(SysUser.id == int(user_id))
+            )
+            row = user_result.one_or_none()
+            user = row[0] if row else None
             if not user or not user.is_active:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已禁用")
 
+            role = row[1] or role
+            payload["role"] = role
+            payload["supplier_name"] = user.supplier_name
+            if user.supplier_name and not payload.get("supplier_code"):
+                supplier_result = await db.execute(
+                    select(Supplier.supplier_code).where(
+                        Supplier.supplier_name == user.supplier_name,
+                        Supplier.status == 1,
+                    )
+                )
+                supplier_code = supplier_result.scalar_one_or_none()
+                if supplier_code:
+                    payload["supplier_code"] = supplier_code
             db_login_version = user.login_version or 0
             if token_login_version != db_login_version:
                 raise HTTPException(
@@ -197,6 +217,12 @@ class PermissionChecker:
 
         if role == "admin":
             return payload
+
+        if role == "supplier" and self.action != "read":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="\u4f9b\u5e94\u5546\u8d26\u53f7\u4ec5\u5141\u8bb8\u67e5\u770b\u81ea\u5df1\u7684\u6570\u636e",
+            )
 
         # 分享用户：只允许访问分享目标页面对应的资源，且仅限授权的操作
         if is_share:

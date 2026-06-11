@@ -26,6 +26,7 @@ class SysUser(Base):
     display_name = Column(String(128))
     hashed_password = Column(String(256), nullable=False)
     role_id = Column(Integer, nullable=False)
+    supplier_name = Column(String(100), nullable=True, comment="关联供应商名称")
     emp_code = Column(String(20), nullable=True, comment="关联员工工号")
     is_active = Column(Boolean, nullable=False, default=True)
     login_version = Column(Integer, nullable=False, default=0, comment="登录版本号，用于单点登录控制")

@@ -6,6 +6,7 @@ import {
   ClockCircleOutlined, FieldTimeOutlined,
 } from '@ant-design/icons'
 import { materialApi } from '../../../services/api'
+import { useAuthStore } from '../../../store/auth'
 
 interface OrderItem {
   po_no: string | null
@@ -41,6 +42,8 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 }
 
 export default function SupplierRisk() {
+  const isSupplierUser = useAuthStore((s) => s.isSupplierUser)
+  const supplierReadOnly = isSupplierUser()
   const [data, setData] = useState<SupplierRiskRow[]>([])
   const [loading, setLoading] = useState(false)
   const [supplier, setSupplier] = useState('')
@@ -188,7 +191,7 @@ export default function SupplierRisk() {
 
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
         <Row gutter={12} align="middle">
-          <Col>
+          {!supplierReadOnly && <Col>
             <Input
               prefix={<SearchOutlined />}
               placeholder="搜索供应商"
@@ -197,7 +200,7 @@ export default function SupplierRisk() {
               style={{ width: 200 }}
               allowClear
             />
-          </Col>
+          </Col>}
           <Col>
             <Select
               placeholder="风险等级"

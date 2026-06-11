@@ -8,6 +8,7 @@ from typing import Optional
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
+from app.core.supplier_scope import get_supplier_name_scope
 from app.models.material.long_lead_material import LongLeadMaterial
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.material.schemas import LongLeadMaterialOut, LongLeadMaterialUpdate, EnsureAnnotationRequest
@@ -32,10 +33,12 @@ async def list_long_lead(
     current_user: dict = Depends(PermissionChecker("materials.long_lead", "read")),
     db: AsyncSession = Depends(get_db),
 ):
+    supplier_scope = await get_supplier_name_scope(current_user, db)
     items, total, stats = await get_long_lead_pool(
         db,
         keyword=keyword,
-        supplier_name=supplier_name,
+        supplier_name=supplier_scope or supplier_name,
+        exact_supplier_name=bool(supplier_scope),
         status=status,
         risk_level=risk_level,
         page=page,

@@ -9,6 +9,7 @@ import {
   WarningOutlined, ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import { materialApi } from '../../../services/api'
+import { useAuthStore } from '../../../store/auth'
 
 interface LongLeadDerivedRow {
   id: number | null
@@ -31,6 +32,8 @@ const RISK_TAG_MAP: Record<string, { color: string; label: string }> = {
 }
 
 export default function LongLeadMaterials() {
+  const isSupplierUser = useAuthStore((s) => s.isSupplierUser)
+  const supplierReadOnly = isSupplierUser()
   const [data, setData] = useState<LongLeadDerivedRow[]>([])
   const [total, setTotal] = useState(0)
   const [globalStats, setGlobalStats] = useState({ total: 0, active_count: 0, danger_count: 0, warning_count: 0 })
@@ -179,7 +182,7 @@ export default function LongLeadMaterials() {
         </Tag>
       ),
     },
-    {
+    ...(!supplierReadOnly ? [{
       title: '操作', width: 90, fixed: 'right' as const,
       render: (_: any, row: LongLeadDerivedRow) => (
         <Space size={4}>
@@ -191,7 +194,7 @@ export default function LongLeadMaterials() {
           )}
         </Space>
       ),
-    },
+    }] : []),
   ]
 
   return (
@@ -232,7 +235,7 @@ export default function LongLeadMaterials() {
               allowClear
             />
           </Col>
-          <Col>
+          {!supplierReadOnly && <Col>
             <Input
               placeholder="供应商"
               value={filters.supplier_name}
@@ -240,7 +243,7 @@ export default function LongLeadMaterials() {
               style={{ width: 130 }}
               allowClear
             />
-          </Col>
+          </Col>}
           <Col>
             <Select
               placeholder="风险等级"
@@ -269,7 +272,7 @@ export default function LongLeadMaterials() {
           <Col>
             <Space>
               <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-              <Button icon={<ScanOutlined />} loading={scanLoading} onClick={handleScan}>扫描识别</Button>
+              {!supplierReadOnly && <Button icon={<ScanOutlined />} loading={scanLoading} onClick={handleScan}>扫描识别</Button>}
             </Space>
           </Col>
         </Row>

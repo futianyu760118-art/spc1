@@ -10,8 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user
-from app.core.security import create_share_access_token
+from app.core.security import PermissionChecker, create_share_access_token
 from app.models.basicdata.share_link import ShareLink
 from app.schemas.common import ResponseModel
 
@@ -62,12 +61,16 @@ def _generate_token() -> str:
     return secrets.token_urlsafe(24)
 
 
+def _get_user_id(current_user: dict) -> int:
+    return int(current_user.get("user_id") or current_user["sub"])
+
+
 # ── Endpoints ──
 
 @router.post("", response_model=ResponseModel[dict])
 async def create_share_link(
     body: ShareCreateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(PermissionChecker("topbar.share", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     """创建分享链接（需登录）"""
@@ -80,7 +83,7 @@ async def create_share_link(
         target_path=body.target_path,
         target_params=body.target_params,
         permissions=body.permissions,
-        created_by=current_user["user_id"],
+        created_by=_get_user_id(current_user),
         expires_at=expires_at,
     )
     db.add(share)
@@ -96,13 +99,13 @@ async def create_share_link(
 
 @router.get("/list", response_model=ResponseModel[list[ShareListItem]])
 async def list_share_links(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(PermissionChecker("topbar.share", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     """查询我创建的分享链接（需登录）"""
     result = await db.execute(
         select(ShareLink)
-        .where(ShareLink.created_by == current_user["user_id"])
+        .where(ShareLink.created_by == _get_user_id(current_user))
         .order_by(ShareLink.created_at.desc())
     )
     items = result.scalars().all()
@@ -157,7 +160,7 @@ async def verify_share_link(
 @router.delete("/{share_id}", response_model=ResponseModel[dict])
 async def revoke_share_link(
     share_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(PermissionChecker("topbar.share", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     """撤销分享链接（仅创建者可操作）"""
@@ -169,7 +172,7 @@ async def revoke_share_link(
     if not share:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="分享链接不存在")
 
-    if share.created_by != current_user["user_id"]:
+    if share.created_by != _get_user_id(current_user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只能撤销自己创建的分享链接")
 
     share.is_revoked = True

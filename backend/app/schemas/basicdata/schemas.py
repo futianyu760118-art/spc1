@@ -19,6 +19,8 @@ class UserInfo(BaseModel):
     role_code: Optional[str] = None
     role_name: Optional[str] = None
     permissions: Optional[dict] = None
+    supplier_name: Optional[str] = None
+    supplier_code: Optional[str] = None
     is_active: bool = True
     font_size_scale: Optional[str] = None
 
@@ -348,10 +350,29 @@ class OrganizationWithLeaderOut(OrganizationOut):
 
 
 # ── Employee ──
+class PositionBase(BaseModel):
+    position_code: Optional[str] = None
+    oa_position_id: Optional[str] = None
+    position_name: str
+    status: int = 1
+    data_source: Optional[str] = None
+
+
+class PositionOut(PositionBase):
+    id: int
+    role_id: Optional[int] = None
+    role_code: Optional[str] = None
+    role_name: Optional[str] = None
+    create_time: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class EmployeeBase(BaseModel):
     emp_code: str
     emp_name: str
-    org_id: int
+    org_id: Optional[int] = None
+    position_id: Optional[int] = None
     position: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -365,6 +386,7 @@ class EmployeeCreate(EmployeeBase):
 class EmployeeUpdate(BaseModel):
     emp_name: Optional[str] = None
     org_id: Optional[int] = None
+    position_id: Optional[int] = None
     position: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -374,5 +396,6 @@ class EmployeeUpdate(BaseModel):
 class EmployeeOut(EmployeeBase):
     id: int
     create_time: datetime
+    position_name: Optional[str] = None
 
     model_config = {"from_attributes": True}

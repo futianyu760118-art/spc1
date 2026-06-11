@@ -42,6 +42,7 @@ class SyncScheduler:
             "warehouses": "sync_warehouses",
             "processes": "sync_processes",
             "organizations": "sync_organizations",
+            "positions": "sync_positions",
             "employees": "sync_employees",
             "purchase_invoices": "sync_purchase_invoices",
             "quality_issues": "sync_quality_issues",

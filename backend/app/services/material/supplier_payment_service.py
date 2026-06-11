@@ -83,6 +83,7 @@ async def _fetch_filtered_invoices(
     db: AsyncSession,
     target_month: str,
     supplier_name: Optional[str],
+    exact_supplier_name: bool = False,
     invoice_date_start: Optional[str] = None,
     invoice_date_end: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -113,7 +114,10 @@ async def _fetch_filtered_invoices(
     )
 
     if supplier_name:
-        stmt = stmt.where(PurchaseInvoice.supplier_name.ilike(f'%{supplier_name}%'))
+        if exact_supplier_name:
+            stmt = stmt.where(PurchaseInvoice.supplier_name == supplier_name)
+        else:
+            stmt = stmt.where(PurchaseInvoice.supplier_name.ilike(f'%{supplier_name}%'))
 
     result = await db.execute(stmt)
     rows = result.mappings().all()
@@ -180,6 +184,7 @@ def _aggregate_invoices(
 async def _get_all_suppliers_with_invoices(
     db: AsyncSession,
     supplier_name: Optional[str] = None,
+    exact_supplier_name: bool = False,
     invoice_date_start: Optional[str] = None,
     invoice_date_end: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -194,7 +199,10 @@ async def _get_all_suppliers_with_invoices(
     )
 
     if supplier_name:
-        stmt = stmt.where(PurchaseInvoice.supplier_name.ilike(f'%{supplier_name}%'))
+        if exact_supplier_name:
+            stmt = stmt.where(PurchaseInvoice.supplier_name == supplier_name)
+        else:
+            stmt = stmt.where(PurchaseInvoice.supplier_name.ilike(f'%{supplier_name}%'))
 
     if invoice_date_start:
         stmt = stmt.where(PurchaseInvoice.invoice_date >= datetime.strptime(invoice_date_start, '%Y-%m-%d').date())
@@ -210,6 +218,7 @@ async def _get_supplier_all_invoices(
     db: AsyncSession,
     supplier_codes: List[str],
     supplier_name: Optional[str] = None,
+    exact_supplier_name: bool = False,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """获取指定供应商的全部发票明细。"""
     if not supplier_codes:
@@ -227,7 +236,10 @@ async def _get_supplier_all_invoices(
     ).where(PurchaseInvoice.supplier_code.in_(supplier_codes))
 
     if supplier_name:
-        stmt = stmt.where(PurchaseInvoice.supplier_name.ilike(f'%{supplier_name}%'))
+        if exact_supplier_name:
+            stmt = stmt.where(PurchaseInvoice.supplier_name == supplier_name)
+        else:
+            stmt = stmt.where(PurchaseInvoice.supplier_name.ilike(f'%{supplier_name}%'))
 
     result = await db.execute(stmt)
     rows = result.mappings().all()
@@ -254,6 +266,7 @@ async def _fill_total_payable(
     db: AsyncSession,
     items: List[Dict[str, Any]],
     supplier_name: Optional[str],
+    exact_supplier_name: bool = False,
 ) -> None:
     """回填每个供应商的总应付金额（全量 remain_payable，不限月份）。"""
     if not items:
@@ -269,7 +282,10 @@ async def _fill_total_payable(
         .group_by(PurchaseInvoice.supplier_code)
     )
     if supplier_name:
-        stmt = stmt.where(PurchaseInvoice.supplier_name.ilike(f'%{supplier_name}%'))
+        if exact_supplier_name:
+            stmt = stmt.where(PurchaseInvoice.supplier_name == supplier_name)
+        else:
+            stmt = stmt.where(PurchaseInvoice.supplier_name.ilike(f'%{supplier_name}%'))
 
     result = await db.execute(stmt)
     total_map: Dict[str, Decimal] = {}
@@ -302,6 +318,7 @@ async def get_supplier_payment_list(
     db: AsyncSession,
     schedule_month: Optional[str] = None,
     supplier_name: Optional[str] = None,
+    exact_supplier_name: bool = False,
     payment_month: Optional[str] = None,
     invoice_date_start: Optional[str] = None,
     invoice_date_end: Optional[str] = None,
@@ -313,10 +330,10 @@ async def get_supplier_payment_list(
     target_month = _resolve_month(schedule_month, payment_month)
 
     # 获取所有有发票记录的供应商（不限制排款月）
-    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, invoice_date_start, invoice_date_end)
+    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
 
     # 获取当前排款月的发票数据
-    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, invoice_date_start, invoice_date_end)
+    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
     monthly_items = _aggregate_invoices(filtered, target_month)
 
     # 创建月到期应付金额映射
@@ -324,7 +341,7 @@ async def get_supplier_payment_list(
 
     # 获取不在当前排款月的供应商的全部发票明细
     not_in_month_codes = [s['supplier_code'] for s in all_suppliers if s['supplier_code'] not in monthly_map]
-    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name)
+    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name)
 
     # 合并数据：所有供应商都要显示，月到期应付金额从映射中获取
     items = []
@@ -362,7 +379,7 @@ async def get_supplier_payment_list(
             })
 
     # 回填总应付金额
-    await _fill_total_payable(db, items, supplier_name)
+    await _fill_total_payable(db, items, supplier_name, exact_supplier_name)
 
     items = [_format_item(it) for it in items]
 
@@ -383,6 +400,7 @@ async def get_supplier_payment_summary(
     db: AsyncSession,
     schedule_month: Optional[str] = None,
     supplier_name: Optional[str] = None,
+    exact_supplier_name: bool = False,
     payment_month: Optional[str] = None,
     invoice_date_start: Optional[str] = None,
     invoice_date_end: Optional[str] = None,
@@ -390,10 +408,10 @@ async def get_supplier_payment_summary(
     target_month = _resolve_month(schedule_month, payment_month)
 
     # 获取所有有发票记录的供应商（不限制排款月）
-    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, invoice_date_start, invoice_date_end)
+    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
 
     # 获取当前排款月的发票数据
-    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, invoice_date_start, invoice_date_end)
+    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
     monthly_items = _aggregate_invoices(filtered, target_month)
 
     # 创建月到期应付金额映射
@@ -401,7 +419,7 @@ async def get_supplier_payment_summary(
 
     # 获取不在当前排款月的供应商的全部发票明细
     not_in_month_codes = [s['supplier_code'] for s in all_suppliers if s['supplier_code'] not in monthly_map]
-    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name)
+    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name)
 
     # 合并数据：所有供应商都要显示，月到期应付金额从映射中获取
     items = []
@@ -439,7 +457,7 @@ async def get_supplier_payment_summary(
             })
 
     # 回填总应付金额
-    await _fill_total_payable(db, items, supplier_name)
+    await _fill_total_payable(db, items, supplier_name, exact_supplier_name)
 
     total_payable = Decimal('0')
     total_monthly_due = Decimal('0')
@@ -474,6 +492,7 @@ async def get_supplier_payment_export(
     format: str = 'xlsx',
     schedule_month: Optional[str] = None,
     supplier_name: Optional[str] = None,
+    exact_supplier_name: bool = False,
     payment_month: Optional[str] = None,
     invoice_date_start: Optional[str] = None,
     invoice_date_end: Optional[str] = None,
@@ -484,10 +503,10 @@ async def get_supplier_payment_export(
     target_month = _resolve_month(schedule_month, payment_month)
 
     # 获取所有有发票记录的供应商（不限制排款月）
-    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, invoice_date_start, invoice_date_end)
+    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
 
     # 获取当前排款月的发票数据
-    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, invoice_date_start, invoice_date_end)
+    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
     monthly_items = _aggregate_invoices(filtered, target_month)
 
     # 创建月到期应付金额映射
@@ -495,7 +514,7 @@ async def get_supplier_payment_export(
 
     # 获取不在当前排款月的供应商的全部发票明细
     not_in_month_codes = [s['supplier_code'] for s in all_suppliers if s['supplier_code'] not in monthly_map]
-    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name)
+    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name)
 
     # 合并数据：所有供应商都要显示，月到期应付金额从映射中获取
     items = []
@@ -533,7 +552,7 @@ async def get_supplier_payment_export(
             })
 
     # 回填总应付金额
-    await _fill_total_payable(db, items, supplier_name)
+    await _fill_total_payable(db, items, supplier_name, exact_supplier_name)
 
     items = [_format_item(it) for it in items]
 

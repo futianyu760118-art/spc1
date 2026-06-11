@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Table, Tag, Button, Modal, Form, Input, Select, Space, message, Popconfirm, Switch, Row, Col, Tabs, Checkbox, Tree, Radio, Divider, Alert } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, ReloadOutlined, SafetyOutlined, UserOutlined, ThunderboltOutlined, ExportOutlined } from '@ant-design/icons'
-import { userApi } from '../../services/api'
+import api, { userApi } from '../../services/api'
 import ExportColumnSelector, { type ExportColumnOption } from '../../components/ExportColumnSelector'
 import { useExport } from '../../hooks/useExport'
 import { formatDateTime } from '../../utils'
@@ -12,7 +12,28 @@ const roleColorMap: Record<string, string> = {
   purchaser: 'orange',
   manager: 'cyan',
   purchase_manager: 'gold',
+  supplier: 'green',
 }
+
+interface SupplierOption {
+  supplier_code?: string
+  supplier_name: string
+  status: number
+}
+
+interface EmployeeOption {
+  emp_code: string
+  emp_name: string
+  login_id?: string
+  position_id?: number
+  position_name?: string
+  role_id?: number
+  role_code?: string
+  role_name?: string
+  status: number
+}
+
+const SUPPLIER_PAGE_SIZE = 100
 
 interface PermTreeNode {
   key: string
@@ -22,6 +43,16 @@ interface PermTreeNode {
 
 const PERMISSION_TREE: PermTreeNode[] = [
   { key: 'dashboard', label: '供应链驾驶舱' },
+  {
+    key: 'topbar', label: '顶栏功能',
+    children: [
+      { key: 'topbar.share', label: '页面分享' },
+      { key: 'topbar.feedback', label: '问题反馈' },
+      { key: 'topbar.ai_search', label: 'AI 全局搜索' },
+      { key: 'topbar.font_size', label: '字号设置' },
+      { key: 'topbar.notifications', label: '通知铃铛' },
+    ],
+  },
   {
     key: 'orders', label: '订单交付中心',
     children: [
@@ -140,9 +171,14 @@ interface UserItem {
   id: number
   username: string
   display_name: string | null
+  emp_code: string | null
+  emp_name: string | null
+  position_id: number | null
+  position_name: string | null
   role_id: number
   role_code: string
   role_name: string
+  supplier_name: string | null
   is_active: boolean
   last_login_time: string | null
   created_at: string | null
@@ -159,8 +195,12 @@ interface RoleItem {
 const USER_EXPORT_COLUMNS: ExportColumnOption[] = [
   { field: 'username', label: '用户名' },
   { field: 'display_name', label: '显示名称' },
+  { field: 'emp_code', label: '员工工号' },
+  { field: 'emp_name', label: '员工姓名' },
+  { field: 'position_name', label: '岗位' },
   { field: 'role_code', label: '角色编码' },
   { field: 'role_name', label: '角色名称' },
+  { field: 'supplier_name', label: '绑定供应商' },
   { field: 'is_active', label: '状态' },
   { field: 'last_login_time', label: '最后登录' },
   { field: 'created_at', label: '创建时间' },
@@ -299,6 +339,10 @@ export default function UserManagement() {
   const [activeTab, setActiveTab] = useState('users')
   const [users, setUsers] = useState<UserItem[]>([])
   const [roles, setRoles] = useState<RoleItem[]>([])
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
+  const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([])
+  const [employeeLoading, setEmployeeLoading] = useState(false)
+  const [supplierLoading, setSupplierLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [roleLoading, setRoleLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
@@ -320,6 +364,15 @@ export default function UserManagement() {
   const [bgSubmitting, setBgSubmitting] = useState(false)
   const [exportColumnModalOpen, setExportColumnModalOpen] = useState(false)
   const [userQuery, setUserQuery] = useState<{ sortBy?: string; sortOrder?: string; filters?: Record<string, string[]> }>({})
+  const employeeSearchTimer = useRef<number | undefined>(undefined)
+  const supplierSearchTimer = useRef<number | undefined>(undefined)
+  const supplierRequestSeq = useRef(0)
+  const selectedRoleId = Form.useWatch('role_id', form)
+  const selectedEmpCode = Form.useWatch('emp_code', form)
+  const selectedRole = roles.find(r => r.id === selectedRoleId)
+  const isSupplierRole = selectedRole?.role_code === 'supplier'
+  const selectedEmployee = employeeOptions.find(item => item.emp_code === selectedEmpCode)
+  const hasPositionRole = !!selectedEmployee?.role_id
 
   const fetchUsers = async (sortBy?: string, sortOrder?: string, tableFilters?: Record<string, string[]>) => {
     setUserQuery({ sortBy, sortOrder, filters: tableFilters })
@@ -351,9 +404,88 @@ export default function UserManagement() {
     }
   }
 
+  const fetchEmployeeOptions = async (keyword = '') => {
+    setEmployeeLoading(true)
+    try {
+      const params: { keyword?: string } = {}
+      if (keyword.trim()) params.keyword = keyword.trim()
+      const res: any = await userApi.employeeOptions(params)
+      setEmployeeOptions(res.data || [])
+    } catch {
+      message.error('加载员工列表失败')
+    } finally {
+      setEmployeeLoading(false)
+    }
+  }
+
+  const mergeSuppliers = (list: SupplierOption[]) => {
+    const map = new Map<string, SupplierOption>()
+    list.forEach(item => {
+      if (item.supplier_name) map.set(item.supplier_name, item)
+    })
+    return Array.from(map.values())
+  }
+
+  const fetchSuppliers = async (keyword = '') => {
+    const requestSeq = ++supplierRequestSeq.current
+    setSupplierLoading(true)
+    try {
+      const params: Record<string, any> = {
+        page: 1,
+        page_size: SUPPLIER_PAGE_SIZE,
+        status: '1',
+        sort_by: 'supplier_name',
+        sort_order: 'asc',
+      }
+      if (keyword.trim()) params.keyword = keyword.trim()
+
+      const firstRes: any = await api.get('/basicdata/suppliers', { params })
+      const data = firstRes.data || {}
+      let items: SupplierOption[] = data.items || []
+
+      const total = data.total || items.length
+      const totalPages = Math.ceil(total / SUPPLIER_PAGE_SIZE)
+      for (let page = 2; page <= totalPages; page += 1) {
+        const res: any = await api.get('/basicdata/suppliers', { params: { ...params, page } })
+        items = [...items, ...(res.data?.items || [])]
+      }
+
+      if (requestSeq === supplierRequestSeq.current) {
+        setSuppliers(prev => keyword.trim() ? mergeSuppliers([...prev, ...items]) : mergeSuppliers(items))
+      }
+    } catch {
+      message.error('加载供应商列表失败')
+    } finally {
+      if (requestSeq === supplierRequestSeq.current) {
+        setSupplierLoading(false)
+      }
+    }
+  }
+
+  const handleSupplierSearch = (keyword: string) => {
+    if (supplierSearchTimer.current) window.clearTimeout(supplierSearchTimer.current)
+    supplierSearchTimer.current = window.setTimeout(() => {
+      fetchSuppliers(keyword)
+    }, 300)
+  }
+
+  const handleEmployeeSearch = (keyword: string) => {
+    if (employeeSearchTimer.current) window.clearTimeout(employeeSearchTimer.current)
+    employeeSearchTimer.current = window.setTimeout(() => {
+      fetchEmployeeOptions(keyword)
+    }, 300)
+  }
+
   useEffect(() => {
     fetchUsers()
     fetchRoles()
+    fetchEmployeeOptions()
+    fetchSuppliers()
+
+    return () => {
+      if (employeeSearchTimer.current) window.clearTimeout(employeeSearchTimer.current)
+      if (supplierSearchTimer.current) window.clearTimeout(supplierSearchTimer.current)
+    }
   }, [])
 
   const openAdd = () => {
@@ -368,10 +500,53 @@ export default function UserManagement() {
     form.setFieldsValue({
       username: record.username,
       display_name: record.display_name,
+      emp_code: record.emp_code,
       role_id: record.role_id,
+      supplier_name: record.supplier_name,
       is_active: record.is_active,
     })
+    if (record.emp_code && !employeeOptions.some(item => item.emp_code === record.emp_code)) {
+      setEmployeeOptions(prev => [
+        ...prev,
+        {
+          emp_code: record.emp_code!,
+          emp_name: record.emp_name || record.display_name || record.emp_code!,
+          position_id: record.position_id || undefined,
+          position_name: record.position_name || undefined,
+          role_id: record.role_id,
+          role_code: record.role_code,
+          role_name: record.role_name,
+          status: record.is_active ? 1 : 5,
+        },
+      ])
+    }
     setModalOpen(true)
+  }
+
+  const handleEmployeeChange = (empCode?: string) => {
+    if (!empCode) {
+      form.setFieldsValue({ emp_code: undefined, role_id: undefined })
+      return
+    }
+    const employee = employeeOptions.find(item => item.emp_code === empCode)
+    if (!employee) {
+      form.setFieldsValue({ emp_code: empCode })
+      return
+    }
+    form.setFieldsValue({
+      emp_code: employee.emp_code,
+      display_name: employee.emp_name,
+      role_id: employee.role_id || undefined,
+    })
+    if (!editingUser) {
+      form.setFieldsValue({
+        username: employee.login_id || employee.emp_code,
+        password: employee.emp_code,
+      })
+    }
+    if (!employee.role_id) {
+      message.warning('该员工岗位暂未绑定角色，请手动选择角色')
+    }
   }
 
   const handleSave = async () => {
@@ -381,6 +556,8 @@ export default function UserManagement() {
         await userApi.update(editingUser.id, {
           display_name: values.display_name,
           role_id: values.role_id,
+          emp_code: values.emp_code,
+          supplier_name: values.supplier_name,
           is_active: values.is_active,
         })
         message.success('更新成功')
@@ -535,11 +712,32 @@ export default function UserManagement() {
     { title: '用户名', dataIndex: 'username', key: 'username', width: 120, sorter: true },
     { title: '显示名', dataIndex: 'display_name', key: 'display_name', width: 140, sorter: true },
     {
+      title: '员工',
+      dataIndex: 'emp_name',
+      key: 'emp_code',
+      width: 160,
+      sorter: true,
+      render: (_: string | null, record: UserItem) => record.emp_code
+        ? <span>{record.emp_name || record.emp_code} <span style={{ color: '#94a3b8' }}>({record.emp_code})</span></span>
+        : <span style={{ color: '#cbd5e1' }}>-</span>,
+    },
+    {
+      title: '岗位',
+      dataIndex: 'position_name',
+      key: 'position_name',
+      width: 130,
+      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+    },
+    {
       title: '角色', dataIndex: 'role_code', key: 'role_code', width: 100, sorter: true,
       filters: roles.map(r => ({ text: r.role_name, value: r.role_code })),
       render: (code: string, record: UserItem) => (
         <Tag color={roleColorMap[code] || 'default'}>{record.role_name}</Tag>
       ),
+    },
+    {
+      title: '绑定供应商', dataIndex: 'supplier_name', key: 'supplier_name', width: 180,
+      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     {
       title: '状态', dataIndex: 'is_active', key: 'is_active', width: 80, sorter: true,
@@ -605,7 +803,7 @@ export default function UserManagement() {
             </Row>
           </div>
           <div className="card-modern" style={{ padding: '0 0 4px', flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <Table columns={userColumns} dataSource={users} rowKey="id" loading={loading} size="small" scroll={{ x: 800, y: 'calc(100vh - 310px)' }}
+            <Table columns={userColumns} dataSource={users} rowKey="id" loading={loading} size="small" scroll={{ x: 1260, y: 'calc(100vh - 310px)' }}
               onChange={(_pag: any, tableFilters: any, sorter: any) => {
                 const sortField = sorter.field
                 const sortOrder = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : undefined
@@ -655,8 +853,27 @@ export default function UserManagement() {
       />
 
       {/* 新增/编辑用户 */}
-      <Modal title={editingUser ? '编辑用户' : '新增用户'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={480}>
+      <Modal title={editingUser ? '编辑用户' : '新增用户'} open={modalOpen} onOk={handleSave} onCancel={() => setModalOpen(false)} width={560}>
         <Form form={form} layout="vertical">
+          <Form.Item name="emp_code" label="关联员工">
+            <Select
+              allowClear
+              showSearch
+              placeholder="选择员工后自动匹配岗位权限"
+              loading={employeeLoading}
+              optionFilterProp="label"
+              options={employeeOptions.map(employee => ({
+                value: employee.emp_code,
+                label: `${employee.emp_name} (${employee.emp_code})${employee.position_name ? ` - ${employee.position_name}` : ''}`,
+              }))}
+              filterOption={false}
+              onSearch={handleEmployeeSearch}
+              onDropdownVisibleChange={(open) => {
+                if (open && employeeOptions.length === 0) fetchEmployeeOptions()
+              }}
+              onChange={handleEmployeeChange}
+            />
+          </Form.Item>
           <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
             <Input placeholder="登录用户名" disabled={!!editingUser} />
           </Form.Item>
@@ -668,9 +885,48 @@ export default function UserManagement() {
               <Input.Password placeholder="至少6位" />
             </Form.Item>
           )}
-          <Form.Item name="role_id" label="角色" rules={[{ required: true, message: '请选择角色' }]}>
-            <Select placeholder="选择角色" options={roles.map(r => ({ value: r.id, label: r.role_name }))} />
+          <Form.Item name="role_id" label="角色" rules={[{ required: !hasPositionRole, message: '请选择角色' }]}>
+            <Select
+              placeholder={hasPositionRole ? '已从岗位自动获取角色' : '选择角色；关联员工后自动从岗位获取'}
+              disabled={hasPositionRole}
+              options={roles.map(r => ({ value: r.id, label: `${r.role_name} (${r.role_code})` }))}
+              onChange={(roleId) => {
+                const role = roles.find(r => r.id === roleId)
+                if (role?.role_code !== 'supplier') {
+                  form.setFieldValue('supplier_name', undefined)
+                }
+              }}
+            />
           </Form.Item>
+          {isSupplierRole && (
+            <Form.Item name="supplier_name" label="绑定供应商" rules={[{ required: true, message: '请选择供应商' }]}>
+              <Select
+                showSearch
+                placeholder="选择供应商"
+                loading={supplierLoading}
+                optionFilterProp="label"
+                options={suppliers.map(s => ({
+                  value: s.supplier_name,
+                  label: s.supplier_name,
+                  searchText: `${s.supplier_name} ${s.supplier_code || ''}`,
+                }))}
+                filterOption={(input, option) => String(option?.searchText || option?.label || '').toLowerCase().includes(input.toLowerCase())}
+                onSearch={handleSupplierSearch}
+                onDropdownVisibleChange={(open) => {
+                  if (open && suppliers.length === 0) fetchSuppliers()
+                }}
+                onChange={(supplierName) => {
+                  if (!editingUser && supplierName) {
+                    form.setFieldsValue({
+                      username: supplierName,
+                      display_name: supplierName,
+                      password: supplierName,
+                    })
+                  }
+                }}
+              />
+            </Form.Item>
+          )}
           <Form.Item name="is_active" label="状态" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="停用" />
           </Form.Item>

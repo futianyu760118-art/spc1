@@ -47,6 +47,7 @@ from app.models.basicdata.audit_log import AuditLog
 from app.models.basicdata.field_mapping import FieldMapping
 from app.models.basicdata.sync_sql_config import SyncSqlConfig
 from app.models.basicdata.sync_log import SyncLog
+from app.models.basicdata.position import Position
 from app.models.basicdata.file_asset import FileAsset
 from app.models.basicdata.feedback import Feedback
 
@@ -199,15 +200,23 @@ class DatabaseInitializer:
                 "data_source": "VARCHAR(32)",
                 "oa_org_id": "VARCHAR(64)",
             },
+            "scm_position": {
+                "oa_position_id": "VARCHAR(64)",
+                "role_id": "INTEGER",
+            },
             "scm_employee": {
                 "data_source": "VARCHAR(32)",
                 "oa_user_id": "VARCHAR(64) UNIQUE",
                 "login_id": "VARCHAR(64)",
+                "position_id": "BIGINT",
             },
             "sys_user": {
                 "login_version": "INTEGER NOT NULL DEFAULT 0",
                 "last_token_jti": "VARCHAR(64)",
                 "last_login_time": "TIMESTAMP",
+                "supplier_name": "VARCHAR(100)",
+                "emp_code": "VARCHAR(20)",
+                "font_size_scale": "VARCHAR(10) DEFAULT '1.0'",
             },
             "quality_issue": {
                 "erp_quality_id": "VARCHAR(64)",
@@ -280,6 +289,25 @@ class DatabaseInitializer:
                 print("  Unique constraint uq_scm_employee_oa_user_id ensured")
             except Exception as e:
                 print(f"  Employee oa_user_id unique constraint skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE scm_position ALTER COLUMN position_code DROP NOT NULL"
+                ))
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_position_code ON scm_position (position_code)"
+                ))
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_position_oa_position_id ON scm_position (oa_position_id) WHERE oa_position_id IS NOT NULL"
+                ))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_scm_employee_position_id ON scm_employee (position_id)"
+                ))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_scm_position_role_id ON scm_position (role_id)"
+                ))
+                print("  Position indexes ensured")
+            except Exception as e:
+                print(f"  Position indexes skipped: {e}")
 
     async def backfill_sale_order_id(self):
         """Backfill sale_order_id on sale_order_line by matching order_no"""
@@ -351,7 +379,12 @@ class DatabaseInitializer:
                             "announcements": ["create", "read", "update", "delete"],
                             "users": ["create", "read", "update", "delete"],
                             "audit": ["read"],
-                            "settings": ["create", "read", "update", "delete"]
+                            "settings": ["create", "read", "update", "delete"],
+                            "topbar.share": ["read"],
+                            "topbar.feedback": ["read"],
+                            "topbar.ai_search": ["read"],
+                            "topbar.font_size": ["read"],
+                            "topbar.notifications": ["read"]
                         }
                     },
                     {
@@ -388,7 +421,12 @@ class DatabaseInitializer:
                             "basicdata.data": ["read"],
                             "basicdata.feedback": ["create", "read"],
                             "announcements": ["read"],
-                            "audit": ["read"]
+                            "audit": ["read"],
+                            "topbar.share": ["read"],
+                            "topbar.feedback": ["read"],
+                            "topbar.ai_search": ["read"],
+                            "topbar.font_size": ["read"],
+                            "topbar.notifications": ["read"]
                         }
                     },
                     {
@@ -416,7 +454,12 @@ class DatabaseInitializer:
                             "basicdata.data": ["read"],
                             "basicdata.feedback": ["create", "read"],
                             "announcements": ["read"],
-                            "audit": ["read"]
+                            "audit": ["read"],
+                            "topbar.share": ["read"],
+                            "topbar.feedback": ["read"],
+                            "topbar.ai_search": ["read"],
+                            "topbar.font_size": ["read"],
+                            "topbar.notifications": ["read"]
                         }
                     },
                     {
@@ -451,7 +494,12 @@ class DatabaseInitializer:
                             "basicdata.data": ["read"],
                             "basicdata.feedback": ["create", "read", "update"],
                             "announcements": ["read"],
-                            "audit": ["read"]
+                            "audit": ["read"],
+                            "topbar.share": ["read"],
+                            "topbar.feedback": ["read"],
+                            "topbar.ai_search": ["read"],
+                            "topbar.font_size": ["read"],
+                            "topbar.notifications": ["read"]
                         }
                     },
                     {
@@ -479,7 +527,22 @@ class DatabaseInitializer:
                             "basicdata.data": ["read"],
                             "basicdata.feedback": ["create", "read", "update"],
                             "announcements": ["read"],
-                            "audit": ["read"]
+                            "audit": ["read"],
+                            "topbar.share": ["read"],
+                            "topbar.feedback": ["read"],
+                            "topbar.ai_search": ["read"],
+                            "topbar.font_size": ["read"],
+                            "topbar.notifications": ["read"]
+                        }
+                    },
+                    {
+                        "role_code": "supplier",
+                        "role_name": "供应商",
+                        "permissions": {
+                            "materials.purchase_plan": ["read"],
+                            "materials.supplier_risk": ["read"],
+                            "topbar.font_size": ["read"],
+                            "topbar.notifications": ["read"],
                         }
                     }
                 ]
@@ -760,6 +823,119 @@ class DatabaseInitializer:
             except Exception as e:
                 await session.rollback()
                 print(f"Error seeding field mapping: {e}")
+                raise
+
+    async def seed_normal_order_standards(self):
+        """Seed normal order delivery and material kit readiness standards."""
+        print("Seeding normal order standards...")
+        content = """21、订单总交付标准周期为31天，供应链内部交付期为28天。其中物料采购周期为20天，组、包装车间周期为5天，前道车间、光电车间、品质部检验包含在供应链内部交付期合理安排。这个是正常订单的标准，特殊的就可以手动调整。
+
+24、物料齐套装配车间标准：组装7天齐套，包装包材3天齐套。同时执行包材提前送大货样进行检验，成品支架提前3天送大货样进行检验，合格后待通知送货。"""
+
+        async with AsyncSessionLocal() as session:
+            try:
+                await session.execute(text("""
+                    INSERT INTO node_standard (
+                        node_code,
+                        node_name,
+                        time_value,
+                        time_unit,
+                        applicable_scene,
+                        description,
+                        is_active,
+                        created_by
+                    )
+                    VALUES
+                        ('NORMAL_ORDER_TOTAL_DELIVERY', '正常订单总交付标准周期', 31, '天', '通用', '订单总交付标准周期为31天', true, 'admin'),
+                        ('SUPPLY_CHAIN_INTERNAL_DELIVERY', '供应链内部交付期', 28, '天', '通用', '供应链内部交付期为28天', true, 'admin'),
+                        ('MATERIAL_PROCUREMENT_CYCLE', '物料采购周期', 20, '天', '通用', '物料采购周期为20天', true, 'admin'),
+                        ('ASSEMBLY_PACKAGING_WORKSHOP_CYCLE', '组、包装车间周期', 5, '天', '通用', '组、包装车间周期为5天', true, 'admin'),
+                        ('ASSEMBLY_MATERIAL_KIT_READY', '组装齐套标准', 7, '天', '通用', '组装7天齐套', true, 'admin'),
+                        ('PACKAGING_MATERIAL_KIT_READY', '包装包材齐套标准', 3, '天', '通用', '包装包材3天齐套', true, 'admin'),
+                        ('FINISHED_BRACKET_SAMPLE_INSPECTION_ADVANCE', '成品支架大货样检验提前期', 3, '天', '通用', '成品支架提前3天送大货样进行检验', true, 'admin')
+                    ON CONFLICT (node_code) DO UPDATE
+                    SET node_name = EXCLUDED.node_name,
+                        time_value = EXCLUDED.time_value,
+                        time_unit = EXCLUDED.time_unit,
+                        applicable_scene = EXCLUDED.applicable_scene,
+                        description = EXCLUDED.description,
+                        is_active = EXCLUDED.is_active,
+                        created_by = COALESCE(node_standard.created_by, EXCLUDED.created_by),
+                        updated_at = now()
+                """))
+
+                await session.execute(text("""
+                    WITH upserted_document AS (
+                        INSERT INTO business_document (
+                            doc_type,
+                            code,
+                            title,
+                            applicable_product,
+                            applicable_order,
+                            applicable_process,
+                            current_version,
+                            status,
+                            created_by
+                        )
+                        VALUES (
+                            'order_standard',
+                            'STD-NORMAL-ORDER-DELIVERY',
+                            '正常订单交付与物料齐套标准',
+                            NULL,
+                            '正常订单',
+                            NULL,
+                            'V1.0',
+                            'published',
+                            'admin'
+                        )
+                        ON CONFLICT (doc_type, code) DO UPDATE
+                        SET title = EXCLUDED.title,
+                            applicable_product = EXCLUDED.applicable_product,
+                            applicable_order = EXCLUDED.applicable_order,
+                            applicable_process = EXCLUDED.applicable_process,
+                            current_version = EXCLUDED.current_version,
+                            status = EXCLUDED.status,
+                            updated_at = now()
+                        RETURNING id
+                    )
+                    INSERT INTO business_document_version (
+                        document_id,
+                        version_no,
+                        content,
+                        attachments,
+                        status,
+                        effective_date,
+                        published_at,
+                        published_by,
+                        created_by
+                    )
+                    SELECT
+                        id,
+                        'V1.0',
+                        :content,
+                        '[]'::jsonb,
+                        'published',
+                        DATE '2026-06-09',
+                        now(),
+                        'admin',
+                        'admin'
+                    FROM upserted_document
+                    ON CONFLICT (document_id, version_no) DO UPDATE
+                    SET content = EXCLUDED.content,
+                        attachments = EXCLUDED.attachments,
+                        status = EXCLUDED.status,
+                        effective_date = EXCLUDED.effective_date,
+                        published_at = COALESCE(business_document_version.published_at, EXCLUDED.published_at),
+                        published_by = EXCLUDED.published_by,
+                        updated_at = now()
+                """), {"content": content})
+
+                await session.commit()
+                print("Normal order standards seeded successfully")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding normal order standards: {e}")
                 raise
 
     async def seed_sample_data(self):
@@ -1109,6 +1285,18 @@ ORDER BY po.FBillNo
                         created_by="admin",
                     ),
                     SyncSqlConfig(
+                        sync_type="positions",
+                        description="Position - pull from OA position table",
+                        sql_text="SELECT position_code, oa_position_id, position_name, status FROM T_BD_POSITION ORDER BY position_code",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="full",
+                        sync_priority=18,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
                         sync_type="employees",
                         description="人员 — 从ERP员工表拉取",
                         sql_text="SELECT emp_code, emp_name, org_id, login_id, position, phone, email, status FROM T_BD_EMPLOYEE WHERE FModifyDate >= :since ORDER BY emp_code",
@@ -1119,7 +1307,7 @@ ORDER BY po.FBillNo
                         sync_enabled=False,
                         sync_interval="1d",
                         sync_strategy="incremental",
-                        sync_priority=18,
+                        sync_priority=19,
                         created_by="admin",
                     ),
                     SyncSqlConfig(
@@ -1167,6 +1355,7 @@ ORDER BY po.FBillNo
             await self.seed_users()
             await self.seed_risk_rules()
             await self.seed_field_mapping()
+            await self.seed_normal_order_standards()
             await self.seed_sync_sql_config()
             await self.seed_sample_data()
             
