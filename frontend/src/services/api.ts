@@ -154,6 +154,8 @@ export const materialApi = {
   },
   getPurchasePlanStats: (params: Record<string, any>) =>
     api.get('/materials/purchase-plan/stats', { params }),
+  getPurchasePlanAnalysis: (params: Record<string, any>) =>
+    api.get('/materials/purchase-plan/analysis', { params }),
   exportPurchasePlan: (params: Record<string, any>) =>
     api.get('/materials/purchase-plan/export', { params, responseType: 'blob' }),
   // 问题物料
@@ -193,6 +195,16 @@ export const materialApi = {
     api.get('/materials/supplier-payment', { params }),
   getSupplierPaymentSummary: (params: Record<string, any> = {}) =>
     api.get('/materials/supplier-payment/summary', { params }),
+}
+
+// ============ 供应商即时沟通 ============
+export const supplierMessageApi = {
+  list: (supplierName: string, params: Record<string, any> = {}) =>
+    api.get('/materials/supplier-messages', { params: { supplier_name: supplierName, ...params } }),
+  send: (data: { supplier_name: string; supplier_account?: string; content: string; po_no?: string }) =>
+    api.post('/materials/supplier-messages', data),
+  unread: (supplierName?: string, afterId?: number) =>
+    api.get('/materials/supplier-messages/unread', { params: { supplier_name: supplierName, after_id: afterId } }),
 }
 
 // ============ ETA (订单交付中心) ============

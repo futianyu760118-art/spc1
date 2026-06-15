@@ -243,8 +243,9 @@ export default function FeedbackManagement() {
           onChange={(_pag: any, tableFilters: any, sorter: any) => {
             const sortField = sorter.field
             const sortOrder = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : undefined
-            setSortInfo({ sort_by: sortField, sort_order: sortOrder })
-            // 使用表格筛选器覆盖顶部筛选
+            if (sortField !== sortInfo.sort_by || sortOrder !== sortInfo.sort_order) {
+              setSortInfo({ sort_by: sortField, sort_order: sortOrder })
+            }
             if (tableFilters.type?.length) setFilterType(tableFilters.type.join(','))
             else if (tableFilters.type !== undefined) setFilterType(undefined)
             if (tableFilters.severity?.length) setFilterSeverity(tableFilters.severity.join(','))

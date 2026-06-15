@@ -8,12 +8,15 @@ import {
   ShoppingOutlined, ClockCircleOutlined, CheckCircleOutlined,
   WarningOutlined, ExclamationCircleOutlined, StopOutlined,
   DownloadOutlined, DownOutlined, MessageOutlined, CopyOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { materialApi, orderApi } from '../../../services/api'
 import { formatDate } from '../../../utils'
 import { useExport } from '../../../hooks/useExport'
 import { useAuthStore } from '../../../store/auth'
+import AnalysisCharts from './components/AnalysisCharts'
+import SupplierChatModal from './components/SupplierChatModal'
 
 interface PlanRow {
   id: number
@@ -76,6 +79,7 @@ export default function PurchasePlan() {
     supplier_account: '',
     material_code: '',
     material_name: '',
+    material_property: undefined as number | undefined,
     spec_model: '',
     unit: '',
     owner: '',
@@ -102,9 +106,8 @@ export default function PurchasePlan() {
   const { exporting, exportData } = useExport()
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
   const [batchEditModal, setBatchEditModal] = useState(false)
-  const [contactModal, setContactModal] = useState(false)
-  const [contactRecord, setContactRecord] = useState<PlanRow | null>(null)
-  const [contactText, setContactText] = useState('')
+  const [chatModalOpen, setChatModalOpen] = useState(false)
+  const [chatRecord, setChatRecord] = useState<PlanRow | null>(null)
   const [savingCell, setSavingCell] = useState<string | null>(null)
   const [editingCell, setEditingCell] = useState<string | null>(null)
 
@@ -120,6 +123,7 @@ export default function PurchasePlan() {
     if (filters.inspection_date) { p.inspection_start = filters.inspection_date[0]; p.inspection_end = filters.inspection_date[1] }
     if (filters.po_qty) { p.po_qty_min = filters.po_qty[0]; p.po_qty_max = filters.po_qty[1] }
     if (filters.received_qty) { p.received_qty_min = filters.received_qty[0]; p.received_qty_max = filters.received_qty[1] }
+    if (filters.material_property !== undefined) p.material_property = filters.material_property
     if (filters.only_shortage) p.only_shortage = true
     return p
   }, [filters])
@@ -131,6 +135,13 @@ export default function PurchasePlan() {
     exportData(`/api/v1/materials/purchase-plan/export`, params, `采购到料计划.${ext}`)
   }
   const [stats, setStats] = useState({ total: 0, pending: 0, arrived: 0, inspected: 0, overdue: 0, stagnant: 0 })
+  const [showCharts, setShowCharts] = useState(false)
+  const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [analysisData, setAnalysisData] = useState<{
+    status_distribution: { name: string; value: number; color?: string }[]
+    supplier_overdue_top5: { name: string; value: number }[]
+    material_shortage_top5: { name: string; value: number }[]
+  }>({ status_distribution: [], supplier_overdue_top5: [], material_shortage_top5: [] })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -173,6 +184,26 @@ export default function PurchasePlan() {
   }, [apiFilterParams])
 
   useEffect(() => { loadStats() }, [loadStats])
+
+  const loadAnalysis = useCallback(async () => {
+    setAnalysisLoading(true)
+    try {
+      const res: any = await materialApi.getPurchasePlanAnalysis(apiFilterParams)
+      setAnalysisData(res.data)
+    } catch (e: any) {
+      console.error('加载分析数据失败', e)
+    } finally {
+      setAnalysisLoading(false)
+    }
+  }, [apiFilterParams])
+
+  const toggleCharts = () => {
+    const next = !showCharts
+    setShowCharts(next)
+    if (next) {
+      loadAnalysis()
+    }
+  }
 
   const openEdit = (row: PlanRow) => {
     setEditRecord(row)
@@ -420,35 +451,9 @@ export default function PurchasePlan() {
     }
   }
 
-  const buildSupplierMessage = (row: PlanRow) => {
-    return [
-      `${row.supplier_name || '供应商'}，您好：`,
-      '请确认以下物料的交付安排。',
-      `采购单号：${row.po_no || '-'}`,
-      `物料：${row.material_code}${row.material_name ? ` / ${row.material_name}` : ''}`,
-      `规格型号：${row.spec_model || '-'}`,
-      `关联订单：${row.order_no || '-'}`,
-      `计划数量：${row.po_qty ?? '-'}${row.unit || ''}`,
-      `已收数量：${row.received_qty ?? 0}${row.unit || ''}`,
-      `缺料数量：${row.shortage_qty && row.shortage_qty > 0 ? row.shortage_qty : '-'}`,
-      `承诺交货日期：${row.eta ? formatDate(row.eta) : '-'}`,
-      '请回复最新交期、可交数量及异常原因，谢谢。',
-    ].join('\n')
-  }
-
   const openContact = (row: PlanRow) => {
-    setContactRecord(row)
-    setContactText(buildSupplierMessage(row))
-    setContactModal(true)
-  }
-
-  const copyContactText = async () => {
-    try {
-      await navigator.clipboard.writeText(contactText)
-      message.success('沟通内容已复制')
-    } catch {
-      message.error('复制失败，请手动复制')
-    }
+    setChatRecord(row)
+    setChatModalOpen(true)
   }
 
   const getTextFilterProps = (dataIndex: string) => ({
@@ -702,6 +707,15 @@ export default function PurchasePlan() {
         ))}
       </Row>
 
+      {showCharts && (
+        <AnalysisCharts
+          loading={analysisLoading}
+          statusDistribution={analysisData.status_distribution}
+          supplierOverdueTop5={analysisData.supplier_overdue_top5}
+          materialShortageTop5={analysisData.material_shortage_top5}
+        />
+      )}
+
       <div className="card-modern" style={{ padding: '14px 20px', marginBottom: 16 }}>
         <Row gutter={12} align="middle">
           <Col>
@@ -717,6 +731,13 @@ export default function PurchasePlan() {
           <Col flex="auto" />
           <Col>
             <Space>
+              <Button
+                icon={<BarChartOutlined />}
+                type={showCharts ? 'primary' : 'default'}
+                onClick={toggleCharts}
+              >
+                {showCharts ? '隐藏图表' : '分析图表'}
+              </Button>
               {!supplierReadOnly && selectedRowKeys.length > 0 && (
                 <Button type="primary" icon={<EditOutlined />} onClick={() => setBatchEditModal(true)}>
                   批量编辑 ({selectedRowKeys.length})
@@ -809,26 +830,11 @@ export default function PurchasePlan() {
         </div>
       </div>
 
-      <Modal
-        title={`供应商沟通${contactRecord?.supplier_name ? ` - ${contactRecord.supplier_name}` : ''}`}
-        open={contactModal}
-        onCancel={() => setContactModal(false)}
-        width={620}
-        footer={[
-          <Button key="copy" type="primary" icon={<CopyOutlined />} onClick={copyContactText}>复制内容</Button>,
-          <Button key="close" onClick={() => setContactModal(false)}>关闭</Button>,
-        ]}
-      >
-        <Row gutter={12} style={{ marginBottom: 12 }}>
-          <Col span={12}><span style={{ color: '#64748b' }}>供应商账号</span><div>{contactRecord?.supplier_account || '-'}</div></Col>
-          <Col span={12}><span style={{ color: '#64748b' }}>负责人</span><div>{contactRecord?.owner || '-'}</div></Col>
-        </Row>
-        <Input.TextArea
-          value={contactText}
-          onChange={e => setContactText(e.target.value)}
-          rows={10}
-        />
-      </Modal>
+      <SupplierChatModal
+        open={chatModalOpen}
+        record={chatRecord}
+        onClose={() => setChatModalOpen(false)}
+      />
 
       <Modal
         title="新增采购到料计划"

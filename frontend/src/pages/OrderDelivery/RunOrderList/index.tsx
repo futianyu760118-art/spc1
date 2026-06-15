@@ -95,11 +95,11 @@ export default function RunOrderList() {
   useEffect(() => { fetchOrders() }, [fetchOrders])
 
   const handleTableChange = (pagination: any, tableFilters: any, sorter: any) => {
-    let sortField = sorter.field
     const sortOrder = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : undefined
-    const orderTypeFilter = tableFilters.order_type?.length > 0 ? tableFilters.order_type : []
-    const orderStatusFilter = tableFilters.order_status?.length > 0 ? tableFilters.order_status : []
-    const isDomesticFilter = tableFilters.is_domestic?.length > 0 ? tableFilters.is_domestic : []
+    const sortField = sortOrder ? sorter.field : undefined
+    const orderTypeFilter = tableFilters?.order_type?.length > 0 ? tableFilters.order_type : []
+    const orderStatusFilter = tableFilters?.order_status?.length > 0 ? tableFilters.order_status : []
+    const isDomesticFilter = tableFilters?.is_domestic?.length > 0 ? tableFilters.is_domestic : []
     setSortInfo({ sort_by: sortField, sort_order: sortOrder })
     setFilters(f => ({ ...f, order_type: orderTypeFilter, order_status: orderStatusFilter, is_domestic: isDomesticFilter }))
   }

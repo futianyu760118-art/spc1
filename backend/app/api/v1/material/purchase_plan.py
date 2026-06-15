@@ -477,6 +477,7 @@ async def export_purchase_plan(
     sort_order: Optional[str] = Query(None),
     material_code: Optional[str] = Query(None),
     material_name: Optional[str] = Query(None),
+    material_property: Optional[int] = Query(None),
     spec_model: Optional[str] = Query(None),
     unit: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
@@ -502,6 +503,7 @@ async def export_purchase_plan(
     base = _build_filters(
         None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
+        material_property=material_property,
         spec_model=spec_model, unit=unit, owner=owner,
         arrival_hour_note=arrival_hour_note,
         po_date_start=po_date_start, po_date_end=po_date_end,
@@ -570,6 +572,7 @@ async def get_purchase_plan_stats(
     keyword: Optional[str] = Query(None),
     material_code: Optional[str] = Query(None),
     material_name: Optional[str] = Query(None),
+    material_property: Optional[int] = Query(None),
     spec_model: Optional[str] = Query(None),
     unit: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
@@ -596,6 +599,7 @@ async def get_purchase_plan_stats(
     base = _build_filters(
         None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
+        material_property=material_property,
         spec_model=spec_model, unit=unit, owner=owner,
         arrival_hour_note=arrival_hour_note,
         po_date_start=po_date_start, po_date_end=po_date_end,

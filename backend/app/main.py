@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.api.v1 import api_router
 from app.services.basicdata.sync_scheduler import scheduler  # noqa: F401
 from app.services.exception.risk_scheduler import risk_scheduler  # noqa: F401
+from app.services.scheduler.overdue_checker import overdue_checker  # noqa: F401
 
 
 class SafeJSONEncoder(json.JSONEncoder):
@@ -91,8 +92,11 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     # 启动时：开启风险评估定时调度
     risk_scheduler.start()
+    # 启动时：开启逾期未到料检查
+    overdue_checker.start()
     yield
     # 关闭时：停止调度器
+    overdue_checker.stop()
     risk_scheduler.stop()
     scheduler.stop()
 

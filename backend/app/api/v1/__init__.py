@@ -14,11 +14,13 @@ api_router.include_router(order.run_order_router, prefix="/run-orders", tags=["�
 
 # Material center
 api_router.include_router(material.purchase_plan_router, prefix="/materials/purchase-plan", tags=["物料齐套中心-采购到料计划"])
+api_router.include_router(material.purchase_plan_analysis_router, prefix="/materials/purchase-plan/analysis", tags=["物料齐套中心-采购到料计划分析"])
 api_router.include_router(material.issues_router, prefix="/materials/issues", tags=["物料齐套中心-问题物料"])
 api_router.include_router(material.long_lead_router, prefix="/materials/long-lead", tags=["物料齐套中心-长交期物料"])
 api_router.include_router(material.kit_analysis_router, prefix="/materials/kit-analysis", tags=["物料齐套中心-齐套分析"])
 api_router.include_router(material.supplier_risk_router, prefix="/materials/supplier-risk", tags=["物料齐套中心-供应商风险"])
 api_router.include_router(material.supplier_payment_router, prefix="/materials/supplier-payment", tags=["物料齐套中心-供应商付款排程"])
+api_router.include_router(material.supplier_message_router, prefix="/materials/supplier-messages", tags=["物料齐套中心-供应商即时沟通"])
 api_router.include_router(material.po_router, prefix="/materials", tags=["物料齐套中心-ERP采购订单"])
 
 # Production center

@@ -340,3 +340,27 @@ class SupplierPaymentSummary(BaseModel):
     total_payable: float
     total_monthly_due: float
     supplier_count: int
+    overdue_amount: float = 0.0
+    not_due_amount: float = 0.0
+
+
+# ============ 供应商即时沟通消息 ============
+
+class SupplierMessageCreate(BaseModel):
+    supplier_name: str
+    supplier_account: Optional[str] = None
+    content: str
+    po_no: Optional[str] = None
+
+
+class SupplierMessageOut(BaseModel):
+    id: int
+    supplier_name: str
+    supplier_account: Optional[str] = None
+    sender_id: int
+    sender_name: str
+    content: str
+    po_no: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

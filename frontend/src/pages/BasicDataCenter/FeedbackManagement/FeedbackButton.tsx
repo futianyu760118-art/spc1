@@ -103,6 +103,10 @@ export default function FeedbackButton() {
           return r ? { key: r.key, url: r.url, name: r.name, size: r.size, mime: r.mime } : null
         })
         .filter(Boolean)
+      if (attachments.length === 0) {
+        message.warning('请至少上传一张图片或附件')
+        return
+      }
       setSubmitting(true)
       await feedbackApi.create({ ...values, attachments })
       message.success('感谢您的反馈！我们会尽快处理')
@@ -166,7 +170,11 @@ export default function FeedbackButton() {
               showCount
             />
           </Form.Item>
-          <Form.Item label="粘贴图片（可选）" extra="点击输入框后按 Ctrl+V，可直接粘贴截图或复制的图片">
+          <Form.Item
+            label="粘贴图片（必填）"
+            extra="点击输入框后按 Ctrl+V，可直接粘贴截图或复制的图片（至少上传一张）"
+            required
+          >
             <Input.TextArea
               rows={2}
               placeholder="点击这里粘贴图片，图片会自动上传到附件列表"
@@ -216,7 +224,7 @@ export default function FeedbackButton() {
               </div>
             )}
           </Form.Item>
-          <Form.Item label="附件（可选）" extra="单文件≤10MB，最多5个">
+          <Form.Item label="附件（必填）" extra="单文件≤10MB，最多5个（至少上传一个）" required>
             <Upload
               customRequest={handleUpload}
               fileList={fileList}
