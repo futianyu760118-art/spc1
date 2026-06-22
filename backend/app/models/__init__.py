@@ -34,6 +34,7 @@ from app.models.rules.status_dictionary import StatusDictionary
 
 # 基础数据与集成中心
 from app.models.basicdata.user import SysUser, SysRole
+from app.models.basicdata.user_org_scope import UserOrgScope  # noqa: F401
 from app.models.basicdata.audit_log import AuditLog
 from app.models.basicdata.field_mapping import FieldMapping
 from app.models.basicdata.sync_sql_config import SyncSqlConfig  # noqa: F401

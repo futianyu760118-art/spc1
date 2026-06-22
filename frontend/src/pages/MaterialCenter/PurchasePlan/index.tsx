@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   Table, Tag, Input, InputNumber, Select, Button, Space, message, Modal, Form,
-  DatePicker, Upload, Tooltip, Row, Col, Card, Dropdown,
+  DatePicker, Upload, Tooltip, Row, Col, Card, Dropdown, Switch,
 } from 'antd'
 import {
   SearchOutlined, FilterOutlined, ReloadOutlined, UploadOutlined, PlusOutlined, EditOutlined,
@@ -41,11 +41,12 @@ interface PlanRow {
   shortage_qty: number | null
   owner: string | null
   po_date: string | null
+  is_closed: number
 }
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  inspected: { label: '已检验', color: 'success' },
-  arrived: { label: '已到料', color: 'processing' },
+  fully_received: { label: '已到齐', color: 'success' },
+  partial_received: { label: '部分到', color: 'warning' },
   overdue: { label: '逾期未到', color: 'error' },
   pending: { label: '待到料', color: 'default' },
   stagnant: { label: '呆滞物料', color: 'warning' },
@@ -92,6 +93,7 @@ export default function PurchasePlan() {
     po_qty: null as [number, number] | null,
     received_qty: null as [number, number] | null,
     only_shortage: false,
+    is_closed: [] as string[],
   })
   const [sortBy, setSortBy] = useState<string>('')
   const [sortOrder, setSortOrder] = useState<string>('')
@@ -125,6 +127,7 @@ export default function PurchasePlan() {
     if (filters.received_qty) { p.received_qty_min = filters.received_qty[0]; p.received_qty_max = filters.received_qty[1] }
     if (filters.material_property !== undefined) p.material_property = filters.material_property
     if (filters.only_shortage) p.only_shortage = true
+    if (filters.is_closed.length) p.is_closed = filters.is_closed.join(',')
     return p
   }, [filters])
 
@@ -134,7 +137,7 @@ export default function PurchasePlan() {
     const ext = format === 'csv' ? 'csv' : 'xlsx'
     exportData(`/api/v1/materials/purchase-plan/export`, params, `采购到料计划.${ext}`)
   }
-  const [stats, setStats] = useState({ total: 0, pending: 0, arrived: 0, inspected: 0, overdue: 0, stagnant: 0 })
+  const [stats, setStats] = useState({ total: 0, pending: 0, partial_received: 0, fully_received: 0, overdue: 0, stagnant: 0, closed: 0 })
   const [showCharts, setShowCharts] = useState(false)
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisData, setAnalysisData] = useState<{
@@ -223,6 +226,7 @@ export default function PurchasePlan() {
       arrival_hour_note: row.arrival_hour_note,
       inspection_date: row.inspection_date ? dayjs(row.inspection_date) : null,
       owner: row.owner,
+      is_closed: row.is_closed,
     })
     setEditModal(true)
   }
@@ -244,6 +248,7 @@ export default function PurchasePlan() {
         arrival_hour_note: values.arrival_hour_note,
         inspection_date: values.inspection_date ? dayjs(values.inspection_date).format('YYYY-MM-DD') : null,
         owner: values.owner || null,
+        is_closed: values.is_closed ? 1 : 0,
       }
       await materialApi.updatePurchasePlan(editRecord.id, payload)
       message.success('保存成功')
@@ -420,6 +425,7 @@ export default function PurchasePlan() {
         supplier_account?: string
         actual_arrival_date?: string
         inspection_date?: string
+        is_closed?: boolean
         clear_fields?: string[]
       } = { ids: selectedRowKeys }
       if (values.eta) payload.eta = dayjs(values.eta).format('YYYY-MM-DD')
@@ -427,6 +433,7 @@ export default function PurchasePlan() {
       if (values.supplier_account !== undefined && values.supplier_account !== '') payload.supplier_account = values.supplier_account
       if (values.actual_arrival_date) payload.actual_arrival_date = dayjs(values.actual_arrival_date).format('YYYY-MM-DD')
       if (values.inspection_date) payload.inspection_date = dayjs(values.inspection_date).format('YYYY-MM-DD')
+      if (values.is_closed !== undefined && values.is_closed !== null) payload.is_closed = values.is_closed
       payload.clear_fields = values.clear_fields || []
       if (
         !payload.eta
@@ -434,6 +441,7 @@ export default function PurchasePlan() {
         && !payload.supplier_account
         && !payload.actual_arrival_date
         && !payload.inspection_date
+        && payload.is_closed === undefined
         && (!payload.clear_fields || payload.clear_fields.length === 0)
       ) {
         message.warning('请至少填写一个更新字段或选择清空字段')
@@ -641,7 +649,16 @@ export default function PurchasePlan() {
       sorter: true,
     },
     {
-      title: <Tooltip title="呆滞物料：收料数量超过下单数量">呆滞</Tooltip>, dataIndex: 'is_stagnant', width: 80, fixed: 'right' as const,
+      title: '关闭', dataIndex: 'is_closed', width: 70, fixed: 'right' as const, sorter: true,
+      filters: [{ text: '已关闭', value: 'closed' }, { text: '未关闭', value: 'open' }],
+      filteredValue: (filters as any).is_closed || null,
+      render: (v: number) => {
+        if (v === 1) return <Tag color="error">已关闭</Tag>
+        return <span style={{ color: '#cbd5e1' }}>-</span>
+      },
+    },
+    {
+      title: <Tooltip title="呆滞物料：收料数量超过下单数量">呆滞</Tooltip>, dataIndex: 'is_stagnant', width: 80, fixed: 'right' as const, sorter: true,
       filters: [{ text: '呆滞物料', value: 'stagnant' }],
       filteredValue: filters.po_status.includes('stagnant') ? ['stagnant'] as (string | number | boolean)[] : null,
       render: (v: boolean, row: PlanRow) => {
@@ -650,10 +667,10 @@ export default function PurchasePlan() {
       },
     },
     {
-      title: <Tooltip title="待到料 / 已到料 / 已检验 / 逾期未到 / 呆滞物料，依据到料时间与检验日期自动计算">状态</Tooltip>, dataIndex: 'po_status', width: 90, fixed: 'right' as const,
+      title: <Tooltip title="待到料 / 部分到 / 已到齐 / 逾期未到，依据收料数量自动计算">状态</Tooltip>, dataIndex: 'po_status', width: 90, fixed: 'right' as const, sorter: true,
       filters: Object.entries(STATUS_MAP).filter(([key]) => key !== 'stagnant').map(([key, val]) => ({ text: val.label, value: key })),
-      filteredValue: filters.po_status.filter(s => s !== 'stagnant').length ? filters.po_status.filter(s => s !== 'stagnant') as (string | number | boolean)[] : null,
-      render: (v: string) => {
+      filteredValue: filters.po_status.filter(s => s !== 'stagnant' && s !== 'closed').length ? filters.po_status.filter(s => s !== 'stagnant' && s !== 'closed') as (string | number | boolean)[] : null,
+      render: (v: string, row: PlanRow) => {
         const s = STATUS_MAP[v] || { label: v, color: 'default' }
         return <Tag color={s.color}>{s.label}</Tag>
       },
@@ -682,10 +699,11 @@ export default function PurchasePlan() {
         {[
           { title: '计划总数', value: stats.total, icon: <ShoppingOutlined />, color: '#6366f1' },
           { title: '待到料', value: stats.pending, icon: <ClockCircleOutlined />, color: '#f59e0b' },
-          { title: '已到料', value: stats.arrived, icon: <ExclamationCircleOutlined />, color: '#3b82f6' },
-          { title: '已检验', value: stats.inspected, icon: <CheckCircleOutlined />, color: '#16a34a' },
+          { title: '部分到', value: stats.partial_received, icon: <WarningOutlined />, color: '#f59e0b' },
+          { title: '已到齐', value: stats.fully_received, icon: <CheckCircleOutlined />, color: '#16a34a' },
           { title: '逾期未到', value: stats.overdue, icon: <WarningOutlined />, color: '#e11d48' },
           { title: '呆滞物料', value: stats.stagnant, icon: <StopOutlined />, color: '#d97706' },
+          { title: '已关闭', value: stats.closed, icon: <CheckCircleOutlined />, color: '#94a3b8' },
         ].map((card, i) => (
           <Col flex={1} key={i}>
             <Card
@@ -819,6 +837,7 @@ export default function PurchasePlan() {
               ...numUpdates,
               po_status: [...statusFilter, ...stagnantFilter],
               only_shortage: ((tableFilters?.shortage_qty as string[] | undefined) || []).includes('shortage'),
+              is_closed: (tableFilters?.is_closed as string[] | undefined) || [],
             } as typeof prev))
             // 排序
             const sortField = sorter.field as string | undefined
@@ -1008,6 +1027,11 @@ export default function PurchasePlan() {
                 <Input />
               </Form.Item>
             </Col>
+            <Col span={12}>
+              <Form.Item name="is_closed" label="关闭订单" valuePropName="checked" getValueFromEvent={(checked: boolean) => checked ? 1 : 0} getValueProps={(value: number) => ({ checked: value === 1 })}>
+                <Switch checkedChildren="已关闭" unCheckedChildren="开启" />
+              </Form.Item>
+            </Col>
           </Row>
         </Form>
       </Modal>
@@ -1035,6 +1059,9 @@ export default function PurchasePlan() {
           </Form.Item>
           <Form.Item name="inspection_date" label="检验日期">
             <DatePicker style={{ width: '100%' }} placeholder="选择检验日期" />
+          </Form.Item>
+          <Form.Item name="is_closed" label="关闭订单" valuePropName="checked" getValueFromEvent={(checked: boolean) => checked ? 1 : 0} getValueProps={(value: number) => ({ checked: value === 1 })}>
+            <Switch checkedChildren="已关闭" unCheckedChildren="开启" />
           </Form.Item>
           <Form.Item name="clear_fields" label="清空字段">
             <Select

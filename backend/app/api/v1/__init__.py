@@ -61,17 +61,6 @@ api_router.include_router(basicdata.announcements_router, prefix="/basicdata/ann
 api_router.include_router(basicdata.notifications_router, prefix="/notifications", tags=["通知中心"])
 api_router.include_router(basicdata.share_router, prefix="/share", tags=["页面分享"])
 
-# Legacy /masterdata compatibility routes
-api_router.include_router(masterdata.auth_router, prefix="/masterdata/auth", tags=["认证"])
-api_router.include_router(masterdata.users_router, prefix="/masterdata/users", tags=["用户管理"])
-api_router.include_router(masterdata.audit_router, prefix="/masterdata/audit", tags=["审计日志"])
-api_router.include_router(masterdata.import_export_router, prefix="/masterdata/import-export", tags=["导入导出"])
-api_router.include_router(masterdata.sync_router, prefix="/masterdata/sync", tags=["ERP同步"])
-api_router.include_router(masterdata.masterdata_router, prefix="/masterdata", tags=["基础数据管理"])
-api_router.include_router(masterdata.sync_sql_router, prefix="/masterdata/sync-sql", tags=["同步SQL配置"])
-api_router.include_router(masterdata.feedback_router, prefix="/masterdata/feedback", tags=["问题反馈"])
-api_router.include_router(masterdata.announcements_router, prefix="/masterdata/announcements", tags=["公告管理"])
-
 # Common files and assistant
 api_router.include_router(common.files_router, prefix="/files", tags=["文件"])
 api_router.include_router(assistant.assistant_router, prefix="/assistant", tags=["智能助手"])

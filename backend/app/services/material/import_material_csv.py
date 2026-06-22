@@ -110,12 +110,13 @@ async def import_purchase_plan_csv(filepath: str, db: AsyncSession) -> dict:
         inspection_date = _parse_date(row[11] if len(row) > 11 else '')
         po_date = _parse_date(row[12] if len(row) > 12 else '')
 
-        # 计算状态
+        # 计算状态（纯按收料数量推导，已到料状态已移除）
         today = date.today()
-        if inspection_date:
-            po_status = 'inspected'
-        elif actual_arrival_date:
-            po_status = 'arrived'
+        if received_qty is not None and received_qty > 0:
+            if po_qty is not None and received_qty >= po_qty:
+                po_status = 'fully_received'
+            else:
+                po_status = 'partial_received'
         elif source_eta and source_eta < today:
             po_status = 'overdue'
         else:
@@ -149,10 +150,11 @@ async def import_purchase_plan_csv(filepath: str, db: AsyncSession) -> dict:
             existing.arrival_hour_note = arrival_hour_note
             existing.inspection_date = inspection_date
             existing.po_date = po_date
-            if inspection_date:
-                existing.po_status = 'inspected'
-            elif actual_arrival_date:
-                existing.po_status = 'arrived'
+            if received_qty is not None and received_qty > 0:
+                if po_qty is not None and received_qty >= po_qty:
+                    existing.po_status = 'fully_received'
+                else:
+                    existing.po_status = 'partial_received'
             elif existing.eta and existing.eta < today:
                 existing.po_status = 'overdue'
             else:

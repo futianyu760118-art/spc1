@@ -4,7 +4,7 @@ import uuid
 
 from jose import JWTError, jwt
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +13,8 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.basicdata.user import SysUser, SysRole
 from app.models.basicdata.supplier import Supplier
+from app.models.basicdata.employee import Employee
+from app.services.basicdata.org_scope_service import resolve_user_org_scopes
 
 settings = get_settings()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_PREFIX}/auth/login")
@@ -163,6 +165,21 @@ class PermissionChecker:
 
         return merge_role_permission_additions(role_code, permissions)
 
+    async def _enrich_payload(self, payload: dict, db: AsyncSession, user_id) -> dict:
+        """在 payload 中补充 oa_user_id 和 org_scope_ids"""
+        user_result = await db.execute(select(SysUser).where(SysUser.id == int(user_id)))
+        user = user_result.scalar_one_or_none()
+        oa_user_id = None
+        if user and user.emp_code:
+            emp_result = await db.execute(
+                select(Employee.oa_user_id).where(Employee.emp_code == user.emp_code)
+            )
+            oa_user_id = emp_result.scalar_one_or_none()
+        org_scope_ids = await resolve_user_org_scopes(db, int(user_id))
+        payload["oa_user_id"] = oa_user_id
+        payload["org_scope_ids"] = org_scope_ids
+        return payload
+
     async def __call__(self, token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
         from app.core.token_blacklist import is_token_blacklisted
 
@@ -216,7 +233,7 @@ class PermissionChecker:
                 )
 
         if role == "admin":
-            return payload
+            return await self._enrich_payload(payload, db, user_id)
 
         if role == "supplier" and self.action != "read":
             raise HTTPException(
@@ -238,6 +255,8 @@ class PermissionChecker:
                 if self.resource == allowed_resource or self.resource.split(".")[0] == allowed_resource.split(".")[0]:
                     # 检查请求的操作是否在分享权限中
                     if self.action in share_permissions:
+                        payload["oa_user_id"] = None
+                        payload["org_scope_ids"] = set()
                         return payload
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -259,14 +278,14 @@ class PermissionChecker:
         for resource in self._resource_candidates():
             allowed_actions = permissions.get(resource, [])
             if self.action in allowed_actions:
-                return payload
+                return await self._enrich_payload(payload, db, user_id)
         for resource in self._resource_candidates():
             if "." not in resource:
                 continue
             parent = resource.split(".")[0]
             parent_actions = permissions.get(parent, [])
             if self.action in parent_actions:
-                return payload
+                return await self._enrich_payload(payload, db, user_id)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"缺少 {self.resource}.{self.action} 权限",
@@ -275,7 +294,7 @@ class PermissionChecker:
 
 if __name__ == "__main__":
     """测试密码生成"""
-    password = "admin123"
+    password = "123456"
     hashed = get_password_hash(password)
     print(f"原始密码: {password}")
     print(f"哈希密码: {hashed}")

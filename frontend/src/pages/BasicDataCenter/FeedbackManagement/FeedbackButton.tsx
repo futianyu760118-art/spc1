@@ -96,6 +96,7 @@ export default function FeedbackButton() {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
+      setSubmitting(true)
       const attachments = fileList
         .filter(f => f.status === 'done')
         .map(f => {
@@ -103,11 +104,6 @@ export default function FeedbackButton() {
           return r ? { key: r.key, url: r.url, name: r.name, size: r.size, mime: r.mime } : null
         })
         .filter(Boolean)
-      if (attachments.length === 0) {
-        message.warning('请至少上传一张图片或附件')
-        return
-      }
-      setSubmitting(true)
       await feedbackApi.create({ ...values, attachments })
       message.success('感谢您的反馈！我们会尽快处理')
       setOpen(false)
@@ -171,9 +167,8 @@ export default function FeedbackButton() {
             />
           </Form.Item>
           <Form.Item
-            label="粘贴图片（必填）"
-            extra="点击输入框后按 Ctrl+V，可直接粘贴截图或复制的图片（至少上传一张）"
-            required
+            label="粘贴图片"
+            extra="点击输入框后按 Ctrl+V，可直接粘贴截图或复制的图片"
           >
             <Input.TextArea
               rows={2}
@@ -224,7 +219,7 @@ export default function FeedbackButton() {
               </div>
             )}
           </Form.Item>
-          <Form.Item label="附件（必填）" extra="单文件≤10MB，最多5个（至少上传一个）" required>
+          <Form.Item label="附件" extra="单文件≤10MB，最多5个">
             <Upload
               customRequest={handleUpload}
               fileList={fileList}

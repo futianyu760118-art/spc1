@@ -45,6 +45,7 @@ class SaleOrderOut(BaseModel):
     first_article_date: Optional[date] = None
     assembly_start_date: Optional[date] = None
     assembly_complete_date: Optional[date] = None
+    is_closed: int = 0
     remark: Optional[str] = None
     # ── 风险评估字段 ──
     risk_score: Optional[float] = None
@@ -112,6 +113,7 @@ class SaleOrderUpdate(BaseModel):
     first_article_date: Optional[date] = None
     assembly_start_date: Optional[date] = None
     assembly_complete_date: Optional[date] = None
+    is_closed: Optional[int] = None
     remark: Optional[str] = None
 
 
@@ -328,6 +330,7 @@ class ProductMaterialItemOut(BaseModel):
     po_count: int = 0
     is_stagnant: bool = False
     stagnant_qty: Optional[float] = None
+    is_closed: int = 0
 
 
 class OrderProductMaterialsOut(BaseModel):
@@ -342,6 +345,5 @@ class OrderProductMaterialsOut(BaseModel):
     shortage_count: int = 0
     overdue_count: int = 0
     arrived_count: int = 0
-    inspected_count: int = 0
     kit_rate: float = 0
     materials: List[ProductMaterialItemOut] = []

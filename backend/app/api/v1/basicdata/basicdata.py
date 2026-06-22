@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
+from sqlalchemy.orm import aliased
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker
@@ -25,11 +26,7 @@ from app.models.basicdata import (
     Customer, Supplier, Material, SKU, Product,
     Warehouse, Process, Organization, Employee, Position,
 )
-from app.models.basicdata.user import SysRole
-from app.services.basicdata.position_role_service import (
-    ensure_position_role,
-    sync_user_role_from_employee,
-)
+from app.services.basicdata.position_role_service import sync_user_role_from_employee
 router = APIRouter()
 
 
@@ -47,19 +44,31 @@ def _apply_sort(query, model, sort_by: Optional[str], sort_order: Optional[str],
     return query.order_by(*order_clauses)
 
 
-def _employee_out(employee: Employee, position_name: Optional[str] = None) -> EmployeeOut:
+def _employee_out(employee: Employee, position_name: Optional[str] = None, manager_name: Optional[str] = None) -> EmployeeOut:
     data = EmployeeOut.model_validate(employee)
     data.position_name = position_name or employee.position
+    data.manager_name = manager_name
     return data
 
 
-def _position_out(position: Position, role: Optional[SysRole] = None) -> PositionOut:
-    data = PositionOut.model_validate(position)
-    if role:
-        data.role_id = role.id
-        data.role_code = role.role_code
-        data.role_name = role.role_name
-    return data
+def _can_manage_employee(current_user: dict, target_employee: Employee) -> bool:
+    """检查当前用户是否有权限管理目标员工（上级管理下级或自己管理自己）"""
+    if current_user.get("role") == "admin":
+        return True
+    current_oa_user_id = current_user.get("oa_user_id")
+    if not current_oa_user_id:
+        return False
+    # 可以管理自己
+    if target_employee.oa_user_id == current_oa_user_id:
+        return True
+    # 可以管理下级
+    if target_employee.manager_oa_user_id == current_oa_user_id:
+        return True
+    return False
+
+
+def _position_out(position: Position) -> PositionOut:
+    return PositionOut.model_validate(position)
 
 
 
@@ -967,7 +976,7 @@ async def list_positions(
         "status": Position.status,
         "create_time": Position.create_time,
     }
-    query = select(Position, SysRole).outerjoin(SysRole, Position.role_id == SysRole.id)
+    query = select(Position)
     if keyword:
         like = f"%{keyword}%"
         query = query.where(
@@ -986,28 +995,8 @@ async def list_positions(
     total = (await db.execute(count_q)).scalar() or 0
     query = _apply_sort(query, Position, sort_by, sort_order, SORTABLE)
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
-    items = [_position_out(position, role) for position, role in result.all()]
+    items = [_position_out(position) for position in result.scalars().all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
-
-
-@router.post("/positions/ensure-roles", response_model=ResponseModel[dict])
-async def ensure_position_roles(
-    current_user: dict = Depends(PermissionChecker("users", "create")),
-    db: AsyncSession = Depends(get_db),
-):
-    stats = {"roles_created": 0, "roles_linked": 0}
-
-    result = await db.execute(select(Position).where(Position.role_id.is_(None)))
-    positions = result.scalars().all()
-    for position in positions:
-        _, role_created, linked = await ensure_position_role(db, position)
-        if role_created:
-            stats["roles_created"] += 1
-        if linked:
-            stats["roles_linked"] += 1
-
-    await db.commit()
-    return ResponseModel(data=stats)
 
 
 @router.get("/positions/{position_id}", response_model=PositionOut)
@@ -1016,15 +1005,11 @@ async def get_position(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data", "read")),
 ):
-    result = await db.execute(
-        select(Position, SysRole)
-        .outerjoin(SysRole, Position.role_id == SysRole.id)
-        .where(Position.id == position_id)
-    )
-    row = result.one_or_none()
-    if not row:
+    result = await db.execute(select(Position).where(Position.id == position_id))
+    position = result.scalar_one_or_none()
+    if not position:
         raise HTTPException(status_code=404, detail="Position not found")
-    return _position_out(row[0], row[1])
+    return _position_out(position)
 
 
 @router.get("/employees", response_model=ResponseModel[dict])
@@ -1039,7 +1024,7 @@ async def list_employees(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))
 ):
-    """查询人员列表（分页+排序+筛选）"""
+    """查询人员列表（分页+排序+筛选），支持数据权限过滤"""
     SORTABLE = {
         'emp_code': Employee.emp_code,
         'emp_name': Employee.emp_name,
@@ -1050,7 +1035,13 @@ async def list_employees(
         'phone': Employee.phone,
         'status': Employee.status,
     }
-    query = select(Employee, Position.position_name).outerjoin(Position, Employee.position_id == Position.id)
+    # Manager 别名用于关联上级姓名
+    Manager = aliased(Employee)
+    query = (
+        select(Employee, Position.position_name, Manager.emp_name.label("manager_name"))
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Manager, Employee.manager_oa_user_id == Manager.oa_user_id)
+    )
     if keyword:
         like = f"%{keyword}%"
         query = query.where(or_(Employee.emp_code.ilike(like), Employee.emp_name.ilike(like)))
@@ -1065,22 +1056,25 @@ async def list_employees(
     total = (await db.execute(count_q)).scalar() or 0
     query = _apply_sort(query, Employee, sort_by, sort_order, SORTABLE)
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
-    items = [_employee_out(employee, position_name) for employee, position_name in result.all()]
+    items = [_employee_out(employee, position_name, mgr_name) for employee, position_name, mgr_name in result.all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
 @router.get("/employees/{employee_id}", response_model=EmployeeOut)
 async def get_employee(employee_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
     """查询单个人员"""
+    Manager = aliased(Employee)
     result = await db.execute(
-        select(Employee, Position.position_name)
+        select(Employee, Position.position_name, Manager.emp_name.label("manager_name"))
         .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Manager, Employee.manager_oa_user_id == Manager.oa_user_id)
         .filter(Employee.id == employee_id)
     )
     row = result.one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Employee not found")
-    return _employee_out(row[0], row[1])
+    employee, position_name, manager_name = row
+    return _employee_out(employee, position_name, manager_name)
 
 
 @router.post("/employees", response_model=EmployeeOut)
@@ -1109,7 +1103,12 @@ async def create_employee(employee: EmployeeCreate, db: AsyncSession = Depends(g
     if db_item.position_id:
         position_result = await db.execute(select(Position.position_name).where(Position.id == db_item.position_id))
         position_name = position_result.scalar_one_or_none()
-    return _employee_out(db_item, position_name)
+    # 查询上级姓名
+    manager_name = None
+    if db_item.manager_oa_user_id:
+        mgr_result = await db.execute(select(Employee.emp_name).where(Employee.oa_user_id == db_item.manager_oa_user_id))
+        manager_name = mgr_result.scalar_one_or_none()
+    return _employee_out(db_item, position_name, manager_name)
 
 
 @router.put("/employees/{employee_id}", response_model=EmployeeOut)
@@ -1120,6 +1119,10 @@ async def update_employee(employee_id: int, employee: EmployeeUpdate, db: AsyncS
     if not db_item:
         raise HTTPException(status_code=404, detail="人员不存在")
     
+    # 上下级权限检查：非 admin 只能更新自己或下级
+    if not _can_manage_employee(current_user, db_item):
+        raise HTTPException(status_code=403, detail="无权编辑该员工信息")
+
     update_data = employee.model_dump(exclude_unset=True)
     if update_data.get("position_id"):
         position_result = await db.execute(select(Position).where(Position.id == update_data["position_id"]))
@@ -1137,7 +1140,12 @@ async def update_employee(employee_id: int, employee: EmployeeUpdate, db: AsyncS
     if db_item.position_id:
         position_result = await db.execute(select(Position.position_name).where(Position.id == db_item.position_id))
         position_name = position_result.scalar_one_or_none()
-    return _employee_out(db_item, position_name)
+    # 查询上级姓名
+    manager_name = None
+    if db_item.manager_oa_user_id:
+        mgr_result = await db.execute(select(Employee.emp_name).where(Employee.oa_user_id == db_item.manager_oa_user_id))
+        manager_name = mgr_result.scalar_one_or_none()
+    return _employee_out(db_item, position_name, manager_name)
 
 
 @router.delete("/employees/{employee_id}")
@@ -1148,6 +1156,10 @@ async def delete_employee(employee_id: int, db: AsyncSession = Depends(get_db), 
     if not db_item:
         raise HTTPException(status_code=404, detail="人员不存在")
     
+    # 上下级权限检查：非 admin 只能删除自己或下级
+    if not _can_manage_employee(current_user, db_item):
+        raise HTTPException(status_code=403, detail="无权删除该员工信息")
+
     await log_audit(db, "employee", db_item.id, "delete", operator=current_user["username"])
     await db.delete(db_item)
     await db.commit()

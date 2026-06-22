@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func, asc, desc, case
+from sqlalchemy import select, func, asc, desc, case, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from sqlalchemy.orm import selectinload
@@ -120,9 +120,9 @@ async def _get_order_kit_map(db: AsyncSession, order_nos: list[str]) -> dict[str
             func.max(
                 case(
                     (
-                        (PurchaseOrder.actual_arrival_date.isnot(None))
-                        | (PurchaseOrder.inspection_date.isnot(None))
-                        | (PurchaseOrder.received_qty > 0),
+                        (PurchaseOrder.received_qty > 0)
+                        & PurchaseOrder.po_qty.isnot(None)
+                        & (PurchaseOrder.received_qty >= PurchaseOrder.po_qty),
                         1,
                     ),
                     else_=0,
@@ -174,6 +174,7 @@ async def list_orders(
     packaging_status: Optional[str] = Query(None, description="包装状态，多选逗号分隔"),
     procurement_status: Optional[str] = Query(None, description="采购状态，多选逗号分隔"),
     delivery_completed: Optional[str] = Query(None, description="发货完成状态: yes/no"),
+    is_closed: Optional[str] = Query(None, description="是否关闭，多选逗号分隔如 1,0"),
     promised_date_start: Optional[str] = Query(None, description="合同交期开始日期 YYYY-MM-DD"),
     promised_date_end: Optional[str] = Query(None, description="合同交期结束日期 YYYY-MM-DD"),
     shipping_plan_start: Optional[str] = Query(None, description="出货计划开始日期 YYYY-MM-DD"),
@@ -276,6 +277,18 @@ async def list_orders(
         elif delivery_completed == 'no':
             query = query.where(SaleOrder.delivery_completed_date.is_(None))
             count_query = count_query.where(SaleOrder.delivery_completed_date.is_(None))
+    if is_closed:
+        closed_list = [s.strip() for s in is_closed.split(',') if s.strip()]
+        closed_conditions = []
+        for s in closed_list:
+            if s in ('1', 'true', 'True'):
+                closed_conditions.append(SaleOrder.is_closed == 1)
+            elif s in ('0', 'false', 'False'):
+                closed_conditions.append(SaleOrder.is_closed == 0)
+        if closed_conditions:
+            cond = or_(*closed_conditions)
+            query = query.where(cond)
+            count_query = count_query.where(cond)
     if promised_date_start:
         query = query.where(SaleOrder.promised_date >= datetime.strptime(promised_date_start, '%Y-%m-%d').date())
         count_query = count_query.where(SaleOrder.promised_date >= datetime.strptime(promised_date_start, '%Y-%m-%d').date())
@@ -339,7 +352,6 @@ async def list_orders(
     if order_type:
         types = [x.strip() for x in order_type.split(',') if x.strip()]
         if types:
-            from sqlalchemy import or_
             type_filters = []
             for t in types:
                 if t == 'big':
@@ -433,6 +445,16 @@ async def list_orders(
             stats_query = stats_query.where(SaleOrder.delivery_completed_date.isnot(None))
         elif delivery_completed == 'no':
             stats_query = stats_query.where(SaleOrder.delivery_completed_date.is_(None))
+    if is_closed:
+        closed_list = [s.strip() for s in is_closed.split(',') if s.strip()]
+        closed_conditions = []
+        for s in closed_list:
+            if s in ('1', 'true', 'True'):
+                closed_conditions.append(SaleOrder.is_closed == 1)
+            elif s in ('0', 'false', 'False'):
+                closed_conditions.append(SaleOrder.is_closed == 0)
+        if closed_conditions:
+            stats_query = stats_query.where(or_(*closed_conditions))
     if promised_date_start:
         stats_query = stats_query.where(SaleOrder.promised_date >= datetime.strptime(promised_date_start, '%Y-%m-%d').date())
     if promised_date_end:
@@ -486,7 +508,6 @@ async def list_orders(
                 if len(type_filters) == 1:
                     stats_query = stats_query.where(type_filters[0])
                 else:
-                    from sqlalchemy import or_
                     stats_query = stats_query.where(or_(*type_filters))
     if keyword:
         like_expr = f"%{keyword}%"
@@ -629,6 +650,7 @@ async def export_orders(
     packaging_status: Optional[str] = Query(None, description="包装状态，多选逗号分隔"),
     procurement_status: Optional[str] = Query(None, description="采购状态，多选逗号分隔"),
     delivery_completed: Optional[str] = Query(None, description="发货完成状态：yes/no"),
+    is_closed: Optional[str] = Query(None, description="是否关闭，多选逗号分隔如 1,0"),
     promised_date_start: Optional[str] = Query(None, description="合同交期开始日期 YYYY-MM-DD"),
     promised_date_end: Optional[str] = Query(None, description="合同交期结束日期 YYYY-MM-DD"),
     shipping_plan_start: Optional[str] = Query(None, description="出货计划开始日期 YYYY-MM-DD"),
@@ -714,6 +736,16 @@ async def export_orders(
             query = query.where(SaleOrder.delivery_completed_date.isnot(None))
         elif delivery_completed == 'no':
             query = query.where(SaleOrder.delivery_completed_date.is_(None))
+    if is_closed:
+        closed_list = [s.strip() for s in is_closed.split(',') if s.strip()]
+        closed_conditions = []
+        for s in closed_list:
+            if s in ('1', 'true', 'True'):
+                closed_conditions.append(SaleOrder.is_closed == 1)
+            elif s in ('0', 'false', 'False'):
+                closed_conditions.append(SaleOrder.is_closed == 0)
+        if closed_conditions:
+            query = query.where(or_(*closed_conditions))
     if promised_date_start:
         query = query.where(SaleOrder.promised_date >= datetime.strptime(promised_date_start, '%Y-%m-%d').date())
     if promised_date_end:
@@ -757,7 +789,6 @@ async def export_orders(
     if order_type:
         types = [x.strip() for x in order_type.split(',') if x.strip()]
         if types:
-            from sqlalchemy import or_
             type_filters = []
             for t in types:
                 if t == 'big':
@@ -1000,7 +1031,6 @@ async def list_risk_pool(
     db: AsyncSession = Depends(get_db),
 ):
     """订单风险池 — 延期 + 高/中风险订单"""
-    from sqlalchemy import or_
     today = date.today()
     risk_filter = or_(
         SaleOrder.risk_level.in_(['red', 'yellow']),

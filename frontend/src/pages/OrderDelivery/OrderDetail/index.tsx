@@ -78,7 +78,6 @@ interface ProductMaterialGroup {
   shortage_count: number
   overdue_count: number
   arrived_count: number
-  inspected_count: number
   kit_rate: number
   materials: ProductMaterialItem[]
 }
@@ -88,8 +87,8 @@ const STATUS_COLOR: Record<string, string> = {
   self_made_unlinked: 'blue',
   pending: 'processing',
   overdue: 'error',
-  arrived: 'success',
-  inspected: 'purple',
+  partial_received: 'warning',
+  fully_received: 'success',
 }
 
 export default function OrderDetail() {
@@ -210,8 +209,7 @@ export default function OrderDetail() {
       title: '逾期', dataIndex: 'overdue_count', key: 'overdue_count', width: 80,
       render: (v: number) => v > 0 ? <span style={{ color: '#e11d48', fontWeight: 600 }}>{v}</span> : <span style={{ color: '#94a3b8' }}>0</span>,
     },
-    { title: '已到料', dataIndex: 'arrived_count', key: 'arrived_count', width: 80 },
-    { title: '已检验', dataIndex: 'inspected_count', key: 'inspected_count', width: 80 },
+    { title: '已到齐', dataIndex: 'arrived_count', key: 'arrived_count', width: 80 },
   ]
 
   const productMaterialColumns = [

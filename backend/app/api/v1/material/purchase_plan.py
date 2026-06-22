@@ -18,6 +18,7 @@ from app.schemas.common import ResponseModel, PageResult
 from app.schemas.material.schemas import PurchaseOrderOut, PurchaseOrderCreate, PurchaseOrderUpdate, PurchaseOrderBatchUpdate, PurchasePlanStats
 from app.services.material.import_material_csv import import_purchase_plan_csv
 from app.services.common.export_service import GenericExportService, ExportColumn
+from app.services.common.sync_filter import get_purchase_order_sync_filters
 
 router = APIRouter()
 
@@ -38,12 +39,15 @@ SORTABLE_COLUMNS = {
     'actual_arrival_date': PurchaseOrder.actual_arrival_date,
     'inspection_date': PurchaseOrder.inspection_date,
     'owner': PurchaseOrder.owner,
+    'is_closed': PurchaseOrder.is_closed,
+    'is_stagnant': PurchaseOrder.received_qty,  # 呆滞按收料数量排序
+    'po_status': PurchaseOrder.po_status,
 }
 
 
 STATUS_LABELS = {
-    'inspected': '已检验',
-    'arrived': '已到料',
+    'fully_received': '已到齐',
+    'partial_received': '部分到',
     'overdue': '逾期未到',
     'pending': '待到料',
 }
@@ -67,6 +71,7 @@ EXPORT_COLUMNS = [
     ExportColumn('inspection_date', '检验日期', 12),
     ExportColumn('owner', '责任人', 10),
     ExportColumn('po_status', '状态', 10),
+    ExportColumn('is_closed', '关闭', 8),
     ExportColumn('is_stagnant', '呆滞', 8),
 ]
 
@@ -97,6 +102,7 @@ def _build_filters(
     received_qty_min: Optional[float] = None,
     received_qty_max: Optional[float] = None,
     only_shortage: Optional[bool] = None,
+    is_closed: Optional[str] = None,
 ) -> list:
     """构建采购到料计划通用筛选条件列表"""
     base = []
@@ -161,24 +167,29 @@ def _build_filters(
         for s in status_list:
             if s == 'stagnant':
                 stagnant_filter = True
-            elif s == 'inspected':
-                status_conditions.append(PurchaseOrder.inspection_date.isnot(None))
-            elif s == 'arrived':
+            elif s == 'fully_received':
                 status_conditions.append(
-                    PurchaseOrder.actual_arrival_date.isnot(None)
-                    & PurchaseOrder.inspection_date.is_(None)
+                    (PurchaseOrder.received_qty > 0)
+                    & PurchaseOrder.po_qty.isnot(None)
+                    & (PurchaseOrder.received_qty >= PurchaseOrder.po_qty)
+                )
+            elif s == 'partial_received':
+                status_conditions.append(
+                    (PurchaseOrder.received_qty > 0)
+                    & or_(
+                        PurchaseOrder.po_qty.is_(None),
+                        PurchaseOrder.received_qty < PurchaseOrder.po_qty,
+                    )
                 )
             elif s == 'overdue':
                 status_conditions.append(
-                    PurchaseOrder.inspection_date.is_(None)
-                    & PurchaseOrder.actual_arrival_date.is_(None)
+                    or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0)
                     & PurchaseOrder.eta.isnot(None)
                     & (PurchaseOrder.eta < today)
                 )
             elif s == 'pending':
                 status_conditions.append(
-                    PurchaseOrder.inspection_date.is_(None)
-                    & PurchaseOrder.actual_arrival_date.is_(None)
+                    or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0)
                     & or_(PurchaseOrder.eta.is_(None), PurchaseOrder.eta >= today)
                 )
         if stagnant_filter:
@@ -199,6 +210,16 @@ def _build_filters(
             | PurchaseOrder.supplier_name.ilike(like)
             | PurchaseOrder.order_no.ilike(like)
         )
+    if is_closed:
+        closed_list = [s.strip() for s in is_closed.split(',')]
+        closed_conditions = []
+        for s in closed_list:
+            if s == 'closed':
+                closed_conditions.append(PurchaseOrder.is_closed == 1)
+            elif s == 'open':
+                closed_conditions.append(PurchaseOrder.is_closed == 0)
+        if closed_conditions:
+            base.append(or_(*closed_conditions))
     return base
 
 
@@ -217,12 +238,13 @@ def _build_order_clauses(sort_by: Optional[str], sort_order: Optional[str]) -> l
 
 
 def _recalc_status(row):
-    """实时重算状态（不落库），保证 overdue 等依赖当天日期的状态展示正确"""
+    """实时重算状态（不落库），纯按收料数量推导；已到料状态已移除"""
     today = date_type.today()
-    if row.inspection_date:
-        row.po_status = 'inspected'
-    elif row.actual_arrival_date:
-        row.po_status = 'arrived'
+    if row.received_qty is not None and row.received_qty > 0:
+        if row.po_qty is not None and row.received_qty >= row.po_qty:
+            row.po_status = 'fully_received'
+        else:
+            row.po_status = 'partial_received'
     elif row.eta and row.eta < today:
         row.po_status = 'overdue'
     else:
@@ -276,10 +298,12 @@ async def list_purchase_plan(
     received_qty_min: Optional[float] = Query(None),
     received_qty_max: Optional[float] = Query(None),
     only_shortage: Optional[bool] = Query(None),
+    is_closed: Optional[str] = Query(None),
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     supplier_scope = await get_supplier_name_scope(current_user, db)
+    sync_filters = await get_purchase_order_sync_filters(db)
     base = _build_filters(
         None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
@@ -292,7 +316,9 @@ async def list_purchase_plan(
         po_qty_min=po_qty_min, po_qty_max=po_qty_max,
         received_qty_min=received_qty_min, received_qty_max=received_qty_max,
         only_shortage=only_shortage,
+        is_closed=is_closed,
     )
+    base.extend(sync_filters)
     if supplier_scope:
         base.append(PurchaseOrder.supplier_name == supplier_scope)
 
@@ -345,6 +371,7 @@ async def batch_update_purchase_plan(
         and data.supplier_account is None
         and data.actual_arrival_date is None
         and data.inspection_date is None
+        and data.is_closed is None
         and not data.clear_fields
     ):
         raise HTTPException(status_code=400, detail="请至少填写一个更新字段")
@@ -361,6 +388,8 @@ async def batch_update_purchase_plan(
         update_fields['actual_arrival_date'] = data.actual_arrival_date
     if data.inspection_date is not None:
         update_fields['inspection_date'] = data.inspection_date
+    if data.is_closed is not None:
+        update_fields['is_closed'] = data.is_closed
 
     allowed_clear_fields = {'eta', 'owner', 'supplier_account', 'actual_arrival_date', 'inspection_date'}
     if data.clear_fields:
@@ -382,22 +411,16 @@ async def batch_update_purchase_plan(
         data.eta is not None
         or data.actual_arrival_date is not None
         or data.inspection_date is not None
-        or (data.clear_fields and any(f in {'eta', 'actual_arrival_date', 'inspection_date'} for f in data.clear_fields))
+        or data.is_closed is not None
+        or getattr(data, 'received_qty', None) is not None
+        or getattr(data, 'po_qty', None) is not None
+        or (data.clear_fields and any(f in {'eta', 'actual_arrival_date', 'inspection_date', 'received_qty', 'po_qty'} for f in data.clear_fields))
     ):
-        today = date_type.today()
-        # 对于更新了 eta 的记录，重新计算 pending/overdue 状态
         rows_result = await db.execute(
             select(PurchaseOrder).where(PurchaseOrder.id.in_(data.ids))
         )
         for po in rows_result.scalars().all():
-            if po.inspection_date:
-                po.po_status = 'inspected'
-            elif po.actual_arrival_date:
-                po.po_status = 'arrived'
-            elif po.eta and po.eta < today:
-                po.po_status = 'overdue'
-            else:
-                po.po_status = 'pending'
+            _recalc_status(po)
 
     await log_audit(db, "purchase_order", 0, "batch_update",
                     field_name="batch_eta_owner",
@@ -429,15 +452,7 @@ async def update_purchase_plan(
         setattr(po, field, value)
 
     # 重新计算状态
-    today = date_type.today()
-    if po.inspection_date:
-        po.po_status = 'inspected'
-    elif po.actual_arrival_date:
-        po.po_status = 'arrived'
-    elif po.eta and po.eta < today:
-        po.po_status = 'overdue'
-    else:
-        po.po_status = 'pending'
+    _recalc_status(po)
     await db.commit()
     await db.refresh(po)
     return ResponseModel(data=PurchaseOrderOut.model_validate(po))
@@ -495,11 +510,13 @@ async def export_purchase_plan(
     received_qty_min: Optional[float] = Query(None),
     received_qty_max: Optional[float] = Query(None),
     only_shortage: Optional[bool] = Query(None),
+    is_closed: Optional[str] = Query(None),
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     """导出采购到料计划（支持筛选 + 排序，不分页）"""
     supplier_scope = await get_supplier_name_scope(current_user, db)
+    sync_filters = await get_purchase_order_sync_filters(db)
     base = _build_filters(
         None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
@@ -513,7 +530,9 @@ async def export_purchase_plan(
         po_qty_min=po_qty_min, po_qty_max=po_qty_max,
         received_qty_min=received_qty_min, received_qty_max=received_qty_max,
         only_shortage=only_shortage,
+        is_closed=is_closed,
     )
+    base.extend(sync_filters)
     if supplier_scope:
         base.append(PurchaseOrder.supplier_name == supplier_scope)
     order_clauses = _build_order_clauses(sort_by, sort_order)
@@ -542,6 +561,7 @@ async def export_purchase_plan(
             'inspection_date': str(item.inspection_date) if item.inspection_date else '',
             'owner': item.owner or '',
             'po_status': STATUS_LABELS.get(item.po_status, item.po_status),
+            'is_closed': '已关闭' if item.is_closed == 1 else '',
             'is_stagnant': f'呆滞 +{item.stagnant_qty}' if item.is_stagnant else '',
         })
 
@@ -590,12 +610,14 @@ async def get_purchase_plan_stats(
     received_qty_min: Optional[float] = Query(None),
     received_qty_max: Optional[float] = Query(None),
     only_shortage: Optional[bool] = Query(None),
+    is_closed: Optional[str] = Query(None),
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     """获取采购计划统计（支持筛选）"""
     today = date_type.today()
     supplier_scope = await get_supplier_name_scope(current_user, db)
+    sync_filters = await get_purchase_order_sync_filters(db)
     base = _build_filters(
         None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
@@ -609,7 +631,9 @@ async def get_purchase_plan_stats(
         po_qty_min=po_qty_min, po_qty_max=po_qty_max,
         received_qty_min=received_qty_min, received_qty_max=received_qty_max,
         only_shortage=only_shortage,
+        is_closed=is_closed,
     )
+    base.extend(sync_filters)
     if supplier_scope:
         base.append(PurchaseOrder.supplier_name == supplier_scope)
 
@@ -617,27 +641,34 @@ async def get_purchase_plan_stats(
     total_result = await db.execute(select(func.count(PurchaseOrder.id)).where(*base))
     total = total_result.scalar() or 0
 
-    # 已检验
-    inspected_result = await db.execute(
-        select(func.count(PurchaseOrder.id)).where(PurchaseOrder.inspection_date.isnot(None), *base)
-    )
-    inspected = inspected_result.scalar() or 0
-
-    # 已到料（已到料但未检验）
-    arrived_result = await db.execute(
+    # 部分到（0 < 收料 < 订单）
+    partial_result = await db.execute(
         select(func.count(PurchaseOrder.id)).where(
-            PurchaseOrder.actual_arrival_date.isnot(None),
-            PurchaseOrder.inspection_date.is_(None),
+            (PurchaseOrder.received_qty > 0)
+            & or_(
+                PurchaseOrder.po_qty.is_(None),
+                PurchaseOrder.received_qty < PurchaseOrder.po_qty,
+            ),
             *base
         )
     )
-    arrived = arrived_result.scalar() or 0
+    partial_received = partial_result.scalar() or 0
 
-    # 逾期未到
+    # 已到齐（收料 >= 订单）
+    fully_result = await db.execute(
+        select(func.count(PurchaseOrder.id)).where(
+            (PurchaseOrder.received_qty > 0)
+            & PurchaseOrder.po_qty.isnot(None)
+            & (PurchaseOrder.received_qty >= PurchaseOrder.po_qty),
+            *base
+        )
+    )
+    fully_received = fully_result.scalar() or 0
+
+    # 逾期未到（无收料，且 eta 超期）
     overdue_result = await db.execute(
         select(func.count(PurchaseOrder.id)).where(
-            PurchaseOrder.inspection_date.is_(None),
-            PurchaseOrder.actual_arrival_date.is_(None),
+            or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0),
             PurchaseOrder.eta.isnot(None),
             PurchaseOrder.eta < today,
             *base
@@ -645,11 +676,10 @@ async def get_purchase_plan_stats(
     )
     overdue = overdue_result.scalar() or 0
 
-    # 待到料（未到料且未逾期）
+    # 待到料（无收料，未逾期）
     pending_result = await db.execute(
         select(func.count(PurchaseOrder.id)).where(
-            PurchaseOrder.inspection_date.is_(None),
-            PurchaseOrder.actual_arrival_date.is_(None),
+            or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0),
             or_(PurchaseOrder.eta.is_(None), PurchaseOrder.eta >= today),
             *base
         )
@@ -667,11 +697,21 @@ async def get_purchase_plan_stats(
     )
     stagnant = stagnant_result.scalar() or 0
 
+    # 已关闭
+    closed_result = await db.execute(
+        select(func.count(PurchaseOrder.id)).where(
+            PurchaseOrder.is_closed == 1,
+            *base
+        )
+    )
+    closed = closed_result.scalar() or 0
+
     return ResponseModel(data=PurchasePlanStats(
         total=total,
         pending=pending,
-        arrived=arrived,
-        inspected=inspected,
+        partial_received=partial_received,
+        fully_received=fully_received,
         overdue=overdue,
         stagnant=stagnant,
+        closed=closed,
     ))

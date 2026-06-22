@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from app.core.database import get_db
+from app.core.config import get_settings
 from app.core.security import verify_password, get_password_hash, create_access_token
 from app.core.dependencies import get_current_user
 from app.core.audit import log_audit
@@ -34,9 +35,9 @@ class UpdatePreferencesRequest(BaseModel):
 
 @router.post("/login", response_model=ResponseModel[TokenResponse])
 async def login(
-    form: OAuth2PasswordRequestForm = Depends(),
-    login_type: str = Form("employee"),
-    db: AsyncSession = Depends(get_db),
+        form: OAuth2PasswordRequestForm = Depends(),
+        login_type: str = Form("employee"),
+        db: AsyncSession = Depends(get_db),
 ):
     login_type = (login_type or "employee").strip().lower()
     if login_type not in VALID_LOGIN_TYPES:
@@ -129,6 +130,13 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
             )
         )
         supplier_code = supplier_result.scalar_one_or_none()
+
+    settings = get_settings()
+    if user.login_version > 0 and user.is_default_password==True:
+        is_default = verify_password(settings.ERP_SYNC_DEFAULT_PASSWORD, user.hashed_password)
+    else:
+        is_default = user.is_default_password
+
     return ResponseModel(data=UserInfo(
         id=user.id,
         username=user.username,
@@ -139,14 +147,16 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
         supplier_name=user.supplier_name,
         supplier_code=supplier_code,
         font_size_scale=user.font_size_scale,
+        is_default_password=is_default,
+        login_version=user.login_version,
     ))
 
 
 @router.put("/change-password", response_model=ResponseModel[dict])
 async def change_password(
-    body: ChangePasswordRequest,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+        body: ChangePasswordRequest,
+        current_user: dict = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(SysUser).where(SysUser.id == current_user["user_id"]))
     user = result.scalar_one_or_none()
@@ -163,6 +173,7 @@ async def change_password(
         raise HTTPException(status_code=400, detail="新密码不能与原密码相同")
 
     user.hashed_password = get_password_hash(body.new_password)
+    user.is_default_password = False
     await log_audit(db, "sys_user", user.id, "update", field_name="password", operator=current_user["username"])
     await db.commit()
     return ResponseModel(data={"id": user.id, "message": "密码修改成功"})
@@ -170,9 +181,9 @@ async def change_password(
 
 @router.put("/preferences", response_model=ResponseModel[dict])
 async def update_preferences(
-    body: UpdatePreferencesRequest,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+        body: UpdatePreferencesRequest,
+        current_user: dict = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(SysUser).where(SysUser.id == current_user["user_id"]))
     user = result.scalar_one_or_none()

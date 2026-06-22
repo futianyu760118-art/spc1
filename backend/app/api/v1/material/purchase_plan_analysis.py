@@ -18,15 +18,15 @@ router = APIRouter()
 
 STATUS_COLORS = {
     'pending': '#94a3b8',
-    'arrived': '#3b82f6',
-    'inspected': '#16a34a',
+    'partial_received': '#f59e0b',
+    'fully_received': '#16a34a',
     'overdue': '#e11d48',
 }
 
 STATUS_LABELS = {
     'pending': '待到料',
-    'arrived': '已到料',
-    'inspected': '已检验',
+    'partial_received': '部分到',
+    'fully_received': '已到齐',
     'overdue': '逾期未到',
 }
 
@@ -80,21 +80,25 @@ async def get_purchase_plan_analysis(
         base.append(PurchaseOrder.supplier_name == supplier_scope)
 
     status_distribution = []
+    no_received = or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0)
     for status_key, label in STATUS_LABELS.items():
         cond = base.copy()
-        if status_key == 'inspected':
-            cond.append(PurchaseOrder.inspection_date.isnot(None))
-        elif status_key == 'arrived':
-            cond.append(PurchaseOrder.actual_arrival_date.isnot(None))
-            cond.append(PurchaseOrder.inspection_date.is_(None))
+        if status_key == 'fully_received':
+            cond.append(PurchaseOrder.received_qty > 0)
+            cond.append(PurchaseOrder.po_qty.isnot(None))
+            cond.append(PurchaseOrder.received_qty >= PurchaseOrder.po_qty)
+        elif status_key == 'partial_received':
+            cond.append(PurchaseOrder.received_qty > 0)
+            cond.append(or_(
+                PurchaseOrder.po_qty.is_(None),
+                PurchaseOrder.received_qty < PurchaseOrder.po_qty,
+            ))
         elif status_key == 'overdue':
-            cond.append(PurchaseOrder.inspection_date.is_(None))
-            cond.append(PurchaseOrder.actual_arrival_date.is_(None))
+            cond.append(no_received)
             cond.append(PurchaseOrder.eta.isnot(None))
             cond.append(PurchaseOrder.eta < today)
         elif status_key == 'pending':
-            cond.append(PurchaseOrder.inspection_date.is_(None))
-            cond.append(PurchaseOrder.actual_arrival_date.is_(None))
+            cond.append(no_received)
             cond.append(or_(PurchaseOrder.eta.is_(None), PurchaseOrder.eta >= today))
         count_result = await db.execute(select(func.count(PurchaseOrder.id)).where(*cond))
         count = count_result.scalar() or 0
@@ -116,8 +120,7 @@ async def get_purchase_plan_analysis(
 
 async def _get_supplier_overdue(db: AsyncSession, base: list, today: date_type):
     overdue_base = base.copy()
-    overdue_base.append(PurchaseOrder.inspection_date.is_(None))
-    overdue_base.append(PurchaseOrder.actual_arrival_date.is_(None))
+    overdue_base.append(or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0))
     overdue_base.append(PurchaseOrder.eta.isnot(None))
     overdue_base.append(PurchaseOrder.eta < today)
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Table, Card, Row, Col, Input, Select, Button, Tag, Progress, Tooltip, message, Switch, DatePicker, InputNumber, Space } from 'antd'
 import { SearchOutlined, ShoppingOutlined, PieChartOutlined, WarningOutlined, ExclamationCircleOutlined, CheckCircleOutlined, ReloadOutlined, FilterOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -32,8 +32,7 @@ interface KitItem {
   order_no: string
   total_materials: number
   received_materials: number
-  inspected_materials: number
-  pending_inspection: number
+  partial_received_materials: number
   not_ordered_materials: number
   overdue_materials: number
   stagnant_materials: number
@@ -47,10 +46,11 @@ const RISK_COLOR: Record<string, string> = { red: '#e11d48', yellow: '#f59e0b', 
 const RISK_LABEL: Record<string, string> = { red: '缺料严重', yellow: '部分齐套', green: '齐套' }
 
 const MATERIAL_STATUS: Record<string, { label: string; color: string }> = {
+  closed: { label: '已关闭', color: 'default' },
   not_ordered: { label: '未下单', color: 'default' },
   self_made_unlinked: { label: '自制未排产/未关联', color: 'blue' },
-  inspected: { label: '已检验', color: 'success' },
-  arrived: { label: '已到料', color: 'processing' },
+  partial_received: { label: '部分到', color: 'warning' },
+  fully_received: { label: '已到齐', color: 'success' },
   overdue: { label: '逾期未到', color: 'error' },
   pending: { label: '待到料', color: 'default' },
 }
@@ -68,7 +68,7 @@ const MATERIAL_PROPERTY_OPTIONS = [
 
 const MATERIAL_PROPERTY_MAP = Object.fromEntries(MATERIAL_PROPERTY_OPTIONS.map(item => [item.value, item.label]))
 
-const DEFAULT_MATERIAL_FILTERS = { status: 'not_ordered,self_made_unlinked,pending,overdue' }
+const DEFAULT_MATERIAL_FILTERS = { status: 'not_ordered,self_made_unlinked,pending,overdue,partial_received' }
 
 export default function KitAnalysis() {
   const [data, setData] = useState<KitItem[]>([])
@@ -83,13 +83,15 @@ export default function KitAnalysis() {
   const [materialsLoading, setMaterialsLoading] = useState<Record<string, boolean>>({})
   const [materialFilters, setMaterialFilters] = useState<Record<string, Record<string, any>>>({})
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
+  const paginationRef = useRef(pagination)
+  paginationRef.current = pagination
   const [statistics, setStatistics] = useState({ redCount: 0, yellowCount: 0, greenCount: 0, avgKitRate: 0 })
 
   const load = useCallback(async (page?: number, pageSize?: number) => {
     setLoading(true)
     try {
-      const currentPage = page || pagination.current
-      const currentPageSize = pageSize || pagination.pageSize
+      const currentPage = page || paginationRef.current.current
+      const currentPageSize = pageSize || paginationRef.current.pageSize
       const res: any = await materialApi.getKitAnalysis({
         ...(orderNo ? { order_no: orderNo } : {}),
         ...(sortBy ? { sort_by: sortBy, sort_order: sortOrder || 'asc' } : {}),
@@ -112,7 +114,7 @@ export default function KitAnalysis() {
     } finally {
       setLoading(false)
     }
-  }, [orderNo, sortBy, sortOrder, pagination.current, pagination.pageSize, onlyPendingShipment, riskLevelFilter, promisedDateRange])
+  }, [orderNo, sortBy, sortOrder, onlyPendingShipment, riskLevelFilter, promisedDateRange])
 
   const handlePaginationChange = useCallback((page: number, pageSize: number) => {
     setPagination(prev => ({ ...prev, current: page, pageSize }))
@@ -258,8 +260,8 @@ export default function KitAnalysis() {
       filters: [
         { text: '未下单', value: 'not_ordered' },
         { text: '自制未排产/未关联', value: 'self_made_unlinked' },
-        { text: '已检验', value: 'inspected' },
-        { text: '已到料', value: 'arrived' },
+        { text: '已到齐', value: 'fully_received' },
+        { text: '部分到', value: 'partial_received' },
         { text: '逾期未到', value: 'overdue' },
         { text: '待到料', value: 'pending' },
       ],
@@ -269,6 +271,17 @@ export default function KitAnalysis() {
         const s = MATERIAL_STATUS[v] || { label: v, color: 'default' }
         return <Tag color={s.color}>{row.status_label || s.label}</Tag>
       },
+    },
+    {
+      title: '是否关闭', dataIndex: 'is_closed', width: 90,
+      filters: [
+        { text: '已关闭', value: 'true' },
+        { text: '未关闭', value: 'false' },
+      ],
+      filterMultiple: false,
+      render: (v: number) => v === 1
+        ? <span style={{ color: '#e11d48', fontWeight: 500 }}>已关闭</span>
+        : <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     {
       title: '物料属性', dataIndex: 'material_property', width: 90, sorter: true,
@@ -370,41 +383,43 @@ export default function KitAnalysis() {
     },
     {
       title: '齐套率', dataIndex: 'kit_rate', width: 180, sorter: true,
-      render: (v: number, row: KitItem) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Progress
-            percent={Math.round(v * 100)}
-            size="small"
-            style={{ width: 120 }}
-            strokeColor={RISK_COLOR[row.risk_level]}
-            showInfo={false}
-          />
-          <span style={{ color: RISK_COLOR[row.risk_level], fontWeight: 600, fontSize: 13 }}>
-            {Math.round(v * 100)}%
-          </span>
-        </div>
-      ),
+      render: (v: number, row: KitItem) => {
+        const percent = Math.round(v * 100)
+        const tip = `齐套率 = 已到齐 ÷ 物料数\n已到齐 ${row.received_materials} / 物料数 ${row.total_materials} = ${percent}%\n（部分到、未到不计入齐套）`
+        return (
+          <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{tip}</span>}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Progress
+                percent={percent}
+                size="small"
+                style={{ width: 120 }}
+                strokeColor={RISK_COLOR[row.risk_level]}
+                showInfo={false}
+              />
+              <span style={{ color: RISK_COLOR[row.risk_level], fontWeight: 600, fontSize: 13 }}>
+                {percent}%
+              </span>
+            </div>
+          </Tooltip>
+        )
+      },
     },
     {
       title: '物料数', dataIndex: 'total_materials', width: 80, sorter: true,
       render: (v: number) => v,
     },
     {
-      title: '已到料', dataIndex: 'received_materials', width: 80, sorter: true,
+      title: '已到齐', dataIndex: 'received_materials', width: 80, sorter: true,
       render: (v: number) => <span style={{ color: '#16a34a' }}>{v}</span>,
     },
     {
-      title: '已检验', dataIndex: 'inspected_materials', width: 80, sorter: true,
-      render: (v: number) => <span style={{ color: '#6366f1' }}>{v}</span>,
+      title: '部分到', dataIndex: 'partial_received_materials', width: 80, sorter: true,
+      render: (v: number) => v > 0 ? <span style={{ color: '#f59e0b', fontWeight: 600 }}>{v}</span> : <span style={{ color: '#94a3b8' }}>0</span>,
     },
     {
-      title: '待检验', dataIndex: 'pending_inspection', width: 80, sorter: true,
-      render: (v: number) => v > 0 ? <span style={{ color: '#f59e0b' }}>{v}</span> : <span style={{ color: '#94a3b8' }}>0</span>,
-    },
-    {
-      title: '缺料物料', width: 80, sorter: true,
+      title: '未到', width: 80, sorter: true,
       render: (_: any, row: KitItem) => {
-        const shortage = row.total_materials - row.received_materials
+        const shortage = row.total_materials - row.received_materials - row.partial_received_materials
         return shortage > 0 ? <span style={{ color: '#e11d48', fontWeight: 600 }}>{shortage}</span> : <span style={{ color: '#16a34a' }}>0</span>
       },
     },

@@ -33,8 +33,8 @@ STATUS_LABELS = {
     "self_made_unlinked": "自制未排产/未关联",
     "pending": "待到料",
     "overdue": "逾期未到",
-    "arrived": "已到料",
-    "inspected": "已检验",
+    "partial_received": "部分到",
+    "fully_received": "已到齐",
 }
 
 
@@ -52,6 +52,7 @@ class MaterialPoSummary:
     actual_arrival_date: Optional[date] = None
     inspection_date: Optional[date] = None
     po_count: int = 0
+    is_closed: int = 0
 
     @property
     def eta(self) -> Optional[date]:
@@ -97,6 +98,7 @@ def _summarize_pos(pos: list[PurchaseOrder]) -> Optional[MaterialPoSummary]:
         actual_arrival_date=max(arrivals) if arrivals else None,
         inspection_date=max(inspections) if inspections else None,
         po_count=len(pos),
+        is_closed=1 if any(po.is_closed for po in pos) else 0,
     )
 
 
@@ -122,10 +124,13 @@ def _material_property_label(material_property: Optional[int]) -> Optional[str]:
 def _status(material_property: Optional[int], po_summary: Optional[MaterialPoSummary]) -> str:
     if not po_summary or po_summary.po_count == 0:
         return "self_made_unlinked" if material_property == 2 else "not_ordered"
-    if po_summary.inspection_date:
-        return "inspected"
-    if po_summary.actual_arrival_date or (po_summary.received_qty is not None and po_summary.received_qty > 0):
-        return "arrived"
+    received_qty = po_summary.received_qty
+    po_qty = po_summary.po_qty
+    # 状态纯按收料数量推导（已到料状态已移除）
+    if received_qty is not None and received_qty > 0:
+        if po_qty is not None and received_qty >= po_qty:
+            return "fully_received"
+        return "partial_received"
     if po_summary.eta and po_summary.eta < date.today():
         return "overdue"
     return "pending"
@@ -134,7 +139,8 @@ def _status(material_property: Optional[int], po_summary: Optional[MaterialPoSum
 def _kit_met(status: str, material_property: Optional[int]) -> bool:
     if material_property == 2 and status == "self_made_unlinked":
         return True
-    return status in {"arrived", "inspected"}
+    # 仅「已到齐」视为齐套；部分到（缺量）不计入
+    return status == "fully_received"
 
 
 async def get_order_product_materials(
@@ -288,11 +294,11 @@ def _build_line_materials(
             po_count=po_summary.po_count if po_summary else 0,
             is_stagnant=stagnant_qty is not None,
             stagnant_qty=_to_float(stagnant_qty),
+            is_closed=po_summary.is_closed if po_summary else 0,
         ))
 
     total = len(items)
-    arrived = sum(1 for item in items if item.status in {"arrived", "inspected"})
-    inspected = sum(1 for item in items if item.status == "inspected")
+    arrived = sum(1 for item in items if item.status == "fully_received")
     not_ordered = sum(1 for item in items if item.status == "not_ordered")
     overdue = sum(1 for item in items if item.status == "overdue")
     shortage = sum(1 for item in items if item.shortage_flag or item.shortage_qty > 0)
@@ -310,7 +316,6 @@ def _build_line_materials(
         shortage_count=shortage,
         overdue_count=overdue,
         arrived_count=arrived,
-        inspected_count=inspected,
         kit_rate=round(met / total, 4) if total else 0,
         materials=items,
     )
