@@ -13,6 +13,8 @@ frontend/dist/
 # IDE
 .vscode/
 .idea/
+.trae/
+.windsurf/
 
 # Docker
 pg_data/
