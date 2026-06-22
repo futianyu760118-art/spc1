@@ -86,6 +86,7 @@ const allMenuItems: PermissionAwareItem[] = [
     children: [
       { key: '/production-overview', icon: <DashboardOutlined />, label: '生产总览', permission: 'production.overview' },
       { key: '/schedule-plans', icon: <ProjectOutlined />, label: '计划排产', permission: 'production.schedule_plans' },
+      { key: '/product-process-capacities', icon: <DatabaseOutlined />, label: '产品工序产能', permission: 'production.product_process_capacities' },
       { key: '/front-process', icon: <ContainerOutlined />, label: '前道管理', permission: 'production.front_process' },
       { key: '/smt', icon: <ExperimentOutlined />, label: '贴片管理', permission: 'production.smt' },
       { key: '/lean', icon: <AuditOutlined />, label: '精益管理', permission: 'production.lean' },
@@ -236,6 +237,7 @@ const pathToGroupKey: Record<string, string> = {
   '/supplier-payment': 'material-center',
   '/production-overview': 'production-center',
   '/schedule-plans': 'production-center',
+  '/product-process-capacities': 'production-center',
   '/front-process': 'production-center',
   '/smt': 'production-center',
   '/lean': 'production-center',
@@ -297,6 +299,7 @@ const pathToPermission: Record<string, string> = {
   '/closure-tracking': 'exceptions.closure',
   '/production-overview': 'production.overview',
   '/schedule-plans': 'production.schedule_plans',
+  '/product-process-capacities': 'production.product_process_capacities',
   '/front-process': 'production.front_process',
   '/smt': 'production.smt',
   '/lean': 'production.lean',

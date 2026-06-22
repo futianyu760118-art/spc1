@@ -80,9 +80,7 @@ export default function Login() {
         navigate('/dashboard')
       }
     } catch (error: any) {
-      if (!error?.response) {
-        message.error(error?.message || '登录失败，请检查用户名和密码')
-      }
+      message.error(error?.message || '登录失败，请检查用户名和密码')
     } finally {
       setLoading(false)
     }

@@ -45,13 +45,17 @@ async def get_current_user(
             detail="无效的认证凭据",
         )
 
-    if token_jti and await is_token_blacklisted(token_jti):
-        from fastapi import HTTPException, status
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="您的账号已在其他设备登录，请重新登录",
-            headers={"X-Force-Logout": "true"},
-        )
+    if token_jti:
+        try:
+            if await is_token_blacklisted(token_jti):
+                from fastapi import HTTPException, status
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="您的账号已在其他设备登录，请重新登录",
+                    headers={"X-Force-Logout": "true"},
+                )
+        except Exception:
+            pass
 
     result = await db.execute(select(SysUser).where(SysUser.id == int(user_id)))
     user = result.scalar_one_or_none()
@@ -137,13 +141,17 @@ async def get_current_user_or_share(
             detail="无效的认证凭据",
         )
 
-    if token_jti and await is_token_blacklisted(token_jti):
-        from fastapi import HTTPException, status
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="您的账号已在其他设备登录，请重新登录",
-            headers={"X-Force-Logout": "true"},
-        )
+    if token_jti:
+        try:
+            if await is_token_blacklisted(token_jti):
+                from fastapi import HTTPException, status
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="您的账号已在其他设备登录，请重新登录",
+                    headers={"X-Force-Logout": "true"},
+                )
+        except Exception:
+            pass
 
     result = await db.execute(select(SysUser).where(SysUser.id == int(user_id)))
     user = result.scalar_one_or_none()
