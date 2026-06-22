@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, date, timedelta
 from typing import Optional
 
-from sqlalchemy import create_engine, text, select
+from sqlalchemy import create_engine, text, select, cast, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +32,7 @@ from app.models.basicdata.employee import Employee
 from app.models.basicdata.employee_organization import EmployeeOrganization
 from app.models.basicdata.position import Position
 from app.models.exception.quality_issue import QualityIssue
-from app.services.basicdata.position_role_service import ensure_position_role, resolve_role_for_employee
+from app.services.basicdata.position_role_service import ensure_position_role
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -251,7 +251,7 @@ class ERPSyncService:
                     coerced[k] = str(v)
                 elif col_type in (Numeric, Float) and not isinstance(v, (int, float)):
                     coerced[k] = float(v)
-                elif col_type is Integer and not isinstance(v, int):
+                elif col_type is Integer and (isinstance(v, bool) or not isinstance(v, int)):
                     coerced[k] = int(v)
                 elif col_type is Date:
                     if isinstance(v, str):
@@ -728,6 +728,7 @@ class ERPSyncService:
                                     continue
                                 if getattr(existing, k, None) != v and v is not None:
                                     setattr(existing, k, v)
+                            existing.updated_at = datetime.now()
                             if hasattr(existing, "data_source"):
                                 existing.data_source = "erp"
                             stats["updated"] += 1
@@ -1607,8 +1608,8 @@ class ERPSyncService:
         return stats
 
     async def sync_employees(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
-        """同步人员，并自动创建/更新系统用户"""
-        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": [], "users_created": 0, "users_updated": 0, "users_skipped": 0, "roles_from_position": 0}
+        """同步人员（仅更新员工数据，不自动创建/更新系统用户。系统用户由管理员在用户管理页面手动开通）"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
 
         logger.info(f"[员工同步] 开始同步人员 since={since}")
         try:
@@ -1627,20 +1628,6 @@ class ERPSyncService:
             logger.info(f"[员工同步] 从 ERP 获取到 {len(rows)} 条人员记录")
             valid_cols = self._get_model_columns(Employee)
 
-            from app.models.basicdata.user import SysUser, SysRole
-            from app.core.security import get_password_hash
-            default_role_result = await self.spc_db.execute(
-                select(SysRole).where(SysRole.role_code == "planner")
-            )
-            default_role = default_role_result.scalar_one_or_none()
-            if not default_role:
-                default_role_result = await self.spc_db.execute(select(SysRole).limit(1))
-                default_role = default_role_result.scalar_one_or_none()
-            default_role_id = default_role.id if default_role else 1
-
-            # 获取自动创建用户的默认密码
-            default_password = get_password_hash(settings.ERP_SYNC_DEFAULT_PASSWORD)
-
             for idx, row in enumerate(rows):
                 try:
                     row_dict = self._map_row(row, mapping)
@@ -1653,7 +1640,7 @@ class ERPSyncService:
                     oa_user_id = str(row_dict.get("oa_user_id", "")).strip()
                     login_id = str(row_dict.get("login_id", "")).strip()
                     emp_name = row_dict.get("emp_name", "")
-                    
+
                     existing = None
                     # 尝试多种方式查找现有员工
                     if emp_code:
@@ -1671,7 +1658,7 @@ class ERPSyncService:
                             select(Employee).where(Employee.login_id == login_id)
                         )
                         existing = result.scalar_one_or_none()
-                    
+
                     if not emp_code and not existing:
                         # 如果是新记录且 emp_code 为空，尝试用 oa_user_id 或 login_id 填充
                         if oa_user_id:
@@ -1689,7 +1676,7 @@ class ERPSyncService:
                             emp_code = temp_emp_code
                             row_dict["emp_code"] = emp_code
                             logger.warning(f"[员工同步] 第{idx+1}条记录所有标识为空，生成临时 emp_code: {temp_emp_code}")
-                    
+
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
                     row_dict = self._coerce_row_types(row_dict, Employee)
 
@@ -1722,96 +1709,6 @@ class ERPSyncService:
                         stats["created"] += 1
                         logger.info(f"[员工同步] 创建员工 emp_code={emp_code} emp_name={emp_name}")
 
-                    # 确保 employee 已持久化（无论是更新还是创建）
-                    await self.spc_db.flush()
-
-                    # 获取最新的员工信息（含 oa_user_id）
-                    if existing:
-                        emp = existing
-                    else:
-                        emp_result = await self.spc_db.execute(
-                            select(Employee).where(Employee.emp_code == emp_code)
-                        )
-                        emp = emp_result.scalar_one_or_none()
-                    if emp:
-                        matched_role, matched_position = await resolve_role_for_employee(self.spc_db, emp)
-                        target_role_id = matched_role.id if matched_role else default_role_id
-                        if matched_role and matched_position:
-                            stats["roles_from_position"] += 1
-                        # 查询是否已存在关联的系统用户
-                        user_result = await self.spc_db.execute(
-                            select(SysUser).where(SysUser.emp_code == emp.emp_code)
-                        )
-                        existing_user = user_result.scalar_one_or_none()
-
-                        if existing_user:
-                            # 更新已有的系统用户
-                            username = emp.login_id or emp.emp_code
-                            user_updated = False
-                            user_changes = []
-
-                            # 更新 username（如果有 login_id 的变化）
-                            if existing_user.username != username:
-                                # 检查新 username 是否被其他用户占用
-                                dup_result = await self.spc_db.execute(
-                                    select(SysUser).where(SysUser.username == username, SysUser.id != existing_user.id)
-                                )
-                                if not dup_result.scalar_one_or_none():
-                                    user_changes.append(f"username: {existing_user.username}->{username}")
-                                    existing_user.username = username
-                                    user_updated = True
-
-                            # 更新 display_name
-                            if existing_user.display_name != emp.emp_name:
-                                user_changes.append(f"display_name: {existing_user.display_name}->{emp.emp_name}")
-                                existing_user.display_name = emp.emp_name
-                                user_updated = True
-
-                            if existing_user.role_id != target_role_id:
-                                user_changes.append(f"role_id: {existing_user.role_id}->{target_role_id}")
-                                existing_user.role_id = target_role_id
-                                user_updated = True
-
-                            # 更新 is_active 状态（根据员工状态）
-                            new_is_active = emp.status in ACTIVE_EMPLOYEE_STATUSES
-                            if existing_user.is_active != new_is_active:
-                                user_changes.append(f"is_active: {existing_user.is_active}->{new_is_active}")
-                                existing_user.is_active = new_is_active
-                                user_updated = True
-
-                            if user_updated:
-                                stats["users_updated"] += 1
-                                logger.info(f"[员工同步] 更新系统用户 username={username} emp_code={emp.emp_code} 变更: {', '.join(user_changes)}")
-                            else:
-                                logger.info(f"[员工同步] 系统用户无需更新 username={username} emp_code={emp.emp_code}")
-                        else:
-                            # 创建新的系统用户
-                            username = emp.login_id or emp.emp_code
-
-                            # 检查 username 是否已存在（通过 Employee.login_id 查询 SysUser.username）
-                            username_check = await self.spc_db.execute(
-                                select(SysUser).where(SysUser.username == username)
-                            )
-                            existing_by_username = username_check.scalar_one_or_none()
-
-                            if existing_by_username:
-                                # 如果 username 已存在（通过 login_id 匹配），跳过创建
-                                stats["users_skipped"] = stats.get("users_skipped", 0) + 1
-                                logger.info(f"[员工同步] 跳过创建系统用户 username={username} emp_code={emp.emp_code} 原因: 用户名已被占用")
-                            else:
-                                # 创建新用户
-                                new_user = SysUser(
-                                    username=username,
-                                    display_name=emp.emp_name,
-                                    hashed_password=default_password,
-                                    role_id=target_role_id,
-                                    emp_code=emp.emp_code,
-                                    is_active=emp.status in ACTIVE_EMPLOYEE_STATUSES,
-                                )
-                                self.spc_db.add(new_user)
-                                stats["users_created"] += 1
-                                logger.info(f"[员工同步] 创建系统用户 username={username} emp_code={emp.emp_code} emp_name={emp.emp_name} is_active={emp.status in ACTIVE_EMPLOYEE_STATUSES}")
-
                     stats["synced"] += 1
                 except Exception as e:
                     try:
@@ -1824,7 +1721,7 @@ class ERPSyncService:
 
             await self.spc_db.flush()
             await self.spc_db.commit()
-            logger.info(f"[员工同步] 完成同步: 共处理{len(rows)}条记录 created={stats['created']} updated={stats['updated']} skipped={stats['skipped']} errors={len(stats['errors'])} 用户created={stats['users_created']} updated={stats['users_updated']} skipped={stats['users_skipped']} 通过岗位获取角色={stats['roles_from_position']}")
+            logger.info(f"[员工同步] 完成同步: 共处理{len(rows)}条记录 created={stats['created']} updated={stats['updated']} skipped={stats['skipped']} errors={len(stats['errors'])}")
 
         except Exception as e:
             stats["errors"].append(str(e))
@@ -1927,7 +1824,9 @@ class ERPSyncService:
 
             await self.spc_db.flush()
 
-            # 回填 Employee.org_id：对每个员工取 is_primary=1 的关联记录对应的 Organization.id
+            # 回填 Employee.org_id：对每个员工取 is_primary=1 的关联记录，
+            # 赋值为 scm_organization.oa_org_id（与代码库其他地方保持一致，
+            # 如用户列表查询按 Employee.org_id == Organization.oa_org_id 关联）
             primary_result = await self.spc_db.execute(
                 select(EmployeeOrganization).where(EmployeeOrganization.is_primary == 1)
             )
@@ -1942,9 +1841,18 @@ class ERPSyncService:
                         select(Employee).where(Employee.emp_code == rel.emp_code)
                     )
                     emp = emp_result.scalar_one_or_none()
-                    if emp and emp.org_id != org.id:
-                        emp.org_id = org.id
-                        stats["org_id_backfilled"] += 1
+                    if emp:
+                        # Employee.org_id 存 oa_org_id（转为整数），而非 Organization.id
+                        if org.oa_org_id:
+                            try:
+                                target_org_id = int(org.oa_org_id)
+                            except (ValueError, TypeError):
+                                target_org_id = org.id
+                        else:
+                            target_org_id = org.id
+                        if emp.org_id != target_org_id:
+                            emp.org_id = target_org_id
+                            stats["org_id_backfilled"] += 1
 
             await self.spc_db.flush()
             await self.spc_db.commit()

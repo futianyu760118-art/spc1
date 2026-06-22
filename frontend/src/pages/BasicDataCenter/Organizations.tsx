@@ -358,22 +358,22 @@ export default function Organizations() {
   }
 
   const employeeColumns = [
-    { title: '员工工号', dataIndex: 'emp_code', key: 'emp_code', width: 120 },
-    { title: '员工姓名', dataIndex: 'emp_name', key: 'emp_name', width: 120 },
+    { title: '员工工号', dataIndex: 'emp_code', key: 'emp_code', width: 110, fixed: 'left' as const },
+    { title: '员工姓名', dataIndex: 'emp_name', key: 'emp_name', width: 110, fixed: 'left' as const },
     {
       title: '岗位',
       dataIndex: 'position_name',
       key: 'position_name',
-      width: 140,
+      width: 160,
       render: (_: any, record: Employee) => record.position_name || record.position || '-',
     },
     { title: '手机号', dataIndex: 'phone', key: 'phone', width: 130 },
-    { title: '邮箱', dataIndex: 'email', key: 'email' },
-    { 
-      title: '状态', 
-      dataIndex: 'status', 
-      key: 'status', 
-      width: 80,
+    { title: '邮箱', dataIndex: 'email', key: 'email', ellipsis: true },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
       render: (status: number) => {
         const meta = getEmployeeStatusMeta(status)
         return <Tag color={meta.color}>{meta.label}</Tag>
@@ -382,7 +382,8 @@ export default function Organizations() {
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 110,
+      fixed: 'right' as const,
       render: (_: any, record: Employee) => (
         <Space size="small">
           <Button size="small" icon={<EditOutlined />} onClick={() => handleEditEmp(record)} />
@@ -395,19 +396,20 @@ export default function Organizations() {
   ]
 
   return (
-    <div className="h-full">
-      <Row gutter={16} className="h-full">
-        <Col span={6}>
-          <Card 
-            title="组织架构" 
+    <div style={{ height: 'calc(100vh - 72px - 12px - 24px)', display: 'flex', flexDirection: 'column' }}>
+      <Row gutter={16} style={{ height: '100%', margin: 0, flex: 1, minHeight: 0 }}>
+        <Col span={6} style={{ height: '100%' }}>
+          <Card
+            title="组织架构"
             extra={
               <Space>
                 <Button icon={<ReloadOutlined />} onClick={fetchTreeData} />
                 <Button type="primary" icon={<PlusOutlined />} onClick={handleAddOrg}>新增组织</Button>
               </Space>
             }
-            className="h-full organization-tree-card"
-            styles={{ body: { height: 'calc(100% - 57px)', overflow: 'auto', padding: '12px 10px' } }}
+            style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+            styles={{ body: { flex: 1, overflow: 'auto', padding: '12px 10px', minHeight: 0 } }}
+            className="organization-tree-card"
           >
             <Tree
               className="organization-tree"
@@ -421,8 +423,8 @@ export default function Organizations() {
             />
           </Card>
         </Col>
-        <Col span={18}>
-          <Card 
+        <Col span={18} style={{ height: '100%' }}>
+          <Card
             title={selectedOrgId ? `员工列表（${employees.length}）` : "请选择一个组织查看员工"}
             extra={selectedOrgId ? (
               <Space>
@@ -430,8 +432,8 @@ export default function Organizations() {
                 <Button type="primary" icon={<UserOutlined />} onClick={handleAddEmp}>新增员工</Button>
               </Space>
             ) : null}
-            className="h-full"
-            styles={{ body: { height: 'calc(100% - 57px)', padding: 0 } }}
+            style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
+            styles={{ body: { flex: 1, overflow: 'auto', padding: 0, minHeight: 0 } }}
           >
             {selectedOrgId ? (
               <Table
@@ -439,12 +441,12 @@ export default function Organizations() {
                 columns={employeeColumns}
                 dataSource={employees}
                 loading={employeesLoading}
-                scroll={{ x: 900, y: 'calc(100vh - 280px)' }}
+                scroll={{ x: 900, y: 'calc(100vh - 72px - 57px - 12px - 24px - 24px)' }}
                 size="small"
                 pagination={false}
               />
             ) : (
-              <div className="flex items-center justify-center h-full text-gray-400">
+              <div className="flex items-center justify-center h-full text-gray-400" style={{ height: '100%' }}>
                 <TeamOutlined className="text-4xl mr-2" />
                 <span>请在左侧选择一个组织查看该组织下的员工</span>
               </div>

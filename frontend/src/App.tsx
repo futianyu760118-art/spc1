@@ -24,7 +24,7 @@ import ProductSamples from './pages/ExceptionCenter/ProductSamples/index'
 import ClosureTracking from './pages/ExceptionCenter/ClosureTracking/index'
 import DataImport from './pages/BasicDataCenter/DataIntegration/index'
 import { RiskRules, InspectionRules, NodeStandards, ResponsibilityMap, StatusDictionary, OrderStandards, WorkInstructions } from './pages/RulesCenter'
-import { UserManagement, AuditLog, SyncSqlConfig, FeedbackManagement, FileManagement, AnnouncementManagement } from './pages/BasicDataCenter'
+import { UserManagement, AuditLog, SyncSqlConfig, FeedbackManagement, FileManagement, AnnouncementManagement, RoleManagement } from './pages/BasicDataCenter'
 import Customers from './pages/BasicDataCenter/Customers'
 import Suppliers from './pages/BasicDataCenter/Suppliers'
 import Materials from './pages/BasicDataCenter/Materials'
@@ -164,6 +164,7 @@ export default function App() {
           <Route path="order-standards" element={<OrderStandards />} />
           <Route path="work-instructions" element={<WorkInstructions />} />
           <Route path="users" element={<UserManagement />} />
+          <Route path="roles" element={<RoleManagement />} />
           <Route path="audit" element={<AuditLog />} />
           <Route path="sync-config" element={<SyncSqlConfig />} />
           <Route path="basicdata" element={<Navigate to="/basicdata/customers" replace />} />

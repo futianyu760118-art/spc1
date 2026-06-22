@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Col, Input, message, Row, Select, Space, Table, Tag } from 'antd'
-import { ReloadOutlined, SafetyOutlined, SearchOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import api from '../../services/api'
 
 interface Position {
   id: number
-  position_code?: string
   oa_position_id?: string
   position_name: string
-  role_id?: number
-  role_code?: string
-  role_name?: string
   status: number
   data_source?: string
   create_time: string
@@ -19,7 +15,6 @@ interface Position {
 export default function Positions() {
   const [data, setData] = useState<Position[]>([])
   const [loading, setLoading] = useState(false)
-  const [ensuringRoles, setEnsuringRoles] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState<string | undefined>()
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
@@ -48,33 +43,9 @@ export default function Positions() {
     fetchData()
   }, [fetchData])
 
-  const ensureRoles = async () => {
-    setEnsuringRoles(true)
-    try {
-      const res: any = await api.post('/basicdata/positions/ensure-roles')
-      const stats = res.data || {}
-      message.success(`岗位权限绑定完成：新增角色 ${stats.roles_created || 0}，绑定 ${stats.roles_linked || 0}`)
-      fetchData(pagination.current, pagination.pageSize)
-    } catch (error: any) {
-      message.error(error?.message || '绑定岗位权限失败')
-    } finally {
-      setEnsuringRoles(false)
-    }
-  }
-
   const columns = [
-    { title: '岗位编码', dataIndex: 'position_code', key: 'position_code', sorter: true },
     { title: 'OA岗位ID', dataIndex: 'oa_position_id', key: 'oa_position_id', sorter: true },
     { title: '岗位名称', dataIndex: 'position_name', key: 'position_name', sorter: true },
-    {
-      title: '权限角色',
-      dataIndex: 'role_name',
-      key: 'role_name',
-      width: 180,
-      render: (_: string, record: Position) => record.role_name
-        ? <Tag color="blue">{record.role_name}</Tag>
-        : <Tag color="default">未绑定</Tag>,
-    },
     {
       title: '状态',
       dataIndex: 'status',
@@ -124,7 +95,6 @@ export default function Positions() {
           <Col>
             <Space>
               <Button icon={<SearchOutlined />} onClick={() => fetchData(1, pagination.pageSize)}>查询</Button>
-              <Button icon={<SafetyOutlined />} loading={ensuringRoles} onClick={ensureRoles}>绑定岗位权限</Button>
               <Button icon={<ReloadOutlined />} onClick={() => fetchData()}>刷新</Button>
             </Space>
           </Col>

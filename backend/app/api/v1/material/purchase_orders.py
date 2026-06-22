@@ -14,6 +14,7 @@ from app.schemas.material.schemas import (
     PurchaseOrderOut, PurchaseOrderCreate, PurchaseOrderUpdate,
     POStatusUpdate, POTimelineItem,
 )
+from app.services.common.sync_filter import get_purchase_order_sync_filters
 
 router = APIRouter()
 
@@ -30,8 +31,9 @@ async def list_purchase_orders(
     db: AsyncSession = Depends(get_db),
 ):
     supplier_scope = await get_supplier_name_scope(current_user, db)
-    query = select(PurchaseOrder)
-    count_query = select(func.count(PurchaseOrder.id))
+    sync_filters = await get_purchase_order_sync_filters(db)
+    query = select(PurchaseOrder).where(*sync_filters)
+    count_query = select(func.count(PurchaseOrder.id)).where(*sync_filters)
     if supplier_scope:
         query = query.where(PurchaseOrder.supplier_name == supplier_scope)
         count_query = count_query.where(PurchaseOrder.supplier_name == supplier_scope)
@@ -73,7 +75,8 @@ async def get_purchase_order(
     db: AsyncSession = Depends(get_db),
 ):
     supplier_scope = await get_supplier_name_scope(current_user, db)
-    conditions = [PurchaseOrder.po_no == po_no]
+    sync_filters = await get_purchase_order_sync_filters(db)
+    conditions = [PurchaseOrder.po_no == po_no] + sync_filters
     if supplier_scope:
         conditions.append(PurchaseOrder.supplier_name == supplier_scope)
     result = await db.execute(select(PurchaseOrder).where(*conditions))
@@ -91,7 +94,8 @@ async def update_po_status(
     db: AsyncSession = Depends(get_db),
 ):
     supplier_scope = await get_supplier_name_scope(current_user, db)
-    conditions = [PurchaseOrder.po_no == po_no]
+    sync_filters = await get_purchase_order_sync_filters(db)
+    conditions = [PurchaseOrder.po_no == po_no] + sync_filters
     if supplier_scope:
         conditions.append(PurchaseOrder.supplier_name == supplier_scope)
     result = await db.execute(select(PurchaseOrder).where(*conditions))
@@ -117,7 +121,8 @@ async def get_po_timeline(
     db: AsyncSession = Depends(get_db),
 ):
     supplier_scope = await get_supplier_name_scope(current_user, db)
-    conditions = [PurchaseOrder.po_no == po_no]
+    sync_filters = await get_purchase_order_sync_filters(db)
+    conditions = [PurchaseOrder.po_no == po_no] + sync_filters
     if supplier_scope:
         conditions.append(PurchaseOrder.supplier_name == supplier_scope)
     po_result = await db.execute(select(PurchaseOrder).where(*conditions))

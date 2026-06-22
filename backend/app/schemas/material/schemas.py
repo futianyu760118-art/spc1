@@ -35,6 +35,7 @@ class PurchaseOrderOut(BaseModel):
     received_qty: Optional[float] = None
     arrival_hour_note: Optional[str] = None
     inspection_date: Optional[date] = None
+    is_closed: int = 0
     is_stagnant: bool = False
     stagnant_qty: Optional[float] = None
     # 缺料差异：po_qty - received_qty，正数表示缺料
@@ -91,6 +92,7 @@ class PurchaseOrderUpdate(BaseModel):
     received_qty: Optional[float] = None
     arrival_hour_note: Optional[str] = None
     inspection_date: Optional[date] = None
+    is_closed: Optional[int] = None
 
 
 class PurchaseOrderBatchUpdate(BaseModel):
@@ -101,6 +103,7 @@ class PurchaseOrderBatchUpdate(BaseModel):
     supplier_account: Optional[str] = None
     actual_arrival_date: Optional[date] = None
     inspection_date: Optional[date] = None
+    is_closed: Optional[int] = None
     clear_fields: Optional[List[str]] = None
 
 
@@ -256,14 +259,14 @@ class KitAnalysisMaterialItem(BaseModel):
     status_label: Optional[str] = None
     is_stagnant: bool = False
     stagnant_qty: Optional[float] = None
+    is_closed: int = 0
 
 
 class KitAnalysisItem(BaseModel):
     order_no: str
     total_materials: int
     received_materials: int
-    inspected_materials: int
-    pending_inspection: int
+    partial_received_materials: int = 0
     not_ordered_materials: int = 0
     overdue_materials: int = 0
     stagnant_materials: int = 0
@@ -302,10 +305,11 @@ class SupplierRiskItem(BaseModel):
 class PurchasePlanStats(BaseModel):
     total: int
     pending: int
-    arrived: int
-    inspected: int
+    partial_received: int
+    fully_received: int
     overdue: int
     stagnant: int
+    closed: int = 0
 
 
 # ============ 供应商付款排程（基于 purchase_invoice 聚合） ============
@@ -340,3 +344,51 @@ class SupplierPaymentSummary(BaseModel):
     total_payable: float
     total_monthly_due: float
     supplier_count: int
+    overdue_amount: float = 0.0
+    not_due_amount: float = 0.0
+
+
+# ============ 供应商即时沟通消息 ============
+
+class SupplierMessageCreate(BaseModel):
+    supplier_name: str
+    supplier_account: Optional[str] = None
+    content: str
+    po_no: Optional[str] = None
+
+
+class SupplierMessageOut(BaseModel):
+    id: int
+    supplier_name: str
+    supplier_account: Optional[str] = None
+    sender_id: int
+    sender_name: str
+    content: str
+    po_no: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ============ MRP计划订单 ============
+
+class MrpPlanOrderOut(BaseModel):
+    id: int
+    fbill_no: str
+    fmaterial_id: Optional[int] = None
+    material_code: str
+    material_name: Optional[str] = None
+    fplan_qty: Optional[float] = None
+    fplan_start_date: Optional[date] = None
+    fplan_finish_date: Optional[date] = None
+    fneed_date: Optional[date] = None
+    forder_type: Optional[str] = None
+    fstatus: int
+    fsupply_org: Optional[str] = None
+    frequire_org: Optional[str] = None
+    fsource_bill_no: Optional[str] = None
+    data_source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}

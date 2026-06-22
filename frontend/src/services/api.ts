@@ -154,6 +154,8 @@ export const materialApi = {
   },
   getPurchasePlanStats: (params: Record<string, any>) =>
     api.get('/materials/purchase-plan/stats', { params }),
+  getPurchasePlanAnalysis: (params: Record<string, any>) =>
+    api.get('/materials/purchase-plan/analysis', { params }),
   exportPurchasePlan: (params: Record<string, any>) =>
     api.get('/materials/purchase-plan/export', { params, responseType: 'blob' }),
   // 问题物料
@@ -193,6 +195,16 @@ export const materialApi = {
     api.get('/materials/supplier-payment', { params }),
   getSupplierPaymentSummary: (params: Record<string, any> = {}) =>
     api.get('/materials/supplier-payment/summary', { params }),
+}
+
+// ============ 供应商即时沟通 ============
+export const supplierMessageApi = {
+  list: (supplierName: string, params: Record<string, any> = {}) =>
+    api.get('/materials/supplier-messages', { params: { supplier_name: supplierName, ...params } }),
+  send: (data: { supplier_name: string; supplier_account?: string; content: string; po_no?: string }) =>
+    api.post('/materials/supplier-messages', data),
+  unread: (supplierName?: string, afterId?: number) =>
+    api.get('/materials/supplier-messages/unread', { params: { supplier_name: supplierName, after_id: afterId } }),
 }
 
 // ============ ETA (订单交付中心) ============
@@ -553,7 +565,7 @@ export const notificationApi = {
 // ============ 用户管理 (基础数据与集成中心) ============
 export const userApi = {
   list: (params?: any) => api.get('/basicdata/users', { params }),
-  roles: () => api.get('/basicdata/users/roles'),
+  roles: (params?: Record<string, any>) => api.get('/basicdata/users/roles', { params }),
   employeeOptions: (params?: { keyword?: string }) => api.get('/basicdata/users/employee-options', { params }),
   createRole: (data: { role_code: string; role_name: string; permissions?: Record<string, string[]> }) =>
     api.post('/basicdata/users/roles', data),
@@ -569,6 +581,17 @@ export const userApi = {
   delete: (id: number) => api.delete(`/basicdata/users/${id}`),
   batchGrant: (data: { role_ids: number[]; permissions: Record<string, string[]>; mode: 'grant' | 'revoke' | 'replace' }) =>
     api.post('/basicdata/users/roles/batch-grant', data),
+  syncRoles: () => api.post('/basicdata/users/sync-roles'),
+  listUnprovisionedEmployees: (params?: { keyword?: string; org_name?: string; position_name?: string; page?: number; page_size?: number }) =>
+    api.get('/basicdata/users/unprovisioned-employees', { params }),
+  batchProvision: (data: { emp_codes: string[]; role_id?: number; default_password?: string }) =>
+    api.post('/basicdata/users/batch-provision', data),
+  batchToggleActive: (data: { user_ids?: number[]; is_active: boolean; filter?: { role_code?: string; is_active?: boolean; keyword?: string; org_name?: string; position_name?: string; supplier_name?: string } }) =>
+    api.put('/basicdata/users/batch/toggle-active', data),
+  batchResetPassword: (data: { user_ids?: number[]; filter?: { role_code?: string; is_active?: boolean; keyword?: string; org_name?: string; position_name?: string; supplier_name?: string } }) =>
+    api.put('/basicdata/users/batch/reset-password', data),
+  batchDelete: (data: { user_ids?: number[]; filter?: { role_code?: string; is_active?: boolean; keyword?: string; org_name?: string; position_name?: string; supplier_name?: string } }) =>
+    api.post('/basicdata/users/batch/delete', data),
 }
 
 // ============ 页面分享 ============

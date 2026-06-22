@@ -21,6 +21,8 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "exceptions.product_samples": ["read", "update"],
         "rules.order_standards": ["read", "update"],
         "rules.work_instructions": ["read", "update"],
+        "users": ["read", "update"],
+        "roles": ["read", "update"],
     },
 }
 

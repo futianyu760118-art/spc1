@@ -1,12 +1,15 @@
-"""物料齐套中心 — 供应商付款排程服务
+"""
+Supplier Payment Schedule Service.
 
-数据来源：直接基于 purchase_invoice 表聚合。
-筛选规则：用户选择排款月，后端按 invoice_date + 账期天数 计算排款月，
-         只保留排款月等于所选月份的发票，再按 supplier_code 聚合。
-聚合结果：
-  monthly_due   = 排款月在所选月份的发票 SUM(remain_payable)
-  monthly_bill  = 排款月在所选月份的发票 SUM(invoice_amount)
-  total_payable = 该供应商所有发票 SUM(remain_payable)
+Data source: aggregates directly from purchase_invoice table.
+Filtering logic: users select a target month; the backend calculates
+payment_month = invoice_date + payment_term_days, and only includes
+invoices whose payment_month matches the selected month, then groups by supplier_code.
+
+Aggregated results:
+  monthly_due   = SUM(remain_payable) for invoices falling in the selected month
+  monthly_bill  = SUM(invoice_amount) for invoices falling in the selected month
+  total_payable = SUM(remain_payable) for all invoices of the supplier
 """
 
 import re
@@ -58,9 +61,34 @@ def _compute_payment_month(invoice_date, payment_term: Optional[str]) -> Optiona
     return due.strftime('%Y-%m')
 
 
+def _compute_overdue_not_due(invoices: List[Dict[str, Any]]) -> Tuple[Decimal, Decimal]:
+    current_month = datetime.now().strftime('%Y-%m')
+    overdue = Decimal('0')
+    not_due = Decimal('0')
+    for inv in invoices:
+        inv_date = inv.get('invoice_date')
+        if not inv_date:
+            not_due += Decimal(str(inv.get('remain_payable', 0)))
+            continue
+        if isinstance(inv_date, str):
+            try:
+                inv_date = datetime.strptime(inv_date, '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                not_due += Decimal(str(inv.get('remain_payable', 0)))
+                continue
+        payment_term = inv.get('payment_term')
+        pm = _compute_payment_month(inv_date, payment_term)
+        remain = Decimal(str(inv.get('remain_payable', 0)))
+        if pm and pm < current_month:
+            overdue += remain
+        else:
+            not_due += remain
+    return overdue, not_due
+
+
 SORT_LABELS = {
     'supplier_code', 'supplier_name', 'invoice_date',
-    'payment_term', 'payment_method', 'total_payable', 'monthly_due', 'monthly_bill',
+    'payment_term', 'payment_method', 'total_payable', 'monthly_due', 'monthly_bill', 'payment_month',
 }
 
 
@@ -423,10 +451,12 @@ async def get_supplier_payment_summary(
 
     # 合并数据：所有供应商都要显示，月到期应付金额从映射中获取
     items = []
+    all_invoices_for_overdue: List[Dict[str, Any]] = []
     for supplier in all_suppliers:
         code = supplier['supplier_code']
         if code in monthly_map:
             items.append(monthly_map[code])
+            all_invoices_for_overdue.extend(monthly_map[code].get('invoices', []))
         else:
             # 不在当前排款月的供应商，月到期应付金额为0，到票日期和账期不显示，但显示全部发票
             all_invoices = all_invoices_map.get(code, [])
@@ -455,6 +485,7 @@ async def get_supplier_payment_summary(
                 'schedule_month': target_month,
                 'invoices': invoice_list,
             })
+            all_invoices_for_overdue.extend(invoice_list)
 
     # 回填总应付金额
     await _fill_total_payable(db, items, supplier_name, exact_supplier_name)
@@ -468,10 +499,14 @@ async def get_supplier_payment_summary(
         total_payable += it.get('total_payable', Decimal('0'))
         total_monthly_due += it.get('monthly_due', Decimal('0'))
 
+    overdue_amount, not_due_amount = _compute_overdue_not_due(all_invoices_for_overdue)
+
     return SupplierPaymentSummary(
         total_payable=float(total_payable.quantize(Decimal('0.01'))),
         total_monthly_due=float(total_monthly_due.quantize(Decimal('0.01'))),
         supplier_count=len(supplier_codes),
+        overdue_amount=float(overdue_amount.quantize(Decimal('0.01'))),
+        not_due_amount=float(not_due_amount.quantize(Decimal('0.01'))),
     )
 
 

@@ -1,10 +1,12 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { Table, Input, Button, message, Row, Col, Card, DatePicker, Dropdown } from 'antd'
 import {
   SearchOutlined, ReloadOutlined, AccountBookOutlined,
-  DollarOutlined, BankOutlined, LeftOutlined, RightOutlined,
+  DollarOutlined, ExclamationCircleOutlined, SafetyOutlined,
+  LeftOutlined, RightOutlined,
   DownloadOutlined, DownOutlined, CalendarOutlined,
 } from '@ant-design/icons'
+import { Pie } from '@ant-design/charts'
 import dayjs from 'dayjs'
 import 'dayjs/locale/zh-cn'
 import zhCN from 'antd/locale/zh_CN'
@@ -41,6 +43,8 @@ interface Summary {
   total_payable: number
   total_monthly_due: number
   supplier_count: number
+  overdue_amount: number
+  not_due_amount: number
 }
 
 const fmt = (v: number | null) => {
@@ -62,6 +66,7 @@ export default function SupplierPayment() {
   const [invoiceDateRange, setInvoiceDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
   const [sortBy, setSortBy] = useState<string>('')
   const [sortOrder, setSortOrder] = useState<string>('')
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
   const { exporting, exportData } = useExport()
 
   const handleExport = (format: 'xlsx' | 'csv') => {
@@ -109,48 +114,62 @@ export default function SupplierPayment() {
 
   useEffect(() => { load() }, [load])
 
-  const columns = [
-    {
-      title: '供应商编码', dataIndex: 'supplier_code', width: 140, fixed: 'left' as const, sorter: true,
-      render: (v: string) => <span style={{ fontFamily: 'monospace' }}>{v}</span>,
-    },
-    {
-      title: '供应商', dataIndex: 'supplier_name', width: 240, ellipsis: true, fixed: 'left' as const, sorter: true,
-      render: (v: string | null) => v ? <strong>{v}</strong> : <span style={{ color: '#cbd5e1' }}>-</span>,
-    },
-    {
-      title: '到票日期', dataIndex: 'invoice_date', width: 120, sorter: true,
-      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
-    },
-    {
-      title: '账期', dataIndex: 'payment_term', width: 120, sorter: true,
-      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
-    },
-    {
-      title: '付款方式', dataIndex: 'payment_method', width: 140, sorter: true,
-      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
-    },
-    {
-      title: '排款月', dataIndex: 'payment_month', width: 120, sorter: true,
-      render: (v: string | null) => {
-        if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
-        const d = dayjs(v)
-        return d.isValid() ? d.format('YYYY年M月') : v
+  const columns = useMemo(() => {
+    const getSortOrder = (dataIndex: string) => {
+      if (sortBy !== dataIndex) return undefined
+      return sortOrder === 'asc' ? ('ascend' as const) : sortOrder === 'desc' ? ('descend' as const) : undefined
+    }
+    return [
+      {
+        title: '供应商编码', dataIndex: 'supplier_code', width: 140, fixed: 'left' as const,
+        sorter: true, sortOrder: getSortOrder('supplier_code'),
+        render: (v: string) => <span style={{ fontFamily: 'monospace' }}>{v}</span>,
       },
-    },
-    {
-      title: '总应付金额', dataIndex: 'total_payable', width: 140, align: 'right' as const, sorter: true,
-      render: fmt,
-    },
-    {
-      title: '月到期应付金额', dataIndex: 'monthly_due', width: 160, align: 'right' as const, sorter: true,
-      render: (v: number | null) => {
-        if (v == null) return <span style={{ color: '#cbd5e1' }}>-</span>
-        const color = v > 0 ? '#e11d48' : '#16a34a'
-        return <span style={{ fontFamily: 'monospace', fontWeight: 500, color }}>{v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+      {
+        title: '供应商', dataIndex: 'supplier_name', width: 240, ellipsis: true, fixed: 'left' as const,
+        sorter: true, sortOrder: getSortOrder('supplier_name'),
+        render: (v: string | null) => v ? <strong>{v}</strong> : <span style={{ color: '#cbd5e1' }}>-</span>,
       },
-    },
-  ]
+      {
+        title: '到票日期', dataIndex: 'invoice_date', width: 120,
+        sorter: true, sortOrder: getSortOrder('invoice_date'),
+        render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+      },
+      {
+        title: '账期', dataIndex: 'payment_term', width: 120,
+        sorter: true, sortOrder: getSortOrder('payment_term'),
+        render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+      },
+      {
+        title: '付款方式', dataIndex: 'payment_method', width: 140,
+        sorter: true, sortOrder: getSortOrder('payment_method'),
+        render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+      },
+      {
+        title: '排款月', dataIndex: 'payment_month', width: 120,
+        sorter: true, sortOrder: getSortOrder('payment_month'),
+        render: (v: string | null) => {
+          if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
+          const d = dayjs(v)
+          return d.isValid() ? d.format('YYYY年M月') : v
+        },
+      },
+      {
+        title: '总应付金额', dataIndex: 'total_payable', width: 140, align: 'right' as const,
+        sorter: true, sortOrder: getSortOrder('total_payable'),
+        render: fmt,
+      },
+      {
+        title: '月到期应付金额', dataIndex: 'monthly_due', width: 160, align: 'right' as const,
+        sorter: true, sortOrder: getSortOrder('monthly_due'),
+        render: (v: number | null) => {
+          if (v == null) return <span style={{ color: '#cbd5e1' }}>-</span>
+          const color = v > 0 ? '#e11d48' : '#16a34a'
+          return <span style={{ fontFamily: 'monospace', fontWeight: 500, color }}>{v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+        },
+      },
+    ]
+  }, [sortBy, sortOrder])
 
   return (
     <div>
@@ -159,7 +178,9 @@ export default function SupplierPayment() {
         {[
           { title: '供应商数', value: summary?.supplier_count ?? '-', icon: <AccountBookOutlined />, color: '#6366f1' },
           { title: '总应付金额', value: summary?.total_payable != null ? `¥${summary.total_payable.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <DollarOutlined />, color: '#e11d48' },
-          { title: '月到期应付金额', value: summary?.total_monthly_due != null ? `¥${summary.total_monthly_due.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <BankOutlined />, color: '#f59e0b' },
+          { title: '月到期应付金额', value: summary?.total_monthly_due != null ? `¥${summary.total_monthly_due.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <CalendarOutlined />, color: '#f59e0b' },
+          { title: '到期未付', value: summary?.overdue_amount != null ? `¥${summary.overdue_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <ExclamationCircleOutlined />, color: '#dc2626' },
+          { title: '未到期', value: summary?.not_due_amount != null ? `¥${summary.not_due_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <SafetyOutlined />, color: '#16a34a' },
         ].map((card, i) => (
           <Col flex={1} key={i}>
             <Card size="small" className="card-modern" style={{ padding: 0 }}>
@@ -176,6 +197,70 @@ export default function SupplierPayment() {
           </Col>
         ))}
       </Row>
+
+      {/* 图表 */}
+      <div className="card-modern" style={{ padding: '20px 24px', marginBottom: 16 }}>
+        <Row gutter={24}>
+          <Col span={12}>
+            <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#475569', marginBottom: 16 }}>应付金额分布</h3>
+            {summary && (summary.overdue_amount > 0 || summary.not_due_amount > 0) ? (
+              <Pie
+                data={[
+                  { name: '到期未付', value: summary.overdue_amount },
+                  { name: '未到期', value: summary.not_due_amount },
+                ]}
+                angleField="value"
+                colorField="name"
+                radius={0.8}
+                innerRadius={0.55}
+                color={['#dc2626', '#16a34a']}
+                label={{
+                  text: (d: { name: string; value: number }) => `${d.name}\n¥${d.value.toLocaleString('zh-CN', { minimumFractionDigits: 0 })}`,
+                  style: { fontSize: 11, fontWeight: 500 },
+                }}
+                legend={{
+                  color: { position: 'bottom' as const, layout: { justifyContent: 'center' } },
+                }}
+                statistic={{
+                  title: { content: '总应付', style: { fontSize: '12px', color: '#94a3b8' } },
+                  content: {
+                    content: `¥${((summary.overdue_amount + summary.not_due_amount) / 10000).toFixed(0)}万`,
+                    style: { fontSize: '22px', fontWeight: 700, color: '#1e293b' },
+                  },
+                }}
+                interaction={{ elementHighlight: true }}
+                height={260}
+              />
+            ) : (
+              <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>暂无数据</div>
+            )}
+          </Col>
+          <Col span={12}>
+            <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#475569', marginBottom: 16 }}>供应商应付 TOP10</h3>
+            {data.length > 0 ? (
+              <Pie
+                data={[...data]
+                  .sort((a, b) => (b.total_payable || 0) - (a.total_payable || 0))
+                  .slice(0, 10)
+                  .map((d) => ({ name: d.supplier_name || d.supplier_code, value: d.total_payable || 0 }))}
+                angleField="value"
+                colorField="name"
+                radius={0.8}
+                innerRadius={0.3}
+                label={{
+                  text: (d: { name: string; value: number }) => `${d.name}`,
+                  style: { fontSize: 10, fontWeight: 400 },
+                }}
+                legend={false}
+                interaction={{ elementHighlight: true }}
+                height={260}
+              />
+            ) : (
+              <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>暂无数据</div>
+            )}
+          </Col>
+        </Row>
+      </div>
 
       {/* 筛选栏 */}
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
@@ -258,6 +343,11 @@ export default function SupplierPayment() {
           loading={loading}
           size="small"
           scroll={{ x: 1000 }}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys: React.Key[]) => setSelectedRowKeys(keys as string[]),
+            preserveSelectedRowKeys: true,
+          }}
           expandable={{
             expandedRowRender: (record: SupplierPaymentRow) => {
               if (!record.invoices?.length) return <div style={{ padding: '8px 16px', color: '#94a3b8' }}>暂无发票明细</div>

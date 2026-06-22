@@ -1,6 +1,6 @@
 """订单交付中心 — 销售订单模型（对齐1.点检CSV 38列）"""
 
-from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, Text, Boolean, UniqueConstraint, Index, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, Text, UniqueConstraint, Index, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
@@ -54,6 +54,7 @@ class SaleOrder(Base):
     first_article_date = Column(Date, comment="首件检验日期")
     assembly_start_date = Column(Date, comment="组装上线日期")
     assembly_complete_date = Column(Date, comment="组装完成日期")
+    is_closed = Column(Integer, nullable=False, server_default='0', default=0, comment="是否关闭")
     remark = Column(Text, comment="备注")
 
     # ── 风险评估字段 ──

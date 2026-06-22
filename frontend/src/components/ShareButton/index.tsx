@@ -46,17 +46,25 @@ export default function ShareButton() {
   }
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(shareUrl).then(() => {
-      message.success('链接已复制到剪贴板')
-    }).catch(() => {
-      const input = document.createElement('input')
-      input.value = shareUrl
-      document.body.appendChild(input)
-      input.select()
-      document.execCommand('copy')
-      document.body.removeChild(input)
-      message.success('链接已复制到剪贴板')
-    })
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        message.success('链接已复制到剪贴板')
+      }).catch(() => {
+        fallbackCopy()
+      })
+    } else {
+      fallbackCopy()
+    }
+  }
+
+  const fallbackCopy = () => {
+    const input = document.createElement('input')
+    input.value = shareUrl
+    document.body.appendChild(input)
+    input.select()
+    document.execCommand('copy')
+    document.body.removeChild(input)
+    message.success('链接已复制到剪贴板')
   }
 
   const handleOpen = () => {

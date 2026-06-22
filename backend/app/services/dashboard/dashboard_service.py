@@ -1,7 +1,7 @@
 """供应链驾驶舱 — 仪表盘服务"""
 
 from datetime import date, timedelta
-from sqlalchemy import select, func, and_, case, DateTime
+from sqlalchemy import select, func, and_, or_, case, DateTime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order.sale_order import SaleOrder
@@ -109,10 +109,17 @@ class DashboardService:
         )
         overdue_tasks = overdue_tasks_q.scalar() or 0
 
-        # 在途 PO
+        # 在途 PO:ERP 原始在途状态,或基于收料数量推导的部分收料(未关闭且未收齐)
         in_transit_q = await self.db.execute(
             select(func.count(PurchaseOrder.id)).where(
-                PurchaseOrder.po_status.in_(["in_transit", "shipped", "partial_received"])
+                PurchaseOrder.is_closed == 0,
+                or_(
+                    PurchaseOrder.po_status.in_(["in_transit", "shipped"]),
+                    and_(
+                        PurchaseOrder.received_qty > 0,
+                        PurchaseOrder.received_qty < PurchaseOrder.po_qty,
+                    ),
+                ),
             )
         )
         in_transit_po = in_transit_q.scalar() or 0

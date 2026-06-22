@@ -11,6 +11,8 @@ interface UserInfo {
   supplier_name?: string | null
   supplier_code?: string | null
   font_size_scale?: string | null
+  is_default_password: boolean
+  login_version: number
 }
 
 interface ShareUserInfo {

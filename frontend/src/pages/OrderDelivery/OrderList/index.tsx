@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Row, Col, Table, Tag, Input, Select, Button, message, Space, Tooltip, Modal, Form, DatePicker, Card, Spin, Progress, Dropdown, Switch } from 'antd'
+import { Row, Col, Table, Tag, Input, Select, Button, message, Space, Tooltip, Modal, Form, DatePicker, Card, Spin, Progress, Dropdown, Switch, Checkbox } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 const { RangePicker } = DatePicker
 import {
@@ -68,6 +68,7 @@ interface OrderRow {
   first_article_date: string | null
   assembly_start_date: string | null
   assembly_complete_date: string | null
+  is_closed: number
   remark: string | null
   order_date: string | null
   shortage_count: number
@@ -115,6 +116,7 @@ interface Filters {
   packaging_status: string[]
   procurement_status: string[]
   delivery_completed: string[]
+  is_closed: string[]
   order_type: string[]
   promised_date_range: [string, string] | null
   shipping_plan_range: [string, string] | null
@@ -184,7 +186,8 @@ export default function OrderList() {
     packaging_status: [],
     procurement_status: [],
     delivery_completed: ['no'],
-    order_type: [],
+    is_closed: ['0'],
+    order_type: ['big'],
     promised_date_range: null,
     shipping_plan_range: null,
     order_date_range: null,
@@ -236,9 +239,9 @@ export default function OrderList() {
   }, [searchParams, setSearchParams])
 
   // ── 行内编辑 ──
-  const [editingCell, setEditingCell] = useState<{ rowId: number; field: string } | null>(null)
-  const [savingCell, setSavingCell] = useState(false)
-  const savingCellRef = useRef(false)
+  const [editingCell, setEditingCell] = useState<string | null>(null)
+  const [savingCell, setSavingCell] = useState<string | null>(null)
+  const savingCellRef = useRef<string | null>(null)
 
   const DATE_FIELDS = [
     'delivery_completed_date', 'shipping_plan', 'customer_inspection_date',
@@ -247,12 +250,12 @@ export default function OrderList() {
   ]
 
   const handleCellSave = useCallback(async (record: OrderRow, field: string, value: any) => {
+    const cellKey = `${record.id}-${field}`
     if (savingCellRef.current) return
-    savingCellRef.current = true
-    setSavingCell(true)
+    savingCellRef.current = cellKey
+    setSavingCell(cellKey)
     try {
       const payload: Record<string, any> = {}
-      // material_dates 子字段
       if (field.startsWith('mat_')) {
         const matKey = field.replace('mat_', '')
         const newMaterialDates = { ...(record.material_dates || {}) }
@@ -264,13 +267,14 @@ export default function OrderList() {
         payload.material_dates = Object.keys(newMaterialDates).length > 0 ? newMaterialDates : null
       } else if (DATE_FIELDS.includes(field)) {
         payload[field] = value && dayjs.isDayjs(value) ? value.format('YYYY-MM-DD') : value || null
+      } else if (field === 'is_closed') {
+        payload[field] = value === 'true' ? 1 : 0
       } else {
         payload[field] = value || null
       }
 
       await orderApi.update(record.order_no, payload)
 
-      // 本地更新 orders state 避免全量刷新
       setOrders(prev => prev.map(o => {
         if (o.id !== record.id) return o
         if (field.startsWith('mat_')) {
@@ -278,139 +282,103 @@ export default function OrderList() {
         }
         return { ...o, [field]: payload[field] }
       }))
-      setEditingCell(null)
+      message.success('保存成功')
     } catch {
       message.error('保存失败')
     } finally {
-      savingCellRef.current = false
-      setSavingCell(false)
+      savingCellRef.current = null
+      setSavingCell(null)
     }
   }, [])
 
-  const isEditingCell = useCallback((rowId: number, field: string) =>
-    editingCell?.rowId === rowId && editingCell?.field === field, [editingCell])
-
-  const startEditCell = useCallback((rowId: number, field: string) => {
-    if (savingCellRef.current) return
-    setEditingCell({ rowId, field })
-  }, [])
-
-  const cancelEditCell = useCallback(() => {
-    if (!savingCellRef.current) setEditingCell(null)
-  }, [])
-
-  // ── 行内编辑渲染辅助 ──
-  function EditableDateCell({ value, record, field, overdue, green }: {
-    value: string | null; record: OrderRow; field: string; overdue?: boolean; green?: boolean
-  }) {
-    const editing = isEditingCell(record.id, field)
-    const pickerRef = useRef<any>(null)
-    
-    const handleClick = (e: React.MouseEvent) => {
-      e.stopPropagation()
-      startEditCell(record.id, field)
-    }
-    
-    if (editing) {
+  // ── 行内编辑渲染辅助（参考采购到料计划模式）──
+  const editableDate = (field: string, opts?: {
+    overdue?: (value: string | null, record: OrderRow) => boolean
+    green?: boolean
+  }) => (value: string | null, record: OrderRow) => {
+    const cellKey = `${record.id}-${field}`
+    const isEditing = editingCell === cellKey
+    if (isEditing) {
       return (
         <div className="editable-cell editable-cell-editing">
           <DatePicker
-            ref={pickerRef}
-            defaultValue={value ? dayjs(value) : undefined}
             size="small"
+            defaultValue={value ? dayjs(value) : undefined}
+            disabled={savingCell === cellKey}
+            style={{ width: '100%' }}
+            autoFocus
             open
             onChange={(d) => handleCellSave(record, field, d)}
-            onOpenChange={(open) => { if (!open) cancelEditCell() }}
-            style={{ width: '100%' }}
-            popupStyle={{ zIndex: 1050 }}
+            onOpenChange={(open) => { if (!open) setEditingCell(null) }}
           />
         </div>
       )
     }
+    const isOverdue = opts?.overdue ? opts.overdue(value, record) : false
+    const isGreen = opts?.green || false
     const display = value
       ? <span style={{
-          color: green ? '#16a34a' : overdue ? '#e11d48' : undefined,
-          fontWeight: (green || overdue) ? (green ? 500 : 600) : undefined,
+          color: isGreen ? '#16a34a' : isOverdue ? '#e11d48' : undefined,
+          fontWeight: (isGreen || isOverdue) ? (isGreen ? 500 : 600) : undefined,
         }}>{formatDate(value)}</span>
       : <span style={{ color: '#cbd5e1' }}>-</span>
-    return <div className="editable-cell" onClick={handleClick}>{display}</div>
+    return <div className="editable-cell" onClick={() => !savingCell && setEditingCell(cellKey)}>{display}</div>
   }
 
-  function EditableSelectCell({ value, record, field, options, renderValue }: {
-    value: string | null; record: OrderRow; field: string;
-    options: { value: string; label: string }[];
-    renderValue?: (v: string | null) => React.ReactNode;
-  }) {
-    const editing = isEditingCell(record.id, field)
-    const selectRef = useRef<any>(null)
-    
-    const handleClick = (e: React.MouseEvent) => {
-      e.stopPropagation()
-      startEditCell(record.id, field)
-    }
-    
-    if (editing) {
-      return (
-        <div className="editable-cell editable-cell-editing">
-          <Select
-            ref={selectRef}
-            defaultValue={value || undefined}
-            size="small"
-            open
-            allowClear
-            options={options}
-            style={{ width: '100%' }}
-            onChange={(v) => handleCellSave(record, field, v ?? null)}
-            onDropdownVisibleChange={(open) => { if (!open) cancelEditCell() }}
-            dropdownStyle={{ zIndex: 1050 }}
-          />
-        </div>
-      )
-    }
-    const display = renderValue ? renderValue(value) : (value || '-')
-    return <div className="editable-cell" onClick={handleClick}>{display}</div>
-  }
-
-  function EditableTextCell({ value, record, field, renderValue }: {
-    value: string | null; record: OrderRow; field: string;
-    renderValue?: (v: string | null) => React.ReactNode;
-  }) {
-    const editing = isEditingCell(record.id, field)
-    const inputRef = useRef<any>(null)
-    const [tempVal, setTempVal] = useState('')
-    
-    const handleClick = (e: React.MouseEvent) => {
-      e.stopPropagation()
-      startEditCell(record.id, field)
-    }
-    
-    // 进入编辑态时初始化值
-    useEffect(() => {
-      if (editing) {
-        setTempVal(value || '')
-        // 延迟聚焦，确保DOM已渲染
-        setTimeout(() => inputRef.current?.focus(), 0)
+  const editableSelect = (field: string, options: { value: string; label: string }[], renderValue?: (v: string | null, r: OrderRow) => React.ReactNode) =>
+    (value: string | null, record: OrderRow) => {
+      const cellKey = `${record.id}-${field}`
+      const isEditing = editingCell === cellKey
+      if (isEditing) {
+        return (
+          <div className="editable-cell editable-cell-editing">
+            <Select
+              size="small"
+              defaultValue={value || undefined}
+              disabled={savingCell === cellKey}
+              style={{ width: '100%' }}
+              autoFocus
+              open
+              allowClear
+              options={options}
+              onChange={(v) => handleCellSave(record, field, v ?? null)}
+              onDropdownVisibleChange={(open) => { if (!open) setEditingCell(null) }}
+              dropdownStyle={{ zIndex: 1050 }}
+            />
+          </div>
+        )
       }
-    }, [editing, value])
-    
-    if (editing) {
-      return (
-        <div className="editable-cell editable-cell-editing">
-          <Input
-            ref={inputRef}
-            value={tempVal}
-            size="small"
-            onChange={(e) => setTempVal(e.target.value)}
-            onBlur={() => handleCellSave(record, field, tempVal)}
-            onPressEnter={() => handleCellSave(record, field, tempVal)}
-            onKeyDown={(e) => { if (e.key === 'Escape') cancelEditCell() }}
-          />
-        </div>
-      )
+      const display = renderValue ? renderValue(value, record) : (value || '-')
+      return <div className="editable-cell" onClick={() => !savingCell && setEditingCell(cellKey)}>{display}</div>
     }
-    const display = renderValue ? renderValue(value) : (value || <span style={{ color: '#cbd5e1' }}>-</span>)
-    return <div className="editable-cell" onClick={handleClick}>{display}</div>
-  }
+
+  const editableText = (field: string, renderValue?: (v: string | null, r: OrderRow) => React.ReactNode) =>
+    (value: string | null, record: OrderRow) => {
+      const cellKey = `${record.id}-${field}`
+      const isEditing = editingCell === cellKey
+      if (isEditing) {
+        return (
+          <div className="editable-cell editable-cell-editing">
+            <Input
+              size="small"
+              defaultValue={value || ''}
+              disabled={savingCell === cellKey}
+              style={{ width: '100%' }}
+              autoFocus
+              onBlur={(e) => {
+                const next = e.target.value.trim()
+                if ((value || '') !== next) handleCellSave(record, field, next || null)
+                setEditingCell(null)
+              }}
+              onPressEnter={(e) => e.currentTarget.blur()}
+              onKeyDown={(e) => { if (e.key === 'Escape') setEditingCell(null) }}
+            />
+          </div>
+        )
+      }
+      const display = renderValue ? renderValue(value, record) : (value || <span style={{ color: '#cbd5e1' }}>-</span>)
+      return <div className="editable-cell" onClick={() => !savingCell && setEditingCell(cellKey)}>{display}</div>
+    }
 
   const fetchOrders = useCallback(async (
     page = 1,
@@ -434,6 +402,7 @@ export default function OrderList() {
       if (f.packaging_status.length > 0) params.packaging_status = f.packaging_status.join(',')
       if (f.procurement_status.length > 0) params.procurement_status = f.procurement_status.join(',')
       if (f.delivery_completed.length > 0) params.delivery_completed = f.delivery_completed.join(',')
+      if (f.is_closed.length > 0) params.is_closed = f.is_closed.join(',')
       if (f.order_type.length > 0) params.order_type = f.order_type.join(',')
       if (f.promised_date_range) {
         params.promised_date_start = f.promised_date_range[0]
@@ -524,8 +493,9 @@ export default function OrderList() {
     const deliveryCompletedFilter = tableFilters.delivery_completed_date != null
       ? (tableFilters.delivery_completed_date.length > 0 ? tableFilters.delivery_completed_date : [])
       : filters.delivery_completed
-    const orderTypeFilter = tableFilters.order_type?.length > 0 ? tableFilters.order_type : []
-    
+    const orderTypeFilter = tableFilters.order_no?.length > 0 ? tableFilters.order_no : []
+    const isClosedFilter = tableFilters.is_closed?.length > 0 ? tableFilters.is_closed : []
+
     const newSort = { sort_by: sortField, sort_order: sortOrder }
     const newFilters = {
       ...filters,
@@ -537,6 +507,7 @@ export default function OrderList() {
       packaging_status: packagingStatusFilter,
       procurement_status: procurementStatusFilter,
       delivery_completed: deliveryCompletedFilter,
+      is_closed: isClosedFilter,
       order_type: orderTypeFilter,
     }
     setSortInfo(newSort)
@@ -568,6 +539,7 @@ export default function OrderList() {
     if (filters.packaging_status.length > 0) params.packaging_status = filters.packaging_status.join(',')
     if (filters.procurement_status.length > 0) params.procurement_status = filters.procurement_status.join(',')
     if (filters.delivery_completed.length > 0) params.delivery_completed = filters.delivery_completed.join(',')
+    if (filters.is_closed.length > 0) params.is_closed = filters.is_closed.join(',')
     if (filters.order_type.length > 0) params.order_type = filters.order_type.join(',')
     if (filters.promised_date_range) {
       params.promised_date_start = filters.promised_date_range[0]
@@ -661,6 +633,7 @@ export default function OrderList() {
       assembly_start_date: record.assembly_start_date ? dayjs(record.assembly_start_date) : undefined,
       assembly_complete_date: record.assembly_complete_date ? dayjs(record.assembly_complete_date) : undefined,
       risk_level: record.risk_level || undefined,
+      is_closed: record.is_closed === 1 ? 1 : 0,
       remark: record.remark || undefined,
     }
     MATERIAL_KEYS.forEach(key => {
@@ -691,6 +664,8 @@ export default function OrderList() {
       textFields.forEach(f => {
         if (values[f] !== undefined) payload[f] = values[f] || null
       })
+      // is_closed 整数字段（0/1）
+      if (values.is_closed !== undefined && values.is_closed !== null) payload.is_closed = values.is_closed
       // material_dates JSONB
       const materialDates: Record<string, string> = {}
       MATERIAL_KEYS.forEach(key => {
@@ -765,7 +740,7 @@ export default function OrderList() {
     },
     {
       title: '发货完成', dataIndex: 'delivery_completed_date', key: 'delivery_completed_date', minWidth: 90, fixed: 'left' as const,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="delivery_completed_date" green />, sorter: true,
+      render: editableDate('delivery_completed_date', { green: true }), sorter: true,
       filters: [
         { text: '已发货', value: 'yes' },
         { text: '未发货', value: 'no' },
@@ -774,14 +749,9 @@ export default function OrderList() {
     },
     {
       title: '客户等级', dataIndex: 'customer_grade', key: 'customer_grade', minWidth: 60, fixed: 'left' as const,
-      render: (v: string, r: OrderRow) => (
-        <EditableSelectCell value={v} record={r} field="customer_grade"
-          options={[
-            { value: 'A', label: 'A级' }, { value: 'B', label: 'B级' },
-            { value: 'C', label: 'C级' }, { value: 'D', label: 'D级' },
-          ]}
-          renderValue={(val) => val ? <Tag color={val === 'A' ? 'red' : val === 'B' ? 'orange' : val === 'C' ? 'blue' : 'default'}>{val}</Tag> : '-'}
-        />
+      render: editableSelect('customer_grade',
+        [{ value: 'A', label: 'A级' }, { value: 'B', label: 'B级' }, { value: 'C', label: 'C级' }, { value: 'D', label: 'D级' }],
+        (val) => val ? <Tag color={val === 'A' ? 'red' : val === 'B' ? 'orange' : val === 'C' ? 'blue' : 'default'}>{val}</Tag> : '-'
       ),
       sorter: true,
       filters: [
@@ -863,14 +833,31 @@ export default function OrderList() {
         { text: '样品单（HJY开头）', value: 'sample' },
       ],
       filterMultiple: true,
+      filteredValue: filters.order_type,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: 8, width: 200 }}>
           <Input
             placeholder="输入订单号"
-            value={selectedKeys[0]}
-            onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
+            value={selectedKeys.find((k: string) => !['big', 'sample'].includes(k)) || ''}
+            onChange={(e) => {
+              const typeKeys = selectedKeys.filter((k: string) => ['big', 'sample'].includes(k))
+              const newKeys = e.target.value ? [...typeKeys, e.target.value] : typeKeys
+              setSelectedKeys(newKeys.length > 0 ? newKeys : [])
+            }}
+            style={{ width: '100%', marginBottom: 8, display: 'block' }}
           />
+          <Checkbox.Group
+            value={selectedKeys.filter((k: string) => ['big', 'sample'].includes(k))}
+            onChange={(checkedValues) => {
+              const textKey = selectedKeys.find((k: string) => !['big', 'sample'].includes(k))
+              const newKeys = textKey ? [...checkedValues, textKey] : [...checkedValues]
+              setSelectedKeys(newKeys.length > 0 ? newKeys : [])
+            }}
+            style={{ marginBottom: 8, display: 'block' }}
+          >
+            <Checkbox value="big">大单（HJ开头）</Checkbox>
+            <Checkbox value="sample">样品单（HJY开头）</Checkbox>
+          </Checkbox.Group>
           <Space>
             <Button
               type="primary"
@@ -891,19 +878,17 @@ export default function OrderList() {
         </div>
       ),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
-      onFilter: (value: string, record: OrderRow) => 
-        record.order_no ? record.order_no.toLowerCase().includes(value.toLowerCase()) : false,
+      onFilter: (value: string, record: OrderRow) => {
+        if (value === 'big') return record.order_no ? record.order_no.toUpperCase().startsWith('HJ') && !record.order_no.toUpperCase().startsWith('HJY') : false
+        if (value === 'sample') return record.order_no ? record.order_no.toUpperCase().startsWith('HJY') : false
+        return record.order_no ? record.order_no.toLowerCase().includes(value.toLowerCase()) : false
+      },
     },
     {
       title: '风险等级', dataIndex: 'risk_level', key: 'risk_level', minWidth: 80,
-      render: (v: string, r: OrderRow) => (
-        <EditableSelectCell value={v} record={r} field="risk_level"
-          options={[
-            { value: 'red', label: '高风险' }, { value: 'yellow', label: '中风险' },
-            { value: 'blue', label: '低风险' }, { value: 'green', label: '正常' },
-          ]}
-          renderValue={(val) => <RiskBadge level={val} onClick={() => { setSelectedOrder(r); setRiskModalOpen(true) }} />}
-        />
+      render: editableSelect('risk_level',
+        [{ value: 'red', label: '高风险' }, { value: 'yellow', label: '中风险' }, { value: 'blue', label: '低风险' }, { value: 'green', label: '正常' }],
+        (val, r) => <RiskBadge level={val} onClick={() => { setSelectedOrder(r); setRiskModalOpen(true) }} />
       ),
       sorter: true,
       filters: [
@@ -975,7 +960,7 @@ export default function OrderList() {
     // ── 交期 & 计划 ──
     {
       title: '合同交期', dataIndex: 'promised_date', key: 'promised_date', minWidth: 85,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="promised_date" overdue={!!(v && v < today() && r.status !== 'closed')} />, sorter: true,
+      render: editableDate('promised_date', { overdue: (v, r) => !!(v && v < today() && r.status !== 'closed') }), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1021,7 +1006,7 @@ export default function OrderList() {
     },
     {
       title: '出货计划', dataIndex: 'shipping_plan', key: 'shipping_plan', minWidth: 85,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="shipping_plan" />, sorter: true,
+      render: editableDate('shipping_plan'), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1067,7 +1052,7 @@ export default function OrderList() {
     },
     {
       title: '客户验货时间', dataIndex: 'customer_inspection_date', key: 'customer_inspection_date', minWidth: 100,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="customer_inspection_date" />, sorter: true,
+      render: editableDate('customer_inspection_date'), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1114,7 +1099,7 @@ export default function OrderList() {
     },
     {
       title: '上线时间', dataIndex: 'planned_start_date', key: 'planned_start_date', minWidth: 85,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="planned_start_date" />, sorter: true,
+      render: editableDate('planned_start_date'), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1161,18 +1146,13 @@ export default function OrderList() {
     },
     {
       title: '客检结果', dataIndex: 'inspection_result', key: 'inspection_result', minWidth: 70,
-      render: (v: string, r: OrderRow) => (
-        <EditableSelectCell value={v} record={r} field="inspection_result"
-          options={[
-            { value: 'OK', label: 'OK / 通过' }, { value: 'NG', label: 'NG / 不通过' },
-            { value: '待检', label: '待检' },
-          ]}
-          renderValue={(val) => {
-            if (!val) return '-'
-            const color = val === 'OK' || val === '通过' ? '#16a34a' : val === 'NG' ? '#e11d48' : undefined
-            return <span style={{ color, fontWeight: 600 }}>{val}</span>
-          }}
-        />
+      render: editableSelect('inspection_result',
+        [{ value: 'OK', label: 'OK / 通过' }, { value: 'NG', label: 'NG / 不通过' }, { value: '待检', label: '待检' }],
+        (val) => {
+          if (!val) return '-'
+          const color = val === 'OK' || val === '通过' ? '#16a34a' : val === 'NG' ? '#e11d48' : undefined
+          return <span style={{ color, fontWeight: 600 }}>{val}</span>
+        }
       ),
       filters: [
         { text: 'OK', value: 'OK' },
@@ -1186,16 +1166,12 @@ export default function OrderList() {
     {
       title: '包装完成状况', dataIndex: 'packaging_status', key: 'packaging_status', minWidth: 100,
       ellipsis: true,
-      render: (v: string, r: OrderRow) => (
-        <EditableTextCell value={v} record={r} field="packaging_status"
-          renderValue={(val) => {
-            if (!val) return <span style={{ color: '#cbd5e1' }}>-</span>
-            const isBlue = val.includes('完成') && !val.includes('入库')
-            const isGreen = val.includes('入库')
-            return <span style={{ color: isGreen ? '#16a34a' : isBlue ? '#2563eb' : undefined }}>{val}</span>
-          }}
-        />
-      ),
+      render: editableText('packaging_status', (val) => {
+        if (!val) return <span style={{ color: '#cbd5e1' }}>-</span>
+        const isBlue = val.includes('完成') && !val.includes('入库')
+        const isGreen = val.includes('入库')
+        return <span style={{ color: isGreen ? '#16a34a' : isBlue ? '#2563eb' : undefined }}>{val}</span>
+      }),
       filters: [
         { text: '完成', value: '完成' },
         { text: '入库', value: '入库' },
@@ -1206,11 +1182,11 @@ export default function OrderList() {
     },
     {
       title: 'BOM回收', dataIndex: 'bom_return_date', key: 'bom_return_date', minWidth: 80,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="bom_return_date" />, sorter: true,
+      render: editableDate('bom_return_date'), sorter: true,
     },
     {
       title: '料齐套时间', dataIndex: 'material_ready_date', key: 'material_ready_date', minWidth: 85,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="material_ready_date" green />, sorter: true,
+      render: editableDate('material_ready_date', { green: true }), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1259,7 +1235,7 @@ export default function OrderList() {
     {
       title: '发货状态即时说明', dataIndex: 'shipping_status_desc', key: 'shipping_status_desc', minWidth: 120,
       ellipsis: true,
-      render: (v: string, r: OrderRow) => <EditableTextCell value={v} record={r} field="shipping_status_desc" />,
+      render: editableText('shipping_status_desc'),
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <Input
@@ -1340,10 +1316,7 @@ export default function OrderList() {
     // ── 物料分类到料日期（16列 from material_dates JSONB）──
     ...MATERIAL_KEYS.map(key => ({
       title: key, key: `mat_${key}`, minWidth: key.length > 6 ? 100 : 70,
-      render: (_: any, r: OrderRow) => {
-        const val = r.material_dates?.[key] || null
-        return <EditableDateCell value={val} record={r} field={`mat_${key}`} />
-      },
+      render: (_: any, r: OrderRow) => editableDate(`mat_${key}`)(r.material_dates?.[key] || null, r),
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1397,7 +1370,7 @@ export default function OrderList() {
     // ── 生产节点 ──
     {
       title: '前道', dataIndex: 'front_process_date', key: 'front_process_date', minWidth: 80,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="front_process_date" />, sorter: true,
+      render: editableDate('front_process_date'), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1444,7 +1417,7 @@ export default function OrderList() {
     },
     {
       title: '首件检验日期', dataIndex: 'first_article_date', key: 'first_article_date', minWidth: 100,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="first_article_date" />, sorter: true,
+      render: editableDate('first_article_date'), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1491,7 +1464,7 @@ export default function OrderList() {
     },
     {
       title: '组装上线日期', dataIndex: 'assembly_start_date', key: 'assembly_start_date', minWidth: 100,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="assembly_start_date" />, sorter: true,
+      render: editableDate('assembly_start_date'), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1538,7 +1511,7 @@ export default function OrderList() {
     },
     {
       title: '组装完成日期', dataIndex: 'assembly_complete_date', key: 'assembly_complete_date', minWidth: 100,
-      render: (v: string, r: OrderRow) => <EditableDateCell value={v} record={r} field="assembly_complete_date" green />, sorter: true,
+      render: editableDate('assembly_complete_date', { green: true }), sorter: true,
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <RangePicker
@@ -1587,7 +1560,20 @@ export default function OrderList() {
     {
       title: '备注', dataIndex: 'remark', key: 'remark', minWidth: 120,
       ellipsis: true,
-      render: (v: string, r: OrderRow) => <EditableTextCell value={v} record={r} field="remark" />,
+      render: editableText('remark'),
+    },
+    {
+      title: '是否关闭', dataIndex: 'is_closed', key: 'is_closed', minWidth: 70,
+      render: (v: number, r: OrderRow) => editableSelect('is_closed',
+        [{ value: 'true', label: '已关闭' }, { value: 'false', label: '未关闭' }],
+        (val) => val === 'true' ? <Tag color="default">已关闭</Tag> : <Tag color="green">未关闭</Tag>
+      )(v ? 'true' : 'false', r),
+      filters: [
+        { text: '已关闭', value: '1' },
+        { text: '未关闭', value: '0' },
+      ],
+      filterMultiple: true,
+      filteredValue: filters.is_closed,
     },
     {
       title: '状态', dataIndex: 'status', key: 'status', minWidth: 80,
@@ -1613,7 +1599,7 @@ export default function OrderList() {
     },
   ].map(col =>
     col.key === 'action' ? col : { ...col, ellipsis: true, minWidth: Math.min(col.minWidth || 100, 100) }
-  ), [isEditingCell, handleCellSave, startEditCell, cancelEditCell, navigate, filters, pagination, sortInfo, fetchOrders, openEditModal])
+  ), [editingCell, savingCell, handleCellSave, navigate, filters, pagination, sortInfo, fetchOrders, openEditModal])
 
   return (
     <div>
@@ -2082,7 +2068,15 @@ export default function OrderList() {
                 ]} />
               </Form.Item>
             </Col>
-            <Col span={16}>
+            <Col span={8}>
+              <Form.Item name="is_closed" label="是否关闭">
+                <Select allowClear placeholder="选择关闭状态" options={[
+                  { value: 1, label: '已关闭' },
+                  { value: 0, label: '未关闭' },
+                ]} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
               <Form.Item name="remark" label="备注">
                 <Input.TextArea rows={2} placeholder="备注信息" />
               </Form.Item>

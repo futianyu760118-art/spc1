@@ -10,6 +10,7 @@ from app.models.material.receipt_batch import ReceiptBatch
 from app.models.material.material_issue import MaterialIssue
 from app.models.material.long_lead_material import LongLeadMaterial
 from app.models.material.purchase_invoice import PurchaseInvoice
+from app.models.material.supplier_message import SupplierMessage
 
 # 生产协同中心
 from app.models.production.process_progress import ProcessProgress
@@ -33,6 +34,7 @@ from app.models.rules.status_dictionary import StatusDictionary
 
 # 基础数据与集成中心
 from app.models.basicdata.user import SysUser, SysRole
+from app.models.basicdata.user_org_scope import UserOrgScope  # noqa: F401
 from app.models.basicdata.audit_log import AuditLog
 from app.models.basicdata.field_mapping import FieldMapping
 from app.models.basicdata.sync_sql_config import SyncSqlConfig  # noqa: F401
@@ -55,6 +57,7 @@ __all__ = [
     "MaterialIssue",
     "LongLeadMaterial",
     "PurchaseInvoice",
+    "SupplierMessage",
     # 生产协同中心
     "ProcessProgress",
     "ProcessException",

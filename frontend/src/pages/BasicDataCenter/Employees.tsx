@@ -17,6 +17,9 @@ interface Employee {
   position_id?: number
   position?: string
   position_name?: string
+  oa_user_id?: string
+  manager_oa_user_id?: string
+  manager_name?: string
   phone?: string
   email?: string
   status: number
@@ -30,7 +33,7 @@ interface Position {
   status: number
 }
 
-const EmployeeForm = ({ form, positions }: { form: any, positions: Position[] }) => (
+const EmployeeForm = ({ form, positions, employees }: { form: any, positions: Position[], employees: Employee[] }) => (
   <Form form={form} layout="vertical">
     <Form.Item name="emp_code" label="员工工号" rules={[{ required: true }]}>
       <Input placeholder="请输入员工工号" />
@@ -51,6 +54,20 @@ const EmployeeForm = ({ form, positions }: { form: any, positions: Position[] })
           value: position.id,
           label: `${position.position_name} (${position.position_code})`,
         }))}
+      />
+    </Form.Item>
+    <Form.Item name="manager_oa_user_id" label="上级人员">
+      <Select
+        allowClear
+        showSearch
+        placeholder="请选择上级人员"
+        optionFilterProp="label"
+        options={employees
+          .filter(emp => emp.emp_code)
+          .map(emp => ({
+            value: emp.oa_user_id || emp.emp_code,
+            label: `${emp.emp_name} (${emp.emp_code})`,
+          }))}
       />
     </Form.Item>
     <Form.Item name="phone" label="手机号">
@@ -157,6 +174,12 @@ export default function Employees() {
       key: 'position_name',
       render: (_: any, record: Employee) => record.position_name || record.position || '-',
     },
+    {
+      title: '上级',
+      dataIndex: 'manager_name',
+      key: 'manager_name',
+      render: (text: string) => text || '-',
+    },
     { title: '手机号', dataIndex: 'phone', key: 'phone' },
     {
       title: '状态',
@@ -202,7 +225,7 @@ export default function Employees() {
           columns={columns}
           dataSource={data}
           loading={loading}
-          scroll={{ x: 900 }}
+          scroll={{ x: 1000 }}
           size="small"
           pagination={{
             ...pagination,
@@ -220,7 +243,7 @@ export default function Employees() {
         onCancel={() => setModalVisible(false)}
         width={600}
       >
-        <EmployeeForm form={form} positions={positions} />
+        <EmployeeForm form={form} positions={positions} employees={data} />
       </Modal>
     </div>
   )

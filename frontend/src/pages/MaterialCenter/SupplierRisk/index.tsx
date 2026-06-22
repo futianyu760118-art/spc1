@@ -35,8 +35,8 @@ const RISK_COLOR: Record<string, string> = { red: '#e11d48', yellow: '#f59e0b', 
 const RISK_LABEL: Record<string, string> = { red: '高风险', yellow: '中风险', green: '低风险' }
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  inspected: { label: '已检验', color: 'success' },
-  arrived: { label: '已到料', color: 'processing' },
+  fully_received: { label: '已到齐', color: 'success' },
+  partial_received: { label: '部分到', color: 'warning' },
   overdue: { label: '逾期未到', color: 'error' },
   pending: { label: '待到料', color: 'default' },
 }

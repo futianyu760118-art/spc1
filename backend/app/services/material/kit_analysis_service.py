@@ -13,6 +13,7 @@ from app.models.material.purchase_order import PurchaseOrder
 from app.models.order.sale_order import SaleOrder
 from app.schemas.material.schemas import KitAnalysisItem, KitAnalysisMaterialItem
 from app.services.order.order_materials_service import get_order_product_materials
+from app.services.common.sync_filter import get_purchase_order_sync_filters
 
 
 def _kit_risk_level(kit_rate: float) -> str:
@@ -28,8 +29,7 @@ KIT_SORT_KEYS = {
     "kit_rate",
     "total_materials",
     "received_materials",
-    "inspected_materials",
-    "pending_inspection",
+    "partial_received_materials",
     "not_ordered_materials",
     "overdue_materials",
     "stagnant_materials",
@@ -74,32 +74,36 @@ def _pick_first(values):
 
 
 def _po_status(po_group: list[PurchaseOrder]) -> str:
-    if any(po.inspection_date for po in po_group):
-        return "inspected"
-    if any(po.actual_arrival_date for po in po_group):
-        return "arrived"
     received_qty = _sum_decimal([po.received_qty for po in po_group])
+    po_qty = _sum_decimal([po.po_qty for po in po_group])
+    # 状态纯按收料数量推导（已到料状态已移除）
     if received_qty is not None and received_qty > 0:
-        return "arrived"
+        if po_qty is not None and received_qty >= po_qty:
+            return "fully_received"
+        return "partial_received"
     etas = [po.eta for po in po_group if po.eta]
     if etas and min(etas) < date.today():
         return "overdue"
+    if any(po.is_closed for po in po_group):
+        return "closed"
     return "pending"
 
 
 def _status_label(status: str) -> str:
     return {
+        "closed": "已关闭",
         "pending": "待到料",
         "overdue": "逾期未到",
-        "arrived": "已到料",
-        "inspected": "已检验",
+        "partial_received": "部分到",
+        "fully_received": "已到齐",
     }.get(status, status)
 
 
 async def _get_po_material_items(db: AsyncSession, order_no: str) -> list[KitAnalysisMaterialItem]:
+    sync_filters = await get_purchase_order_sync_filters(db)
     result = await db.execute(
         select(PurchaseOrder)
-        .where(PurchaseOrder.order_no == order_no)
+        .where(PurchaseOrder.order_no == order_no, *sync_filters)
         .order_by(PurchaseOrder.material_code, PurchaseOrder.eta)
     )
     pos = result.scalars().all()
@@ -145,6 +149,7 @@ async def _get_po_material_items(db: AsyncSession, order_no: str) -> list[KitAna
             status_label=_status_label(status),
             is_stagnant=stagnant_qty is not None,
             stagnant_qty=_to_float(stagnant_qty),
+            is_closed=1 if any(po.is_closed for po in po_group) else 0,
         ))
 
     return items
@@ -175,6 +180,7 @@ async def _get_order_material_items(db: AsyncSession, order_no: str) -> list[Kit
             status_label=material.status_label,
             is_stagnant=material.is_stagnant,
             stagnant_qty=material.stagnant_qty,
+            is_closed=material.is_closed,
         )
         for group in product_groups
         for material in group.materials
@@ -199,6 +205,7 @@ async def get_kit_analysis(
     promised_date_end: Optional[str] = None,
 ) -> dict:
     """Summarize material kit status by order, using one batched PO scan."""
+    sync_filters = await get_purchase_order_sync_filters(db)
     po_query = select(
         PurchaseOrder.order_no,
         PurchaseOrder.material_code,
@@ -207,7 +214,7 @@ async def get_kit_analysis(
         PurchaseOrder.eta,
         PurchaseOrder.actual_arrival_date,
         PurchaseOrder.inspection_date,
-    ).where(PurchaseOrder.order_no.is_not(None))
+    ).where(PurchaseOrder.order_no.is_not(None), *sync_filters)
     if order_no:
         po_query = po_query.where(PurchaseOrder.order_no.ilike(f"%{order_no}%"))
 
@@ -253,9 +260,10 @@ async def get_kit_analysis(
     promised_dates: dict[str, date | None] = {}
     pending_shipment_orders: set[str] = set()
     sale_order_nos: set[str] = set()
+    closed_orders: set[str] = set()
     if order_nos:
         sale_order_result = await db.execute(
-            select(SaleOrder.order_no, SaleOrder.promised_date, SaleOrder.delivery_completed_date)
+            select(SaleOrder.order_no, SaleOrder.promised_date, SaleOrder.delivery_completed_date, SaleOrder.is_closed)
             .where(SaleOrder.order_no.in_(order_nos))
             .distinct()
         )
@@ -264,6 +272,15 @@ async def get_kit_analysis(
             promised_dates.setdefault(row.order_no, row.promised_date)
             if row.delivery_completed_date is None:
                 pending_shipment_orders.add(row.order_no)
+            if row.is_closed == 1:
+                closed_orders.add(row.order_no)
+
+    if closed_orders:
+        order_nos = [
+            current_order_no
+            for current_order_no in order_nos
+            if current_order_no not in closed_orders
+        ]
 
     if only_pending_shipment:
         order_nos = [
@@ -296,28 +313,30 @@ async def get_kit_analysis(
         order_materials = per_order.get(current_order_no, [])
         total = len(order_materials)
         received_count = 0
-        inspected_count = 0
-        pending_inspection_count = 0
+        partial_count = 0
         overdue_count = 0
         stagnant_count = 0
 
         for material_group in order_materials:
-            inspected = material_group["inspection_date"] is not None
-            arrived = (
-                material_group["actual_arrival_date"] is not None
-                or (
-                    material_group["has_received_qty"]
-                    and material_group["received_qty"] > 0
-                )
+            has_received = (
+                material_group["has_received_qty"]
+                and material_group["received_qty"] > 0
             )
-            if inspected:
-                inspected_count += 1
-            if arrived or inspected:
+            fully_received = (
+                has_received
+                and material_group["has_po_qty"]
+                and material_group["received_qty"] >= material_group["po_qty"]
+            )
+            # 已到齐：收料数量 >= 需求数量
+            if fully_received:
                 received_count += 1
-            if arrived and not inspected:
-                pending_inspection_count += 1
-            if not arrived and not inspected and material_group["eta"] and material_group["eta"] < date.today():
+            # 部分到：0 < 收料数量 < 需求数量
+            elif has_received:
+                partial_count += 1
+            # 逾期未到：无收料且交期早于今天
+            elif material_group["eta"] and material_group["eta"] < date.today():
                 overdue_count += 1
+            # 呆滞：收料数量 > 下单数量
             if (
                 material_group["has_po_qty"]
                 and material_group["has_received_qty"]
@@ -325,8 +344,8 @@ async def get_kit_analysis(
             ):
                 stagnant_count += 1
 
-        met_count = received_count
-        kit_rate = round(met_count / total, 4) if total else 0
+        # 齐套率 = 已到齐物料数 / 总物料数
+        kit_rate = round(received_count / total, 4) if total else 0
         current_risk_level = _kit_risk_level(kit_rate)
         if risk_level and current_risk_level != risk_level:
             continue
@@ -335,8 +354,7 @@ async def get_kit_analysis(
             order_no=current_order_no,
             total_materials=total,
             received_materials=received_count,
-            inspected_materials=inspected_count,
-            pending_inspection=pending_inspection_count,
+            partial_received_materials=partial_count,
             not_ordered_materials=0,
             overdue_materials=overdue_count,
             stagnant_materials=stagnant_count,
@@ -402,6 +420,9 @@ async def get_order_materials(
 ) -> List[KitAnalysisMaterialItem]:
     """Return complete order material details, including PO-only rows."""
     items = await _get_order_material_items(db, order_no)
+
+    # 已关闭的物料，已到齐/部分到仍返回，其他状态不返回
+    items = [item for item in items if not (item.is_closed == 1 and item.status not in ("partial_received", "fully_received"))]
 
     if material_code_filter:
         needle = material_code_filter.lower()

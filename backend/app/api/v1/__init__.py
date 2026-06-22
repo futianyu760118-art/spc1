@@ -14,11 +14,13 @@ api_router.include_router(order.run_order_router, prefix="/run-orders", tags=["�
 
 # Material center
 api_router.include_router(material.purchase_plan_router, prefix="/materials/purchase-plan", tags=["物料齐套中心-采购到料计划"])
+api_router.include_router(material.purchase_plan_analysis_router, prefix="/materials/purchase-plan/analysis", tags=["物料齐套中心-采购到料计划分析"])
 api_router.include_router(material.issues_router, prefix="/materials/issues", tags=["物料齐套中心-问题物料"])
 api_router.include_router(material.long_lead_router, prefix="/materials/long-lead", tags=["物料齐套中心-长交期物料"])
 api_router.include_router(material.kit_analysis_router, prefix="/materials/kit-analysis", tags=["物料齐套中心-齐套分析"])
 api_router.include_router(material.supplier_risk_router, prefix="/materials/supplier-risk", tags=["物料齐套中心-供应商风险"])
 api_router.include_router(material.supplier_payment_router, prefix="/materials/supplier-payment", tags=["物料齐套中心-供应商付款排程"])
+api_router.include_router(material.supplier_message_router, prefix="/materials/supplier-messages", tags=["物料齐套中心-供应商即时沟通"])
 api_router.include_router(material.po_router, prefix="/materials", tags=["物料齐套中心-ERP采购订单"])
 
 # Production center
@@ -58,17 +60,6 @@ api_router.include_router(basicdata.feedback_router, prefix="/basicdata/feedback
 api_router.include_router(basicdata.announcements_router, prefix="/basicdata/announcements", tags=["公告管理"])
 api_router.include_router(basicdata.notifications_router, prefix="/notifications", tags=["通知中心"])
 api_router.include_router(basicdata.share_router, prefix="/share", tags=["页面分享"])
-
-# Legacy /masterdata compatibility routes
-api_router.include_router(masterdata.auth_router, prefix="/masterdata/auth", tags=["认证"])
-api_router.include_router(masterdata.users_router, prefix="/masterdata/users", tags=["用户管理"])
-api_router.include_router(masterdata.audit_router, prefix="/masterdata/audit", tags=["审计日志"])
-api_router.include_router(masterdata.import_export_router, prefix="/masterdata/import-export", tags=["导入导出"])
-api_router.include_router(masterdata.sync_router, prefix="/masterdata/sync", tags=["ERP同步"])
-api_router.include_router(masterdata.masterdata_router, prefix="/masterdata", tags=["基础数据管理"])
-api_router.include_router(masterdata.sync_sql_router, prefix="/masterdata/sync-sql", tags=["同步SQL配置"])
-api_router.include_router(masterdata.feedback_router, prefix="/masterdata/feedback", tags=["问题反馈"])
-api_router.include_router(masterdata.announcements_router, prefix="/masterdata/announcements", tags=["公告管理"])
 
 # Common files and assistant
 api_router.include_router(common.files_router, prefix="/files", tags=["文件"])

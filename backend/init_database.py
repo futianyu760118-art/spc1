@@ -137,6 +137,7 @@ class DatabaseInitializer:
                 "risk_score": "NUMERIC(5,2)",
                 "risk_factors": "JSONB",
                 "risk_assessed_at": "TIMESTAMP",
+                "is_closed": "INTEGER NOT NULL DEFAULT 0",
             },
             "sale_order_line": {
                 "sale_order_id": "INTEGER REFERENCES sale_order(id)",
@@ -207,6 +208,7 @@ class DatabaseInitializer:
             "scm_employee": {
                 "data_source": "VARCHAR(32)",
                 "oa_user_id": "VARCHAR(64) UNIQUE",
+                "manager_oa_user_id": "VARCHAR(64)",
                 "login_id": "VARCHAR(64)",
                 "position_id": "BIGINT",
             },
@@ -217,6 +219,11 @@ class DatabaseInitializer:
                 "supplier_name": "VARCHAR(100)",
                 "emp_code": "VARCHAR(20)",
                 "font_size_scale": "VARCHAR(10) DEFAULT '1.0'",
+                "is_default_password": "BOOLEAN NOT NULL DEFAULT TRUE",
+            },
+            "sys_role": {
+                "org_id": "VARCHAR(64)",
+                "position_id": "VARCHAR(64)",
             },
             "quality_issue": {
                 "erp_quality_id": "VARCHAR(64)",
@@ -265,6 +272,27 @@ class DatabaseInitializer:
                     except Exception as e:
                         print(f"  Drop {table}.{col} skipped: {e}")
         print(f"Column migration completed ({added} statements executed)")
+
+        # 确保 is_closed 列存在且类型为 integer（独立事务，避免被其他语句回滚）
+        for table in ("sale_order", "purchase_order"):
+            try:
+                async with self.engine.begin() as conn:
+                    await conn.execute(text(
+                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS is_closed INTEGER NOT NULL DEFAULT 0"
+                    ))
+                async with self.engine.begin() as conn:
+                    await conn.execute(text(
+                        f"ALTER TABLE {table} ALTER COLUMN is_closed DROP DEFAULT"
+                    ))
+                    await conn.execute(text(
+                        f"ALTER TABLE {table} ALTER COLUMN is_closed TYPE integer USING is_closed::integer"
+                    ))
+                    await conn.execute(text(
+                        f"ALTER TABLE {table} ALTER COLUMN is_closed SET DEFAULT 0"
+                    ))
+                print(f"  {table}.is_closed ensured as integer")
+            except Exception as e:
+                print(f"  {table}.is_closed fix skipped: {e}")
 
         # 创建唯一约束
         async with self.engine.begin() as conn:
@@ -1179,6 +1207,35 @@ JOIN T_PUR_ORDERENTRY poe ON po.FID = poe.FID
 LEFT JOIN T_BD_SUPPLIER sup ON po.FSupplierId = sup.FSupplierId
 WHERE poe.FModifyDate >= :since
 ORDER BY po.FBillNo
+                        """.strip(),
+                        field_mapping_json=None,
+                        is_active=True,
+                        sync_enabled=True,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="mrp_plan_orders",
+                        description="MRP计划订单 — 从K3 ICMrpResult拉取",
+                        sql_text="""
+SELECT
+    CAST(mr.FBillNo AS VARCHAR(64))        AS fbill_no,
+    CAST(mr.FMaterialId AS INT)            AS fmaterial_id,
+    CAST(mat.FNumber AS VARCHAR(64))       AS material_code,
+    CAST(mat.FName AS VARCHAR(256))        AS material_name,
+    CAST(mr.FPlanQty AS DECIMAL(15,2))     AS fplan_qty,
+    CAST(mr.FPlanStartDate AS DATE)        AS fplan_start_date,
+    CAST(mr.FPlanFinishDate AS DATE)       AS fplan_finish_date,
+    CAST(mr.FNeedDate AS DATE)             AS fneed_date,
+    CAST(mr.FOrderType AS VARCHAR(32))     AS forder_type,
+    CAST(mr.FStatus AS INT)                AS fstatus,
+    CAST(mr.FSupplyOrg AS VARCHAR(128))    AS fsupply_org,
+    CAST(mr.FRequireOrg AS VARCHAR(128))   AS frequire_org,
+    CAST(mr.FSourceBillNo AS VARCHAR(64))  AS fsource_bill_no,
+    mr.FModifyDate                         AS erp_updated_at
+FROM ICMrpResult mr
+LEFT JOIN t_ICItem mat ON mr.FMaterialId = mat.FItemID
+WHERE mr.FModifyDate >= :since
+ORDER BY mr.FBillNo
                         """.strip(),
                         field_mapping_json=None,
                         is_active=True,

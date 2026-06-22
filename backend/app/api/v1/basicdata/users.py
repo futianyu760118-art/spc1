@@ -4,19 +4,23 @@ from typing import Optional, Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, cast, String
+from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import PermissionChecker, get_password_hash
+from app.core.security import PermissionChecker, get_password_hash, verify_password
+from app.core.config import get_settings
 from app.core.audit import log_audit
 from app.core.permissions import merge_role_permission_additions
 from app.models.basicdata.employee import Employee
+from app.models.basicdata.organization import Organization
 from app.models.basicdata.position import Position
 from app.models.basicdata.supplier import Supplier
 from app.models.basicdata.user import SysUser, SysRole
+from app.models.basicdata.announcement import Notification
 from app.schemas.common import ResponseModel
-from app.services.basicdata.position_role_service import resolve_employee_role_by_code
+from app.services.basicdata.position_role_service import resolve_employee_role_by_code, sync_user_role_from_employee, resolve_or_create_role
 from app.services.common.export_service import ExportColumn, GenericExportService
 
 router = APIRouter()
@@ -31,6 +35,7 @@ USER_EXPORT_COLUMNS = [
     ExportColumn("role_name", "角色名称", 18),
     ExportColumn("supplier_name", "绑定供应商", 24),
     ExportColumn("is_active", "状态", 10),
+    ExportColumn("is_default_password", "默认密码", 10),
     ExportColumn("last_login_time", "最后登录", 18),
     ExportColumn("created_at", "创建时间", 18),
     ExportColumn("updated_at", "更新时间", 18),
@@ -125,13 +130,18 @@ async def _validate_supplier_binding(role: SysRole, supplier_name: Optional[str]
 
 
 # ---------- 用户列表 ----------
-@router.get("", response_model=ResponseModel[list])
+@router.get("", response_model=ResponseModel[dict])
 async def list_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
     role_code: Optional[str] = None,
     is_active: Optional[bool] = None,
     keyword: Optional[str] = None,
+    org_name: Optional[str] = None,
+    position_name: Optional[str] = None,
+    supplier_name: Optional[str] = None,
     current_user: dict = Depends(PermissionChecker("users", "read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -143,14 +153,22 @@ async def list_users(
         'is_active': SysUser.is_active,
         'last_login_time': SysUser.last_login_time,
         'created_at': SysUser.created_at,
+        'position_name': Position.position_name,
+        'org_name': Organization.org_name,
+        'supplier_name': SysUser.supplier_name,
     }
 
+    Manager = aliased(Employee)
     query = (
-        select(SysUser, SysRole, Employee, Position)
+        select(SysUser, SysRole, Employee, Position, Organization, Manager)
         .join(SysRole, SysUser.role_id == SysRole.id)
         .outerjoin(Employee, SysUser.emp_code == Employee.emp_code)
         .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
+        .outerjoin(Manager, Employee.manager_oa_user_id == Manager.oa_user_id)
     )
+
+    # 用户管理不受上级员工控制，所有用户可见
 
     if role_code:
         codes = [c.strip() for c in role_code.split(",") if c.strip()]
@@ -158,6 +176,18 @@ async def list_users(
             query = query.where(SysRole.role_code.in_(codes))
     if is_active is not None:
         query = query.where(SysUser.is_active == is_active)
+    if org_name:
+        names = [n.strip() for n in org_name.split(",") if n.strip()]
+        if names:
+            query = query.where(Organization.org_name.in_(names))
+    if position_name:
+        names = [n.strip() for n in position_name.split(",") if n.strip()]
+        if names:
+            query = query.where(Position.position_name.in_(names))
+    if supplier_name:
+        names = [n.strip() for n in supplier_name.split(",") if n.strip()]
+        if names:
+            query = query.where(SysUser.supplier_name.in_(names))
     if keyword:
         like = f"%{keyword}%"
         query = query.where(
@@ -179,27 +209,43 @@ async def list_users(
         order_clauses = [SysUser.id.asc()]
 
     result = await db.execute(query.order_by(*order_clauses))
-    rows = result.all()
-    return ResponseModel(data=[
-        {
-            "id": user.id,
-            "username": user.username,
-            "display_name": user.display_name,
-            "emp_code": user.emp_code,
-            "emp_name": employee.emp_name if employee else None,
-            "position_id": employee.position_id if employee else None,
-            "position_name": position.position_name if position else (employee.position if employee else None),
-            "role_id": user.role_id,
-            "role_code": role.role_code,
-            "role_name": role.role_name,
-            "supplier_name": user.supplier_name,
-            "is_active": user.is_active,
-            "last_login_time": user.last_login_time.strftime("%Y-%m-%d %H:%M") if user.last_login_time else None,
-            "created_at": user.created_at.strftime("%Y-%m-%d %H:%M") if user.created_at else None,
-            "updated_at": user.updated_at.strftime("%Y-%m-%d %H:%M") if user.updated_at else None,
-        }
-        for user, role, employee, position in rows
-    ])
+    all_rows = result.all()
+    total = len(all_rows)
+
+    # 分页
+    offset = (page - 1) * page_size
+    rows = all_rows[offset:offset + page_size]
+
+    # 通过校验数据库密码哈希判断是否为默认密码
+    settings = get_settings()
+    default_pwd = settings.ERP_SYNC_DEFAULT_PASSWORD
+
+    return ResponseModel(data={
+        "items": [
+            {
+                "id": user.id,
+                "username": user.username,
+                "display_name": user.display_name,
+                "emp_code": user.emp_code,
+                "emp_name": employee.emp_name if employee else None,
+                "position_id": employee.position_id if employee else None,
+                "position_name": position.position_name if position else (employee.position if employee else None),
+                "org_name": org.org_name if org else None,
+                "manager_name": manager.emp_name if manager else None,
+                "role_id": user.role_id,
+                "role_code": role.role_code,
+                "role_name": role.role_name,
+                "supplier_name": user.supplier_name,
+                "is_active": user.is_active,
+                "is_default_password": verify_password(default_pwd, user.hashed_password),
+                "last_login_time": user.last_login_time.strftime("%Y-%m-%d %H:%M") if user.last_login_time else None,
+                "created_at": user.created_at.strftime("%Y-%m-%d %H:%M") if user.created_at else None,
+                "updated_at": user.updated_at.strftime("%Y-%m-%d %H:%M") if user.updated_at else None,
+            }
+            for user, role, employee, position, org, manager in rows
+        ],
+        "total": total,
+    })
 
 
 @router.get("/export")
@@ -211,6 +257,9 @@ async def export_users(
     role_code: Optional[str] = None,
     is_active: Optional[bool] = None,
     keyword: Optional[str] = None,
+    org_name: Optional[str] = None,
+    position_name: Optional[str] = None,
+    supplier_name: Optional[str] = None,
     current_user: dict = Depends(PermissionChecker("users", "read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -222,13 +271,17 @@ async def export_users(
         'is_active': SysUser.is_active,
         'last_login_time': SysUser.last_login_time,
         'created_at': SysUser.created_at,
+        'position_name': Position.position_name,
+        'org_name': Organization.org_name,
+        'supplier_name': SysUser.supplier_name,
     }
 
     query = (
-        select(SysUser, SysRole, Employee, Position)
+        select(SysUser, SysRole, Employee, Position, Organization)
         .join(SysRole, SysUser.role_id == SysRole.id)
         .outerjoin(Employee, SysUser.emp_code == Employee.emp_code)
         .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
     )
 
     if role_code:
@@ -237,6 +290,18 @@ async def export_users(
             query = query.where(SysRole.role_code.in_(codes))
     if is_active is not None:
         query = query.where(SysUser.is_active == is_active)
+    if org_name:
+        names = [n.strip() for n in org_name.split(",") if n.strip()]
+        if names:
+            query = query.where(Organization.org_name.in_(names))
+    if position_name:
+        names = [n.strip() for n in position_name.split(",") if n.strip()]
+        if names:
+            query = query.where(Position.position_name.in_(names))
+    if supplier_name:
+        names = [n.strip() for n in supplier_name.split(",") if n.strip()]
+        if names:
+            query = query.where(SysUser.supplier_name.in_(names))
     if keyword:
         like = f"%{keyword}%"
         query = query.where(
@@ -268,8 +333,12 @@ async def export_users(
     if invalid_columns:
         raise HTTPException(status_code=400, detail=f"无效导出字段: {', '.join(invalid_columns)}")
 
+    # 通过校验数据库密码哈希判断是否为默认密码
+    settings = get_settings()
+    default_pwd = settings.ERP_SYNC_DEFAULT_PASSWORD
+
     export_rows = []
-    for user, role, employee, position in rows:
+    for user, role, employee, position, org in rows:
         export_rows.append({
             "username": user.username,
             "display_name": user.display_name or "",
@@ -280,6 +349,7 @@ async def export_users(
             "role_name": role.role_name,
             "supplier_name": user.supplier_name or "",
             "is_active": "启用" if user.is_active else "停用",
+            "is_default_password": "是" if verify_password(default_pwd, user.hashed_password) else "否",
             "last_login_time": user.last_login_time.strftime("%Y-%m-%d %H:%M") if user.last_login_time else "",
             "created_at": user.created_at.strftime("%Y-%m-%d %H:%M") if user.created_at else "",
             "updated_at": user.updated_at.strftime("%Y-%m-%d %H:%M") if user.updated_at else "",
@@ -303,22 +373,133 @@ async def export_users(
 
 
 # ---------- 角色列表 ----------
-@router.get("/roles", response_model=ResponseModel[list])
+@router.get("/roles", response_model=ResponseModel[dict])
 async def list_roles(
-    current_user: dict = Depends(PermissionChecker("users", "read")),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
+    role_code: Optional[str] = None,
+    org_name: Optional[str] = None,
+    position_name: Optional[str] = None,
+    current_user: dict = Depends(PermissionChecker("roles", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(SysRole).order_by(SysRole.id))
-    roles = result.scalars().all()
-    return ResponseModel(data=[
-        {
-            "id": r.id,
-            "role_code": r.role_code,
-            "role_name": r.role_name,
-            "permissions": merge_role_permission_additions(r.role_code, r.permissions),
-        }
-        for r in roles
-    ])
+    # 查询角色及用户数
+    user_count_sub = (
+        select(SysUser.role_id, func.count().label("user_count"))
+        .group_by(SysUser.role_id)
+        .subquery()
+    )
+    query = (
+        select(SysRole, func.coalesce(user_count_sub.c.user_count, 0))
+        .outerjoin(user_count_sub, SysRole.id == user_count_sub.c.role_id)
+    )
+
+    if role_code:
+        codes = [c.strip() for c in role_code.split(",") if c.strip()]
+        if codes:
+            query = query.where(SysRole.role_code.in_(codes))
+    if org_name:
+        names = [n.strip() for n in org_name.split(",") if n.strip()]
+        if names:
+            query = query.where(SysRole.org_id.in_(
+                select(Organization.oa_org_id).where(Organization.org_name.in_(names))
+            ))
+    if position_name:
+        names = [n.strip() for n in position_name.split(",") if n.strip()]
+        if names:
+            query = query.where(SysRole.position_id.in_(
+                select(cast(Position.id, String)).where(Position.position_name.in_(names))
+            ))
+
+    # 排序
+    SORTABLE = {
+        'role_code': SysRole.role_code,
+        'role_name': SysRole.role_name,
+        'user_count': user_count_sub.c.user_count,
+    }
+    order_clauses = []
+    if sort_by and sort_by in SORTABLE:
+        col = SORTABLE[sort_by]
+        if sort_order == 'desc':
+            order_clauses.append(col.desc().nullslast())
+        else:
+            order_clauses.append(col.asc().nullslast())
+    if not order_clauses:
+        order_clauses = [SysRole.id.asc()]
+
+    result = await db.execute(query.order_by(*order_clauses))
+    rows = result.all()
+    total = len(rows)
+    offset = (page - 1) * page_size
+    paged = rows[offset:offset + page_size]
+
+    # 批量查询关联的部门和岗位
+    org_ids = [role.org_id for role, _ in paged if role.org_id]
+    position_ids = {int(role.position_id) for role, _ in paged if role.position_id and role.position_id.isdigit()}
+
+    org_map = {}
+    if org_ids:
+        org_result = await db.execute(select(Organization).where(Organization.oa_org_id.in_(org_ids)))
+        org_map = {o.oa_org_id: o for o in org_result.scalars().all() if o.oa_org_id}
+
+    position_map = {}
+    if position_ids:
+        pos_result = await db.execute(select(Position).where(Position.id.in_(position_ids)))
+        position_map = {p.id: p for p in pos_result.scalars().all()}
+
+    return ResponseModel(data={
+        "items": [
+            {
+                "id": role.id,
+                "role_code": role.role_code,
+                "role_name": role.role_name,
+                "permissions": merge_role_permission_additions(role.role_code, role.permissions),
+                "user_count": user_count,
+                "org_id": role.org_id,
+                "org_name": org_map[role.org_id].org_name if role.org_id and org_map.get(role.org_id) else None,
+                "position_id": role.position_id,
+                "position_name": position_map[role.position_id].position_name if role.position_id and role.position_id in position_map else None,
+            }
+            for role, user_count in paged
+        ],
+        "total": total,
+    })
+
+
+@router.post("/sync-roles", response_model=ResponseModel[dict])
+async def sync_user_roles(
+    current_user: dict = Depends(PermissionChecker("users", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    # 先回填角色的 org_id 和 position_id（已移除，避免回填错误关联）
+
+    result = await db.execute(
+        select(SysUser, Employee, Position, Organization)
+        .join(Employee, SysUser.emp_code == Employee.emp_code)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
+    )
+    rows = result.all()
+    updated = 0
+    created = 0
+    for user, employee, position, org in rows:
+        if not position:
+            continue
+
+        # 使用公共函数查找或创建角色
+        role, role_created = await resolve_or_create_role(db, position, org)
+        if role_created:
+            created += 1
+
+        # 更新用户角色
+        if role and user.role_id != role.id:
+            user.role_id = role.id
+            updated += 1
+
+    await db.commit()
+    return ResponseModel(data={"total": len(rows), "updated": updated, "created": created})
 
 
 @router.get("/employee-options", response_model=ResponseModel[list])
@@ -330,7 +511,7 @@ async def list_employee_options(
     query = (
         select(Employee, Position, SysRole)
         .outerjoin(Position, Employee.position_id == Position.id)
-        .outerjoin(SysRole, Position.role_id == SysRole.id)
+        .outerjoin(SysRole, SysRole.position_id == Position.id.cast(String))
     )
     if keyword:
         like = f"%{keyword}%"
@@ -354,6 +535,8 @@ async def list_employee_options(
             "role_id": role.id if role else None,
             "role_code": role.role_code if role else None,
             "role_name": role.role_name if role else None,
+            "oa_user_id": employee.oa_user_id,
+            "manager_oa_user_id": employee.manager_oa_user_id,
             "status": employee.status,
         }
         for employee, position, role in result.all()
@@ -364,7 +547,7 @@ async def list_employee_options(
 @router.post("/roles/batch-grant", response_model=ResponseModel[dict])
 async def batch_grant_permissions(
     body: BatchGrantBody,
-    current_user: dict = Depends(PermissionChecker("users", "update")),
+    current_user: dict = Depends(PermissionChecker("roles", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     if not body.role_ids:
@@ -413,7 +596,7 @@ async def batch_grant_permissions(
 @router.post("/roles", response_model=ResponseModel[dict])
 async def create_role(
     body: RoleCreate,
-    current_user: dict = Depends(PermissionChecker("users", "create")),
+    current_user: dict = Depends(PermissionChecker("roles", "create")),
     db: AsyncSession = Depends(get_db),
 ):
     existing = await db.execute(select(SysRole).where(SysRole.role_code == body.role_code))
@@ -434,7 +617,7 @@ async def create_role(
 async def update_role(
     role_id: int,
     body: RoleUpdate,
-    current_user: dict = Depends(PermissionChecker("users", "update")),
+    current_user: dict = Depends(PermissionChecker("roles", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(SysRole).where(SysRole.id == role_id))
@@ -456,7 +639,7 @@ async def update_role(
 @router.delete("/roles/{role_id}", response_model=ResponseModel[dict])
 async def delete_role(
     role_id: int,
-    current_user: dict = Depends(PermissionChecker("users", "delete")),
+    current_user: dict = Depends(PermissionChecker("roles", "delete")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(SysRole).where(SysRole.id == role_id))
@@ -523,6 +706,8 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
 
+    # 用户管理不受上级员工控制，所有用户可编辑
+
     if body.display_name is not None:
         user.display_name = body.display_name
     if body.role_id is not None or body.emp_code is not None:
@@ -564,6 +749,7 @@ async def reset_password(
         raise HTTPException(status_code=400, detail="密码长度不能少于6位")
 
     user.hashed_password = get_password_hash(body.new_password)
+    user.is_default_password = True
     await log_audit(db, "sys_user", user.id, "update", field_name="password", operator=current_user["username"])
     await db.commit()
     return ResponseModel(data={"id": user.id, "message": "密码已重置"})
@@ -585,6 +771,448 @@ async def delete_user(
         raise HTTPException(status_code=400, detail="不能删除当前登录用户")
 
     await log_audit(db, "sys_user", user.id, "delete", operator=current_user["username"])
+    await db.execute(Notification.__table__.delete().where(Notification.user_id == user_id))
     await db.delete(user)
     await db.commit()
     return ResponseModel(data={"deleted": user_id})
+
+
+# ---------- 批量操作 Schemas ----------
+class BatchFilterParams(BaseModel):
+    role_code: Optional[str] = None
+    is_active: Optional[bool] = None
+    keyword: Optional[str] = None
+    org_name: Optional[str] = None
+    position_name: Optional[str] = None
+    supplier_name: Optional[str] = None
+
+
+class BatchSetActiveBody(BaseModel):
+    user_ids: Optional[List[int]] = None
+    is_active: bool
+    filter: Optional[BatchFilterParams] = None
+
+
+class BatchResetPasswordBody(BaseModel):
+    user_ids: Optional[List[int]] = None
+    filter: Optional[BatchFilterParams] = None
+
+
+class BatchDeleteBody(BaseModel):
+    user_ids: Optional[List[int]] = None
+    filter: Optional[BatchFilterParams] = None
+
+
+def _build_filtered_user_ids(
+    db: AsyncSession,
+    user_ids: Optional[List[int]],
+    flt: Optional[BatchFilterParams],
+    exclude_user_id: Optional[int] = None,
+):
+    Manager = aliased(Employee)
+    query = (
+        select(SysUser.id)
+        .join(SysRole, SysUser.role_id == SysRole.id)
+        .outerjoin(Employee, SysUser.emp_code == Employee.emp_code)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
+    )
+
+    if user_ids is not None:
+        if not user_ids:
+            return []
+        query = query.where(SysUser.id.in_(user_ids))
+
+    if flt:
+        if flt.role_code:
+            codes = [c.strip() for c in flt.role_code.split(",") if c.strip()]
+            if codes:
+                query = query.where(SysRole.role_code.in_(codes))
+        if flt.is_active is not None:
+            query = query.where(SysUser.is_active == flt.is_active)
+        if flt.org_name:
+            names = [n.strip() for n in flt.org_name.split(",") if n.strip()]
+            if names:
+                query = query.where(Organization.org_name.in_(names))
+        if flt.position_name:
+            names = [n.strip() for n in flt.position_name.split(",") if n.strip()]
+            if names:
+                query = query.where(Position.position_name.in_(names))
+        if flt.supplier_name:
+            names = [n.strip() for n in flt.supplier_name.split(",") if n.strip()]
+            if names:
+                query = query.where(SysUser.supplier_name.in_(names))
+        if flt.keyword:
+            like = f"%{flt.keyword}%"
+            query = query.where(
+                (SysUser.username.ilike(like))
+                | (SysUser.display_name.ilike(like))
+                | (SysUser.emp_code.ilike(like))
+                | (Employee.emp_name.ilike(like))
+            )
+
+    if exclude_user_id is not None:
+        query = query.where(SysUser.id != exclude_user_id)
+
+    return query
+
+
+async def _resolve_users_for_batch(
+    db: AsyncSession,
+    user_ids: Optional[List[int]],
+    flt: Optional[BatchFilterParams],
+    exclude_user_id: Optional[int] = None,
+) -> List[int]:
+    if user_ids is not None and not user_ids and flt is None:
+        return []
+
+    stmt = _build_filtered_user_ids(db, user_ids, flt, exclude_user_id)
+    if isinstance(stmt, list):
+        return stmt
+    result = await db.execute(stmt)
+    return [row[0] for row in result.all()]
+
+
+# ---------- 批量启用/停用 ----------
+@router.put("/batch/toggle-active", response_model=ResponseModel[dict])
+async def batch_toggle_active(
+    body: BatchSetActiveBody,
+    current_user: dict = Depends(PermissionChecker("users", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    matched_ids = await _resolve_users_for_batch(db, body.user_ids, body.filter)
+    if not matched_ids:
+        raise HTTPException(status_code=400, detail="未找到符合条件的用户")
+
+    result = await db.execute(
+        select(SysUser).where(SysUser.id.in_(matched_ids))
+    )
+    users = result.scalars().all()
+    updated = 0
+    for user in users:
+        if user.is_active != body.is_active:
+            user.is_active = body.is_active
+            updated += 1
+            await log_audit(
+                db, "sys_user", user.id, "update",
+                field_name="is_active", operator=current_user["username"],
+            )
+    await db.commit()
+    action = "启用" if body.is_active else "停用"
+    return ResponseModel(data={"total": len(users), "updated": updated, "action": action})
+
+
+# ---------- 批量重置密码 ----------
+@router.put("/batch/reset-password", response_model=ResponseModel[dict])
+async def batch_reset_password(
+    body: BatchResetPasswordBody,
+    current_user: dict = Depends(PermissionChecker("users", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    matched_ids = await _resolve_users_for_batch(db, body.user_ids, body.filter)
+    if not matched_ids:
+        raise HTTPException(status_code=400, detail="未找到符合条件的用户")
+
+    settings = get_settings()
+    default_pwd = settings.ERP_SYNC_DEFAULT_PASSWORD
+    hashed_pwd = get_password_hash(default_pwd)
+
+    result = await db.execute(
+        select(SysUser).where(SysUser.id.in_(matched_ids))
+    )
+    users = result.scalars().all()
+    updated = 0
+    for user in users:
+        user.hashed_password = hashed_pwd
+        user.is_default_password = True
+        updated += 1
+        await log_audit(
+            db, "sys_user", user.id, "update",
+            field_name="password", operator=current_user["username"],
+        )
+    await db.commit()
+    return ResponseModel(data={"total": len(users), "updated": updated, "default_password": default_pwd})
+
+
+# ---------- 批量删除 ----------
+@router.post("/batch/delete", response_model=ResponseModel[dict])
+async def batch_delete_users(
+    body: BatchDeleteBody,
+    current_user: dict = Depends(PermissionChecker("users", "delete")),
+    db: AsyncSession = Depends(get_db),
+):
+    current_user_id = current_user.get("user_id")
+    matched_ids = await _resolve_users_for_batch(
+        db, body.user_ids, body.filter, exclude_user_id=current_user_id
+    )
+    if not matched_ids:
+        raise HTTPException(status_code=400, detail="未找到符合条件的用户或仅选择了当前登录用户")
+
+    result = await db.execute(
+        select(SysUser).where(SysUser.id.in_(matched_ids))
+    )
+    users = result.scalars().all()
+    deleted = 0
+    for user in users:
+        await log_audit(db, "sys_user", user.id, "delete", operator=current_user["username"])
+        await db.execute(Notification.__table__.delete().where(Notification.user_id == user.id))
+        await db.delete(user)
+        deleted += 1
+    await db.commit()
+    return ResponseModel(data={"total": len(users), "deleted": deleted})
+
+
+# ---------- Schemas: 批量开通用户 ----------
+class BatchProvisionBody(BaseModel):
+    emp_codes: List[str]
+    role_id: Optional[int] = None
+    default_password: Optional[str] = None
+
+
+# ---------- 未开通用户的员工列表 ----------
+@router.get("/unprovisioned-employees", response_model=ResponseModel[dict])
+async def list_unprovisioned_employees(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    keyword: Optional[str] = None,
+    org_name: Optional[str] = None,
+    position_name: Optional[str] = None,
+    current_user: dict = Depends(PermissionChecker("users", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """查询已同步员工数据但尚未开通系统用户的员工列表"""
+
+    # 已开通用户的 emp_code 集合
+    provisioned_sub = select(SysUser.emp_code).where(SysUser.emp_code.isnot(None))
+
+    # 查找未开通的员工，关联岗位和组织
+    query = (
+        select(Employee, Position, Organization)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
+        .where(Employee.emp_code.not_in(provisioned_sub))
+    )
+
+    # 过滤条件：keyword 支持空格分隔多关键词（任一匹配即可）
+    if keyword:
+        parts = [p.strip() for p in keyword.replace("，", " ").split() if p.strip()]
+        if parts:
+            or_clauses = []
+            for p in parts:
+                like = f"%{p}%"
+                or_clauses.append(
+                    (Employee.emp_code.ilike(like))
+                    | (Employee.emp_name.ilike(like))
+                    | (Employee.login_id.ilike(like))
+                )
+            if len(or_clauses) == 1:
+                query = query.where(or_clauses[0])
+            else:
+                from sqlalchemy import or_ as sa_or
+                query = query.where(sa_or(*or_clauses))
+    if org_name:
+        names = [n.strip() for n in org_name.split(",") if n.strip()]
+        if names:
+            query = query.where(Organization.org_name.in_(names))
+    if position_name:
+        names = [n.strip() for n in position_name.split(",") if n.strip()]
+        if names:
+            query = query.where(
+                or_(
+                    Position.position_name.in_(names),
+                    Employee.position.in_(names),
+                )
+            )
+
+    result = await db.execute(query.order_by(Employee.emp_code.asc()))
+    rows = result.all()
+    total = len(rows)
+
+    # 分页
+    offset = (page - 1) * page_size
+    paged_rows = rows[offset:offset + page_size]
+
+    # 统计所有岗位和部门供前端筛选
+    all_position_names = set()
+    all_org_names = set()
+    for emp, pos, org in rows:
+        pos_name = pos.position_name if pos else (emp.position or None)
+        if pos_name:
+            all_position_names.add(pos_name)
+        if org and org.org_name:
+            all_org_names.add(org.org_name)
+
+    return ResponseModel(data={
+        "items": [
+            {
+                "emp_code": emp.emp_code,
+                "emp_name": emp.emp_name,
+                "login_id": emp.login_id,
+                "position_name": pos.position_name if pos else (emp.position or None),
+                "org_name": org.org_name if org else None,
+                "status": emp.status,
+                "phone": emp.phone,
+                "email": emp.email,
+            }
+            for emp, pos, org in paged_rows
+        ],
+        "total": total,
+        "position_options": sorted(all_position_names),
+        "org_options": sorted(all_org_names),
+    })
+
+
+# ---------- 批量开通用户 ----------
+@router.post("/batch-provision", response_model=ResponseModel[dict])
+async def batch_provision_users(
+    body: BatchProvisionBody,
+    current_user: dict = Depends(PermissionChecker("users", "create")),
+    db: AsyncSession = Depends(get_db),
+):
+    """批量为选中的员工开通系统用户"""
+
+    if not body.emp_codes:
+        raise HTTPException(status_code=400, detail="请选择至少一名员工")
+
+    codes = [c.strip() for c in body.emp_codes if c and c.strip()]
+    if not codes:
+        raise HTTPException(status_code=400, detail="员工工号为空")
+
+    # 检查已开通的用户
+    existing_result = await db.execute(
+        select(SysUser.emp_code).where(SysUser.emp_code.in_(codes))
+    )
+    existing_codes = {row[0] for row in existing_result.all() if row[0]}
+    skipped_codes = sorted(existing_codes)
+
+    # 获取需要开通的员工
+    emp_result = await db.execute(
+        select(Employee).where(Employee.emp_code.in_(codes))
+    )
+    employees = emp_result.scalars().all()
+    employee_map = {e.emp_code: e for e in employees}
+
+    # 确定角色
+    from app.core.config import get_settings
+    from app.services.basicdata.position_role_service import resolve_or_create_role
+    settings = get_settings()
+
+    # 默认密码
+    default_pwd = body.default_password or settings.ERP_SYNC_DEFAULT_PASSWORD
+    hashed_pwd = get_password_hash(default_pwd)
+
+    # 默认角色（当 role_id 未指定且员工无岗位时使用）
+    fallback_role_id = None
+    if not body.role_id:
+        planner_result = await db.execute(
+            select(SysRole).where(SysRole.role_code == "planner").limit(1)
+        )
+        planner = planner_result.scalar_one_or_none()
+        if planner:
+            fallback_role_id = planner.id
+        else:
+            first_result = await db.execute(select(SysRole).limit(1))
+            first = first_result.scalar_one_or_none()
+            fallback_role_id = first.id if first else None
+
+    created = 0
+    errors: List[str] = []
+    newly_created_users: List[dict] = []
+
+    for emp_code in codes:
+        if emp_code in existing_codes:
+            continue  # 已开通，跳过
+
+        emp = employee_map.get(emp_code)
+        if not emp:
+            errors.append(f"{emp_code}: 员工不存在")
+            continue
+
+        # 确定角色
+        target_role_id = body.role_id
+        if not target_role_id:
+            # 按岗位自动匹配
+            matched_position = None
+            if emp.position_id:
+                pos_result = await db.execute(
+                    select(Position).where(Position.id == emp.position_id)
+                )
+                matched_position = pos_result.scalar_one_or_none()
+            if not matched_position and emp.position:
+                pos_result = await db.execute(
+                    select(Position).where(Position.position_name == emp.position).limit(1)
+                )
+                matched_position = pos_result.scalar_one_or_none()
+
+            matched_org = None
+            if emp.org_id and matched_position:
+                org_result = await db.execute(
+                    select(Organization).where(Organization.oa_org_id == str(emp.org_id))
+                )
+                matched_org = org_result.scalars().first()
+
+            if matched_position:
+                matched_role, _ = await resolve_or_create_role(db, matched_position, matched_org)
+                if matched_role:
+                    target_role_id = matched_role.id
+
+            if not target_role_id:
+                target_role_id = fallback_role_id
+
+        if not target_role_id:
+            errors.append(f"{emp_code}({emp.emp_name}): 无法确定角色，请先创建角色")
+            continue
+
+        # 生成用户名
+        username = emp.login_id or emp.emp_code
+
+        # 检查 username 是否已被占用
+        dup_result = await db.execute(
+            select(SysUser).where(SysUser.username == username)
+        )
+        if dup_result.scalar_one_or_none():
+            # 用户名冲突，用 emp_code 作为用户名
+            username = emp.emp_code
+
+        # 确定激活状态
+        is_active = (emp.status in {0, 1, 2, 3}) if emp.status is not None else True
+
+        # 创建用户
+        try:
+            new_user = SysUser(
+                username=username,
+                display_name=emp.emp_name,
+                hashed_password=hashed_pwd,
+                role_id=target_role_id,
+                emp_code=emp.emp_code,
+                is_active=is_active,
+            )
+            db.add(new_user)
+            await db.flush()
+            await log_audit(db, "sys_user", new_user.id, "create", operator=current_user["username"])
+            created += 1
+            newly_created_users.append({
+                "emp_code": emp.emp_code,
+                "username": username,
+                "display_name": emp.emp_name,
+                "role_id": target_role_id,
+            })
+        except Exception as e:
+            errors.append(f"{emp_code}({emp.emp_name}): {e}")
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            await db.begin_nested()
+
+    await db.commit()
+
+    return ResponseModel(data={
+        "created": created,
+        "skipped": len(skipped_codes),
+        "skipped_codes": skipped_codes,
+        "errors": errors,
+        "total_requested": len(codes),
+        "default_password": default_pwd,
+        "new_users": newly_created_users,
+    })

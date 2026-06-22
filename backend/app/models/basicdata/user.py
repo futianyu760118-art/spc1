@@ -1,6 +1,6 @@
 """基础数据与集成中心 — 用户/角色模型"""
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from sqlalchemy import BigInteger, Column, Integer, String, Boolean, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
@@ -14,6 +14,8 @@ class SysRole(Base):
     role_code = Column(String(32), nullable=False, unique=True)
     role_name = Column(String(64), nullable=False)
     permissions = Column(JSONB)
+    org_id = Column(String(64), nullable=True, comment="关联部门ID")
+    position_id = Column(String(64), nullable=True, comment="关联岗位ID")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
@@ -33,5 +35,6 @@ class SysUser(Base):
     last_token_jti = Column(String(64), nullable=True, comment="上一次登录的token jti，用于立即失效")
     last_login_time = Column(DateTime, nullable=True, comment="最后一次登录时间")
     font_size_scale = Column(String(10), nullable=True, default='1.0', comment="字体大小缩放比例")
+    is_default_password = Column(Boolean, nullable=False, default=True, comment="是否默认密码，首次登录强制修改")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

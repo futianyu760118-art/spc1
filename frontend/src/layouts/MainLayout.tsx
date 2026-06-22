@@ -32,6 +32,7 @@ import {
   CheckOutlined,
   SoundOutlined,
   IdcardOutlined,
+  SafetyOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { authApi, notificationApi } from '../services/api'
@@ -165,6 +166,7 @@ const allMenuItems: PermissionAwareItem[] = [
         ],
       },
       { key: '/users', icon: <UserOutlined />, label: '用户管理', permission: 'users' },
+      { key: '/roles', icon: <SafetyOutlined />, label: '角色管理', permission: 'roles' },
       { key: '/audit', icon: <AuditOutlined />, label: '审计日志', permission: 'audit' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
@@ -271,6 +273,7 @@ const pathToGroupKey: Record<string, string> = {
   '/basicdata/positions': 'basicdata-management',
   '/basicdata/employees': 'basicdata-management',
   '/users': 'basicdata-center',
+  '/roles': 'basicdata-center',
   '/audit': 'basicdata-center',
   '/sync-config': 'basicdata-center',
   '/basicdata/feedback': 'basicdata-center',
@@ -317,6 +320,7 @@ const pathToPermission: Record<string, string> = {
   '/responsibility-map': 'rules.responsibility',
   '/status-dict': 'rules.status_dict',
   '/users': 'users',
+  '/roles': 'roles',
   '/audit': 'audit',
   '/sync-config': 'settings',
   '/basicdata/customers': 'basicdata.data',
@@ -353,6 +357,9 @@ export default function MainLayout() {
   const [unreadByType, setUnreadByType] = useState<Record<string, number>>({})
   const [pwdModalOpen, setPwdModalOpen] = useState(false)
   const [pwdForm] = Form.useForm()
+  const [forcePwdModalOpen, setForcePwdModalOpen] = useState(false)
+  const [forcePwdForm] = Form.useForm()
+  const [forcePwdDismissable, setForcePwdDismissable] = useState(false)
   const toastShown = useRef(false)
   const canUseTopbar = useMemo(() => ({
     share: hasPermission('topbar.share', 'read'),
@@ -440,6 +447,13 @@ export default function MainLayout() {
     if (bellOpen) fetchNotifList(notifTab)
   }, [bellOpen, notifTab, fetchNotifList])
 
+  useEffect(() => {
+    if (currentUser && 'is_default_password' in currentUser && currentUser.is_default_password) {
+      setForcePwdDismissable(false)
+      setForcePwdModalOpen(true)
+    }
+  }, [currentUser])
+
   const handleMarkRead = async (id: number) => {
     await notificationApi.markRead(id)
     setNotifList(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n))
@@ -466,6 +480,28 @@ export default function MainLayout() {
       message.success('密码修改成功')
       setPwdModalOpen(false)
       pwdForm.resetFields()
+      const user = useAuthStore.getState().currentUser
+      if (user && 'is_default_password' in user) {
+        useAuthStore.getState().setAuth(useAuthStore.getState().originalToken!, { ...user, is_default_password: false } as any)
+      }
+    } catch (e: any) {
+      if (e?.response?.data?.detail) message.error(e.response.data.detail)
+    }
+  }
+
+  const handleForceChangePassword = async () => {
+    try {
+      const values = await forcePwdForm.validateFields()
+      await authApi.changePassword(values.old_password, values.new_password)
+      message.success('密码修改成功')
+      setForcePwdModalOpen(false)
+      forcePwdForm.resetFields()
+      const user = useAuthStore.getState().currentUser
+      if (user && 'is_default_password' in user) {
+        useAuthStore.getState().setAuth(useAuthStore.getState().originalToken!, { ...user, is_default_password: false } as any)
+      }
+      logout()
+      navigate('/login')
     } catch (e: any) {
       if (e?.response?.data?.detail) message.error(e.response.data.detail)
     }
@@ -662,6 +698,47 @@ export default function MainLayout() {
           okText="确认修改"
         >
           <Form form={pwdForm} layout="vertical" style={{ marginTop: 16 }}>
+            <Form.Item name="old_password" label="原密码" rules={[{ required: true, message: '请输入原密码' }]}>
+              <Input.Password placeholder="输入当前密码" />
+            </Form.Item>
+            <Form.Item name="new_password" label="新密码" rules={[{ required: true, message: '请输入新密码' }, { min: 6, message: '密码至少6位' }]}>
+              <Input.Password placeholder="至少6位" />
+            </Form.Item>
+            <Form.Item
+              name="confirm_password"
+              label="确认新密码"
+              dependencies={['new_password']}
+              rules={[
+                { required: true, message: '请确认新密码' },
+                ({ getFieldValue }) => ({
+                  validator(_, value) {
+                    if (!value || getFieldValue('new_password') === value) return Promise.resolve()
+                    return Promise.reject(new Error('两次密码不一致'))
+                  },
+                }),
+              ]}
+            >
+              <Input.Password placeholder="再次输入新密码" />
+            </Form.Item>
+          </Form>
+        </Modal>
+
+        <Modal
+          title="安全提醒 — 请修改默认密码"
+          open={forcePwdModalOpen}
+          onOk={handleForceChangePassword}
+          onCancel={forcePwdDismissable ? () => { setForcePwdModalOpen(false); forcePwdForm.resetFields() } : undefined}
+          closable={forcePwdDismissable}
+          maskClosable={forcePwdDismissable}
+          width={420}
+          okText="确认修改"
+          cancelText={forcePwdDismissable ? '稍后再说' : undefined}
+          cancelButtonProps={forcePwdDismissable ? undefined : { style: { display: 'none' } }}
+        >
+          <div style={{ marginBottom: 12, padding: '8px 12px', background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 6, color: '#ad6800', fontSize: 13 }}>
+            检测到您正在使用默认密码，为保障账号安全，请立即修改密码
+          </div>
+          <Form form={forcePwdForm} layout="vertical" style={{ marginTop: 8 }}>
             <Form.Item name="old_password" label="原密码" rules={[{ required: true, message: '请输入原密码' }]}>
               <Input.Password placeholder="输入当前密码" />
             </Form.Item>

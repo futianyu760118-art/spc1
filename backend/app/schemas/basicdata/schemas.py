@@ -23,6 +23,8 @@ class UserInfo(BaseModel):
     supplier_code: Optional[str] = None
     is_active: bool = True
     font_size_scale: Optional[str] = None
+    is_default_password: bool = True
+    login_version: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -360,9 +362,6 @@ class PositionBase(BaseModel):
 
 class PositionOut(PositionBase):
     id: int
-    role_id: Optional[int] = None
-    role_code: Optional[str] = None
-    role_name: Optional[str] = None
     create_time: datetime
 
     model_config = {"from_attributes": True}
@@ -373,6 +372,7 @@ class EmployeeBase(BaseModel):
     emp_name: str
     org_id: Optional[int] = None
     position_id: Optional[int] = None
+    manager_oa_user_id: Optional[str] = None
     position: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -387,6 +387,7 @@ class EmployeeUpdate(BaseModel):
     emp_name: Optional[str] = None
     org_id: Optional[int] = None
     position_id: Optional[int] = None
+    manager_oa_user_id: Optional[str] = None
     position: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -397,5 +398,6 @@ class EmployeeOut(EmployeeBase):
     id: int
     create_time: datetime
     position_name: Optional[str] = None
+    manager_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
