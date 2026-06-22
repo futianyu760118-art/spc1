@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Row, Col, Table, Tag, Input, Select, Button, message, Space, Tooltip, Modal, Form, DatePicker, Card, Spin, Progress, Dropdown, Switch, Checkbox } from 'antd'
+import { Row, Col, Table, Tag, Input, InputNumber, Select, Button, message, Space, Tooltip, Modal, Form, DatePicker, Card, Spin, Progress, Dropdown, Switch, Checkbox } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 const { RangePicker } = DatePicker
 import {
@@ -270,7 +270,7 @@ export default function OrderList() {
       } else if (field === 'is_closed') {
         payload[field] = value === 'true' ? 1 : 0
       } else {
-        payload[field] = value || null
+        payload[field] = value ?? null
       }
 
       await orderApi.update(record.order_no, payload)
@@ -300,29 +300,35 @@ export default function OrderList() {
     const isEditing = editingCell === cellKey
     if (isEditing) {
       return (
-        <div className="editable-cell editable-cell-editing">
-          <DatePicker
-            size="small"
-            defaultValue={value ? dayjs(value) : undefined}
-            disabled={savingCell === cellKey}
-            style={{ width: '100%' }}
-            autoFocus
-            open
-            onChange={(d) => handleCellSave(record, field, d)}
-            onOpenChange={(open) => { if (!open) setEditingCell(null) }}
-          />
-        </div>
+        <DatePicker
+          size="small"
+          value={value ? dayjs(value) : null}
+          disabled={savingCell === cellKey}
+          style={{ width: '100%' }}
+          autoFocus
+          onChange={(d) => {
+            handleCellSave(record, field, d ? d.format('YYYY-MM-DD') : null)
+            setEditingCell(null)
+          }}
+          onOpenChange={(open) => { if (!open) setEditingCell(null) }}
+        />
       )
     }
     const isOverdue = opts?.overdue ? opts.overdue(value, record) : false
     const isGreen = opts?.green || false
-    const display = value
-      ? <span style={{
-          color: isGreen ? '#16a34a' : isOverdue ? '#e11d48' : undefined,
-          fontWeight: (isGreen || isOverdue) ? (isGreen ? 500 : 600) : undefined,
-        }}>{formatDate(value)}</span>
-      : <span style={{ color: '#cbd5e1' }}>-</span>
-    return <div className="editable-cell" onClick={() => !savingCell && setEditingCell(cellKey)}>{display}</div>
+    return (
+      <div
+        onClick={() => !savingCell && setEditingCell(cellKey)}
+        style={{ cursor: 'pointer', padding: '4px 8px', minHeight: '24px' }}
+      >
+        {value
+          ? <span style={{
+              color: isGreen ? '#16a34a' : isOverdue ? '#e11d48' : undefined,
+              fontWeight: (isGreen || isOverdue) ? (isGreen ? 500 : 600) : undefined,
+            }}>{formatDate(value)}</span>
+          : <span style={{ color: '#cbd5e1' }}>-</span>}
+      </div>
+    )
   }
 
   const editableSelect = (field: string, options: { value: string; label: string }[], renderValue?: (v: string | null, r: OrderRow) => React.ReactNode) =>
@@ -331,25 +337,33 @@ export default function OrderList() {
       const isEditing = editingCell === cellKey
       if (isEditing) {
         return (
-          <div className="editable-cell editable-cell-editing">
-            <Select
-              size="small"
-              defaultValue={value || undefined}
-              disabled={savingCell === cellKey}
-              style={{ width: '100%' }}
-              autoFocus
-              open
-              allowClear
-              options={options}
-              onChange={(v) => handleCellSave(record, field, v ?? null)}
-              onDropdownVisibleChange={(open) => { if (!open) setEditingCell(null) }}
-              dropdownStyle={{ zIndex: 1050 }}
-            />
-          </div>
+          <Select
+            size="small"
+            defaultValue={value || undefined}
+            disabled={savingCell === cellKey}
+            style={{ width: '100%' }}
+            autoFocus
+            open
+            allowClear
+            options={options}
+            onChange={(v) => {
+              handleCellSave(record, field, v ?? null)
+              setEditingCell(null)
+            }}
+            onDropdownVisibleChange={(open) => { if (!open) setEditingCell(null) }}
+            dropdownStyle={{ zIndex: 1050 }}
+          />
         )
       }
       const display = renderValue ? renderValue(value, record) : (value || '-')
-      return <div className="editable-cell" onClick={() => !savingCell && setEditingCell(cellKey)}>{display}</div>
+      return (
+        <div
+          onClick={() => !savingCell && setEditingCell(cellKey)}
+          style={{ cursor: 'pointer', padding: '4px 8px', minHeight: '24px' }}
+        >
+          {display}
+        </div>
+      )
     }
 
   const editableText = (field: string, renderValue?: (v: string | null, r: OrderRow) => React.ReactNode) =>
@@ -358,26 +372,65 @@ export default function OrderList() {
       const isEditing = editingCell === cellKey
       if (isEditing) {
         return (
-          <div className="editable-cell editable-cell-editing">
-            <Input
-              size="small"
-              defaultValue={value || ''}
-              disabled={savingCell === cellKey}
-              style={{ width: '100%' }}
-              autoFocus
-              onBlur={(e) => {
-                const next = e.target.value.trim()
-                if ((value || '') !== next) handleCellSave(record, field, next || null)
-                setEditingCell(null)
-              }}
-              onPressEnter={(e) => e.currentTarget.blur()}
-              onKeyDown={(e) => { if (e.key === 'Escape') setEditingCell(null) }}
-            />
-          </div>
+          <Input
+            size="small"
+            defaultValue={value || ''}
+            disabled={savingCell === cellKey}
+            autoFocus
+            onBlur={(e) => {
+              const next = e.target.value.trim()
+              if ((value || '') !== next) handleCellSave(record, field, next || null)
+              setEditingCell(null)
+            }}
+            onPressEnter={(e) => e.currentTarget.blur()}
+          />
         )
       }
       const display = renderValue ? renderValue(value, record) : (value || <span style={{ color: '#cbd5e1' }}>-</span>)
-      return <div className="editable-cell" onClick={() => !savingCell && setEditingCell(cellKey)}>{display}</div>
+      return (
+        <div
+          onClick={() => !savingCell && setEditingCell(cellKey)}
+          style={{ cursor: 'pointer', padding: '4px 8px', minHeight: '24px' }}
+        >
+          {display}
+        </div>
+      )
+    }
+
+  const editableNumber = (field: string, min = 0, renderValue?: (v: number | null, r: OrderRow) => React.ReactNode) =>
+    (value: number | null, record: OrderRow) => {
+      const cellKey = `${record.id}-${field}`
+      const isEditing = editingCell === cellKey
+      if (isEditing) {
+        return (
+          <InputNumber
+            size="small"
+            min={min}
+            defaultValue={value ?? undefined}
+            disabled={savingCell === cellKey}
+            style={{ width: '100%' }}
+            autoFocus
+            onBlur={(e) => {
+              const raw = e.target.value
+              const next = raw === '' ? null : Number(raw)
+              if ((value ?? null) !== next && (next == null || !Number.isNaN(next))) handleCellSave(record, field, next)
+              setEditingCell(null)
+            }}
+            onPressEnter={(e) => e.currentTarget.blur()}
+          />
+        )
+      }
+      const display = renderValue
+        ? renderValue(value, record)
+        : (value != null ? value : <span style={{ color: '#cbd5e1' }}>-</span>)
+      return (
+        <div
+          onClick={() => !savingCell && setEditingCell(cellKey)}
+          style={{ cursor: 'pointer', padding: '4px 8px', textAlign: 'right' }}
+        >
+          {display}
+        </div>
+      )
     }
 
   const fetchOrders = useCallback(async (
@@ -707,6 +760,7 @@ export default function OrderList() {
     {
       title: '销售部门', dataIndex: 'department', key: 'department', minWidth: 70, fixed: 'left' as const,
       ellipsis: true, sorter: true,
+      render: editableText('department'),
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8 }}>
           <Input
@@ -901,15 +955,15 @@ export default function OrderList() {
     },
     {
       title: '数量', dataIndex: 'order_qty', key: 'order_qty', minWidth: 60, align: 'right' as const,
-      render: (v: number) => v?.toLocaleString() || '-', sorter: true,
+      render: editableNumber('order_qty', 0), sorter: true,
     },
     {
       title: '金额', dataIndex: 'order_amount', key: 'order_amount', minWidth: 80, align: 'right' as const,
-      render: (v: number) => v?.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-', sorter: true,
+      render: editableNumber('order_amount', 0, (v) => v?.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || <span style={{ color: '#cbd5e1' }}>-</span>), sorter: true,
     },
     {
       title: '完成数量', dataIndex: 'completed_qty', key: 'completed_qty', minWidth: 80, align: 'right' as const,
-      render: (v: number) => v?.toLocaleString() || '-', sorter: true,
+      render: editableNumber('completed_qty', 0), sorter: true,
     },
     {
       title: '下单时间', dataIndex: 'order_date', key: 'order_date', minWidth: 90,
