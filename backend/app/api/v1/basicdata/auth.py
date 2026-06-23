@@ -105,7 +105,10 @@ async def login(
     await db.commit()
 
     if old_token_jti:
-        await add_token_to_blacklist(old_token_jti)
+        try:
+            await add_token_to_blacklist(old_token_jti)
+        except Exception:
+            pass
 
     return ResponseModel(data=TokenResponse(access_token=token))
 

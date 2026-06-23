@@ -223,6 +223,16 @@ export const productionApi = {
   createSchedulePlan: (data: Record<string, any>) => api.post('/production/schedule-plans', data),
   updateSchedulePlan: (id: number, data: Record<string, any>) => api.put(`/production/schedule-plans/${id}`, data),
   deleteSchedulePlan: (id: number) => api.delete(`/production/schedule-plans/${id}`),
+  // 重新排产
+  reschedulePlan: (planId: number) => api.post(`/production/schedule-plans/${planId}/reschedule`),
+  // 订单池用于排产
+  getOrdersForScheduling: (params: Record<string, any>) => api.get('/production/schedule-plans/orders-for-scheduling', { params }),
+  // 获取工作时间配置
+  getWorkHoursConfig: () => api.get('/production/schedule-plans/work-hours-config'),
+  // 一键排产
+  autoSchedule: (data: Record<string, any>) => api.post('/production/schedule-plans/auto-schedule', data),
+  // 检测变更
+  detectScheduleChanges: () => api.post('/production/schedule-plans/detect-changes'),
   // 前道管理
   listFrontProcess: (params: Record<string, any>) =>
     api.get('/production/front-process', { params }),
@@ -287,6 +297,11 @@ export const productionApi = {
     api.put(`/production/exceptions/${id}`, data),
   deleteException: (id: number) =>
     api.delete(`/production/exceptions/${id}`),
+  // 产品工序产能
+  listProductProcessCapacities: (params: Record<string, any>) => api.get('/production/product-process-capacities', { params }),
+  createProductProcessCapacity: (data: Record<string, any>) => api.post('/production/product-process-capacities', data),
+  updateProductProcessCapacity: (id: number, data: Record<string, any>) => api.put(`/production/product-process-capacities/${id}`, data),
+  deleteProductProcessCapacity: (id: number) => api.delete(`/production/product-process-capacities/${id}`),
 }
 
 // ============ 异常与质量中心 ============
