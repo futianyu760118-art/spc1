@@ -32,7 +32,8 @@ from app.models.basicdata.employee import Employee
 from app.models.basicdata.employee_organization import EmployeeOrganization
 from app.models.basicdata.position import Position
 from app.models.exception.quality_issue import QualityIssue
-from app.services.basicdata.position_role_service import ensure_position_role
+from app.models.material.mrp_plan_order import MrpPlanOrder
+
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -1498,7 +1499,7 @@ class ERPSyncService:
 
     async def sync_positions(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
         """Sync positions from OA/ERP SQL config."""
-        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": [], "roles_created": 0, "roles_linked": 0}
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
 
         try:
             await self._connect_erp()
@@ -1570,19 +1571,7 @@ class ERPSyncService:
                             position.data_source = "erp"
                         self.spc_db.add(position)
                         await self.spc_db.flush()
-                        _, rc, rl = await ensure_position_role(self.spc_db, position)
-                        if rc:
-                            stats["roles_created"] += 1
-                        if rl:
-                            stats["roles_linked"] += 1
                         stats["created"] += 1
-
-                    if existing:
-                        _, rc, rl = await ensure_position_role(self.spc_db, existing)
-                        if rc:
-                            stats["roles_created"] += 1
-                        if rl:
-                            stats["roles_linked"] += 1
 
                     stats["synced"] += 1
                 except Exception as e:
@@ -1597,7 +1586,7 @@ class ERPSyncService:
 
             await self.spc_db.flush()
             await self.spc_db.commit()
-            logger.info(f"[岗位同步] 完成: {stats}, 角色创建={stats['roles_created']}, 岗位角色关联={stats['roles_linked']}")
+            logger.info(f"[岗位同步] 完成: {stats}")
 
         except Exception as e:
             stats["errors"].append(str(e))
@@ -2068,6 +2057,87 @@ class ERPSyncService:
         return stats
 
     # ------------------------------------------------------------------
+    # MRP计划订单同步
+    # ------------------------------------------------------------------
+    async def sync_mrp_plan_orders(
+        self, since: Optional[datetime] = None, custom_params: Optional[dict] = None
+    ) -> dict:
+        """同步MRP计划订单数据。幂等依据: sale_order_id + material_id 联合主键。"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("mrp_plan_orders")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条MRP计划订单记录")
+            valid_cols = self._get_model_columns(MrpPlanOrder)
+
+            for row in rows:
+                row_dict: dict = {}
+                try:
+                    row_dict = self._map_row(row, mapping)
+                    sale_order_id = row_dict.get("sale_order_id")
+                    material_id = str(row_dict.get("material_id", "")).strip()
+                    if sale_order_id is None or not material_id:
+                        stats["skipped"] += 1
+                        continue
+
+                    row_dict = self._filter_model_fields(row_dict, valid_cols)
+                    row_dict = self._coerce_row_types(row_dict, MrpPlanOrder)
+
+                    result = await self.spc_db.execute(
+                        select(MrpPlanOrder).where(
+                            MrpPlanOrder.sale_order_id == sale_order_id,
+                            MrpPlanOrder.material_id == material_id,
+                        )
+                    )
+                    existing = result.scalar_one_or_none()
+
+                    if existing:
+                        for k, v in row_dict.items():
+                            if k in ("sale_order_id", "material_id"):
+                                continue
+                            if v is not None:
+                                setattr(existing, k, v)
+                        stats["updated"] += 1
+                    else:
+                        order = MrpPlanOrder(**row_dict)
+                        self.spc_db.add(order)
+                        stats["created"] += 1
+
+                    stats["synced"] += 1
+                except Exception as e:
+                    try:
+                        await self.spc_db.rollback()
+                    except Exception:
+                        pass
+                    stats["errors"].append(
+                        f"MRP计划订单 {row_dict.get('sale_order_no', '')}/{row_dict.get('material_code', '')}: {e}"
+                    )
+                    await self.spc_db.begin_nested()
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"MRP计划订单同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"MRP计划订单同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
     # 全量同步
     # ------------------------------------------------------------------
     async def sync_all(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
@@ -2092,6 +2162,7 @@ class ERPSyncService:
             results["employee_organizations"] = await self.sync_employee_organizations(since, custom_params)
             results["purchase_invoices"] = await self.sync_purchase_invoices(since, custom_params)
             results["quality_issues"] = await self.sync_quality_issues(since, custom_params)
+            results["mrp_plan_orders"] = await self.sync_mrp_plan_orders(since, custom_params)
             return results
         finally:
             self._close_erp()

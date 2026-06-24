@@ -9,5 +9,7 @@ from app.api.v1.basicdata.feedback import router as feedback_router
 from app.api.v1.basicdata.announcements import router as announcements_router
 from app.api.v1.basicdata.notifications import router as notifications_router
 from app.api.v1.basicdata.share import router as share_router
+from app.api.v1.basicdata.permissions import router as permissions_router
+from app.api.v1.basicdata.data_supply import router as data_supply_router
 
 masterdata_router = basicdata_router

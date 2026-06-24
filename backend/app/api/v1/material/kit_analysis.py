@@ -51,6 +51,7 @@ async def order_materials(
     inspection_date_start: Optional[str] = Query(None, description="检验开始日期"),
     inspection_date_end: Optional[str] = Query(None, description="检验结束日期"),
     is_stagnant: Optional[bool] = Query(None, description="是否呆滞"),
+    bill_type: Optional[str] = Query(None, description="计划订单单据类型筛选，多值逗号分隔，如 11010,11011,11012"),
     sort_by: Optional[str] = Query(None, description="排序字段"),
     sort_order: Optional[str] = Query(None, description="排序方向 asc/desc"),
     current_user: dict = Depends(PermissionChecker("materials.kit_analysis", "read")),
@@ -76,6 +77,7 @@ async def order_materials(
         inspection_date_start=inspection_date_start,
         inspection_date_end=inspection_date_end,
         is_stagnant=is_stagnant,
+        bill_type_filter=bill_type,
         sort_by=sort_by,
         sort_order=sort_order,
     )

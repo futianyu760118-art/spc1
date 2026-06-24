@@ -389,7 +389,7 @@ export const importExportApi = {
     formData.append('file', file)
     return api.post('/basicdata/import-export/purchase-orders', formData)
   },
-  syncData: (type: 'orders' | 'order_details' | 'materials' | 'purchase_orders' | 'customers' | 'suppliers' | 'materials_masterdata' | 'skus' | 'products' | 'warehouses' | 'processes' | 'organizations' | 'positions' | 'employees' | 'purchase_invoices' | 'quality_issues' | 'all', params: { hours?: number; order_numbers?: string[] } = {}) => {
+  syncData: (type: string, params: { hours?: number; order_numbers?: string[] } = {}) => {
     const queryParams = new URLSearchParams()
     if (params.hours !== undefined) {
       queryParams.append('hours', params.hours.toString())
@@ -601,4 +601,31 @@ export const shareApi = {
   verify: (token: string) => api.get(`/share/${token}`),
   list: () => api.get('/share/list'),
   revoke: (id: number) => api.delete(`/share/${id}`),
+}
+
+// ============ 权限定义 ============
+export const permissionApi = {
+  tree: () => api.get('/permissions/tree'),
+  list: () => api.get('/permissions'),
+  routeMap: () => api.get('/permissions/route-map'),
+}
+
+// ============ 数据供给 (基础数据与集成中心) ============
+export const dataSupplyApi = {
+  // 数据范围配置
+  listAvailableTypes: () => api.get('/basicdata/data-supply/configs/available-types'),
+  dataTypeOptions: () => api.get('/basicdata/data-supply/data-type-options'),
+  listConfigs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/configs', { params }),
+  createConfig: (data: Record<string, any>) => api.post('/basicdata/data-supply/configs', data),
+  updateConfig: (id: number, data: Record<string, any>) => api.put(`/basicdata/data-supply/configs/${id}`, data),
+  deleteConfig: (id: number) => api.delete(`/basicdata/data-supply/configs/${id}`),
+  // API Key 管理
+  listApiKeys: (params?: Record<string, any>) => api.get('/basicdata/data-supply/api-keys', { params }),
+  createApiKey: (data: Record<string, any>) => api.post('/basicdata/data-supply/api-keys', data),
+  updateApiKey: (id: number, data: Record<string, any>) => api.put(`/basicdata/data-supply/api-keys/${id}`, data),
+  deleteApiKey: (id: number) => api.delete(`/basicdata/data-supply/api-keys/${id}`),
+  // 调用日志
+  listCallLogs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/call-logs', { params }),
+  // 统计
+  getStatistics: (params?: Record<string, any>) => api.get('/basicdata/data-supply/statistics', { params }),
 }

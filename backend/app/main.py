@@ -88,6 +88,14 @@ def _check_erp_connection():
 async def lifespan(app: FastAPI):
     # 启动时：检测 ERP 数据库连接
     _check_erp_connection()
+    # 启动时：同步权限定义到数据库
+    try:
+        from app.core.permission_registry import sync_permissions_to_db
+        from app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            await sync_permissions_to_db(db)
+    except Exception as e:
+        logger.warning(f"[权限注册] 同步权限定义失败: {e}")
     # 启动时：开启 ERP 定时同步
     scheduler.start()
     # 启动时：开启风险评估定时调度

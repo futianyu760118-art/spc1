@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  Upload, Button, message, Tabs, Alert, List, Space, Card, Tag,
-  InputNumber, Tooltip, Spin, Descriptions, Collapse, Badge, Modal, Table,
-  Input, DatePicker, Select, Switch, notification as antNotification,
+  Upload, Button, message, Alert, List, Space, Card, Tag,
+  InputNumber, Tooltip, Spin, Descriptions, Collapse, Modal, Table,
+  Select, notification as antNotification,
 } from 'antd'
 import {
   UploadOutlined, DownloadOutlined, FileExcelOutlined, SyncOutlined,
@@ -13,7 +13,7 @@ import {
 import { importExportApi, dashboardApi, notificationApi } from '../../../services/api'
 import dayjs from 'dayjs'
 
-type SyncType = 'orders' | 'order_details' | 'materials' | 'purchase_orders' | 'customers' | 'suppliers' | 'materials_masterdata' | 'skus' | 'products' | 'warehouses' | 'processes' | 'organizations' | 'positions' | 'employees' | 'purchase_invoices' | 'quality_issues'
+type SyncType = string
 
 interface SyncResult {
   synced?: number
@@ -21,8 +21,6 @@ interface SyncResult {
   updated?: number
   skipped?: number
   errors?: string[]
-  roles_created?: number
-  roles_linked?: number
   roles_from_position?: number
   users_created?: number
   users_updated?: number
@@ -41,52 +39,34 @@ interface ConfigStatus {
     is_active: boolean
     has_sql: boolean
     has_mapping: boolean
+    sync_enabled?: boolean
   }>
 }
 
-
-const SYNC_TYPE_LABELS: Record<string, string> = {
-  orders: '销售订单',
-  order_details: '订单明细',
-  materials: '物料需求',
-  'purchase_orders': '采购订单',
-  customers: '客户',
-  suppliers: '供应商',
-  'materials_masterdata': '物料',
-  skus: 'SKU',
-  products: '产品',
-  warehouses: '仓库',
-  processes: '工序',
-  organizations: '组织',
-  positions: '岗位',
-  employees: '人员',
-  'purchase_invoices': '采购开票',
-  'quality_issues': '品质异常',
+// Excel 导入（备份）支持的特殊类型及其必填字段
+const EXCEL_IMPORT_TYPES: Record<string, string> = {
+  orders: 'order_no, line_no, customer, product_code, product_name, order_qty, promised_date, planned_start_date, owner',
+  materials: 'order_no, line_no, material_code, material_name, req_qty, req_date',
+  purchase_orders: 'po_no, material_code, supplier_code, supplier_name, po_qty, po_status, eta, owner',
 }
 
-function SyncResultCard({ result, type }: { result: SyncResult; type: string }) {
+// 需要特殊提示信息的类型
+const TYPE_ALERTS: Record<string, { message: string; description: string }> = {
+  positions: {
+    message: '岗位同步会自动创建对应的系统角色',
+    description: '同步岗位时，系统会根据岗位名称自动匹配权限分类并创建角色，岗位与角色自动关联。人员同步时，系统用户将通过岗位ID获取对应的角色权限。',
+  },
+  employees: {
+    message: '人员同步会自动创建系统用户并分配岗位角色',
+    description: '同步人员时，系统会根据员工的岗位ID自动匹配对应角色，并创建或更新系统用户。请确保先同步岗位数据，再同步人员数据。',
+  },
+}
+
+function SyncResultCard({ result, type, label }: { result: SyncResult; type: string; label?: string }) {
   const errors = result.errors || []
   const hasErrors = errors.length > 0
-  const isPositions = type === 'positions'
   const isEmployees = type === 'employees'
   const extraItems: React.ReactNode[] = []
-
-  if (isPositions) {
-    if (result.roles_created != null) {
-      extraItems.push(
-        <Descriptions.Item key="roles_created" label="角色创建">
-          <Tag color="purple">{result.roles_created}</Tag>
-        </Descriptions.Item>
-      )
-    }
-    if (result.roles_linked != null) {
-      extraItems.push(
-        <Descriptions.Item key="roles_linked" label="岗位角色关联">
-          <Tag color="cyan">{result.roles_linked}</Tag>
-        </Descriptions.Item>
-      )
-    }
-  }
 
   if (isEmployees) {
     if (result.users_created != null) {
@@ -122,7 +102,7 @@ function SyncResultCard({ result, type }: { result: SyncResult; type: string }) 
     >
       <Descriptions size="small" column={extraItems.length > 0 ? 5 : 5} style={{ marginBottom: hasErrors ? 8 : 0 }}>
         <Descriptions.Item label="类型">
-          <Tag color="blue">{SYNC_TYPE_LABELS[type] || type}</Tag>
+          <Tag color="blue">{label || type}</Tag>
         </Descriptions.Item>
         <Descriptions.Item label="新增">
           <Tag color="green">{result.created ?? 0}</Tag>
@@ -198,11 +178,21 @@ export default function DataImport() {
     }
   }, [])
 
-  const [activeTab, setActiveTab] = useState<string>('orders')
+  const [selectedType, setSelectedType] = useState<string>('')
 
   useEffect(() => {
     loadConfigStatus()
   }, [loadConfigStatus])
+
+  // 配置加载后默认选中第一个类型
+  useEffect(() => {
+    if (configStatus && !selectedType) {
+      const firstType = Object.keys(configStatus.types)[0]
+      if (firstType) setSelectedType(firstType)
+    }
+  }, [configStatus, selectedType])
+
+  const getLabel = (type: string) => configStatus?.types?.[type]?.label || type
 
   const handleOpenOrderModal = async () => {
     setOrderModalVisible(true)
@@ -291,8 +281,8 @@ export default function DataImport() {
     try {
       const title = success ? '数据同步完成' : '数据同步失败'
       const content = success 
-        ? `${SYNC_TYPE_LABELS[type]} 同步完成：新增 ${result.created ?? 0} 条，更新 ${result.updated ?? 0} 条`
-        : `${SYNC_TYPE_LABELS[type]} 同步失败：${result.errors?.join('；') || '未知错误'}`
+        ? `${getLabel(type)} 同步完成：新增 ${result.created ?? 0} 条，更新 ${result.updated ?? 0} 条`
+        : `${getLabel(type)} 同步失败：${result.errors?.join('；') || '未知错误'}`
       
       await notificationApi.create({
         title,
@@ -324,9 +314,9 @@ export default function DataImport() {
         const errors = data.errors || []
         const success = errors.length === 0
         if (errors.length > 0) {
-          message.warning(`${SYNC_TYPE_LABELS[type]} 同步完成，但有 ${errors.length} 条错误`)
+          message.warning(`${getLabel(type)} 同步完成，但有 ${errors.length} 条错误`)
         } else {
-          message.success(`${SYNC_TYPE_LABELS[type]} 同步完成：新增 ${data.created ?? 0}，更新 ${data.updated ?? 0}`)
+          message.success(`${getLabel(type)} 同步完成：新增 ${data.created ?? 0}，更新 ${data.updated ?? 0}`)
         }
         // 创建通知
         await createSyncNotification(type, data, success)
@@ -334,7 +324,7 @@ export default function DataImport() {
         if (success) {
           antNotification.success({
             message: '同步完成',
-            description: `${SYNC_TYPE_LABELS[type]} 同步已完成，请查看顶部栏通知`,
+            description: `${getLabel(type)} 同步已完成，请查看顶部栏通知`,
             placement: 'topRight',
             duration: 4,
           })
@@ -343,7 +333,7 @@ export default function DataImport() {
       }
 
       // 轮询任务状态
-      message.info(`${SYNC_TYPE_LABELS[type]} 同步任务已提交...`)
+      message.info(`${getLabel(type)} 同步任务已提交...`)
       const pollTask = async () => {
         try {
           const taskRes: any = await importExportApi.getSyncTask(taskId)
@@ -365,13 +355,13 @@ export default function DataImport() {
           
           let success = false
           if (task.status === 'failed') {
-            message.error(`${SYNC_TYPE_LABELS[type]} 同步失败: ${task.message}`)
+            message.error(`${getLabel(type)} 同步失败: ${task.message}`)
             success = false
           } else if (task.failed_count > 0) {
-            message.warning(`${SYNC_TYPE_LABELS[type]} 同步完成，但有 ${task.failed_count} 条错误`)
+            message.warning(`${getLabel(type)} 同步完成，但有 ${task.failed_count} 条错误`)
             success = true
           } else {
-            message.success(`${SYNC_TYPE_LABELS[type]} 同步完成：新增 ${task.created_count ?? 0}，更新 ${task.updated_count ?? 0}`)
+            message.success(`${getLabel(type)} 同步完成：新增 ${task.created_count ?? 0}，更新 ${task.updated_count ?? 0}`)
             success = true
           }
           
@@ -381,7 +371,7 @@ export default function DataImport() {
           if (success) {
             antNotification.success({
               message: '同步完成',
-              description: `${SYNC_TYPE_LABELS[type]} 同步已完成，请查看顶部栏通知`,
+              description: `${getLabel(type)} 同步已完成，请查看顶部栏通知`,
               placement: 'topRight',
               duration: 4,
             })
@@ -413,7 +403,7 @@ export default function DataImport() {
         return
       }
       message.info('全量同步任务已提交...')
-      const allTypes: SyncType[] = ['orders', 'order_details', 'materials', 'purchase_orders', 'customers', 'suppliers', 'materials_masterdata', 'skus', 'products', 'warehouses', 'processes', 'organizations', 'positions', 'employees', 'purchase_invoices', 'quality_issues']
+      const allTypes: string[] = Object.keys(configStatus?.types || {})
       allTypes.forEach(t => setSyncLoading(prev => ({ ...prev, [t]: true })))
 
       const pollTask = async () => {
@@ -591,205 +581,17 @@ export default function DataImport() {
             <div style={{ marginBottom: 8, fontSize: 12, color: '#64748b' }}>
               <ClockCircleOutlined /> 同步时间: {result.timestamp}
             </div>
-            <SyncResultCard result={result} type={type} />
+            <SyncResultCard result={result} type={type} label={getLabel(type)} />
           </div>
         )}
       </Card>
     )
   }
 
-  const items = [
-    {
-      key: 'orders',
-      label: <span>订单数据 {syncResults.orders && <Badge dot status={syncResults.orders.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('orders', 'ERP 同步（主路）')}
-          <Card size="small" title="Excel 导入（备份）">
-            <p style={{ color: '#94a3b8', fontSize: 11, marginBottom: 12 }}>
-              当 ERP 同步不可用时，通过 Excel 文件导入订单。
-              必填字段: order_no, line_no, customer, product_code, product_name, order_qty, promised_date, planned_start_date, owner
-            </p>
-            <Space>
-              <Upload {...uploadProps('orders')}>
-                <Button icon={<UploadOutlined />}>选择 Excel/CSV 文件</Button>
-              </Upload>
-              <Button icon={<FileExcelOutlined />} onClick={() => downloadTemplate('orders')}>下载模板</Button>
-            </Space>
-          </Card>
-        </Space>
-      ),
-    },
-    {
-      key: 'order_details',
-      label: <span>订单明细 {syncResults['order_details'] && <Badge dot status={syncResults['order_details']?.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('order_details', 'ERP 同步（主路）')}
-        </Space>
-      ),
-    },
-    {
-      key: 'materials',
-      label: <span>物料需求 {syncResults.materials && <Badge dot status={syncResults.materials.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('materials', 'ERP 同步（主路）')}
-          <Card size="small" title="Excel 导入（备份）">
-            <p style={{ color: '#94a3b8', fontSize: 11, marginBottom: 12 }}>
-              必填字段: order_no, line_no, material_code, material_name, req_qty, req_date
-            </p>
-            <Space>
-              <Upload {...uploadProps('materials')}>
-                <Button icon={<UploadOutlined />}>选择 Excel/CSV 文件</Button>
-              </Upload>
-              <Button icon={<FileExcelOutlined />} onClick={() => downloadTemplate('materials')}>下载模板</Button>
-            </Space>
-          </Card>
-        </Space>
-      ),
-    },
-    {
-      key: 'purchase_orders',
-      label: <span>采购订单 {syncResults['purchase_orders'] && <Badge dot status={syncResults['purchase_orders']?.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('purchase_orders', 'SRM 同步（主路）')}
-          <Card size="small" title="Excel 导入（备份）">
-            <p style={{ color: '#94a3b8', fontSize: 11, marginBottom: 12 }}>
-              必填字段: po_no, material_code, supplier_code, supplier_name, po_qty, po_status, eta, owner
-            </p>
-            <Space>
-              <Upload {...uploadProps('purchase_orders')}>
-                <Button icon={<UploadOutlined />}>选择 Excel/CSV 文件</Button>
-              </Upload>
-              <Button icon={<FileExcelOutlined />} onClick={() => downloadTemplate('purchase_orders')}>下载模板</Button>
-            </Space>
-          </Card>
-        </Space>
-      ),
-    },
-    {
-      key: 'customers',
-      label: <span>客户 {syncResults.customers && <Badge dot status={syncResults.customers.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('customers', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'suppliers',
-      label: <span>供应商 {syncResults.suppliers && <Badge dot status={syncResults.suppliers.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('suppliers', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'materials_masterdata',
-      label: <span>物料 {syncResults['materials_masterdata'] && <Badge dot status={syncResults['materials_masterdata']?.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('materials_masterdata', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'skus',
-      label: <span>SKU {syncResults.skus && <Badge dot status={syncResults.skus.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('skus', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'products',
-      label: <span>产品 {syncResults.products && <Badge dot status={syncResults.products.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('products', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'warehouses',
-      label: <span>仓库 {syncResults.warehouses && <Badge dot status={syncResults.warehouses.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('warehouses', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'processes',
-      label: <span>工序 {syncResults.processes && <Badge dot status={syncResults.processes.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('processes', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'organizations',
-      label: <span>组织 {syncResults.organizations && <Badge dot status={syncResults.organizations.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('organizations', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'positions',
-      label: <span>岗位 {syncResults.positions && <Badge dot status={syncResults.positions.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="info" showIcon icon={<InfoCircleOutlined />}
-            message="岗位同步会自动创建对应的系统角色"
-            description="同步岗位时，系统会根据岗位名称自动匹配权限分类并创建角色，岗位与角色自动关联。人员同步时，系统用户将通过岗位ID获取对应的角色权限。"
-            style={{ marginBottom: 0 }}
-          />
-          {renderSyncCard('positions', 'OA/ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'employees',
-      label: <span>人员 {syncResults.employees && <Badge dot status={syncResults.employees.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Alert
-            type="info" showIcon icon={<InfoCircleOutlined />}
-            message="人员同步会自动创建系统用户并分配岗位角色"
-            description="同步人员时，系统会根据员工的岗位ID自动匹配对应角色，并创建或更新系统用户。请确保先同步岗位数据，再同步人员数据。"
-            style={{ marginBottom: 0 }}
-          />
-          {renderSyncCard('employees', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'purchase_invoices',
-      label: <span>采购开票 {syncResults['purchase_invoices'] && <Badge dot status={syncResults['purchase_invoices']?.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('purchase_invoices', 'ERP 同步')}
-        </Space>
-      ),
-    },
-    {
-      key: 'quality_issues',
-      label: <span>品质异常 {syncResults['quality_issues'] && <Badge dot status={syncResults['quality_issues']?.errors?.length ? 'warning' : 'success'} />}</span>,
-      children: (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          {renderSyncCard('quality_issues', 'ERP 同步')}
-        </Space>
-      ),
-    },
-  ]
+  // 当前选中类型的配置
+  const selectedCfg = selectedType ? configStatus?.types?.[selectedType] : null
+  const selectedAlert = selectedType ? TYPE_ALERTS[selectedType] : null
+  const selectedExcelFields = selectedType ? EXCEL_IMPORT_TYPES[selectedType] : null
 
   return (
     <div>
@@ -840,14 +642,84 @@ export default function DataImport() {
 
       <Spin spinning={configLoading} tip="加载配置状态...">
         <div className="card-modern" style={{ padding: '20px 24px' }}>
-          <Tabs activeKey={activeTab} onChange={setActiveTab} items={items} />
+          {/* 数据类型选择 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: '#475569', whiteSpace: 'nowrap' }}>
+              数据类型:
+            </span>
+            <Select
+              value={selectedType || undefined}
+              onChange={v => setSelectedType(v)}
+              placeholder="选择数据类型"
+              showSearch
+              optionFilterProp="label"
+              style={{ minWidth: 220 }}
+              options={Object.entries(configStatus?.types || {}).map(([k, v]) => ({
+                value: k,
+                label: v.label,
+              }))}
+            />
+            {selectedCfg && (
+              <Space size={4}>
+                {selectedCfg.has_sql ? (
+                  <Tag color="success" style={{ margin: 0 }}><CheckCircleOutlined /> SQL</Tag>
+                ) : (
+                  <Tag color="warning" style={{ margin: 0 }}><WarningOutlined /> SQL未配置</Tag>
+                )}
+                {selectedCfg.has_mapping ? (
+                  <Tag color="success" style={{ margin: 0 }}><CheckCircleOutlined /> 映射</Tag>
+                ) : (
+                  <Tag color="default" style={{ margin: 0 }}><WarningOutlined /> 映射未配置</Tag>
+                )}
+                {!selectedCfg.is_active && (
+                  <Tag color="error" style={{ margin: 0 }}>已禁用</Tag>
+                )}
+              </Space>
+            )}
+          </div>
+
+          {/* 选中类型的内容 */}
+          {selectedType && selectedCfg ? (
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              {selectedAlert && (
+                <Alert
+                  type="info" showIcon icon={<InfoCircleOutlined />}
+                  message={selectedAlert.message}
+                  description={selectedAlert.description}
+                  style={{ marginBottom: 0 }}
+                />
+              )}
+              {renderSyncCard(selectedType, 'ERP 同步')}
+              {selectedExcelFields && (
+                <Card size="small" title="Excel 导入（备份）">
+                  <p style={{ color: '#94a3b8', fontSize: 11, marginBottom: 12 }}>
+                    必填字段: {selectedExcelFields}
+                  </p>
+                  <Space>
+                    <Upload {...uploadProps(selectedType)}>
+                      <Button icon={<UploadOutlined />}>选择 Excel/CSV 文件</Button>
+                    </Upload>
+                    <Button icon={<FileExcelOutlined />} onClick={() => downloadTemplate(selectedType)}>下载模板</Button>
+                  </Space>
+                </Card>
+              )}
+            </Space>
+          ) : (
+            !configLoading && (
+              <div style={{ textAlign: 'center', padding: '40px 0', color: '#94a3b8' }}>
+                {configStatus && Object.keys(configStatus.types).length === 0
+                  ? '暂无已配置的同步类型，请先到「同步SQL配置」中添加'
+                  : '请选择数据类型'}
+              </div>
+            )
+          )}
         </div>
       </Spin>
 
       {importResult && (
         <div className="card-modern mt-4" style={{ padding: '20px 24px' }}>
           <h3 className="text-sm font-semibold mb-3" style={{ color: '#475569' }}>
-            导入结果 - <Tag color="blue">{SYNC_TYPE_LABELS[importResult.type] || importResult.type}</Tag>
+            导入结果 - <Tag color="blue">{getLabel(importResult.type)}</Tag>
           </h3>
           <Space direction="vertical" size="small" style={{ width: '100%' }}>
             <div>
@@ -887,7 +759,7 @@ export default function DataImport() {
               value={syncLogFilter || undefined}
               onChange={v => setSyncLogFilter(v || '')}
               style={{ width: 140 }}
-              options={Object.entries(SYNC_TYPE_LABELS).map(([k, v]) => ({ value: k, label: v }))}
+              options={Object.entries(configStatus?.types || {}).map(([k, v]) => ({ value: k, label: v.label }))}
             />
             <Button size="small" icon={<ReloadOutlined />} onClick={fetchSyncLogs} loading={syncLogsLoading}>刷新</Button>
           </Space>
@@ -902,7 +774,7 @@ export default function DataImport() {
           columns={[
             {
               title: '类型', dataIndex: 'sync_type', width: 100,
-              render: (v: string) => <Tag color="blue" style={{ fontSize: 11 }}>{SYNC_TYPE_LABELS[v] || v}</Tag>,
+              render: (v: string) => <Tag color="blue" style={{ fontSize: 11 }}>{getLabel(v)}</Tag>,
             },
             {
               title: '触发', dataIndex: 'trigger_mode', width: 70,

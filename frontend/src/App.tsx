@@ -24,7 +24,7 @@ import ProductSamples from './pages/ExceptionCenter/ProductSamples/index'
 import ClosureTracking from './pages/ExceptionCenter/ClosureTracking/index'
 import DataImport from './pages/BasicDataCenter/DataIntegration/index'
 import { RiskRules, InspectionRules, NodeStandards, ResponsibilityMap, StatusDictionary, OrderStandards, WorkInstructions } from './pages/RulesCenter'
-import { UserManagement, AuditLog, SyncSqlConfig, FeedbackManagement, FileManagement, AnnouncementManagement, RoleManagement } from './pages/BasicDataCenter'
+import { UserManagement, AuditLog, SyncSqlConfig, FeedbackManagement, FileManagement, AnnouncementManagement, RoleManagement, DataSupply } from './pages/BasicDataCenter'
 import Customers from './pages/BasicDataCenter/Customers'
 import Suppliers from './pages/BasicDataCenter/Suppliers'
 import Materials from './pages/BasicDataCenter/Materials'
@@ -181,6 +181,7 @@ export default function App() {
           <Route path="basicdata/employees" element={<Employees />} key="employees" />
           <Route path="basicdata/feedback" element={<FeedbackManagement />} key="feedback" />
           <Route path="basicdata/files" element={<FileManagement />} key="files" />
+          <Route path="basicdata/data-supply" element={<DataSupply />} key="data-supply" />
           <Route path="announcements" element={<AnnouncementManagement />} key="announcements" />
         </Route>
       </Routes>

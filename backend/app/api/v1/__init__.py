@@ -61,6 +61,12 @@ api_router.include_router(basicdata.announcements_router, prefix="/basicdata/ann
 api_router.include_router(basicdata.notifications_router, prefix="/notifications", tags=["通知中心"])
 api_router.include_router(basicdata.share_router, prefix="/share", tags=["页面分享"])
 
+# 权限定义
+api_router.include_router(basicdata.permissions_router, prefix="/permissions", tags=["权限定义"])
+
+# 数据供给
+api_router.include_router(basicdata.data_supply_router, prefix="/basicdata/data-supply", tags=["数据供给"])
+
 # Common files and assistant
 api_router.include_router(common.files_router, prefix="/files", tags=["文件"])
 api_router.include_router(assistant.assistant_router, prefix="/assistant", tags=["智能助手"])

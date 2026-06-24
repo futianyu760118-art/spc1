@@ -84,6 +84,8 @@ class SaleOrderLine(Base):
     promised_date = Column(Date)
     planned_start_date = Column(Date)
     batch_no = Column(String(128))
+    bom_no = Column(String(64), comment="BOM编号")
+    bom_id = Column(Integer, comment="BOM ID")
     status = Column(String(32), nullable=False, default="open")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

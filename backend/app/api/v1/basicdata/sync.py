@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 VALID_SYNC_TYPES = [
     "orders", "order_details", "materials", "purchase_orders", "customers", "suppliers",
     "materials_masterdata", "skus", "products", "warehouses", "processes",
-    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "quality_issues", "all",
+    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "quality_issues", "mrp_plan_orders", "all",
 ]
 
 
@@ -87,10 +87,17 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
                 "employee_organizations": lambda: service.sync_employee_organizations(sync_params.get("since"), custom_params),
                 "purchase_invoices": lambda: service.sync_purchase_invoices(sync_params.get("since"), custom_params),
                 "quality_issues": lambda: service.sync_quality_issues(sync_params.get("since"), custom_params),
+                "mrp_plan_orders": lambda: service.sync_mrp_plan_orders(sync_params.get("since"), custom_params),
                 "all": lambda: service.sync_all(sync_params.get("since"), custom_params),
             }
 
-            result = await type_map[sync_type]()
+            handler = type_map.get(sync_type)
+            if handler is None:
+                raise ValueError(
+                    f"同步类型 '{sync_type}' 已在SQL配置中定义，但尚未实现对应的同步处理器。"
+                    f"请仅用于配置展示，或联系开发人员补充该类型的同步逻辑。"
+                )
+            result = await handler()
 
             # 3. 更新 SyncLog 为 success
             now = datetime.now()
@@ -132,7 +139,11 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
             await db.commit()
 
             # 4. 更新 SyncSqlConfig
-            sync_types_to_update = [t for t in VALID_SYNC_TYPES if t != "all"] if sync_type == "all" else [sync_type]
+            if sync_type == "all":
+                cfg_types_result = await db.execute(select(SyncSqlConfig.sync_type))
+                sync_types_to_update = [row[0] for row in cfg_types_result.all()]
+            else:
+                sync_types_to_update = [sync_type]
             for st in sync_types_to_update:
                 cfg_result = await db.execute(select(SyncSqlConfig).where(SyncSqlConfig.sync_type == st))
                 cfg = cfg_result.scalar_one_or_none()
@@ -169,44 +180,24 @@ async def get_sync_config_status(
 ):
     result = await db.execute(select(SyncSqlConfig))
     configs = result.scalars().all()
-    config_map = {c.sync_type: c for c in configs}
 
-    type_labels = {
-        "orders": "销售订单",
-        "order_details": "订单明细",
-        "materials": "物料需求",
-        "purchase_orders": "采购订单",
-        "customers": "客户",
-        "suppliers": "供应商",
-        "materials_masterdata": "物料",
-        "skus": "SKU",
-        "products": "产品",
-        "warehouses": "仓库",
-        "processes": "工序",
-        "organizations": "组织",
-        "employees": "人员",
-        "employee_organizations": "员工部门关系",
-        "purchase_invoices": "采购开票",
-        "quality_issues": "品质异常",
-    }
-    type_labels["positions"] = "岗位"
     status = {}
-    for sync_type, label in type_labels.items():
-        c = config_map.get(sync_type)
+    for c in configs:
         condition_params = []
-        if c and c.condition_params_json:
+        if c.condition_params_json:
             try:
                 condition_params = json.loads(c.condition_params_json)
             except json.JSONDecodeError:
                 pass
 
-        status[sync_type] = {
-            "label": label,
-            "configured": c is not None,
-            "is_active": c.is_active if c else False,
-            "has_sql": bool(c.sql_text.strip()) if c and c.sql_text else False,
-            "has_mapping": bool(c.field_mapping_json and c.field_mapping_json.strip() not in ("", "{}")) if c else False,
+        status[c.sync_type] = {
+            "label": c.description or c.sync_type,
+            "configured": True,
+            "is_active": c.is_active,
+            "has_sql": bool(c.sql_text and c.sql_text.strip()),
+            "has_mapping": bool(c.field_mapping_json and c.field_mapping_json.strip() not in ("", "{}")),
             "condition_params": condition_params,
+            "sync_enabled": c.sync_enabled,
         }
 
     return ResponseModel(data={
@@ -233,12 +224,17 @@ async def trigger_sync(
             data={"enabled": False},
         )
 
+    # 允许内置类型或在 sync_sql_config 中已配置的类型
     if sync_type not in VALID_SYNC_TYPES:
-        return ResponseModel(
-            code=400,
-            message=f"不支持的同步类型: {sync_type}，可选: {', '.join(VALID_SYNC_TYPES)}",
-            data={},
+        cfg_result = await db.execute(
+            select(SyncSqlConfig.sync_type).where(SyncSqlConfig.sync_type == sync_type)
         )
+        if not cfg_result.scalar_one_or_none():
+            return ResponseModel(
+                code=400,
+                message=f"不支持的同步类型: {sync_type}，请先在「同步SQL配置」中配置",
+                data={},
+            )
 
     # 构建同步参数
     sync_params: dict = {}
@@ -348,17 +344,11 @@ async def get_sync_status(
     db: AsyncSession = Depends(get_db),
 ):
     """查询各类数据最近一次同步状态（从 SyncLog 读取）"""
-    type_labels = {
-        "orders": "销售订单", "order_details": "订单明细", "materials": "物料需求", "purchase_orders": "采购订单",
-        "customers": "客户", "suppliers": "供应商", "materials_masterdata": "物料",
-        "skus": "SKU", "products": "产品", "warehouses": "仓库",
-        "processes": "工序", "organizations": "组织", "employees": "人员",
-        "employee_organizations": "员工部门关系",
-        "purchase_invoices": "采购开票",
-    }
-    type_labels["positions"] = "岗位"
+    cfg_result = await db.execute(select(SyncSqlConfig.sync_type))
+    configured_types = [row[0] for row in cfg_result.all()]
+
     last_sync = {}
-    for st in type_labels:
+    for st in configured_types:
         result = await db.execute(
             select(SyncLog)
             .where(SyncLog.sync_type == st, SyncLog.status.in_(["success", "failed"]))

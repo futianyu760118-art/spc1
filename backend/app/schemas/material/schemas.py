@@ -243,6 +243,7 @@ class KitAnalysisMaterialItem(BaseModel):
     material_property: Optional[int] = None
     material_property_label: Optional[str] = None
     material_type: Optional[str] = None
+    unit_name: Optional[str] = None
     supplier_name: Optional[str] = None
     order_qty: Optional[float] = None
     shortage_qty: Optional[float] = None
@@ -260,6 +261,8 @@ class KitAnalysisMaterialItem(BaseModel):
     is_stagnant: bool = False
     stagnant_qty: Optional[float] = None
     is_closed: int = 0
+    bill_type: Optional[int] = None
+    bill_type_label: Optional[str] = None
 
 
 class KitAnalysisItem(BaseModel):
@@ -373,21 +376,22 @@ class SupplierMessageOut(BaseModel):
 # ============ MRP计划订单 ============
 
 class MrpPlanOrderOut(BaseModel):
-    id: int
-    fbill_no: str
-    fmaterial_id: Optional[int] = None
+    """MRP计划订单 — 销售订单ID + 物料ID 联合主键"""
+    sale_order_id: int
+    material_id: str
+    sale_order_no: Optional[str] = None
     material_code: str
     material_name: Optional[str] = None
-    fplan_qty: Optional[float] = None
-    fplan_start_date: Optional[date] = None
-    fplan_finish_date: Optional[date] = None
-    fneed_date: Optional[date] = None
-    forder_type: Optional[str] = None
-    fstatus: int
-    fsupply_org: Optional[str] = None
-    frequire_org: Optional[str] = None
-    fsource_bill_no: Optional[str] = None
-    data_source: Optional[str] = None
+    material_property: Optional[int] = None
+    material_type: Optional[str] = None
+    unit_id: Optional[str] = None
+    unit_name: Optional[str] = None
+    base_plan_qty: Optional[float] = None
+    mrp_run_time: Optional[datetime] = None
+    need_date: Optional[date] = None
+    is_closed: int = 0
+    close_type: Optional[int] = None
+    bill_type: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

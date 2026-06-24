@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Table, Tag, Button, Modal, Form, Input, Space, message, Popconfirm, Row, Col, Checkbox, Tree, Radio, Divider, Alert } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, SafetyOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { userApi } from '../../services/api'
 import { useAuthStore } from '../../store/auth'
+import { usePermissionStore, PermNode } from '../../store/permission'
 
 const roleColorMap: Record<string, string> = {
   admin: 'purple',
@@ -19,7 +20,17 @@ interface PermTreeNode {
   children?: PermTreeNode[]
 }
 
-const PERMISSION_TREE: PermTreeNode[] = [
+// 将 API 返回的 PermNode 转换为 PermTreeNode
+function permNodeToTreeNode(nodes: PermNode[]): PermTreeNode[] {
+  return nodes.map(node => ({
+    key: node.code,
+    label: node.name,
+    children: node.children?.length ? permNodeToTreeNode(node.children) : undefined,
+  }))
+}
+
+// 保留硬编码作为 fallback
+const FALLBACK_PERMISSION_TREE: PermTreeNode[] = [
   { key: 'dashboard', label: '供应链驾驶舱' },
   {
     key: 'topbar', label: '顶栏功能',
@@ -125,8 +136,8 @@ function flattenAll(nodes: PermTreeNode[]): string[] {
   return result
 }
 
-const ALL_PERM_KEYS = flattenAll(PERMISSION_TREE)
-const ALL_LEAF_KEYS = flattenLeaves(PERMISSION_TREE)
+const ALL_PERM_KEYS = flattenAll(FALLBACK_PERMISSION_TREE)
+const ALL_LEAF_KEYS = flattenLeaves(FALLBACK_PERMISSION_TREE)
 
 function buildTreeData(nodes: PermTreeNode[]): any[] {
   return nodes.map(n => ({
@@ -135,7 +146,7 @@ function buildTreeData(nodes: PermTreeNode[]): any[] {
     children: n.children && n.children.length > 0 ? buildTreeData(n.children) : undefined,
   }))
 }
-const PERM_TREE_DATA = buildTreeData(PERMISSION_TREE)
+const FALLBACK_PERM_TREE_DATA = buildTreeData(FALLBACK_PERMISSION_TREE)
 
 const PERMISSION_ACTIONS = [
   { key: 'create', label: '新增' },
@@ -157,10 +168,12 @@ interface RoleItem {
   position_name: string | null
 }
 
-function PermissionMatrix({ value, onChange }: { value: Record<string, string[]>; onChange: (v: Record<string, string[]>) => void }) {
+function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<string, string[]>; onChange: (v: Record<string, string[]>) => void; permissionTree: PermTreeNode[] }) {
+  const currentAllPermKeys = useMemo(() => flattenAll(permissionTree), [permissionTree])
+  const currentAllLeafKeys = useMemo(() => flattenLeaves(permissionTree), [permissionTree])
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {}
-    PERMISSION_TREE.forEach(n => { if (n.children) init[n.key] = true })
+    permissionTree.forEach(n => { if (n.children) init[n.key] = true })
     return init
   })
 
@@ -203,14 +216,14 @@ function PermissionMatrix({ value, onChange }: { value: Record<string, string[]>
 
   const toggleCol = (action: string, checked: boolean) => {
     const next = { ...value }
-    ALL_LEAF_KEYS.forEach(k => {
+    currentAllLeafKeys.forEach(k => {
       next[k] = checked ? [...new Set([...(next[k] || []), action])] : (next[k] || []).filter(a => a !== action)
     })
     onChange(next)
   }
 
-  const colAllChecked = (action: string) => ALL_LEAF_KEYS.every(k => (value[k] || []).includes(action))
-  const colSomeChecked = (action: string) => ALL_LEAF_KEYS.some(k => (value[k] || []).includes(action))
+  const colAllChecked = (action: string) => currentAllLeafKeys.every(k => (value[k] || []).includes(action))
+  const colSomeChecked = (action: string) => currentAllLeafKeys.some(k => (value[k] || []).includes(action))
 
   const renderRow = (node: PermTreeNode, depth: number) => {
     const hasChildren = node.children && node.children.length > 0
@@ -272,7 +285,7 @@ function PermissionMatrix({ value, onChange }: { value: Record<string, string[]>
         </tr>
       </thead>
       <tbody>
-        {PERMISSION_TREE.map(node => renderRow(node, 0))}
+        {permissionTree.map(node => renderRow(node, 0))}
       </tbody>
     </table>
   )
@@ -283,6 +296,27 @@ export default function RoleManagement() {
   const hasRolesRead = useAuthStore(s => s.hasPermission('roles', 'read'))
   const hasRolesCreate = useAuthStore(s => s.hasPermission('roles', 'create'))
   const hasRolesDelete = useAuthStore(s => s.hasPermission('roles', 'delete'))
+  const { tree: permTree, loaded: permLoaded, fetchTree } = usePermissionStore()
+  // 动态权限树：优先 API，fallback 硬编码
+  const currentPermissionTree = useMemo(() => {
+    if (permLoaded && permTree.length > 0) {
+      return permNodeToTreeNode(permTree)
+    }
+    return FALLBACK_PERMISSION_TREE
+  }, [permLoaded, permTree])
+  const currentPermTreeData = useMemo(() => {
+    if (permLoaded && permTree.length > 0) {
+      return buildTreeData(currentPermissionTree)
+    }
+    return FALLBACK_PERM_TREE_DATA
+  }, [permLoaded, permTree, currentPermissionTree])
+  const currentAllLeafKeys = useMemo(() => flattenLeaves(currentPermissionTree), [currentPermissionTree])
+  const currentAllPermKeys = useMemo(() => flattenAll(currentPermissionTree), [currentPermissionTree])
+
+  // 加载权限树
+  useEffect(() => {
+    if (!permLoaded) fetchTree()
+  }, [permLoaded, fetchTree])
   const [roles, setRoles] = useState<RoleItem[]>([])
   const [roleLoading, setRoleLoading] = useState(false)
   const [rolePage, setRolePage] = useState(1)
@@ -386,7 +420,7 @@ export default function RoleManagement() {
   }
 
   const handleBatchGrant = async () => {
-    const leafSet = new Set(ALL_LEAF_KEYS)
+    const leafSet = new Set(currentAllLeafKeys)
     const targetKeys = bgKeys.filter(k => leafSet.has(k))
     if (targetKeys.length === 0) {
       message.warning('请选择至少一个权限项（具体子菜单）'); return
@@ -417,7 +451,7 @@ export default function RoleManagement() {
   const getPermSummary = (permissions: Record<string, string[]>) => {
     const entries = Object.entries(permissions).filter(([, v]) => v && v.length > 0)
     if (entries.length === 0) return <Tag>无权限</Tag>
-    if (entries.length >= ALL_PERM_KEYS.length) return <Tag color="green">全部权限</Tag>
+    if (entries.length >= currentAllPermKeys.length) return <Tag color="green">全部权限</Tag>
     return <Tag color="blue">{entries.length} 个模块</Tag>
   }
 
@@ -526,7 +560,7 @@ export default function RoleManagement() {
         </Form>
         <div style={{ marginTop: 8, padding: '12px', border: '1px solid #f0f0f0', borderRadius: 6, background: '#fafafa' }}>
           <div style={{ fontWeight: 500, marginBottom: 8 }}>权限配置</div>
-          <PermissionMatrix value={rolePermissions} onChange={setRolePermissions} />
+          <PermissionMatrix value={rolePermissions} onChange={setRolePermissions} permissionTree={currentPermissionTree} />
         </div>
       </Modal>
 
@@ -562,7 +596,7 @@ export default function RoleManagement() {
                 checkable
                 selectable={false}
                 defaultExpandAll
-                treeData={PERM_TREE_DATA}
+                treeData={currentPermTreeData}
                 checkedKeys={bgKeys}
                 onCheck={(checked: any) => {
                   const keys = Array.isArray(checked) ? checked : checked.checked

@@ -83,7 +83,17 @@ class RoleChecker:
         return payload
 
 
-# 分享路径 → 允许访问的权限资源映射
+async def _get_share_path_to_resource(db: AsyncSession) -> dict[str, str]:
+    """从 sys_permission 表动态获取 route_path → code 映射，替代硬编码的 _SHARE_PATH_TO_RESOURCE"""
+    from app.models.basicdata.permission import SysPermission
+    result = await db.execute(
+        select(SysPermission.code, SysPermission.route_path)
+        .where(SysPermission.route_path.isnot(None), SysPermission.is_active == True)
+    )
+    return {row[1]: row[0] for row in result.all() if row[1]}
+
+
+# 保留硬编码映射作为 fallback（数据库不可用时使用）
 _SHARE_PATH_TO_RESOURCE: dict[str, str] = {
     "/dashboard": "dashboard",
     "/orders": "orders",
@@ -245,11 +255,16 @@ class PermissionChecker:
         if is_share:
             share_target_path = payload.get("share_target_path", "")
             share_permissions = payload.get("share_permissions", ["read"])
-            allowed_resource = _SHARE_PATH_TO_RESOURCE.get(share_target_path)
+            # 优先从数据库动态获取映射，fallback 到硬编码
+            try:
+                path_to_resource = await _get_share_path_to_resource(db)
+            except Exception:
+                path_to_resource = _SHARE_PATH_TO_RESOURCE
+            allowed_resource = path_to_resource.get(share_target_path)
             # 动态路由前缀匹配
             if not allowed_resource and "/:" in share_target_path:
                 prefix = share_target_path.split("/:")[0]
-                allowed_resource = _SHARE_PATH_TO_RESOURCE.get(prefix)
+                allowed_resource = path_to_resource.get(prefix)
             if allowed_resource:
                 # 检查请求的资源是否属于分享目标页面
                 if self.resource == allowed_resource or self.resource.split(".")[0] == allowed_resource.split(".")[0]:

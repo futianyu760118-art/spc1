@@ -46,6 +46,7 @@ class SyncScheduler:
             "employees": "sync_employees",
             "purchase_invoices": "sync_purchase_invoices",
             "quality_issues": "sync_quality_issues",
+            "mrp_plan_orders": "sync_mrp_plan_orders",
         }
 
     async def _load_sync_configs(self, db: AsyncSession) -> list[SyncSqlConfig]:

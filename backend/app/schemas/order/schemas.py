@@ -70,6 +70,8 @@ class SaleOrderLineOut(BaseModel):
     promised_date: Optional[date] = None
     planned_start_date: Optional[date] = None
     batch_no: Optional[str] = None
+    bom_no: Optional[str] = None
+    bom_id: Optional[int] = None
     status: str = "open"
 
     model_config = {"from_attributes": True}
@@ -127,6 +129,8 @@ class SaleOrderLineCreate(BaseModel):
     promised_date: Optional[date] = None
     planned_start_date: Optional[date] = None
     batch_no: Optional[str] = None
+    bom_no: Optional[str] = None
+    bom_id: Optional[int] = None
 
 
 class OrderCreate(BaseModel):

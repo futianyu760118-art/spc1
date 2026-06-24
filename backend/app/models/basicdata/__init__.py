@@ -16,3 +16,5 @@ from app.models.basicdata.position import Position  # noqa: F401
 from app.models.basicdata.user_org_scope import UserOrgScope  # noqa: F401
 from app.models.basicdata.file_asset import FileAsset  # noqa: F401
 from app.models.basicdata.feedback import Feedback  # noqa: F401
+from app.models.basicdata.permission import SysPermission  # noqa: F401
+from app.models.basicdata.data_supply import DataSupplyConfig, DataSupplyApiKey, DataSupplyCallLog  # noqa: F401

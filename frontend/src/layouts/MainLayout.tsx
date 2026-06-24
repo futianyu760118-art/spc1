@@ -33,8 +33,10 @@ import {
   SoundOutlined,
   IdcardOutlined,
   SafetyOutlined,
+  ApiOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
+import { usePermissionStore, PermNode } from '../store/permission'
 import { authApi, notificationApi } from '../services/api'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
@@ -52,6 +54,107 @@ type PermissionAwareItem = {
   children?: PermissionAwareItem[]
 }
 
+// 模块 code → 图标映射（数据库不存储图标，由前端约定）
+const MODULE_ICON_MAP: Record<string, React.ReactNode> = {
+  dashboard: <DashboardOutlined />,
+  topbar: <SettingOutlined />,
+  orders: <FileTextOutlined />,
+  materials: <ExperimentOutlined />,
+  production: <RocketOutlined />,
+  exceptions: <WarningOutlined />,
+  meetings: <TeamOutlined />,
+  npi: <ProjectOutlined />,
+  rules: <ToolOutlined />,
+  basicdata: <DatabaseOutlined />,
+}
+
+// 权限 code → 图标映射（叶子节点图标）
+const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
+  'orders.list': <UnorderedListOutlined />,
+  'orders.run_orders': <RocketOutlined />,
+  'orders.risk_pool': <WarningOutlined />,
+  'materials.purchase_plan': <ShoppingCartOutlined />,
+  'materials.issues': <WarningOutlined />,
+  'materials.long_lead': <ContainerOutlined />,
+  'materials.kit_analysis': <AppstoreOutlined />,
+  'materials.supplier_risk': <AuditOutlined />,
+  'materials.supplier_payment': <AccountBookOutlined />,
+  'production.overview': <DashboardOutlined />,
+  'production.schedule_plans': <ProjectOutlined />,
+  'production.product_process_capacities': <DatabaseOutlined />,
+  'production.front_process': <ContainerOutlined />,
+  'production.smt': <ExperimentOutlined />,
+  'production.lean': <AuditOutlined />,
+  'production.assembly': <ToolOutlined />,
+  'production.packaging': <ContainerOutlined />,
+  'production.exceptions': <WarningOutlined />,
+  'exceptions.pool': <WarningOutlined />,
+  'exceptions.issue_log': <FileTextOutlined />,
+  'exceptions.change_log': <SwapOutlined />,
+  'exceptions.quality': <AuditOutlined />,
+  'exceptions.product_samples': <FileTextOutlined />,
+  'exceptions.closure': <AuditOutlined />,
+  'rules.risk_rules': <SettingOutlined />,
+  'rules.inspection': <AuditOutlined />,
+  'rules.node_standards': <ContainerOutlined />,
+  'rules.order_standards': <FileTextOutlined />,
+  'rules.work_instructions': <AuditOutlined />,
+  'rules.responsibility': <TeamOutlined />,
+  'rules.status_dict': <AppstoreOutlined />,
+  'basicdata.import': <ImportOutlined />,
+  'basicdata.data': <DatabaseOutlined />,
+  'basicdata.data.customers': <UserOutlined />,
+  'basicdata.data.suppliers': <ShoppingCartOutlined />,
+  'basicdata.data.materials': <AppstoreOutlined />,
+  'basicdata.data.skus': <ContainerOutlined />,
+  'basicdata.data.products': <FileTextOutlined />,
+  'basicdata.data.warehouses': <ContainerOutlined />,
+  'basicdata.data.processes': <RocketOutlined />,
+  'basicdata.data.organizations': <TeamOutlined />,
+  'basicdata.data.positions': <IdcardOutlined />,
+  'basicdata.data.employees': <UserOutlined />,
+  'basicdata.feedback': <MessageOutlined />,
+  'basicdata.files': <FolderOpenOutlined />,
+  'basicdata.data_supply': <ApiOutlined />,
+  announcements: <NotificationOutlined />,
+  users: <UserOutlined />,
+  roles: <SafetyOutlined />,
+  audit: <AuditOutlined />,
+  settings: <SwapOutlined />,
+  meetings: <TeamOutlined />,
+  npi: <ProjectOutlined />,
+}
+
+// 从权限树动态生成菜单项
+function buildMenuItemsFromTree(nodes: PermNode[]): PermissionAwareItem[] {
+  return nodes
+    .filter(node => node.code !== 'topbar') // 顶栏功能不在侧边栏显示
+    .map(node => {
+      const hasChildren = node.children && node.children.length > 0
+      const icon = PERMISSION_ICON_MAP[node.code] || MODULE_ICON_MAP[node.module] || <AppstoreOutlined />
+      const key = node.route_path || node.code
+
+      if (hasChildren) {
+        const children = buildMenuItemsFromTree(node.children!)
+        return {
+          key,
+          icon: MODULE_ICON_MAP[node.code] || MODULE_ICON_MAP[node.module] || icon,
+          label: node.name,
+          permission: node.code,
+          children,
+        }
+      }
+
+      return {
+        key,
+        icon,
+        label: node.name,
+        permission: node.code,
+      }
+    })
+}
+
+// 保留硬编码菜单作为 fallback（权限 API 不可用时使用）
 const allMenuItems: PermissionAwareItem[] = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: '供应链驾驶舱', permission: 'dashboard' },
   {
@@ -169,6 +272,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/roles', icon: <SafetyOutlined />, label: '角色管理', permission: 'roles' },
       { key: '/audit', icon: <AuditOutlined />, label: '审计日志', permission: 'audit' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
+      { key: '/basicdata/data-supply', icon: <ApiOutlined />, label: '数据供给', permission: 'basicdata.data_supply' },
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
       { key: '/basicdata/files', icon: <FolderOpenOutlined />, label: '文件管理', permission: 'basicdata.files' },
       { key: '/announcements', icon: <NotificationOutlined />, label: '公告管理', permission: 'announcements' },
@@ -278,6 +382,7 @@ const pathToGroupKey: Record<string, string> = {
   '/sync-config': 'basicdata-center',
   '/basicdata/feedback': 'basicdata-center',
   '/basicdata/files': 'basicdata-center',
+  '/basicdata/data-supply': 'basicdata-center',
   '/announcements': 'basicdata-center',
 }
 
@@ -335,10 +440,12 @@ const pathToPermission: Record<string, string> = {
   '/basicdata/employees': 'basicdata.data',
   '/basicdata/feedback': 'basicdata.feedback',
   '/basicdata/files': 'basicdata.files',
+  '/basicdata/data-supply': 'basicdata.data_supply',
   '/announcements': 'announcements',
 }
 
-function getRequiredPermission(pathname: string): string | undefined {
+function getRequiredPermission(pathname: string, dynamicMap?: Record<string, string>): string | undefined {
+  if (dynamicMap && dynamicMap[pathname]) return dynamicMap[pathname]
   if (pathToPermission[pathname]) return pathToPermission[pathname]
   if (pathname.startsWith('/orders/')) return 'orders.list'
   return undefined
@@ -346,6 +453,7 @@ function getRequiredPermission(pathname: string): string | undefined {
 
 export default function MainLayout() {
   const { currentUser, logout, hasPermission, isSupplierUser, isShareUser, getShareTargetPath, exitShare, originalToken, setAuth } = useAuthStore()
+  const { tree: permTree, loaded: permLoaded, fetchTree, getPathToPermission, getPathToGroupKey } = usePermissionStore()
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
@@ -361,6 +469,37 @@ export default function MainLayout() {
   const [forcePwdForm] = Form.useForm()
   const [forcePwdDismissable, setForcePwdDismissable] = useState(false)
   const toastShown = useRef(false)
+
+  // 加载权限树
+  useEffect(() => {
+    if (originalToken && !permLoaded) {
+      fetchTree()
+    }
+  }, [originalToken, permLoaded, fetchTree])
+
+  // 动态菜单项：优先使用 API 数据，fallback 到硬编码
+  const dynamicMenuItems = useMemo(() => {
+    if (permLoaded && permTree.length > 0) {
+      return buildMenuItemsFromTree(permTree)
+    }
+    return allMenuItems
+  }, [permLoaded, permTree])
+
+  // 动态路径映射
+  const dynamicPathToPermission = useMemo(() => {
+    if (permLoaded && permTree.length > 0) {
+      return getPathToPermission()
+    }
+    return pathToPermission
+  }, [permLoaded, permTree, getPathToPermission])
+
+  const dynamicPathToGroupKey = useMemo(() => {
+    if (permLoaded && permTree.length > 0) {
+      return getPathToGroupKey()
+    }
+    return pathToGroupKey
+  }, [permLoaded, permTree, getPathToGroupKey])
+
   const canUseTopbar = useMemo(() => ({
     share: hasPermission('topbar.share', 'read'),
     feedback: hasPermission('topbar.feedback', 'read'),
@@ -511,22 +650,22 @@ export default function MainLayout() {
     if (isShareUser()) {
       const targetPath = getShareTargetPath()
       if (targetPath) {
-        return toAntdItems(filterMenuByPath(allMenuItems, targetPath, hasPermission))
+        return toAntdItems(filterMenuByPath(dynamicMenuItems, targetPath, hasPermission))
       }
       return []
     }
     if (isSupplierUser()) {
-      return toAntdItems(filterSupplierPortalMenu(allMenuItems, hasPermission))
+      return toAntdItems(filterSupplierPortalMenu(dynamicMenuItems, hasPermission))
     }
-    return toAntdItems(filterMenuByPermission(allMenuItems, hasPermission))
-  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath])
+    return toAntdItems(filterMenuByPermission(dynamicMenuItems, hasPermission))
+  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
 
-  const requiredPermission = getRequiredPermission(location.pathname)
+  const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
   const canViewCurrentPage = !requiredPermission || hasPermission(requiredPermission, 'read')
   const openKeys = useMemo(() => {
-    const gk = pathToGroupKey[location.pathname]
+    const gk = dynamicPathToGroupKey[location.pathname]
     return gk ? [gk] : []
-  }, [location.pathname])
+  }, [location.pathname, dynamicPathToGroupKey])
 
   return (
     <Layout className="min-h-screen" style={{ background: '#f0f4f8' }}>

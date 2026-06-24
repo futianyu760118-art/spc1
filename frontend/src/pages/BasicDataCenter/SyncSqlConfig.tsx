@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Table, Button, Modal, Form, Input, Select, Space, message,
   Popconfirm, Tag, Alert, Divider, Tooltip, Empty, Switch, Row, Col,
+  AutoComplete,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined,
@@ -559,11 +560,14 @@ export default function SyncSqlConfig() {
         <Form form={form} layout="vertical">
           {/* ---- 基本信息 ---- */}
           <div style={{ display: 'flex', gap: 16 }}>
-            <Form.Item name="sync_type" label="同步类型" rules={[{ required: true, message: '选择同步类型' }]} style={{ flex: 1 }}>
-              <Select
-                placeholder="选择同步类型"
+            <Form.Item name="sync_type" label="同步类型" rules={[{ required: true, message: '选择或输入同步类型' }]} style={{ flex: 1 }}>
+              <AutoComplete
+                placeholder="选择或输入同步类型"
                 disabled={!!editingItem}
                 onChange={handleSyncTypeChange}
+                filterOption={(input, option) =>
+                  (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                }
                 options={[
                   { value: 'orders', label: '订单数据' },
                   { value: 'order_details', label: '订单明细数据' },

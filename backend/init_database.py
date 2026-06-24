@@ -337,6 +337,28 @@ class DatabaseInitializer:
             except Exception as e:
                 print(f"  Position indexes skipped: {e}")
 
+    async def rebuild_mrp_plan_order(self):
+        """按 PRD 重建 mrp_plan_order 表（销售订单ID + 物料ID 联合主键）。
+        若检测到旧结构（存在自增 id 列）则 DROP 后按 ORM 模型重建；
+        新结构或不存在时由 create_all / checkfirst 保证幂等。
+        """
+        print("Checking mrp_plan_order structure...")
+        async with self.engine.begin() as conn:
+            result = await conn.execute(text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'mrp_plan_order' AND column_name = 'id'
+            """))
+            is_legacy = result.fetchone() is not None
+            if is_legacy:
+                await conn.execute(text("DROP TABLE IF EXISTS mrp_plan_order CASCADE"))
+                print("  Dropped legacy mrp_plan_order (rebuilding from model)")
+
+        mrp_table = Base.metadata.tables.get('mrp_plan_order')
+        if mrp_table is not None:
+            async with self.engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all, tables=[mrp_table])
+            print("  mrp_plan_order aligned (composite PK: sale_order_id + material_id)")
+
     async def backfill_sale_order_id(self):
         """Backfill sale_order_id on sale_order_line by matching order_no"""
         print("Backfilling sale_order_id on sale_order_line...")
@@ -404,6 +426,7 @@ class DatabaseInitializer:
                             "basicdata.data": ["create", "read", "update", "delete", "import"],
                             "basicdata.feedback": ["create", "read", "update", "delete"],
                             "basicdata.files": ["read", "delete"],
+                            "basicdata.data_supply": ["create", "read", "update", "delete"],
                             "announcements": ["create", "read", "update", "delete"],
                             "users": ["create", "read", "update", "delete"],
                             "audit": ["read"],
@@ -1215,27 +1238,30 @@ ORDER BY po.FBillNo
                     ),
                     SyncSqlConfig(
                         sync_type="mrp_plan_orders",
-                        description="MRP计划订单 — 从K3 ICMrpResult拉取",
+                        description="MRP计划订单 — 从K3 ICMrpResult拉取（字段对齐新表结构，部分K3源列待确认）",
                         sql_text="""
 SELECT
-    CAST(mr.FBillNo AS VARCHAR(64))        AS fbill_no,
-    CAST(mr.FMaterialId AS INT)            AS fmaterial_id,
-    CAST(mat.FNumber AS VARCHAR(64))       AS material_code,
-    CAST(mat.FName AS VARCHAR(256))        AS material_name,
-    CAST(mr.FPlanQty AS DECIMAL(15,2))     AS fplan_qty,
-    CAST(mr.FPlanStartDate AS DATE)        AS fplan_start_date,
-    CAST(mr.FPlanFinishDate AS DATE)       AS fplan_finish_date,
-    CAST(mr.FNeedDate AS DATE)             AS fneed_date,
-    CAST(mr.FOrderType AS VARCHAR(32))     AS forder_type,
-    CAST(mr.FStatus AS INT)                AS fstatus,
-    CAST(mr.FSupplyOrg AS VARCHAR(128))    AS fsupply_org,
-    CAST(mr.FRequireOrg AS VARCHAR(128))   AS frequire_org,
-    CAST(mr.FSourceBillNo AS VARCHAR(64))  AS fsource_bill_no,
-    mr.FModifyDate                         AS erp_updated_at
+    CAST(so.FID AS INT)                   AS sale_order_id,
+    CAST(mat.FItemID AS VARCHAR(50))      AS material_id,
+    CAST(so.FBillNo AS VARCHAR(64))       AS sale_order_no,
+    CAST(mat.FNumber AS VARCHAR(64))      AS material_code,
+    CAST(mat.FName AS VARCHAR(256))       AS material_name,
+    CAST(mat.FErpClsID AS INT)            AS material_property,
+    CAST(mat.FUnitID AS VARCHAR(50))      AS unit_id,
+    CAST(unit.FName AS VARCHAR(64))       AS unit_name,
+    CAST(mr.FPlanQty AS DECIMAL(15,2))    AS base_plan_qty,
+    CAST(mr.FDate AS DATETIME)            AS mrp_run_time,
+    CAST(mr.FNeedDate AS DATE)            AS need_date,
+    CASE WHEN mr.FStatus IN (2,3) THEN 1 ELSE 0 END AS is_closed,
+    CASE WHEN mr.FStatus IN (2,3) THEN 0 ELSE NULL END AS close_type,
+    CAST(mr.FOrderType AS INT)            AS bill_type,
+    mr.FModifyDate                        AS erp_updated_at
 FROM ICMrpResult mr
 LEFT JOIN t_ICItem mat ON mr.FMaterialId = mat.FItemID
+LEFT JOIN t_MeasureUnit unit ON mat.FUnitID = unit.FItemID
+LEFT JOIN T_SAL_ORDER so ON so.FBillNo = mr.FSaleOrderNo
 WHERE mr.FModifyDate >= :since
-ORDER BY mr.FBillNo
+ORDER BY so.FID, mat.FItemID
                         """.strip(),
                         field_mapping_json=None,
                         is_active=True,
@@ -1407,6 +1433,7 @@ ORDER BY mr.FBillNo
             self.create_database()
             await self.create_tables()
             await self.migrate_columns()
+            await self.rebuild_mrp_plan_order()
             await self.backfill_sale_order_id()
             await self.seed_roles()
             await self.seed_users()

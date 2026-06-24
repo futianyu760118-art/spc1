@@ -10,6 +10,7 @@ interface MaterialItem {
   material_property: number | null
   material_property_label: string | null
   material_type: string | null
+  unit_name: string | null
   supplier_name: string | null
   order_qty: number | null
   shortage_qty: number | null
@@ -26,6 +27,8 @@ interface MaterialItem {
   status_label: string | null
   is_stagnant: boolean
   stagnant_qty: number | null
+  bill_type: number | null
+  bill_type_label: string | null
 }
 
 interface KitItem {
@@ -47,12 +50,12 @@ const RISK_LABEL: Record<string, string> = { red: '缺料严重', yellow: '部�
 
 const MATERIAL_STATUS: Record<string, { label: string; color: string }> = {
   closed: { label: '已关闭', color: 'default' },
-  not_ordered: { label: '未下单', color: 'default' },
+  not_ordered: { label: '未下单', color: 'volcano' },
   self_made_unlinked: { label: '自制未排产/未关联', color: 'blue' },
   partial_received: { label: '部分到', color: 'warning' },
   fully_received: { label: '已到齐', color: 'success' },
   overdue: { label: '逾期未到', color: 'error' },
-  pending: { label: '待到料', color: 'default' },
+  pending: { label: '待到料', color: 'cyan' },
 }
 
 const MATERIAL_PROPERTY_OPTIONS = [
@@ -67,6 +70,17 @@ const MATERIAL_PROPERTY_OPTIONS = [
 ]
 
 const MATERIAL_PROPERTY_MAP = Object.fromEntries(MATERIAL_PROPERTY_OPTIONS.map(item => [item.value, item.label]))
+const MATERIAL_PROPERTY_COLOR: Record<number, string> = {
+  1: 'blue', 2: 'purple', 3: 'cyan', 5: 'default', 6: 'geekblue', 7: 'magenta', 8: 'gold', 9: 'orange',
+}
+
+const BILL_TYPE_OPTIONS = [
+  { value: 11010, label: '采购申请' },
+  { value: 11011, label: '自制' },
+  { value: 11012, label: '委外申请' },
+]
+const BILL_TYPE_MAP: Record<number, string> = Object.fromEntries(BILL_TYPE_OPTIONS.map(item => [item.value, item.label]))
+const BILL_TYPE_COLOR: Record<number, string> = { 11010: 'geekblue', 11011: 'purple', 11012: 'cyan' }
 
 const DEFAULT_MATERIAL_FILTERS = { status: 'not_ordered,self_made_unlinked,pending,overdue,partial_received' }
 
@@ -152,6 +166,7 @@ export default function KitAnalysis() {
       if (filters.inspection_date_end) params.inspection_date_end = filters.inspection_date_end
       if (filters.status) params.status = filters.status
       if (filters.is_stagnant) params.is_stagnant = filters.is_stagnant
+      if (filters.bill_type) params.bill_type = filters.bill_type
       if (filters.sortBy) params.sort_by = filters.sortBy
       if (filters.sortOrder) params.sort_order = filters.sortOrder
 
@@ -287,12 +302,19 @@ export default function KitAnalysis() {
       title: '物料属性', dataIndex: 'material_property', width: 90, sorter: true,
       filters: MATERIAL_PROPERTY_OPTIONS.map(opt => ({ text: opt.label, value: String(opt.value) })),
       filterMultiple: true,
-      render: (v: number | null) => v ? (MATERIAL_PROPERTY_MAP[v] || v) : <span style={{ color: '#cbd5e1' }}>-</span>,
+      render: (v: number | null) => {
+        if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
+        return <Tag color={MATERIAL_PROPERTY_COLOR[v] || 'default'}>{MATERIAL_PROPERTY_MAP[v] || v}</Tag>
+      },
     },
     {
       title: '物料类型', dataIndex: 'material_type', width: 110, ellipsis: true, sorter: true,
       filterDropdown: textFilterDropdown('物料类型'),
       filterIcon: (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
+    },
+    {
+      title: '单位', dataIndex: 'unit_name', width: 70,
+      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     {
       title: '供应商', dataIndex: 'supplier_name', width: 130, ellipsis: true, sorter: true,
@@ -539,6 +561,7 @@ export default function KitAnalysis() {
                       inspection_date_end: tableFilters.inspection_date?.[1],
                       status: tableFilters.status?.length ? tableFilters.status.join(',') : undefined,
                       is_stagnant: tableFilters.is_stagnant?.[0],
+                      bill_type: tableFilters.bill_type?.length ? tableFilters.bill_type.join(',') : undefined,
                       sortBy: sortField || '',
                       sortOrder: sortDir,
                     }

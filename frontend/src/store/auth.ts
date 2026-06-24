@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useThemeStore } from './theme'
+import { usePermissionStore } from './permission'
 
 interface UserInfo {
   id: number
@@ -220,14 +221,22 @@ export const useAuthStore = create<AuthState>((set, get) => {
         // 检查操作是否在分享权限中
         if (!sharePerms.includes(action)) return false
         if (!targetPath) return false
+        // 动态获取分享路径映射，fallback 到硬编码
+        let sharePathMap = sharePathToPermission
+        try {
+          const permState = usePermissionStore.getState()
+          if (permState.loaded && permState.tree.length > 0) {
+            sharePathMap = permState.getSharePathToPermission()
+          }
+        } catch { /* fallback */ }
         // 动态路由（如 /orders/:orderNo/lines/:lineNo）需要特殊处理
         if (targetPath.includes(':')) {
           const prefix = targetPath.split('/:')[0]
-          const allowedResource = sharePathToPermission[prefix]
+          const allowedResource = sharePathMap[prefix]
           if (allowedResource && resource.split('.')[0] === allowedResource.split('.')[0]) return true
           return false
         }
-        const allowedResource = sharePathToPermission[targetPath]
+        const allowedResource = sharePathMap[targetPath]
         if (!allowedResource) return true
         if (resource === allowedResource) return true
         if (resource.split('.')[0] === allowedResource.split('.')[0]) return true
