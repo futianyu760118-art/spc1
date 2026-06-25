@@ -1,9 +1,67 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Badge, Button, Col, DatePicker, Empty, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tabs, Tag, Tooltip, message, notification } from 'antd'
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ArrowUpOutlined, CheckCircleOutlined, ClockCircleOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { productionApi } from '../../../services/api'
 import { formatDate, formatDateTime } from '../../../utils'
+
+const CopyableText = ({ value, label = '内容' }: { value?: string | number | null; label?: string }) => {
+  const [copied, setCopied] = useState(false)
+
+  if (value === null || value === undefined || value === '') {
+    return '-'
+  }
+
+  const handleCopy = async () => {
+    const text = String(value).trim()
+    if (!text) {
+      message.warning(`没有可复制的${label}`)
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      message.success(`已复制${label}`)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      message.error(`复制${label}失败，请手动复制`)
+    }
+  }
+
+  return (
+    <Tooltip title={copied ? `${label}已复制` : `点击复制${label}`}>
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={handleCopy}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            handleCopy()
+          }
+        }}
+        style={{
+          display: 'inline-block',
+          maxWidth: '100%',
+          cursor: 'copy',
+          userSelect: 'text',
+          color: copied ? '#389e0d' : '#1677ff',
+          background: copied ? '#f6ffed' : 'transparent',
+          borderRadius: 6,
+          padding: '1px 6px',
+          lineHeight: 1.6,
+          textDecoration: copied ? 'none' : 'underline',
+          textDecorationStyle: 'dotted',
+          textUnderlineOffset: 3,
+          transition: 'all 0.2s ease',
+        }}
+      >
+        {value}
+      </span>
+    </Tooltip>
+  )
+}
 
 const DEPARTMENTS = ['计划', '采购', '生产', '品质', '仓储']
 
@@ -39,6 +97,7 @@ const DELIVERY_STATUS_MAP: Record<string, { label: string; color: string }> = {
   delayed: { label: '已延期', color: 'red' },
   upcoming: { label: '临期', color: 'orange' },
   normal: { label: '正常', color: 'green' },
+  early: { label: '提前', color: 'blue' },
   unknown: { label: '待确认', color: 'default' },
 }
 
@@ -81,11 +140,13 @@ export default function SchedulePlans() {
   const [impactPage, setImpactPage] = useState(1)
   const [impactLevel, setImpactLevel] = useState<string | undefined>()
   const [selectedImpactKeys, setSelectedImpactKeys] = useState<number[]>([])
+  const [batchPreviewOpen, setBatchPreviewOpen] = useState(false)
   const [missingUpphData, setMissingUpphData] = useState<any[]>([])
   const [missingUpphEmptyState, setMissingUpphEmptyState] = useState<any>(null)
   const [operationLogData, setOperationLogData] = useState<any[]>([])
   const [operationLogTotal, setOperationLogTotal] = useState(0)
   const [operationLogPage, setOperationLogPage] = useState(1)
+  const [operationLogModalOpen, setOperationLogModalOpen] = useState(false)
   const [operationType, setOperationType] = useState<string | undefined>()
   const [logKeyword, setLogKeyword] = useState('')
   const [logOperator, setLogOperator] = useState('')
@@ -93,7 +154,6 @@ export default function SchedulePlans() {
     reschedule_needed: 0,
     capacity_impact: 0,
     missing_upph: 0,
-    operation_logs: 0,
   })
 
   const loadPlans = useCallback(async () => {
@@ -198,7 +258,7 @@ export default function SchedulePlans() {
   }, [activeTab, keyword, month, year])
 
   const loadOperationLogs = useCallback(async () => {
-    if (activeTab !== 'operation_logs') return
+    if (!operationLogModalOpen) return
     setLoading(true)
     try {
       const params: Record<string, any> = {
@@ -216,7 +276,7 @@ export default function SchedulePlans() {
     } finally {
       setLoading(false)
     }
-  }, [activeTab, logKeyword, logOperator, operationLogPage, operationType, pageSize])
+  }, [logKeyword, logOperator, operationLogModalOpen, operationLogPage, operationType, pageSize])
 
   const loadTabCounts = useCallback(async () => {
     try {
@@ -239,12 +299,14 @@ export default function SchedulePlans() {
     if (activeTab === 'orders') loadOrders()
     else if (activeTab === 'capacity_impact') loadImpactPlans()
     else if (activeTab === 'missing_upph') loadMissingUpphProducts()
-    else if (activeTab === 'operation_logs') loadOperationLogs()
     else loadPlans()
-  }, [activeTab, loadImpactPlans, loadMissingUpphProducts, loadOperationLogs, loadOrders, loadPlans])
+  }, [activeTab, loadImpactPlans, loadMissingUpphProducts, loadOrders, loadPlans])
 
   useEffect(() => { loadWorkHours() }, [loadWorkHours])
   useEffect(() => { loadTabCounts() }, [loadTabCounts])
+  useEffect(() => {
+    if (operationLogModalOpen) loadOperationLogs()
+  }, [loadOperationLogs, operationLogModalOpen])
 
   const openCreate = () => {
     setEditing(null)
@@ -415,6 +477,7 @@ export default function SchedulePlans() {
         duration: 8,
         placement: 'bottomRight',
       })
+      setBatchPreviewOpen(false)
       setSelectedImpactKeys([])
       loadImpactPlans()
       loadPlans()
@@ -424,6 +487,18 @@ export default function SchedulePlans() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleOpenBatchPreview = () => {
+    if (selectedImpactKeys.length === 0) {
+      message.warning('请先选择需要重排的计划')
+      return
+    }
+    setBatchPreviewOpen(true)
+  }
+
+  const renderCopyableText = (value?: string | number | null, label = '内容') => {
+    return <CopyableText value={value} label={label} />
   }
 
   const getDelayDaysDisplay = (row: any) => {
@@ -441,10 +516,59 @@ export default function SchedulePlans() {
     return { text: '0天', color: '#1677ff' }
   }
 
+  const renderDeliveryStatusTag = (statusValue?: string, row?: any) => {
+    const item = DELIVERY_STATUS_MAP[statusValue || 'unknown'] || DELIVERY_STATUS_MAP.unknown
+    if (statusValue === 'delayed') {
+      return <Tag color={item.color} icon={<ExclamationCircleOutlined />}>{item.label}</Tag>
+    }
+    if (statusValue === 'upcoming') {
+      return <Tag color={item.color} icon={<ClockCircleOutlined />}>{item.label}</Tag>
+    }
+    if (statusValue === 'early') {
+      const aheadDays = row?.customer_due_date && row?.end_date
+        ? Math.max(dayjs(row.customer_due_date).startOf('day').diff(dayjs(row.end_date).startOf('day'), 'day'), 0)
+        : 0
+      return <Tag color={item.color} icon={<ArrowUpOutlined />}>{aheadDays > 0 ? `${item.label}${aheadDays}天` : item.label}</Tag>
+    }
+    if (statusValue === 'normal') {
+      return <Tag color={item.color} icon={<CheckCircleOutlined />}>{item.label}</Tag>
+    }
+    return <Tag color={item.color}>{item.label}</Tag>
+  }
+
+  const getProjectedRescheduleEndDate = (row: any) => {
+    if (!row?.source_promised_date || !row?.current_days_needed) return null
+    let startDate = dayjs(row.source_promised_date).startOf('day').subtract((row.current_days_needed || 1) - 1, 'day')
+    const today = dayjs().startOf('day')
+    if (startDate.isBefore(today)) {
+      startDate = today
+    }
+    return startDate.add((row.current_days_needed || 1) - 1, 'day')
+  }
+
+  const selectedImpactPreviewRows = impactData
+    .filter((row: any) => selectedImpactKeys.includes(row.id))
+    .map((row: any) => {
+      const projectedEndDate = getProjectedRescheduleEndDate(row)
+      const originalEndDate = row.end_date ? dayjs(row.end_date).startOf('day') : null
+      const changeDays = projectedEndDate && originalEndDate ? projectedEndDate.diff(originalEndDate, 'day') : null
+      const projectedStatus = projectedEndDate && row.source_promised_date
+        ? (projectedEndDate.isAfter(dayjs(row.source_promised_date).startOf('day'))
+          ? 'delayed'
+          : (dayjs(row.source_promised_date).startOf('day').diff(projectedEndDate, 'day') >= 2 ? 'early' : 'normal'))
+        : 'unknown'
+      return {
+        ...row,
+        projected_end_date: projectedEndDate ? projectedEndDate.format('YYYY-MM-DD') : null,
+        change_days: changeDays,
+        projected_status: projectedStatus,
+      }
+    })
+
   const planColumns = [
-    { title: '订单号', dataIndex: 'order_no', width: 140, render: (v: string) => v || '-' },
-    { title: '行号', dataIndex: 'line_no', width: 80, render: (v: string) => v || '-' },
-    { title: '产品编码', dataIndex: 'product_code', width: 200, render: (v: string) => v || '-' },
+    { title: '订单号', dataIndex: 'order_no', width: 160, render: (v: string) => renderCopyableText(v, '订单号') },
+    { title: '行号', dataIndex: 'line_no', width: 100, render: (v: string) => renderCopyableText(v, '行号') },
+    { title: '产品编码', dataIndex: 'product_code', width: 220, render: (v: string) => renderCopyableText(v, '产品编码') },
     { title: '型号', dataIndex: 'model_code', width: 250, render: (v: string) => v || '-' },
     { title: '数量', dataIndex: 'quantity', width: 90, render: (v: number) => <span style={{ fontWeight: 'bold' }}>{v ?? '-'}</span> },
     {
@@ -470,10 +594,7 @@ export default function SchedulePlans() {
       title: '延期状态',
       dataIndex: 'delivery_status',
       width: 100,
-      render: (v: string) => {
-        const item = DELIVERY_STATUS_MAP[v] || DELIVERY_STATUS_MAP.unknown
-        return <Tag color={item.color}>{item.label}</Tag>
-      },
+      render: (v: string, row: any) => renderDeliveryStatusTag(v, row),
     },
     {
       title: '创建时间',
@@ -526,11 +647,11 @@ export default function SchedulePlans() {
   ]
 
   const orderColumns = [
-    { title: '订单号', dataIndex: 'order_no', width: 140, fixed: 'left' as const },
-    { title: '行号', dataIndex: 'line_no', width: 80 },
+    { title: '订单号', dataIndex: 'order_no', width: 160, fixed: 'left' as const, render: (v: string) => renderCopyableText(v, '订单号') },
+    { title: '行号', dataIndex: 'line_no', width: 100, render: (v: string) => renderCopyableText(v, '行号') },
     { title: '客户', dataIndex: 'customer', width: 140, ellipsis: true },
-    { title: '产品编码', dataIndex: 'product_code', width: 200, render: (v: string) => v || '-' },
-    { title: '型号', dataIndex: 'product_model', width: 250, render: (v: string) => v || '-' },
+    { title: 'BOM编号', dataIndex: 'bom_no', width: 180, render: (v: string) => v || '-' },
+    { title: '产品编码', dataIndex: 'product_code', width: 220, render: (v: string) => renderCopyableText(v, '产品编码') },
     { title: '数量', dataIndex: 'order_qty', width: 100, render: (v: number) => v ?? '-' },
     { title: '交期', dataIndex: 'promised_date', width: 110, render: (v: string) => formatDate(v) },
     {
@@ -560,10 +681,9 @@ export default function SchedulePlans() {
   ]
 
   const impactColumns = [
-    { title: '订单号', dataIndex: 'order_no', width: 140, fixed: 'left' as const, render: (v: string) => v || '-' },
-    { title: '行号', dataIndex: 'line_no', width: 80, render: (v: string) => v || '-' },
-    { title: '产品编码', dataIndex: 'product_code', width: 180, render: (v: string) => v || '-' },
-    { title: '型号', dataIndex: 'model_code', width: 220, ellipsis: true, render: (v: string) => v || '-' },
+    { title: '订单号', dataIndex: 'order_no', width: 160, fixed: 'left' as const, render: (v: string) => renderCopyableText(v, '订单号') },
+    { title: '行号', dataIndex: 'line_no', width: 100, render: (v: string) => renderCopyableText(v, '行号') },
+    { title: '产品编码', dataIndex: 'product_code', width: 220, render: (v: string) => renderCopyableText(v, '产品编码') },
     { title: '数量', dataIndex: 'quantity', width: 90, render: (v: number) => v ?? '-' },
     {
       title: '影响程度',
@@ -597,7 +717,7 @@ export default function SchedulePlans() {
   ]
 
   const missingUpphColumns = [
-    { title: '产品编码', dataIndex: 'product_code', width: 180, fixed: 'left' as const, render: (v: string) => v || '-' },
+    { title: '产品编码', dataIndex: 'product_code', width: 220, fixed: 'left' as const, render: (v: string) => renderCopyableText(v, '产品编码') },
     { title: '产品型号', dataIndex: 'product_model', width: 220, ellipsis: true, render: (v: string) => v || '-' },
     { title: '订单数', dataIndex: 'order_count', width: 90, render: (v: number) => v ?? '-' },
     { title: '总数量', dataIndex: 'total_quantity', width: 120, render: (v: number) => v ?? '-' },
@@ -647,6 +767,38 @@ export default function SchedulePlans() {
     ? '当前筛选条件下没有匹配的操作日志。'
     : '当前暂无排产操作日志。'
 
+  const batchPreviewColumns = [
+    { title: '订单号', dataIndex: 'order_no', width: 170, render: (v: string) => renderCopyableText(v, '订单号') },
+    { title: '行号', dataIndex: 'line_no', width: 100, render: (v: string) => renderCopyableText(v, '行号') },
+    { title: '原UPPH', dataIndex: 'source_upph', width: 100, render: (v: number) => v ?? '-' },
+    { title: '新UPPH', dataIndex: 'current_upph', width: 100, render: (v: number) => v ?? '-' },
+    { title: '原结束', dataIndex: 'end_date', width: 110, render: (v: string) => formatDate(v) },
+    { title: '新结束', dataIndex: 'projected_end_date', width: 110, render: (v: string) => formatDate(v) || '-' },
+    {
+      title: '变化',
+      dataIndex: 'change_days',
+      width: 140,
+      render: (v: number | null, row: any) => {
+        if (v === null || v === undefined) {
+          return <Tag color="default">无法预估</Tag>
+        }
+        if (v > 0) {
+          return <Tag color="red">+{v}天</Tag>
+        }
+        if (v < 0) {
+          return <Tag color="green">{v}天</Tag>
+        }
+        return <Tag color="blue">无变化</Tag>
+      },
+    },
+    {
+      title: '预估状态',
+      dataIndex: 'projected_status',
+      width: 120,
+      render: (v: string, row: any) => renderDeliveryStatusTag(v, { customer_due_date: row.source_promised_date, end_date: row.projected_end_date }),
+    },
+  ]
+
   return (
     <div>
       <div className="card-modern" style={{ padding: '12px 20px', marginBottom: 16 }}>
@@ -666,7 +818,6 @@ export default function SchedulePlans() {
             { key: 'reschedule_needed', label: renderTabLabel('reschedule_needed', '待重排') },
             { key: 'capacity_impact', label: renderTabLabel('capacity_impact', '产能变更影响') },
             { key: 'missing_upph', label: renderTabLabel('missing_upph', '缺少UPPH') },
-            { key: 'operation_logs', label: renderTabLabel('operation_logs', '操作日志') },
             { key: 'history_plans', label: '历史排产' },
           ]}
         />
@@ -715,6 +866,7 @@ export default function SchedulePlans() {
                   {activeTab === 'active_plans' && (
                     <Button type="primary" onClick={handleDetectChanges}>检测变更</Button>
                   )}
+                  <Button onClick={() => { setOperationLogPage(1); setOperationLogModalOpen(true) }}>查看操作日志</Button>
                   <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增计划</Button>
                 </Space>
               </Col>
@@ -807,15 +959,7 @@ export default function SchedulePlans() {
               <Col>
                 <Space>
                   <Button icon={<ReloadOutlined />} onClick={loadImpactPlans}>刷新</Button>
-                  <Popconfirm
-                    title={`确认重排已选择的 ${selectedImpactKeys.length} 条计划？`}
-                    onConfirm={handleBatchReschedule}
-                    disabled={selectedImpactKeys.length === 0}
-                  >
-                    <Button type="primary" icon={<ThunderboltOutlined />} disabled={selectedImpactKeys.length === 0}>
-                      一键重排选中
-                    </Button>
-                  </Popconfirm>
+                  <Button type="primary" icon={<ThunderboltOutlined />} disabled={selectedImpactKeys.length === 0} onClick={handleOpenBatchPreview}>预览并重排</Button>
                 </Space>
               </Col>
             </Row>
@@ -861,43 +1005,6 @@ export default function SchedulePlans() {
           </Row>
         )}
 
-        {activeTab === 'operation_logs' && (
-          <Row gutter={12} align="middle">
-            <Col>
-              <Input
-                prefix={<SearchOutlined />}
-                value={logKeyword}
-                onChange={e => { setLogKeyword(e.target.value); setOperationLogPage(1) }}
-                placeholder="搜索订单号"
-                allowClear
-                style={{ width: 220 }}
-              />
-            </Col>
-            <Col>
-              <Input
-                value={logOperator}
-                onChange={e => { setLogOperator(e.target.value); setOperationLogPage(1) }}
-                placeholder="操作人"
-                allowClear
-                style={{ width: 180 }}
-              />
-            </Col>
-            <Col>
-              <Select
-                allowClear
-                placeholder="操作类型"
-                value={operationType}
-                onChange={v => { setOperationType(v); setOperationLogPage(1) }}
-                style={{ width: 180 }}
-                options={Object.entries(OPERATION_TYPE_MAP).map(([value, label]) => ({ value, label }))}
-              />
-            </Col>
-            <Col flex="auto" />
-            <Col>
-              <Button icon={<ReloadOutlined />} onClick={() => { loadOperationLogs(); loadTabCounts() }}>刷新</Button>
-            </Col>
-          </Row>
-        )}
       </div>
 
       <div className="card-modern" style={{ padding: '0 0 4px' }}>
@@ -920,28 +1027,30 @@ export default function SchedulePlans() {
             summary={(pageData) => {
               const totalQuantity = pageData.reduce((sum, row) => sum + (row.quantity || 0), 0)
               const uniqueOrders = new Set(pageData.map(row => row.order_no))
+              const delayedCount = pageData.filter(row => row.delivery_status === 'delayed').length
+              const upcomingCount = pageData.filter(row => row.delivery_status === 'upcoming').length
+              const earlyCount = pageData.filter(row => row.delivery_status === 'early').length
+              const normalCount = pageData.filter(row => row.delivery_status === 'normal').length
+              const summaryCells: ReactNode[] = Array.from({ length: planColumns.length }, () => null)
+              summaryCells[0] = '合计'
+              summaryCells[1] = `${uniqueOrders.size}单`
+              summaryCells[4] = totalQuantity
+              summaryCells[9] = (
+                <Space size={4} wrap>
+                  <Tag color="green">正常 {normalCount}</Tag>
+                  <Tag color="orange">临期 {upcomingCount}</Tag>
+                  <Tag color="red">延期 {delayedCount}</Tag>
+                  <Tag color="blue">提前 {earlyCount}</Tag>
+                </Space>
+              )
               return (
                 <Table.Summary fixed>
                   <Table.Summary.Row style={{ backgroundColor: '#fafafa', fontWeight: 'bold' }}>
-                    <Table.Summary.Cell index={0}>合计</Table.Summary.Cell>
-                    <Table.Summary.Cell index={1}>{uniqueOrders.size}单</Table.Summary.Cell>
-                    <Table.Summary.Cell index={2}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={3}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={4}>{totalQuantity}</Table.Summary.Cell>
-                    <Table.Summary.Cell index={5}>—</Table.Summary.Cell>
-                    <Table.Summary.Cell index={6}>—</Table.Summary.Cell>
-                    <Table.Summary.Cell index={7}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={8}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={9}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={10}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={11}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={12}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={13}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={14}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={15}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={16}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={17}></Table.Summary.Cell>
-                    <Table.Summary.Cell index={18}></Table.Summary.Cell>
+                    {summaryCells.map((cell, index) => (
+                      <Table.Summary.Cell index={index} key={index}>
+                        {cell}
+                      </Table.Summary.Cell>
+                    ))}
                   </Table.Summary.Row>
                 </Table.Summary>
               )
@@ -1006,7 +1115,76 @@ export default function SchedulePlans() {
           />
         )}
 
-        {activeTab === 'operation_logs' && (
+      </div>
+
+      <Modal
+        title={`批量重排预览（${selectedImpactPreviewRows.length} 条）`}
+        open={batchPreviewOpen}
+        onCancel={() => setBatchPreviewOpen(false)}
+        onOk={handleBatchReschedule}
+        okText="确认批量重排"
+        cancelText="取消"
+        width={1100}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div style={{ color: '#666' }}>
+            先预览本次重排对 UPPH 与预计完工日期的影响，确认可接受后再执行。
+          </div>
+          <Table
+            rowKey="id"
+            columns={batchPreviewColumns}
+            dataSource={selectedImpactPreviewRows}
+            size="small"
+            pagination={false}
+            scroll={{ x: 1000, y: 360 }}
+          />
+        </Space>
+      </Modal>
+
+      <Modal
+        title="排产操作日志"
+        open={operationLogModalOpen}
+        onCancel={() => setOperationLogModalOpen(false)}
+        footer={null}
+        width={1280}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Row gutter={12} align="middle">
+            <Col>
+              <Input
+                prefix={<SearchOutlined />}
+                value={logKeyword}
+                onChange={e => { setLogKeyword(e.target.value); setOperationLogPage(1) }}
+                placeholder="搜索订单号"
+                allowClear
+                style={{ width: 220 }}
+              />
+            </Col>
+            <Col>
+              <Input
+                value={logOperator}
+                onChange={e => { setLogOperator(e.target.value); setOperationLogPage(1) }}
+                placeholder="操作人"
+                allowClear
+                style={{ width: 180 }}
+              />
+            </Col>
+            <Col>
+              <Select
+                allowClear
+                placeholder="操作类型"
+                value={operationType}
+                onChange={v => { setOperationType(v); setOperationLogPage(1) }}
+                style={{ width: 180 }}
+                options={Object.entries(OPERATION_TYPE_MAP).map(([value, label]) => ({ value, label }))}
+              />
+            </Col>
+            <Col flex="auto" />
+            <Col>
+              <Button icon={<ReloadOutlined />} onClick={loadOperationLogs}>刷新</Button>
+            </Col>
+          </Row>
+
           <Table
             rowKey="id"
             columns={operationLogColumns}
@@ -1024,8 +1202,8 @@ export default function SchedulePlans() {
             }}
             locale={{ emptyText: <Empty description={operationLogEmptyDescription} image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
           />
-        )}
-      </div>
+        </Space>
+      </Modal>
 
       <Modal
         title={editing ? '编辑计划排产' : '新增计划排产'}
