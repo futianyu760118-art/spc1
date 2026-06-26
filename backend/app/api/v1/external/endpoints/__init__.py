@@ -1,0 +1,13 @@
+"""对外接口实现集合
+
+新增一个对外接口只需：
+1. 在本目录下新建文件（或加到现有文件）
+2. 用 @register_external 装饰一个 async handler
+3. 本包 __init__.py 已 import 全部子模块，自动注册
+"""
+
+# 导入各业务对外接口模块，确保 @register_external 装饰器执行
+from . import orders  # noqa: F401
+from . import masterdata  # noqa: F401
+from . import purchase  # noqa: F401
+from . import production  # noqa: F401

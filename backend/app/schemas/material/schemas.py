@@ -246,6 +246,9 @@ class KitAnalysisMaterialItem(BaseModel):
     unit_name: Optional[str] = None
     supplier_name: Optional[str] = None
     order_qty: Optional[float] = None
+    mrp_qty: Optional[float] = None
+    po_qty: Optional[float] = None
+    stock_qty: Optional[float] = None
     shortage_qty: Optional[float] = None
     req_date: Optional[date] = None
     po_no: Optional[str] = None
@@ -392,6 +395,8 @@ class MrpPlanOrderOut(BaseModel):
     is_closed: int = 0
     close_type: Optional[int] = None
     bill_type: Optional[int] = None
+    stock_qty: Optional[float] = None
+    audit_date: Optional[date] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

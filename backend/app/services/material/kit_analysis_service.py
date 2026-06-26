@@ -1,14 +1,15 @@
 """Material kit analysis service.
 
-外层列表（按订单聚合）基于采购订单；展开后的物料明细基于 MRP 计划订单，
-按 sale_order_no + material_code 关联采购订单推导状态。
+外层列表（按订单聚合）基于销售订单表查询；
+展开后的物料明细基于 MRP 计划订单，按 sale_order_no + material_code 关联采购订单推导状态。
 """
 
 from datetime import date
 from typing import Optional, List
 from decimal import Decimal
+from types import SimpleNamespace
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.basicdata.material import Material
@@ -55,7 +56,9 @@ MATERIAL_SORT_KEYS = {
     "material_property",
     "material_type",
     "supplier_name",
-    "order_qty",
+    "mrp_qty",
+    "po_qty",
+    "stock_qty",
     "received_qty",
     "eta",
     "actual_arrival_date",
@@ -183,6 +186,9 @@ async def _get_plan_order_material_items(
             unit_name=plan.unit_name,
             supplier_name=po_summary.supplier_name if po_summary else None,
             order_qty=_to_float(plan.base_plan_qty),
+            mrp_qty=_to_float(plan.base_plan_qty),
+            po_qty=_to_float(po_qty),
+            stock_qty=_to_float(plan.stock_qty),
             shortage_qty=(
                 _to_float(po_qty - received_qty)
                 if po_qty is not None and received_qty is not None and po_qty > received_qty
@@ -212,6 +218,7 @@ async def _get_plan_order_material_items(
 async def get_kit_analysis(
     db: AsyncSession,
     order_no: Optional[str] = None,
+    order_type: Optional[str] = None,
     risk_level: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
@@ -221,156 +228,201 @@ async def get_kit_analysis(
     promised_date_start: Optional[str] = None,
     promised_date_end: Optional[str] = None,
 ) -> dict:
-    """按订单汇总物料齐套状态（基于采购订单聚合），外层列表保持按订单展示。"""
-    sync_filters = await get_purchase_order_sync_filters(db)
-    po_query = select(
-        PurchaseOrder.order_no,
-        PurchaseOrder.material_code,
-        PurchaseOrder.po_qty,
-        PurchaseOrder.received_qty,
-        PurchaseOrder.eta,
-        PurchaseOrder.actual_arrival_date,
-        PurchaseOrder.inspection_date,
-    ).where(PurchaseOrder.order_no.is_not(None), *sync_filters)
+    """按销售订单汇总物料齐套状态（基于销售订单表查询），外层列表保持按销售订单展示。"""
+    # 1. 从销售订单表获取订单列表
+    sale_order_query = select(
+        SaleOrder.order_no,
+        SaleOrder.promised_date,
+        SaleOrder.delivery_completed_date,
+        SaleOrder.is_closed,
+    ).distinct().where(SaleOrder.order_no.is_not(None))
+
     if order_no:
-        po_query = po_query.where(PurchaseOrder.order_no.ilike(f"%{order_no}%"))
+        sale_order_query = sale_order_query.where(SaleOrder.order_no.ilike(f"%{order_no}%"))
+    if order_type:
+        types = [x.strip() for x in order_type.split(',') if x.strip()]
+        if types:
+            type_filters = []
+            for t in types:
+                if t == 'big':
+                    type_filters.append(SaleOrder.order_no.ilike('HJ%') & ~SaleOrder.order_no.ilike('HJY%'))
+                elif t == 'sample':
+                    type_filters.append(SaleOrder.order_no.ilike('HJY%'))
+            if type_filters:
+                if len(type_filters) == 1:
+                    sale_order_query = sale_order_query.where(type_filters[0])
+                else:
+                    sale_order_query = sale_order_query.where(or_(*type_filters))
+    if only_pending_shipment:
+        sale_order_query = sale_order_query.where(SaleOrder.delivery_completed_date.is_(None))
+    if promised_date_start:
+        sale_order_query = sale_order_query.where(SaleOrder.promised_date >= date.fromisoformat(promised_date_start))
+    if promised_date_end:
+        sale_order_query = sale_order_query.where(SaleOrder.promised_date <= date.fromisoformat(promised_date_end))
+    sale_order_query = sale_order_query.where(SaleOrder.is_closed == 0)
 
-    po_result = await db.execute(po_query)
-    material_groups: dict[tuple[str, str], dict] = {}
-    for row in po_result:
-        if not row.order_no or not row.material_code:
-            continue
-        key = (row.order_no, row.material_code)
-        group = material_groups.setdefault(
-            key,
-            {
-                "po_qty": Decimal("0"),
-                "has_po_qty": False,
-                "received_qty": Decimal("0"),
-                "has_received_qty": False,
-                "eta": None,
-                "actual_arrival_date": None,
-                "inspection_date": None,
-            },
-        )
-        if row.po_qty is not None:
-            group["po_qty"] += row.po_qty
-            group["has_po_qty"] = True
-        if row.received_qty is not None:
-            group["received_qty"] += row.received_qty
-            group["has_received_qty"] = True
-        if row.eta and (group["eta"] is None or row.eta < group["eta"]):
-            group["eta"] = row.eta
-        if row.actual_arrival_date and (
-            group["actual_arrival_date"] is None
-            or row.actual_arrival_date > group["actual_arrival_date"]
-        ):
-            group["actual_arrival_date"] = row.actual_arrival_date
-        if row.inspection_date and (
-            group["inspection_date"] is None
-            or row.inspection_date > group["inspection_date"]
-        ):
-            group["inspection_date"] = row.inspection_date
+    sale_order_result = await db.execute(sale_order_query)
+    sale_order_rows = sale_order_result.all()
 
-    order_nos = sorted({current_order_no for current_order_no, _ in material_groups})
-
+    order_nos = sorted({row.order_no for row in sale_order_rows if row.order_no})
     promised_dates: dict[str, date | None] = {}
     pending_shipment_orders: set[str] = set()
-    sale_order_nos: set[str] = set()
-    closed_orders: set[str] = set()
+    for row in sale_order_rows:
+        promised_dates.setdefault(row.order_no, row.promised_date)
+        if row.delivery_completed_date is None:
+            pending_shipment_orders.add(row.order_no)
+
+    # 2. 从 MRP 计划订单获取对应订单的物料清单
+    plan_materials: dict[tuple[str, str], dict] = {}
     if order_nos:
-        sale_order_result = await db.execute(
-            select(SaleOrder.order_no, SaleOrder.promised_date, SaleOrder.delivery_completed_date, SaleOrder.is_closed)
-            .where(SaleOrder.order_no.in_(order_nos))
-            .distinct()
+        plan_query = select(
+            MrpPlanOrder.sale_order_no,
+            MrpPlanOrder.material_code,
+            MrpPlanOrder.base_plan_qty,
+            MrpPlanOrder.bill_type,
+            MrpPlanOrder.material_property,
+            MrpPlanOrder.need_date,
+            MrpPlanOrder.is_closed,
+        ).where(MrpPlanOrder.sale_order_no.in_(order_nos))
+        plan_result = await db.execute(plan_query)
+        for row in plan_result:
+            if not row.sale_order_no or not row.material_code:
+                continue
+            key = (row.sale_order_no, row.material_code)
+            if key not in plan_materials:
+                plan_materials[key] = {
+                    "base_plan_qty": Decimal("0"),
+                    "bill_type": row.bill_type,
+                    "material_property": row.material_property,
+                    "need_date": row.need_date,
+                    "is_closed": row.is_closed,
+                }
+            if row.base_plan_qty is not None:
+                plan_materials[key]["base_plan_qty"] += row.base_plan_qty
+
+    # 3. 从采购订单获取对应物料的采购/收料数据
+    sync_filters = await get_purchase_order_sync_filters(db)
+    material_codes = sorted({mat_code for _, mat_code in plan_materials})
+    po_groups: dict[tuple[str, str], dict] = {}
+    if order_nos and material_codes:
+        po_query = select(
+            PurchaseOrder.order_no,
+            PurchaseOrder.material_code,
+            PurchaseOrder.po_qty,
+            PurchaseOrder.received_qty,
+            PurchaseOrder.eta,
+            PurchaseOrder.actual_arrival_date,
+            PurchaseOrder.inspection_date,
+            PurchaseOrder.is_closed,
+        ).where(
+            PurchaseOrder.order_no.in_(order_nos),
+            PurchaseOrder.material_code.in_(material_codes),
+            *sync_filters,
         )
-        for row in sale_order_result:
-            sale_order_nos.add(row.order_no)
-            promised_dates.setdefault(row.order_no, row.promised_date)
-            if row.delivery_completed_date is None:
-                pending_shipment_orders.add(row.order_no)
-            if row.is_closed == 1:
-                closed_orders.add(row.order_no)
-
-    if closed_orders:
-        order_nos = [
-            current_order_no
-            for current_order_no in order_nos
-            if current_order_no not in closed_orders
-        ]
-
-    if only_pending_shipment:
-        order_nos = [
-            current_order_no
-            for current_order_no in order_nos
-            if current_order_no not in sale_order_nos or current_order_no in pending_shipment_orders
-        ]
-
-    if promised_date_start or promised_date_end:
-        start = date.fromisoformat(promised_date_start) if promised_date_start else None
-        end = date.fromisoformat(promised_date_end) if promised_date_end else None
-        filtered_order_nos = []
-        for current_order_no in order_nos:
-            promised_date = promised_dates.get(current_order_no)
-            if promised_date is None:
+        po_result = await db.execute(po_query)
+        for row in po_result:
+            if not row.order_no or not row.material_code:
                 continue
-            if start and promised_date < start:
-                continue
-            if end and promised_date > end:
-                continue
-            filtered_order_nos.append(current_order_no)
-        order_nos = filtered_order_nos
-
-    items: List[KitAnalysisItem] = []
-    per_order: dict[str, list[dict]] = {}
-    for (current_order_no, _), material_group in material_groups.items():
-        per_order.setdefault(current_order_no, []).append(material_group)
-
-    # 物料数按 MRP 计划订单统计（distinct material_code per order）
-    plan_counts: dict[str, int] = {}
-    if order_nos:
-        plan_count_result = await db.execute(
-            select(
-                MrpPlanOrder.sale_order_no,
-                func.count(MrpPlanOrder.material_code.distinct()).label("cnt"),
+            key = (row.order_no, row.material_code)
+            group = po_groups.setdefault(
+                key,
+                {
+                    "po_qty": Decimal("0"),
+                    "has_po_qty": False,
+                    "received_qty": Decimal("0"),
+                    "has_received_qty": False,
+                    "eta": None,
+                    "actual_arrival_date": None,
+                    "inspection_date": None,
+                    "is_closed": 0,
+                },
             )
-            .where(MrpPlanOrder.sale_order_no.in_(order_nos))
-            .group_by(MrpPlanOrder.sale_order_no)
-        )
-        plan_counts = {row.sale_order_no: row.cnt for row in plan_count_result}
+            if row.po_qty is not None:
+                group["po_qty"] += row.po_qty
+                group["has_po_qty"] = True
+            if row.received_qty is not None:
+                group["received_qty"] += row.received_qty
+                group["has_received_qty"] = True
+            if row.eta and (group["eta"] is None or row.eta < group["eta"]):
+                group["eta"] = row.eta
+            if row.actual_arrival_date and (
+                group["actual_arrival_date"] is None
+                or row.actual_arrival_date > group["actual_arrival_date"]
+            ):
+                group["actual_arrival_date"] = row.actual_arrival_date
+            if row.inspection_date and (
+                group["inspection_date"] is None
+                or row.inspection_date > group["inspection_date"]
+            ):
+                group["inspection_date"] = row.inspection_date
+            if row.is_closed and row.is_closed == 1:
+                group["is_closed"] = 1
+
+    # 4. 按销售订单计算齐套指标
+    items: List[KitAnalysisItem] = []
+    per_order_materials: dict[str, list[tuple[str, dict]]] = {}
+    for (sale_order_no, material_code), plan_info in plan_materials.items():
+        per_order_materials.setdefault(sale_order_no, []).append((material_code, plan_info))
 
     for current_order_no in order_nos:
-        order_materials = per_order.get(current_order_no, [])
-        total = plan_counts.get(current_order_no) or len(order_materials)
+        order_mat_list = per_order_materials.get(current_order_no, [])
+        total = len(order_mat_list)
         received_count = 0
         partial_count = 0
+        not_ordered_count = 0
         overdue_count = 0
         stagnant_count = 0
 
-        for material_group in order_materials:
-            has_received = (
-                material_group["has_received_qty"]
-                and material_group["received_qty"] > 0
-            )
-            fully_received = (
-                has_received
-                and material_group["has_po_qty"]
-                and material_group["received_qty"] >= material_group["po_qty"]
-            )
-            # 已到齐：收料数量 >= 需求数量
-            if fully_received:
+        for material_code, plan_info in order_mat_list:
+            po_info = po_groups.get((current_order_no, material_code))
+            bill_type = plan_info.get("bill_type")
+            material_property = plan_info.get("material_property")
+            po_summary = None
+            if po_info:
+                po_summary = SimpleNamespace(
+                    po_qty=po_info["po_qty"] if po_info["has_po_qty"] else None,
+                    received_qty=po_info["received_qty"] if po_info["has_received_qty"] else None,
+                    eta=po_info["eta"],
+                    actual_arrival_date=po_info["actual_arrival_date"],
+                    inspection_date=po_info["inspection_date"],
+                    is_closed=po_info.get("is_closed", 0),
+                    material_property=material_property,
+                    supplier_name=None,
+                    po_no=None,
+                    po_count=0,
+                    first_eta=None,
+                    latest_eta=None,
+                )
+
+            status = _status_for_plan(bill_type, po_summary)
+            kit_met = _kit_met_for_plan(status, bill_type)
+
+            has_po = po_info and po_info["has_po_qty"] and po_info["po_qty"] > 0
+            has_received = po_info and po_info["has_received_qty"] and po_info["received_qty"] > 0
+            fully_received = has_po and has_received and po_info["received_qty"] >= po_info["po_qty"]
+            partial_received = has_received and (not has_po or po_info["received_qty"] < po_info["po_qty"])
+
+            # 已到齐
+            if kit_met or fully_received:
                 received_count += 1
-            # 部分到：0 < 收料数量 < 需求数量
-            elif has_received:
+            # 部分到
+            elif partial_received:
                 partial_count += 1
-            # 逾期未到：无收料且交期早于今天
-            elif material_group["eta"] and material_group["eta"] < date.today():
-                overdue_count += 1
+            # 未下单
+            elif not has_po and status in ("not_ordered", "not_scheduled"):
+                not_ordered_count += 1
+
+            # 逾期：有 PO 且 ETA 早于今天但未到齐
+            if po_info and po_info.get("eta") and po_info["eta"] < date.today():
+                if not fully_received and not kit_met:
+                    overdue_count += 1
+
             # 呆滞：收料数量 > 下单数量
             if (
-                material_group["has_po_qty"]
-                and material_group["has_received_qty"]
-                and material_group["received_qty"] > material_group["po_qty"]
+                po_info
+                and po_info["has_po_qty"]
+                and po_info["has_received_qty"]
+                and po_info["received_qty"] > po_info["po_qty"]
             ):
                 stagnant_count += 1
 
@@ -385,7 +437,7 @@ async def get_kit_analysis(
             total_materials=total,
             received_materials=received_count,
             partial_received_materials=partial_count,
-            not_ordered_materials=0,
+            not_ordered_materials=not_ordered_count,
             overdue_materials=overdue_count,
             stagnant_materials=stagnant_count,
             kit_rate=kit_rate,
@@ -434,8 +486,8 @@ async def get_order_materials(
     material_type_filter: Optional[str] = None,
     status_filter: Optional[str] = None,
     supplier_filter: Optional[str] = None,
-    order_qty_min: Optional[float] = None,
-    order_qty_max: Optional[float] = None,
+    po_qty_min: Optional[float] = None,
+    po_qty_max: Optional[float] = None,
     received_qty_min: Optional[float] = None,
     received_qty_max: Optional[float] = None,
     eta_start: Optional[str] = None,
@@ -470,10 +522,10 @@ async def get_order_materials(
     if supplier_filter:
         needle = supplier_filter.lower()
         items = [item for item in items if item.supplier_name and needle in item.supplier_name.lower()]
-    if order_qty_min is not None:
-        items = [item for item in items if item.order_qty is not None and item.order_qty >= order_qty_min]
-    if order_qty_max is not None:
-        items = [item for item in items if item.order_qty is not None and item.order_qty <= order_qty_max]
+    if po_qty_min is not None:
+        items = [item for item in items if item.po_qty is not None and item.po_qty >= po_qty_min]
+    if po_qty_max is not None:
+        items = [item for item in items if item.po_qty is not None and item.po_qty <= po_qty_max]
     if received_qty_min is not None:
         items = [item for item in items if item.received_qty is not None and item.received_qty >= received_qty_min]
     if received_qty_max is not None:

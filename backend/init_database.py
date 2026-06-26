@@ -48,6 +48,8 @@ from app.models.basicdata.field_mapping import FieldMapping
 from app.models.basicdata.sync_sql_config import SyncSqlConfig
 from app.models.basicdata.sync_log import SyncLog
 from app.models.basicdata.position import Position
+from app.models.basicdata.bom import Bom
+from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.file_asset import FileAsset
 from app.models.basicdata.feedback import Feedback
 
@@ -239,6 +241,10 @@ class DatabaseInitializer:
                 "batch_qty": "INTEGER",
                 "sample_qty": "INTEGER",
                 "defect_qty": "INTEGER",
+            },
+            "mrp_plan_order": {
+                "stock_qty": "NUMERIC(15,2)",
+                "audit_date": "DATE",
             },
         }
         # 删除已废弃的列
@@ -1327,6 +1333,30 @@ ORDER BY so.FID, mat.FItemID
                         sync_interval="1d",
                         sync_strategy="incremental",
                         sync_priority=14,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="boms",
+                        description="BOM — 从ERP BOM表拉取（幂等键: bom_id）",
+                        sql_text="SELECT bom_id, bom_no, material_id, parent_material_id, bom_version, bom_type, bill_type_id, base_qty, aux_attr_qty, unit_id, aux_attr_id, supply_mode, customer_material_id, audit_status, use_status, disabled_status, void_flag, is_audited, audit_date, entry_date FROM T_BD_BOM WHERE FModifyDate >= :since ORDER BY bom_id",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=15,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="bom_details",
+                        description="BOM明细 — 从ERP BOM明细表拉取（幂等键: bom_id + line_no）",
+                        sql_text="SELECT bom_id, line_no, material_id, standard_qty, aux_qty, material_type, config_type, lead_offset_days, back_flush, scrap_rate, FOperSN, process_id, warehouse_id, location_id, valid_date, invalid_date, unit_id, customer_bom_code, aux_attr_id, material_size, kit_flag FROM T_BD_BOM_DETAIL WHERE FModifyDate >= :since ORDER BY bom_id, line_no",
+                        field_mapping_json='{"FOperSN": "oper_sn"}',
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=15,
                         created_by="admin",
                     ),
                     SyncSqlConfig(

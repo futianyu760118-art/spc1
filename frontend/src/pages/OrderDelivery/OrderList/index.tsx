@@ -876,7 +876,7 @@ export default function OrderList() {
         return (
           <Tooltip title={v}>
             <div>
-              <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
+              <a onClick={() => navigate(`/orders/${v}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
               {orderTypeTag}
             </div>
           </Tooltip>

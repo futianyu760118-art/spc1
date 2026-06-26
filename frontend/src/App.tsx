@@ -136,6 +136,7 @@ export default function App() {
           <Route path="kit-analysis" element={<KitAnalysis />} />
           <Route path="supplier-risk" element={<SupplierRisk />} />
           <Route path="supplier-payment" element={<SupplierPayment />} />
+          <Route path="orders/:orderNo" element={<OrderDetail />} />
           <Route path="orders/:orderNo/lines/:lineNo" element={<OrderDetail />} />
           <Route path="issues" element={<ExceptionPool />} />
           <Route path="issue-log" element={<IssueLogView />} />

@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 VALID_SYNC_TYPES = [
     "orders", "order_details", "materials", "purchase_orders", "customers", "suppliers",
-    "materials_masterdata", "skus", "products", "warehouses", "processes",
+    "materials_masterdata", "skus", "products", "boms", "bom_details", "warehouses", "processes",
     "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "quality_issues", "mrp_plan_orders", "all",
 ]
 
@@ -61,6 +61,7 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
 
             # 2. 执行同步
             service = ERPSyncService(db)
+            service.sync_log = sync_log  # 让同步过程实时回写进度
             type_map = {
                 "orders": lambda: service.sync_orders(
                     sync_params.get("since"), sync_params.get("order_numbers"), custom_params
@@ -79,6 +80,8 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
                 "materials_masterdata": lambda: service.sync_materials_masterdata(sync_params.get("since"), custom_params),
                 "skus": lambda: service.sync_skus(sync_params.get("since"), custom_params),
                 "products": lambda: service.sync_products(sync_params.get("since"), custom_params),
+                "boms": lambda: service.sync_boms(sync_params.get("since"), custom_params),
+                "bom_details": lambda: service.sync_bom_details(sync_params.get("since"), custom_params),
                 "warehouses": lambda: service.sync_warehouses(sync_params.get("since"), custom_params),
                 "processes": lambda: service.sync_processes(sync_params.get("since"), custom_params),
                 "organizations": lambda: service.sync_organizations(sync_params.get("since"), custom_params),

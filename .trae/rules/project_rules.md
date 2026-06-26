@@ -8,20 +8,15 @@ trigger: always
 
 每次完成代码修改任务后，必须按以下步骤重启项目：
 
-### 1. 重启后端
-在 `backend/` 目录下执行：
+在根目录下执行：
 ```bash
-uvicorn app.main:app --reload --port 8000
-```
-
-### 2. 重启前端
-在 `frontend/` 目录下执行：
-```bash
-npm run dev
+docker compose build backend frontend
+docker compose down backend frontend
+docker compose up -d backend frontend
 ```
 
 ### 执行规则
-- 如果只修改了后端代码（`backend/` 目录），只需重启后端
-- 如果只修改了前端代码（`frontend/` 目录），只需重启前端
+- 如果只修改了后端代码（`backend`），只需构建和重启后端
+- 如果只修改了前端代码（`frontend`），只需构建和重启前端
 - 如果前后端都有修改，两个都需要重启
-- 重启前先停止之前运行的进程，避免端口冲突
+- 重启前先停止之前运行的容器，避免端口冲突

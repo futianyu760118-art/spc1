@@ -22,7 +22,7 @@ from app.schemas.basicdata.data_supply_schemas import (
 from app.models.basicdata.data_supply import DataSupplyConfig, DataSupplyApiKey, DataSupplyCallLog
 from app.services.basicdata.data_supply_service import (
     get_available_data_types, get_data_type_options,
-    validate_api_key, validate_signature, check_ip_whitelist,
+    validate_signature, check_ip_whitelist,
     query_data, query_single_record,
     log_call, get_call_statistics,
     generate_api_key, generate_app_key, generate_app_secret,
@@ -152,6 +152,15 @@ async def delete_config(
 
 # ── API Key 管理 ──
 
+@router.get("/endpoints", response_model=ResponseModel[list])
+async def list_registered_endpoints(
+    current_user: dict = Depends(PermissionChecker("basicdata.data_supply", "read")),
+):
+    """获取所有已注册的对外接口 endpoint 清单（供 API Key 表单勾选）"""
+    from app.api.v1.external.registry import list_endpoint_dicts
+    return ResponseModel(data=list_endpoint_dicts())
+
+
 @router.get("/api-keys", response_model=ResponseModel[dict])
 async def list_api_keys(
     page: int = Query(1, ge=1),
@@ -186,6 +195,7 @@ async def create_api_key(
         description=data.description,
         is_active=True,
         allowed_data_types_json=data.allowed_data_types_json,
+        allowed_endpoints_json=data.allowed_endpoints_json,
         rate_limit=data.rate_limit,
         expires_at=data.expires_at,
         ip_whitelist_json=data.ip_whitelist_json,
@@ -282,35 +292,26 @@ async def get_statistics(
 
 # ═══════════════════════════════════════════
 # 数据供给接口（第三方调用）
-# 支持两种认证方式：
-#   1. 签名认证（推荐）：X-App-Key + X-Timestamp + X-Signature
-#   2. API Key 认证（兼容旧模式）：X-API-Key
+# 认证方式：HMAC-SHA256 签名认证（X-App-Key + X-Timestamp + X-Signature）
 # ═══════════════════════════════════════════
 
 async def _authenticate_request(request: Request, data_type: str, db: AsyncSession) -> DataSupplyApiKey:
-    """统一认证：优先签名认证，回退到 API Key 认证"""
-    # 1. 尝试签名认证（推荐）
+    """签名认证：X-App-Key + X-Timestamp + X-Signature"""
     app_key = request.headers.get("X-App-Key")
     signature = request.headers.get("X-Signature")
     timestamp = request.headers.get("X-Timestamp")
 
-    if app_key and signature and timestamp:
-        query_string = str(request.url.query) if request.url.query else ""
-        key_obj = await validate_signature(db, app_key, signature, timestamp, data_type, query_string)
-        if not key_obj:
-            raise HTTPException(status_code=403, detail="签名验证失败：签名不匹配、已过期或无权访问")
-        return key_obj
+    if not (app_key and signature and timestamp):
+        raise HTTPException(
+            status_code=401,
+            detail="缺少认证信息：请提供 X-App-Key + X-Timestamp + X-Signature",
+        )
 
-    # 2. 回退到 API Key 认证（兼容旧模式）
-    api_key_header = request.headers.get("X-API-Key")
-    if api_key_header:
-        key_obj = await validate_api_key(db, api_key_header, data_type)
-        if not key_obj:
-            raise HTTPException(status_code=403, detail="API Key 无效、已过期或无权访问该数据类型")
-        return key_obj
-
-    # 3. 都没有
-    raise HTTPException(status_code=401, detail="缺少认证信息：请提供 X-App-Key + X-Timestamp + X-Signature 或 X-API-Key")
+    query_string = str(request.url.query) if request.url.query else ""
+    key_obj = await validate_signature(db, app_key, signature, timestamp, data_type, query_string)
+    if not key_obj:
+        raise HTTPException(status_code=403, detail="签名验证失败：签名不匹配、已过期或无权访问")
+    return key_obj
 
 
 @router.get("/data/{data_type}", response_model=ResponseModel[dict])
@@ -321,7 +322,6 @@ async def supply_data(
     page_size: int = Query(20, ge=1, le=200),
     keyword: Optional[str] = Query(None, description="关键字搜索"),
     updated_after: Optional[str] = Query(None, description="增量同步：只返回此时间之后更新的数据 (ISO 8601)"),
-    current_user: dict = Depends(PermissionChecker("basicdata.data_supply", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     """获取指定类型数据（支持签名认证和 API Key 认证）"""
@@ -389,7 +389,6 @@ async def supply_single_data(
     data_type: str,
     record_id: int,
     request: Request,
-    current_user: dict = Depends(PermissionChecker("basicdata.data_supply", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     """获取单条数据（支持签名认证和 API Key 认证）"""

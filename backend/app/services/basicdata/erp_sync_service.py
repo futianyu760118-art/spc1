@@ -7,6 +7,7 @@ SQL 中使用 :since 作为增量时间参数
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, date, timedelta
 from typing import Optional
 
@@ -25,6 +26,8 @@ from app.models.basicdata.supplier import Supplier
 from app.models.basicdata.material import Material
 from app.models.basicdata.sku import SKU
 from app.models.basicdata.product import Product
+from app.models.basicdata.bom import Bom
+from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.warehouse import Warehouse
 from app.models.basicdata.process import Process
 from app.models.basicdata.organization import Organization
@@ -56,6 +59,7 @@ class ERPSyncService:
         self.erp_engine = None
         self.erp_session = None
         self.batch_size = settings.ERP_SYNC_BATCH_SIZE
+        self.sync_log = None  # 可选：同步过程中实时回写进度的 SyncLog 对象
 
     # ------------------------------------------------------------------
     # 连接管理
@@ -150,11 +154,31 @@ class ERPSyncService:
     # ------------------------------------------------------------------
     async def _execute_erp_sql(self, sql_text: str, params: dict) -> list[dict]:
         """在 ERP 数据库上执行 SQL，返回字典列表（通过线程池避免阻塞事件循环）"""
+        # pyodbc 使用 ? 绑定参数，传入的参数数量必须与占位符数量完全一致，
+        # 否则会抛出 "COUNT field incorrect or syntax error"。
+        # 这里只保留 SQL 中实际出现的命名占位符（:name），避免配置的 SQL 未使用 :since 时报错。
+        if params:
+            referenced = set(re.findall(r":(\w+)", sql_text))
+            params = {k: v for k, v in params.items() if k in referenced}
+        else:
+            params = {}
+
         loop = asyncio.get_event_loop()
-        rows = await loop.run_in_executor(
-            None,
-            lambda: self.erp_session.execute(text(sql_text), params).mappings().all()
-        )
+
+        def _fetch():
+            return self.erp_session.execute(text(sql_text), params).mappings().all()
+
+        timeout = getattr(settings, "ERP_SYNC_QUERY_TIMEOUT", 600)
+        try:
+            rows = await asyncio.wait_for(
+                loop.run_in_executor(None, _fetch),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            raise ERPConnectionError(
+                f"ERP 查询超时（{timeout}秒未返回），SQL 可能过慢或连接异常。"
+                f"请检查 ERP 端表数据量/索引，或调大 ERP_SYNC_QUERY_TIMEOUT。"
+            )
 
         def clean_value(v):
             """清理值，处理编码问题"""
@@ -279,6 +303,203 @@ class ERPSyncService:
         return coerced
 
     # ------------------------------------------------------------------
+    # 批量 upsert 通用方法
+    # ------------------------------------------------------------------
+    async def _report_progress(self, stats: dict):
+        """实时回写同步进度到 SyncLog，使前端轮询能看到已处理条数。"""
+        if self.sync_log is None:
+            return
+        try:
+            self.sync_log.synced_count = stats["synced"]
+            self.sync_log.created_count = stats["created"]
+            self.sync_log.updated_count = stats["updated"]
+            self.sync_log.failed_count = len(stats["errors"])
+            await self.spc_db.commit()
+        except Exception:
+            try:
+                await self.spc_db.rollback()
+            except Exception:
+                pass
+
+    async def _bulk_upsert(
+        self,
+        model_class,
+        raw_rows: list[dict],
+        mapping: dict,
+        key_fields: list[str],
+        label: str,
+        defaults: Optional[dict] = None,
+    ) -> dict:
+        """
+        批量同步 ERP 行到目标模型。
+
+        相比逐行 upsert 的优化点：
+        1. 一次性按业务键预加载已有记录（避免每行一次 SELECT 退化为 O(N²)）
+        2. 按 batch_size 分批 commit（减少 N 次 DB 往返到 N/batch_size 次）
+        3. 批次失败时自动回退为逐行处理，保留单行错误隔离
+        4. 每处理一定行数打印进度日志
+
+        Args:
+            model_class: 目标 ORM 模型
+            raw_rows: 从 ERP 取回的原始行（_execute_erp_sql 输出）
+            mapping: 字段映射
+            key_fields: 业务主键字段列表，如 ["bom_id"] 或 ["bom_id", "line_no"]
+            label: 日志标识
+            defaults: 当某字段为空时的取值来源，如 {"bom_no": "bom_id"}
+        """
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+        total = len(raw_rows)
+        if total == 0:
+            return stats
+
+        valid_cols = self._get_model_columns(model_class)
+
+        # 1) 映射 + 过滤 + 类型转换 + 业务键规整；按业务键去重（保留最后一条）
+        deduped: dict[tuple, dict] = {}
+        for row in raw_rows:
+            row_dict = self._map_row(row, mapping)
+            first = str(row_dict.get(key_fields[0], "")).strip()
+            if not first:
+                stats["skipped"] += 1
+                continue
+            row_dict[key_fields[0]] = first
+            # 第二业务键缺省（如 line_no -> "1"）
+            for kf in key_fields[1:]:
+                val = str(row_dict.get(kf, "")).strip()
+                if not val:
+                    val = "1"
+                row_dict[kf] = val
+            # 默认值填充
+            if defaults:
+                for tgt, src in defaults.items():
+                    if not row_dict.get(tgt):
+                        row_dict[tgt] = row_dict.get(src)
+            row_dict = self._filter_model_fields(row_dict, valid_cols)
+            row_dict = self._coerce_row_types(row_dict, model_class)
+            # 剔除 NOT NULL 列的 None 值，让 ORM/DB 默认值生效
+            # 否则显式 None 会覆盖 client_default(如 default=0)，
+            # flush 时 INSERT NULL → integrity error → 整批失败
+            for col in model_class.__table__.columns:
+                if col.nullable:
+                    continue
+                if col.default is not None or col.server_default is not None:
+                    row_dict.pop(col.name, None)
+            key = tuple(str(row_dict.get(f, "")).strip() for f in key_fields)
+            deduped[key] = row_dict
+
+        prepared = list(deduped.values())
+        n = len(prepared)
+        logger.info(f"{label}: 原始 {total} 条, 去重后 {n} 条待写入")
+
+        if n == 0:
+            return stats
+
+        # 2) 一次性预加载已有记录（按第一个业务键分块 IN 查询，避免超大 IN）
+        in_col = getattr(model_class, key_fields[0])
+        in_values: list = []
+        seen = set()
+        for key in deduped.keys():
+            v = key[0]
+            if v not in seen:
+                seen.add(v)
+                in_values.append(v)
+
+        existing_map: dict[tuple, object] = {}
+        chunk = 1000
+        for i in range(0, len(in_values), chunk):
+            chunk_vals = in_values[i:i + chunk]
+            res = await self.spc_db.execute(
+                select(model_class).where(in_col.in_(chunk_vals))
+            )
+            for obj in res.scalars():
+                k = tuple(str(getattr(obj, f, "")).strip() for f in key_fields)
+                existing_map[k] = obj
+        logger.info(f"{label}: 预加载 {len(existing_map)} 条已有记录")
+
+        # 3) 处理单行：更新或新增（纯内存操作，无 DB 往返）
+        created_keys: set = set()
+
+        def _process_row(row_dict: dict) -> str:
+            key = tuple(str(row_dict.get(f, "")).strip() for f in key_fields)
+            obj = existing_map.get(key)
+            if obj is not None:
+                if getattr(obj, "data_source", None) not in ("erp", None, ""):
+                    return "skipped"
+                for k, v in row_dict.items():
+                    if k in key_fields:
+                        continue
+                    if v is not None and getattr(obj, k, None) != v:
+                        setattr(obj, k, v)
+                if hasattr(obj, "data_source"):
+                    obj.data_source = "erp"
+                return "updated"
+            new_obj = model_class(**row_dict)
+            if hasattr(new_obj, "data_source"):
+                new_obj.data_source = "erp"
+            self.spc_db.add(new_obj)
+            existing_map[key] = new_obj
+            created_keys.add(key)
+            return "created"
+
+        # 4) 分批 flush+commit；批次失败则回退逐行处理以隔离错误
+        batch_size = max(1, int(self.batch_size or 500))
+        progress_step = max(1000, batch_size * 2)
+
+        def _bump(status: str):
+            stats[status] += 1
+            stats["synced"] += 1
+
+        idx = 0
+        while idx < n:
+            batch = prepared[idx:idx + batch_size]
+            try:
+                await self.spc_db.begin_nested()
+                batch_results = []
+                for row_dict in batch:
+                    batch_results.append(_process_row(row_dict))
+                await self.spc_db.flush()
+                await self.spc_db.commit()
+                for status in batch_results:
+                    _bump(status)
+            except Exception as e:
+                try:
+                    await self.spc_db.rollback()
+                except Exception:
+                    pass
+                # flush 失败时本批新增对象随 rollback 失效，
+                # 需从缓存移除以便逐行重跑时重新插入
+                for row_dict in batch:
+                    key = tuple(str(row_dict.get(f, "")).strip() for f in key_fields)
+                    if key in created_keys:
+                        existing_map.pop(key, None)
+                        created_keys.discard(key)
+                # 逐行重跑，成功才计数
+                for row_dict in batch:
+                    try:
+                        await self.spc_db.begin_nested()
+                        status = _process_row(row_dict)
+                        await self.spc_db.commit()
+                        _bump(status)
+                    except Exception as e2:
+                        try:
+                            await self.spc_db.rollback()
+                        except Exception:
+                            pass
+                        stats["errors"].append(
+                            f"{label} {row_dict.get(key_fields[0])}: {e2}"
+                        )
+            idx += batch_size
+            if idx % progress_step == 0 or idx >= n:
+                logger.info(
+                    f"{label} 进度: {min(idx, n)}/{n} "
+                    f"(created={stats['created']}, updated={stats['updated']}, "
+                    f"errors={len(stats['errors'])})"
+                )
+                await self._report_progress(stats)
+
+        return stats
+
+    # ------------------------------------------------------------------
     # 订单数据同步
     # ------------------------------------------------------------------
     async def sync_orders(
@@ -352,12 +573,14 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     order_no = str(row_dict.get("order_no", "")).strip()
                     line_no = str(row_dict.get("line_no", "")).strip()
 
                     if not order_no:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     # 如果 line_no 为空，设置默认值
@@ -396,13 +619,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"订单 {row_dict.get('order_no')}-{row_dict.get('line_no')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -444,6 +667,7 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     order_no = str(row_dict.get("order_no", "")).strip()
                     line_no = str(row_dict.get("line_no", "")).strip()
@@ -451,10 +675,12 @@ class ERPSyncService:
 
                     if not order_no:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
                     if not erp_line_id:
                         stats["skipped"] += 1
                         logger.warning(f"订单明细缺少 erp_line_id，跳过: {order_no}")
+                        await self.spc_db.commit()
                         continue
                     if not line_no:
                         line_no = "10"
@@ -467,6 +693,7 @@ class ERPSyncService:
                     sale_order = sale_order_result.scalar_one_or_none()
                     if not sale_order:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
                     row_dict["sale_order_id"] = sale_order.id
 
@@ -495,13 +722,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"订单明细 {row_dict.get('order_no')}-{row_dict.get('erp_line_id')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -588,6 +815,7 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     order_no = str(row_dict.get("order_no", "")).strip()
                     line_no = str(row_dict.get("line_no", "")).strip()
@@ -595,6 +823,7 @@ class ERPSyncService:
 
                     if not order_no or not line_no or not material_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     # 计算欠料
@@ -639,6 +868,7 @@ class ERPSyncService:
                         )
                         if not order_exists.scalar_one_or_none():
                             stats["skipped"] += 1
+                            await self.spc_db.commit()
                             continue
                         demand = MaterialDemand(**row_dict)
                         if hasattr(demand, "data_source"):
@@ -647,13 +877,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"物料 {row_dict.get('material_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -692,10 +922,12 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     po_no = str(row_dict.get("po_no", "")).strip()
                     if not po_no:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     # 只保留模型字段 + 类型强转
@@ -747,13 +979,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"PO {row_dict.get('po_no')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -792,10 +1024,12 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     customer_code = str(row_dict.get("customer_code", "")).strip()
                     if not customer_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     # 只保留模型字段 + 类型强转
@@ -827,13 +1061,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"客户 {row_dict.get('customer_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -872,10 +1106,12 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     supplier_code = str(row_dict.get("supplier_code", "")).strip()
                     if not supplier_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
@@ -906,13 +1142,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"供应商 {row_dict.get('supplier_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -951,10 +1187,12 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     material_code = str(row_dict.get("material_code", "")).strip()
                     if not material_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
@@ -989,13 +1227,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"物料 {row_dict.get('material_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1034,10 +1272,12 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     sku_code = str(row_dict.get("sku_code", "")).strip()
                     if not sku_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
@@ -1068,13 +1308,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"SKU {row_dict.get('sku_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1113,10 +1353,12 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     product_code = str(row_dict.get("product_code", "")).strip()
                     if not product_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
@@ -1147,13 +1389,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"产品 {row_dict.get('product_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1162,6 +1404,91 @@ class ERPSyncService:
         except Exception as e:
             stats["errors"].append(str(e))
             logger.exception(f"产品同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
+    # BOM同步
+    # ------------------------------------------------------------------
+    async def sync_boms(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
+        """同步BOM"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("boms")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条BOM记录")
+
+            stats = await self._bulk_upsert(
+                Bom,
+                rows,
+                mapping,
+                key_fields=["bom_id"],
+                label="BOM",
+                defaults={"bom_no": "bom_id"},
+            )
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"BOM同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"BOM同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
+    # BOM明细同步
+    # ------------------------------------------------------------------
+    async def sync_bom_details(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
+        """同步BOM明细行数据到 BomDetail"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("bom_details")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条BOM明细记录")
+
+            stats = await self._bulk_upsert(
+                BomDetail,
+                rows,
+                mapping,
+                key_fields=["bom_id", "line_no"],
+                label="BOM明细",
+            )
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"BOM明细同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"BOM明细同步异常: {e}")
         finally:
             self._close_erp(keep_alive=True)
 
@@ -1192,10 +1519,12 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     wh_code = str(row_dict.get("wh_code", "")).strip()
                     if not wh_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
@@ -1226,13 +1555,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"仓库 {row_dict.get('wh_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1271,10 +1600,12 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     process_code = str(row_dict.get("process_code", "")).strip()
                     if not process_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
@@ -1305,13 +1636,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"工序 {row_dict.get('process_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1354,6 +1685,7 @@ class ERPSyncService:
             org_list = []
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     logger.info(f"映射后数据: {row_dict}")
                     
@@ -1368,6 +1700,7 @@ class ERPSyncService:
                         else:
                             logger.warning(f"组织编码为空且 oa_org_id 也为空，跳过: {row_dict}")
                             stats["skipped"] += 1
+                            await self.spc_db.commit()
                             continue
 
                     # 保存原始 parent_id（ERP 的 oa_org_id）
@@ -1418,6 +1751,7 @@ class ERPSyncService:
                         "original_parent_oa_id": original_parent_oa_id
                     })
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
@@ -1425,7 +1759,6 @@ class ERPSyncService:
                         pass
                     stats["errors"].append(f"组织 {row_dict.get('org_code')}: {e}")
                     logger.exception(f"组织同步错误: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1516,12 +1849,14 @@ class ERPSyncService:
             for row in rows:
                 row_dict = {}
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     position_code = str(row_dict.get("position_code", "") or "").strip() or None
                     oa_position_id = str(row_dict.get("oa_position_id", "") or "").strip() or None
                     position_name = str(row_dict.get("position_name", "") or "").strip() or None
                     if not (position_code or oa_position_id or position_name):
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
                     row_dict["position_code"] = position_code
                     if "oa_position_id" in row_dict:
@@ -1574,6 +1909,7 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
@@ -1582,7 +1918,6 @@ class ERPSyncService:
                     stats["errors"].append(
                         f"岗位 {row_dict.get('position_code') or row_dict.get('oa_position_id') or row_dict.get('position_name')}: {e}"
                     )
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1619,6 +1954,7 @@ class ERPSyncService:
 
             for idx, row in enumerate(rows):
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     resolved_position_id = await self._resolve_position_id(row_dict)
                     if resolved_position_id:
@@ -1699,6 +2035,7 @@ class ERPSyncService:
                         logger.info(f"[员工同步] 创建员工 emp_code={emp_code} emp_name={emp_name}")
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
@@ -1706,7 +2043,6 @@ class ERPSyncService:
                         pass
                     stats["errors"].append(f"人员 {row_dict.get('emp_code')}: {e}")
                     logger.error(f"[员工同步] 处理第{idx+1}条记录异常 emp_code={row_dict.get('emp_code')} 错误: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1745,11 +2081,13 @@ class ERPSyncService:
 
             for row in rows:
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     emp_code = str(row_dict.get("emp_code", "")).strip()
                     org_code = str(row_dict.get("org_code", "")).strip()
                     if not emp_code or not org_code:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     # 验证员工和组织是否存在
@@ -1760,6 +2098,7 @@ class ERPSyncService:
                     if not emp:
                         stats["skipped"] += 1
                         logger.warning(f"员工-部门关系跳过: 员工 {emp_code} 不存在")
+                        await self.spc_db.commit()
                         continue
 
                     org_result = await self.spc_db.execute(
@@ -1769,6 +2108,7 @@ class ERPSyncService:
                     if not org:
                         stats["skipped"] += 1
                         logger.warning(f"员工-部门关系跳过: 组织 {org_code} 不存在")
+                        await self.spc_db.commit()
                         continue
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
@@ -1803,13 +2143,13 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
                     except Exception:
                         pass
                     stats["errors"].append(f"员工部门关系 {row_dict.get('emp_code')}-{row_dict.get('org_code')}: {e}")
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
 
@@ -1883,11 +2223,13 @@ class ERPSyncService:
             for row in rows:
                 row_dict: dict = {}
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     invoice_no = str(row_dict.get("invoice_no", "")).strip()
                     line_no = str(row_dict.get("line_no", "")).strip()
                     if not invoice_no or not line_no:
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
 
                     # 统一类型
@@ -1905,18 +2247,25 @@ class ERPSyncService:
                     existing = result.scalar_one_or_none()
 
                     if existing:
+                        changed = False
                         for k, v in row_dict.items():
                             if k in ("invoice_no", "line_no"):
                                 continue
-                            if v is not None:
+                            if v is not None and getattr(existing, k, None) != v:
                                 setattr(existing, k, v)
-                        stats["updated"] += 1
+                                changed = True
+                        if changed:
+                            stats["updated"] += 1
+                        else:
+                            existing.updated_at = datetime.now()
+                            stats["skipped"] += 1
                     else:
                         invoice = PurchaseInvoice(**row_dict)
                         self.spc_db.add(invoice)
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
@@ -1925,7 +2274,6 @@ class ERPSyncService:
                     stats["errors"].append(
                         f"采购开票 {row_dict.get('invoice_no')}-{row_dict.get('line_no')}: {e}"
                     )
-                    await self.spc_db.begin_nested()
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -1969,6 +2317,7 @@ class ERPSyncService:
             for row in rows:
                 row_dict: dict = {}
                 try:
+                    await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
                     logger.info(f"映射后数据: {row_dict}")
                     erp_quality_id = str(row_dict.get("erp_quality_id", "")).strip()
@@ -1976,6 +2325,7 @@ class ERPSyncService:
                     if not erp_quality_id:
                         logger.warning(f"跳过: ERP品质异常ID为空, row: {row_dict}")
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
                     
                     # 如果 ERP 数据中没有 issue_no，自动生成
@@ -2011,6 +2361,7 @@ class ERPSyncService:
                     if not row_dict:
                         logger.warning(f"跳过: 过滤后无有效字段, issue_no: {issue_no}")
                         stats["skipped"] += 1
+                        await self.spc_db.commit()
                         continue
                     row_dict = self._coerce_row_types(row_dict, QualityIssue)
                     logger.info(f"类型强转后数据: {row_dict}")
@@ -2033,6 +2384,7 @@ class ERPSyncService:
                         stats["created"] += 1
 
                     stats["synced"] += 1
+                    await self.spc_db.commit()
                 except Exception as e:
                     try:
                         await self.spc_db.rollback()
@@ -2041,7 +2393,6 @@ class ERPSyncService:
                     stats["errors"].append(
                         f"品质异常 {row_dict.get('issue_no')}: {e}"
                     )
-                    await self.spc_db.begin_nested()
                     logger.exception(f"处理品质异常失败: {row_dict}")
 
             await self.spc_db.flush()
@@ -2079,51 +2430,14 @@ class ERPSyncService:
 
             rows = await self._execute_erp_sql(sql_text, params)
             logger.info(f"从 ERP 获取到 {len(rows)} 条MRP计划订单记录")
-            valid_cols = self._get_model_columns(MrpPlanOrder)
 
-            for row in rows:
-                row_dict: dict = {}
-                try:
-                    row_dict = self._map_row(row, mapping)
-                    sale_order_id = row_dict.get("sale_order_id")
-                    material_id = str(row_dict.get("material_id", "")).strip()
-                    if sale_order_id is None or not material_id:
-                        stats["skipped"] += 1
-                        continue
-
-                    row_dict = self._filter_model_fields(row_dict, valid_cols)
-                    row_dict = self._coerce_row_types(row_dict, MrpPlanOrder)
-
-                    result = await self.spc_db.execute(
-                        select(MrpPlanOrder).where(
-                            MrpPlanOrder.sale_order_id == sale_order_id,
-                            MrpPlanOrder.material_id == material_id,
-                        )
-                    )
-                    existing = result.scalar_one_or_none()
-
-                    if existing:
-                        for k, v in row_dict.items():
-                            if k in ("sale_order_id", "material_id"):
-                                continue
-                            if v is not None:
-                                setattr(existing, k, v)
-                        stats["updated"] += 1
-                    else:
-                        order = MrpPlanOrder(**row_dict)
-                        self.spc_db.add(order)
-                        stats["created"] += 1
-
-                    stats["synced"] += 1
-                except Exception as e:
-                    try:
-                        await self.spc_db.rollback()
-                    except Exception:
-                        pass
-                    stats["errors"].append(
-                        f"MRP计划订单 {row_dict.get('sale_order_no', '')}/{row_dict.get('material_code', '')}: {e}"
-                    )
-                    await self.spc_db.begin_nested()
+            stats = await self._bulk_upsert(
+                MrpPlanOrder,
+                rows,
+                mapping,
+                key_fields=["sale_order_id", "material_id"],
+                label="MRP计划订单",
+            )
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -2154,6 +2468,8 @@ class ERPSyncService:
             results["materials_masterdata"] = await self.sync_materials_masterdata(since, custom_params)
             results["skus"] = await self.sync_skus(since, custom_params)
             results["products"] = await self.sync_products(since, custom_params)
+            results["boms"] = await self.sync_boms(since, custom_params)
+            results["bom_details"] = await self.sync_bom_details(since, custom_params)
             results["warehouses"] = await self.sync_warehouses(since, custom_params)
             results["processes"] = await self.sync_processes(since, custom_params)
             results["organizations"] = await self.sync_organizations(since, custom_params)

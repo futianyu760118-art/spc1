@@ -5,6 +5,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from typing import Optional
+
 from pydantic import BaseModel
 
 from app.core.database import get_db
@@ -30,7 +32,8 @@ class ChangePasswordRequest(BaseModel):
 
 
 class UpdatePreferencesRequest(BaseModel):
-    font_size_scale: str
+    font_size_scale: Optional[str] = None
+    ui_preferences: Optional[dict] = None
 
 
 @router.post("/login", response_model=ResponseModel[TokenResponse])
@@ -150,6 +153,7 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
         supplier_name=user.supplier_name,
         supplier_code=supplier_code,
         font_size_scale=user.font_size_scale,
+        ui_preferences=user.ui_preferences,
         is_default_password=is_default,
         login_version=user.login_version,
     ))
@@ -193,6 +197,9 @@ async def update_preferences(
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
 
-    user.font_size_scale = body.font_size_scale
+    if body.font_size_scale is not None:
+        user.font_size_scale = body.font_size_scale
+    if body.ui_preferences is not None:
+        user.ui_preferences = body.ui_preferences
     await db.commit()
     return ResponseModel(data={"id": user.id, "message": "偏好设置已更新"})

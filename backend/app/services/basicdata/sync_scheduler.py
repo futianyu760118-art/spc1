@@ -39,6 +39,8 @@ class SyncScheduler:
             "materials_masterdata": "sync_materials_masterdata",
             "skus": "sync_skus",
             "products": "sync_products",
+            "boms": "sync_boms",
+            "bom_details": "sync_bom_details",
             "warehouses": "sync_warehouses",
             "processes": "sync_processes",
             "organizations": "sync_organizations",

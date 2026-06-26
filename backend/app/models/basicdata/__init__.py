@@ -8,6 +8,8 @@ from app.models.basicdata.supplier import Supplier  # noqa: F401
 from app.models.basicdata.material import Material  # noqa: F401
 from app.models.basicdata.sku import SKU  # noqa: F401
 from app.models.basicdata.product import Product  # noqa: F401
+from app.models.basicdata.bom import Bom  # noqa: F401
+from app.models.basicdata.bom_detail import BomDetail  # noqa: F401
 from app.models.basicdata.warehouse import Warehouse  # noqa: F401
 from app.models.basicdata.process import Process  # noqa: F401
 from app.models.basicdata.organization import Organization  # noqa: F401

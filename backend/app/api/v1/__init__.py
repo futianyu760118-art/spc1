@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import assistant, basicdata, common, dashboard, exception, masterdata, material, meeting, npi, order, production, rules
+from app.api.v1 import assistant, basicdata, common, dashboard, exception, external, masterdata, material, meeting, npi, order, production, rules
 
 api_router = APIRouter()
 
@@ -66,6 +66,9 @@ api_router.include_router(basicdata.permissions_router, prefix="/permissions", t
 
 # 数据供给
 api_router.include_router(basicdata.data_supply_router, prefix="/basicdata/data-supply", tags=["数据供给"])
+
+# 对外接口（供外部系统调用，复用数据供给的 API Key 体系）
+api_router.include_router(external.external_router, prefix="/external", tags=["对外接口"])
 
 # Common files and assistant
 api_router.include_router(common.files_router, prefix="/files", tags=["文件"])

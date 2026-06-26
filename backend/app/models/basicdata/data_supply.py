@@ -34,6 +34,7 @@ class DataSupplyApiKey(Base):
     description = Column(String(512), nullable=True, comment="用途说明")
     is_active = Column(Boolean, default=True, comment="是否启用")
     allowed_data_types_json = Column(Text, nullable=True, comment="允许访问的数据类型列表 JSON")
+    allowed_endpoints_json = Column(Text, nullable=True, comment="允许调用的对外接口 endpoint_code 列表 JSON")
     rate_limit = Column(Integer, default=100, comment="每分钟请求限制")
     app_key = Column(String(64), nullable=True, unique=True, index=True, comment="应用标识（AppKey）")
     app_secret = Column(String(128), nullable=True, comment="应用密钥（AppSecret，仅创建时返回）")

@@ -23,6 +23,7 @@ class UserInfo(BaseModel):
     supplier_code: Optional[str] = None
     is_active: bool = True
     font_size_scale: Optional[str] = None
+    ui_preferences: Optional[dict] = None
     is_default_password: bool = True
     login_version: int = 0
 
