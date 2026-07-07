@@ -50,6 +50,9 @@ import {
   renderPlanExplainSummaryCell,
   renderPlanExplainPanel,
 } from './helpers'
+import ScheduleModal from '../components/ScheduleModal'
+import DeleteModal from '../components/DeleteModal'
+import BatchScheduleModal from '../components/BatchScheduleModal'
 
 const PERF_DEBUG = import.meta.env.DEV
 
@@ -2581,87 +2584,6 @@ export default function SchedulePlans() {
         </Space>
       </Modal>
 
-      <Modal
-        title="删除预览与补位建议"
-        open={backfillPreviewOpen}
-        destroyOnHidden
-        onCancel={() => {
-          setBackfillPreviewOpen(false)
-          setBackfillPreview(null)
-        }}
-        footer={[
-          <Button key="close" onClick={() => {
-            setBackfillPreviewOpen(false)
-            setBackfillPreview(null)
-          }}>关闭</Button>,
-          <Button
-            key="delete-only"
-            type="primary"
-            loading={loading}
-            onClick={() => handleConfirmDelete(false)}
-          >
-            只删除，回待处理
-          </Button>,
-          <Button
-            key="execute-backfill"
-            danger
-            disabled={(backfillPreview?.items || []).length === 0}
-            loading={loading}
-            onClick={() => {
-              handleConfirmDelete(true)
-            }}
-          >
-            删除并补位，保留在已排计划
-          </Button>,
-        ]}
-        width={980}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            showIcon
-            type="warning"
-            message="请先确认删除后的去向"
-            description={
-              <div>
-                <div>点“只删除，回待处理”：这张单据会离开已排计划，并回到待处理工作台。</div>
-                <div>点“删除并补位，保留在已排计划”：系统会立即生成新的补位计划，不会回待处理。</div>
-                <div>如果原释放计划日已经过去，系统只会从“最早可补位日”开始补位，不会把新计划前移到过去日期。</div>
-              </div>
-            }
-          />
-          <Row gutter={12}>
-            <Col span={6}>
-              <div className="card-modern" style={{ padding: 16 }}>
-                <Statistic title="原释放计划日" value={backfillPreview?.release_plan_date || '-'} />
-              </div>
-            </Col>
-            <Col span={6}>
-              <div className="card-modern" style={{ padding: 16 }}>
-                <Statistic title="最早可补位日" value={backfillPreview?.earliest_backfill_date || backfillPreview?.release_plan_date || '-'} />
-              </div>
-            </Col>
-            <Col span={6}>
-              <div className="card-modern" style={{ padding: 16 }}>
-                <Statistic title="释放排产段" value={backfillPreview?.release_bucket_label || '-'} />
-              </div>
-            </Col>
-            <Col span={6}>
-              <div className="card-modern" style={{ padding: 16 }}>
-                <Statistic title="候选补位数" value={backfillPreview?.affected_count || 0} />
-              </div>
-            </Col>
-          </Row>
-          <Table
-            rowKey="plan_id"
-            columns={backfillColumns}
-            dataSource={backfillPreview?.items || []}
-            size="small"
-            pagination={false}
-            scroll={{ x: 1100, y: 320 }}
-            locale={{ emptyText: <Empty description="当前没有可前移的补位计划" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-          />
-        </Space>
-      </Modal>
 
       <Modal
         title={`版本历史${planHistoryTarget?.order_no ? ` - ${planHistoryTarget.order_no}/${planHistoryTarget.line_no}` : ''}`}
@@ -2841,71 +2763,12 @@ export default function SchedulePlans() {
         </Space>
       </Modal>
 
-      <Modal
-        title="删除计划"
+      <DeleteModal
         open={deleteModalOpen}
-        destroyOnHidden
-        onOk={handleDelete}
-        onCancel={() => {
-          setDeleteModalOpen(false)
-          setDeletingPlan(null)
-          setDeleteReason('')
-          setBreakFrozenReason('')
-        }}
-        okText="下一步：预览删除影响"
-        cancelText="取消"
-        confirmLoading={loading}
-        width={560}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            showIcon
-            type="warning"
-            message="先输入删除原因，再预览删除影响"
-            description="本次只允许删除未开始、未投产且未锁定的当前有效计划。下一步会先展示释放窗口和补位候选，再由你决定是只删除，还是删除并补位。"
-          />
-          <div>
-            <div style={{ marginBottom: 8, color: '#595959' }}>当前计划</div>
-            <div style={{ lineHeight: 1.8 }}>
-              <div>订单：{deletingPlan?.order_no || '-'}/{deletingPlan?.line_no || '-'}</div>
-              <div>计划日：{formatDate(deletingPlan?.plan_date)}</div>
-              <div>排产段：{deletingPlan?.schedule_bucket_label || '-'}</div>
-            </div>
-          </div>
-          {deletingInFrozen && (
-            <Alert
-              showIcon
-              type="error"
-              message="⚠ 该计划在冷冻区（1-3 天内开工）"
-              description="冷冻区计划受冷冻保护，必须填写破冻理由才能删除。破冻操作会记入操作日志（is_frozen_break=true），便于事后追溯。"
-            />
-          )}
-          <div>
-            <div style={{ marginBottom: 8, color: '#595959' }}>删除原因</div>
-            <Input.TextArea
-              value={deleteReason}
-              onChange={(e) => setDeleteReason(e.target.value)}
-              rows={4}
-              placeholder="例如：客户改交期、客户暂缓、计划调整"
-              maxLength={200}
-              showCount
-            />
-          </div>
-          {deletingInFrozen && (
-            <div>
-              <div style={{ marginBottom: 8, color: '#cf1322', fontWeight: 600 }}>破冻理由（必填）</div>
-              <Input.TextArea
-                value={breakFrozenReason}
-                onChange={(e) => setBreakFrozenReason(e.target.value)}
-                rows={3}
-                placeholder="例如：客户紧急改交期、设备突发故障、临时插单"
-                maxLength={200}
-                showCount
-              />
-            </div>
-          )}
-        </Space>
-      </Modal>
+        planData={deletingPlan}
+        onClose={() => { setDeleteModalOpen(false); setDeletingPlan(null) }}
+        onSuccess={async () => { invalidatePageCaches(); await refreshAllViews() }}
+      />
 
       <Modal
         title={editing ? '编辑计划排产' : '新增计划排产'}
@@ -2951,110 +2814,27 @@ export default function SchedulePlans() {
         </Form>
       </Modal>
 
-      <Modal
-        title={`单条排产${selectedOrder?.schedule_bucket_label ? ` - ${selectedOrder.schedule_bucket_label}` : ''}`}
+      <ScheduleModal
         open={scheduleModalOpen}
-        destroyOnHidden
-        onOk={handleAutoSchedule}
-        onCancel={() => setScheduleModalOpen(false)}
-        width={640}
-      >
-        <Alert
-          showIcon
-          type="info"
-          style={{ marginBottom: 12 }}
-          message={selectedOrder?.schedule_bucket === 'lean'
-            ? `精益会自动试算建议工时：先按 ${leanStandardHours} 小时、必要时加班到 ${leanMaxHours} 小时；当前建议 ${selectedOrder?.recommended_daily_hours ? Number(selectedOrder.recommended_daily_hours).toFixed(2) : '-'} 小时/天。`
-            : selectedOrder?.schedule_bucket === 'mixed'
-              ? `当前订单会自动拆成“组装 + 包装”两条计划；包装按组装前一日释放量滚动承接，不再手填 UPPH。`
-              : selectedOrder?.recommended_daily_hours
-                ? `${selectedOrder?.schedule_bucket_label || '当前阶段'}会自动试算建议工时；当前建议 ${Number(selectedOrder.recommended_daily_hours).toFixed(2)} 小时/天，当前负荷为 ${selectedOrder?.capacity_load_status_label || '正常'}${selectedOrder?.needs_sunday_work ? '，已启用周日生产' : ''}。`
-                : `系统默认按交期前 ${readyOffsetDays} 天备货完成倒排；当前排产段默认工时 ${getRecommendedDailyWorkHours(selectedOrder?.schedule_bucket)} 小时/天，UPPH按明细单价汇总自动计算。`}
-        />
-        <Form form={scheduleForm} layout="vertical">
-          <Row gutter={16}>
-            <Col span={12}><Form.Item name="order_no" label="订单号"><Input disabled /></Form.Item></Col>
-            <Col span={12}><Form.Item name="line_no" label="行号"><Input disabled /></Form.Item></Col>
-            <Col span={12}><Form.Item name="product_code" label="产品编码"><Input disabled /></Form.Item></Col>
-            <Col span={12}><Form.Item name="model_code" label="型号"><Input disabled /></Form.Item></Col>
-            <Col span={12}><Form.Item name="quantity" label="数量"><InputNumber disabled style={{ width: '100%' }} /></Form.Item></Col>
-            <Col span={12}><Form.Item name="promised_date" label="交期"><DatePicker disabled style={{ width: '100%' }} /></Form.Item></Col>
-            <Col span={12}>
-              <Form.Item name="department" label="部门" rules={[{ required: true }]}>
-                <Select options={DEPARTMENTS.map((item) => ({ value: item, label: item }))} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="plan_date" label="计划日期（留空则按倒排开始日）">
-                  <DatePicker style={{ width: '100%' }} placeholder="不填则系统自动倒排" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="upph"
-                label="UPPH"
-                rules={selectedOrder?.schedule_bucket === 'lean' ? [{ required: true, type: 'number', min: 0.001 }] : []}
-              >
-                <InputNumber min={0.001} disabled={selectedOrder?.schedule_bucket !== 'lean'} style={{ width: '100%' }} placeholder={selectedOrder?.schedule_bucket === 'lean' ? '' : '装配由系统自动计算'} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="daily_work_hours" label="每日工时（可留空自动）">
-                <InputNumber min={1} max={24} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={24}><Form.Item name="owner" label="负责人"><Input /></Form.Item></Col>
-          </Row>
-        </Form>
-      </Modal>
+        orderData={selectedOrder}
+        onClose={() => setScheduleModalOpen(false)}
+        onSuccess={async () => {
+          invalidatePageCaches()
+          await refreshAllViews()
+        }}
+      />
 
-      <Modal
-        title={`批量排产（${selectedOrderRows.length} 条）`}
+      <BatchScheduleModal
         open={batchScheduleOpen}
-        destroyOnHidden
-        onOk={handleBatchSchedule}
-        onCancel={() => setBatchScheduleOpen(false)}
-        width={720}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert showIcon type="info" message={`仅勾选“可排产”的订单会执行批量排产，后端会统一处理并返回失败原因；精益默认自动试算工时，先按 ${leanStandardHours} 小时、必要时加班到 ${leanMaxHours} 小时。`} />
-          <Form form={batchScheduleForm} layout="vertical">
-            <Row gutter={16}>
-              <Col span={8}>
-                <Form.Item name="department" label="部门" rules={[{ required: true }]}>
-                  <Select options={DEPARTMENTS.map((item) => ({ value: item, label: item }))} />
-                </Form.Item>
-              </Col>
-              <Col span={8}>
-                <Form.Item name="plan_date" label="计划日期（留空则按倒排开始日）">
-                  <DatePicker style={{ width: '100%' }} placeholder="不填则系统自动倒排" />
-                </Form.Item>
-              </Col>
-              <Col span={8}>
-                <Form.Item name="daily_work_hours" label="每日工时（留空则按订单自动试算）">
-                  <InputNumber min={1} max={24} style={{ width: '100%' }} />
-                </Form.Item>
-              </Col>
-              <Col span={24}><Form.Item name="owner" label="负责人"><Input placeholder="可选，批量写入负责人" /></Form.Item></Col>
-            </Row>
-          </Form>
-          <Table
-            rowKey={(row: any) => `${row.order_no}-${row.line_no}`}
-            size="small"
-            pagination={false}
-            dataSource={selectedOrderRows}
-            columns={[
-              { title: '订单号', dataIndex: 'order_no', width: 150, render: (v: string) => renderCopyableText(v, '订单号') },
-              { title: '行号', dataIndex: 'line_no', width: 90, render: (v: string) => renderCopyableText(v, '行号') },
-              { title: '排产段', width: 110, render: (_: any, row: any) => renderBucketTag(row) },
-              { title: 'BOM编码', dataIndex: 'bom_no', width: 180, render: (v: string) => renderCopyableText(v, 'BOM编码') },
-              { title: '数量', dataIndex: 'order_qty', width: 90, render: (v: number) => v ?? '-' },
-              { title: 'UPPH', dataIndex: 'upph', width: 90, render: (v: number) => v ? Number(v).toFixed(2) : '-' },
-            ]}
-            scroll={{ x: 900, y: 280 }}
-          />
-        </Space>
-      </Modal>
+        orderRows={selectedOrderRows}
+        onClose={() => setBatchScheduleOpen(false)}
+        onSuccess={async () => {
+          setSelectedOrderKeys([])
+          setSelectedOrderRows([])
+          invalidatePageCaches()
+          await refreshAllViews()
+        }}
+      />
     </div>
   )
 }

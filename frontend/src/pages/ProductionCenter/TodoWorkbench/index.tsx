@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Col, DatePicker, Input, Row, Select, Space, Statistic, Table, Tag, message } from 'antd'
+import { Button, Col, DatePicker, Input, Row, Select, Space, Statistic, Table, Tag, Tooltip, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined, SearchOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -8,6 +8,8 @@ import { productionApi } from '../../../services/api'
 import { formatDate } from '../../../utils'
 import { TODO_FILTER_OPTIONS, TODO_BUCKET_WORKSPACE_OPTIONS, TODO_STATUS_META } from '../SchedulePlans/constants'
 import { renderBucketTag, renderCopyableText, renderSchedulingReasonCell, renderSchedulingStatusTag } from '../SchedulePlans/helpers'
+import ScheduleModal from '../components/ScheduleModal'
+import BatchScheduleModal from '../components/BatchScheduleModal'
 
 interface TodoRow {
   id: number
@@ -37,6 +39,25 @@ interface TodoRow {
 
 export default function TodoWorkbench() {
   const navigate = useNavigate()
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
+  const [scheduleOrder, setScheduleOrder] = useState<any>(null)
+  const [batchScheduleOpen, setBatchScheduleOpen] = useState(false)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [selectedRows, setSelectedRows] = useState<any[]>([])
+
+  const openSchedule = (row: any) => {
+    setScheduleOrder(row)
+    setScheduleModalOpen(true)
+  }
+
+  const openBatchSchedule = () => {
+    const schedulableRows = selectedRows.filter((row) => row.todo_kind === 'ready')
+    if (schedulableRows.length === 0) {
+      message.warning('请先勾选待排产订单')
+      return
+    }
+    setBatchScheduleOpen(true)
+  }
   const [data, setData] = useState<TodoRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -134,17 +155,29 @@ export default function TodoWorkbench() {
     { title: '建议动作', width: 120, render: (_: any, row: TodoRow) => <span style={{ color: '#595959' }}>{row.todo_action_label || '-'}</span> },
     {
       title: '操作',
-      width: 140,
+      width: 180,
       fixed: 'right',
-      render: (_: any, row: TodoRow) => (
-        <Button
-          size="small"
-          type="link"
-          onClick={() => navigate(`/schedule-plans?workspace=planner_hub&planId=${row.id}`)}
-        >
-          去巨无霸处理
-        </Button>
-      ),
+      render: (_: any, row: TodoRow) => {
+        if (row.todo_kind === 'ready') {
+          return (
+            <Button size="small" type="primary" icon={<ThunderboltOutlined />} onClick={() => openSchedule(row)}>
+              {row.schedule_bucket === 'mixed' ? '生成两段' : '排产'}
+            </Button>
+          )
+        }
+        if (row.todo_kind === 'reschedule') {
+          return (
+            <Button size="small" type="primary" ghost onClick={() => navigate(`/schedule-plans?workspace=plan_board&planId=${row.id}&keyword=${row.order_no}`)}>
+              预览重排
+            </Button>
+          )
+        }
+        return (
+          <Button size="small" type="link" onClick={() => navigate(`/schedule-plans?workspace=plan_board&planId=${row.id}&keyword=${row.order_no}`)}>
+            查看
+          </Button>
+        )
+      },
     },
   ], [navigate])
 
@@ -222,8 +255,15 @@ export default function TodoWorkbench() {
             <Col flex="auto" />
             <Col>
               <Space>
-                <span style={{ color: '#595959' }}>共 {total} 条</span>
+                <span style={{ color: '#595959' }}>
+                  共 {total} 条，已选 {selectedRows.length} 条（其中待排产 {selectedRows.filter(r => r.todo_kind === 'ready').length} 条）
+                </span>
                 <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+                <Tooltip title={selectedRows.filter(r => r.todo_kind === 'ready').length > 0 ? `批量排产 ${selectedRows.filter(r => r.todo_kind === 'ready').length} 条` : '请先勾选待排产订单'}>
+                  <Button type="primary" icon={<ThunderboltOutlined />} disabled={selectedRows.filter(r => r.todo_kind === 'ready').length === 0} onClick={openBatchSchedule}>
+                    批量排产
+                  </Button>
+                </Tooltip>
               </Space>
             </Col>
           </Row>
@@ -233,6 +273,14 @@ export default function TodoWorkbench() {
       <div className="card-modern" style={{ padding: '0 0 4px' }}>
         <Table<TodoRow>
           rowKey={(row) => row.id || `${row.order_no}-${row.line_no}-${row.todo_kind}`}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys, rows) => {
+              setSelectedRowKeys(keys)
+              setSelectedRows(rows)
+            },
+            getCheckboxProps: (row) => ({ disabled: row.todo_kind !== 'ready' }),
+          }}
           dataSource={data}
           columns={columns}
           loading={loading}
@@ -250,8 +298,26 @@ export default function TodoWorkbench() {
       </div>
 
       <div style={{ color: '#94a3b8', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>
-        待排工作台 · 真实数据来自 getTodoWorkbench 接口 · 单条排产/批量操作仍走巨无霸（v2 7.2 新旧共存）
+        待排工作台 · 真实数据来自 getTodoWorkbench 接口 · 单条排产直接弹 Modal，重排/查看跳巨无霸
       </div>
+
+      <ScheduleModal
+        open={scheduleModalOpen}
+        orderData={scheduleOrder}
+        onClose={() => { setScheduleModalOpen(false); setScheduleOrder(null) }}
+        onSuccess={() => load()}
+      />
+
+      <BatchScheduleModal
+        open={batchScheduleOpen}
+        orderRows={selectedRows}
+        onClose={() => setBatchScheduleOpen(false)}
+        onSuccess={() => {
+          setSelectedRowKeys([])
+          setSelectedRows([])
+          load()
+        }}
+      />
     </div>
   )
 }
