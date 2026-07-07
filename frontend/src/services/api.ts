@@ -225,12 +225,14 @@ export const etaApi = {
 export const productionApi = {
   // 生产总览
   getOverview: () => api.get('/production/overview'),
+  getKpiSummary: () => api.get('/production/kpi-summary'),
+  getTodayCards: () => api.get('/production/kpi-summary/today-cards'),
   listSchedulePlans: (params: Record<string, any>) => api.get('/production/schedule-plans', { params }),
   createSchedulePlan: (data: Record<string, any>) => api.post('/production/schedule-plans', data),
   updateSchedulePlan: (id: number, data: Record<string, any>) => api.put(`/production/schedule-plans/${id}`, data),
   getDeleteSchedulePlanPreview: (id: number, params?: Record<string, any>) =>
     api.get(`/production/schedule-plans/${id}/delete-preview`, { params }),
-  confirmDeleteSchedulePlan: (id: number, data: { reason?: string; execute_backfill?: boolean }) =>
+  confirmDeleteSchedulePlan: (id: number, data: { reason?: string; execute_backfill?: boolean; break_frozen_reason?: string }) =>
     api.post(`/production/schedule-plans/${id}/delete-confirm`, data),
   deleteSchedulePlan: (id: number, params?: Record<string, any>) =>
     api.delete(`/production/schedule-plans/${id}`, { params }),
