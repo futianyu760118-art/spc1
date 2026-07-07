@@ -243,6 +243,7 @@ class DatabaseInitializer:
             "production_schedule_plan": {
                 "frozen_locked_by": "VARCHAR(64)",
                 "frozen_locked_at": "TIMESTAMP",
+                "planned_qty": "NUMERIC(15,2)",
             },
             "production_schedule_operation_log": {
                 "is_frozen_break": "BOOLEAN NOT NULL DEFAULT FALSE",

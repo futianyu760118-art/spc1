@@ -3039,6 +3039,7 @@ async def _save_schedule_plan_record(
         product_code=order_line.product_code,
         model_code=order_line.product_model,
         quantity=float(order_line.order_qty),
+        planned_qty=float(order_line.order_qty),  # v2 Q8：本段计划负责数量（mixed 两段都处理全量）
         start_date=calculation_result["start_date"],
         end_date=calculation_result["end_date"],
         priority=priority,
@@ -3073,6 +3074,72 @@ async def _save_schedule_plan_record(
         remark=operation_remark or calculation_result.get("warning") or "自动排产创建",
     )
     return record
+
+
+async def _preview_schedule_risk(
+    db: AsyncSession,
+    *,
+    order_no: str,
+    line_no: str,
+    plan_date: Optional[date],
+    upph: Optional[float],
+    daily_work_hours: Optional[float],
+) -> dict:
+    """v2 阶段 4：试算排产风险（不落库），用于判断是否需要人工确认。
+
+    返回 dict：
+      needs_confirm: bool - 是否需要人工确认（周日/前挪）
+      warning: str - 警告文案
+      calculation_result: dict - 试算结果（供前端展示）
+    """
+    row = await _get_latest_sale_order_line(db, order_no, line_no)
+    if not row:
+        return {"needs_confirm": False, "warning": "", "calculation_result": None}
+    order_line = row.SaleOrderLine
+    if not order_line.promised_date or not order_line.order_qty:
+        return {"needs_confirm": False, "warning": "", "calculation_result": None}
+
+    try:
+        simulation_service = ScheduleSimulationService(db)
+        # 精益才走 lean_workhour_plan 判断周日/前挪
+        bom_code = _get_order_line_bom_code(order_line)
+        upph_value = upph
+        if not upph_value:
+            upph_service = UpphCalculationService(db)
+            capacities, _ = await upph_service.calculate_total_upph(
+                product_code=order_line.product_code,
+                bom_code=bom_code,
+            )
+            upph_value = capacities or 0
+        if not upph_value or upph_value <= 0:
+            return {"needs_confirm": False, "warning": "", "calculation_result": None}
+
+        lean_workhour_plan = simulation_service.build_lean_workhour_plan(
+            quantity=float(order_line.order_qty),
+            upph=float(upph_value),
+            promised_date=order_line.promised_date,
+        )
+        if not lean_workhour_plan:
+            return {"needs_confirm": False, "warning": "", "calculation_result": None}
+
+        needs_sunday = bool(lean_workhour_plan.get("needs_sunday_work"))
+        needs_move_earlier = bool(lean_workhour_plan.get("needs_move_earlier"))
+        move_earlier_days = lean_workhour_plan.get("move_earlier_days") or 0
+        needs_confirm = needs_sunday or needs_move_earlier
+        warning_parts = []
+        if needs_sunday:
+            warning_parts.append("需周日生产")
+        if needs_move_earlier:
+            warning_parts.append(f"需前挪 {move_earlier_days} 天")
+        warning = "、".join(warning_parts) + "，请人工确认是否接受"
+        return {
+            "needs_confirm": needs_confirm,
+            "warning": warning,
+            "calculation_result": lean_workhour_plan,
+        }
+    except Exception:
+        # 试算失败不阻塞，让原有流程处理（落库或报错）
+        return {"needs_confirm": False, "warning": "", "calculation_result": None}
 
 
 async def _create_schedule_plan_from_request(
@@ -4561,6 +4628,64 @@ async def detect_sale_order_line_changes(
     return ResponseModel(data=[log for log in changed_logs])
 
 
+@router.get("/planned-qty-audit", response_model=ResponseModel)
+async def planned_qty_audit(
+    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """v2 Q8：拆分对账 —— 检查 active 计划的 planned_qty 一致性
+
+    返回：
+      total_orders: 涉及订单行数
+      mismatch_count: 不一致订单行数
+      mismatches: [{order_no, line_no, source_order_qty, planned_qty_sum, status}]
+      status:
+        - ok: 求和匹配
+        - missing: 有订单但没 active 计划
+        - mismatch: 求和不等（mixed 两段 planned_qty 应该都等于 source_order_qty）
+    """
+    # 查所有有 active 计划的 order_no+line_no 组合
+    stmt = (
+        select(
+            ProductionSchedulePlan.order_no,
+            ProductionSchedulePlan.line_no,
+            ProductionSchedulePlan.source_order_qty,
+            func.sum(ProductionSchedulePlan.planned_qty).label("planned_sum"),
+            func.count(ProductionSchedulePlan.id).label("plan_count"),
+        )
+        .where(
+            ProductionSchedulePlan.is_active == True,
+            ProductionSchedulePlan.order_no.isnot(None),
+            ProductionSchedulePlan.line_no.isnot(None),
+        )
+        .group_by(
+            ProductionSchedulePlan.order_no,
+            ProductionSchedulePlan.line_no,
+            ProductionSchedulePlan.source_order_qty,
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    mismatches = []
+    for row in rows:
+        source_qty = float(row.source_order_qty) if row.source_order_qty else 0
+        planned_sum = float(row.planned_sum) if row.planned_sum else 0
+        # 容忍 0.01 浮点误差
+        if abs(source_qty - planned_sum) > 0.01:
+            mismatches.append({
+                "order_no": row.order_no,
+                "line_no": row.line_no,
+                "source_order_qty": source_qty,
+                "planned_qty_sum": planned_sum,
+                "plan_count": row.plan_count,
+                "status": "mismatch",
+            })
+    return ResponseModel(data={
+        "total_order_lines": len(rows),
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+    })
+
+
 @router.post("/{plan_id}/reschedule", response_model=ResponseModel[ProductionSchedulePlanOut])
 async def reschedule_plan(
     plan_id: int,
@@ -5818,7 +5943,31 @@ async def auto_schedule(
     current_user: dict = Depends(PermissionChecker("production.schedule_plans", "create")),
     db: AsyncSession = Depends(get_db),
 ):
-    """一键排产"""
+    """一键排产
+
+    v2 阶段 4 工时干预：周日生产/前挪两档强制人工确认。
+    - 第一次调用（confirm_risky=False）：若试算结果需要周日/前挪，返回 needs_confirm=True + calculation_result，不落库
+    - 第二次调用（confirm_risky=True）：直接落库
+    """
+    # v2 阶段 4：风险试算（不落库）——仅当未确认时检查
+    if not data.confirm_risky:
+        risky_preview = await _preview_schedule_risk(
+            db,
+            order_no=data.order_no,
+            line_no=data.line_no,
+            plan_date=data.plan_date,
+            upph=data.upph,
+            daily_work_hours=data.daily_work_hours,
+        )
+        if risky_preview.get("needs_confirm"):
+            return ResponseModel(data=AutoScheduleResponse(
+                success=False,
+                message=risky_preview.get("warning", "此排产需要人工确认（周日生产或前挪），请确认后再提交"),
+                schedule_plan=None,
+                calculation_result=risky_preview.get("calculation_result"),
+                needs_confirm=True,
+            ))
+
     records, calculation_result, response_message = await _create_schedule_plan_from_request(
         db,
         order_no=data.order_no,

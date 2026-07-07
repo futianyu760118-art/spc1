@@ -165,6 +165,7 @@ export default function SchedulePlans() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [deletingPlan, setDeletingPlan] = useState<any>(null)
   const [deleteReason, setDeleteReason] = useState('')
+  const [breakFrozenReason, setBreakFrozenReason] = useState('')
   const [backfillPreview, setBackfillPreview] = useState<any>(null)
   const [backfillPreviewOpen, setBackfillPreviewOpen] = useState(false)
   const [planHistoryOpen, setPlanHistoryOpen] = useState(false)
@@ -733,8 +734,20 @@ export default function SchedulePlans() {
   const openDeleteModal = (row: any) => {
     setDeletingPlan(row)
     setDeleteReason('')
+    setBreakFrozenReason('')
     setDeleteModalOpen(true)
   }
+
+  // v2 阶段 2：判断计划是否在冷冻区（plan_date 在 today+1 ~ today+3）
+  const isPlanInFrozenZone = (planDateStr?: string | null): boolean => {
+    if (!planDateStr) return false
+    const today = dayjs().startOf('day')
+    const planDate = dayjs(planDateStr).startOf('day')
+    if (!planDate.isValid()) return false
+    const diff = planDate.diff(today, 'day')
+    return diff >= 1 && diff <= 3
+  }
+  const deletingInFrozen = isPlanInFrozenZone(deletingPlan?.plan_date)
 
   const openCreate = () => {
     setEditing(null)
@@ -1083,12 +1096,18 @@ export default function SchedulePlans() {
 
   const handleDelete = async () => {
     if (!deletingPlan?.id) return
+    // v2 阶段 2：冷冻区操作必须填破冻理由
+    if (isPlanInFrozenZone(deletingPlan?.plan_date) && !breakFrozenReason.trim()) {
+      message.warning('该计划在冷冻区（1-3 天内开工），必须填写破冻理由')
+      return
+    }
     const requestStartedAt = performance.now()
     try {
       setLoading(true)
       const apiStartedAt = performance.now()
       const res: any = await productionApi.getDeleteSchedulePlanPreview(deletingPlan.id, {
         reason: deleteReason?.trim() || undefined,
+        break_frozen_reason: breakFrozenReason?.trim() || undefined,
       })
       const apiMs = performance.now() - apiStartedAt
       const result = res.data || {}
@@ -1125,6 +1144,7 @@ export default function SchedulePlans() {
       const res: any = await productionApi.confirmDeleteSchedulePlan(deletingPlan.id, {
         reason: backfillPreview?.reason || deleteReason?.trim() || '计划员手动删除计划',
         execute_backfill: executeBackfill,
+        break_frozen_reason: breakFrozenReason?.trim() || undefined,
       })
       const apiMs = performance.now() - apiStartedAt
       const result = res.data || {}
@@ -2807,6 +2827,7 @@ export default function SchedulePlans() {
           setDeleteModalOpen(false)
           setDeletingPlan(null)
           setDeleteReason('')
+          setBreakFrozenReason('')
         }}
         okText="下一步：预览删除影响"
         cancelText="取消"
@@ -2828,6 +2849,14 @@ export default function SchedulePlans() {
               <div>排产段：{deletingPlan?.schedule_bucket_label || '-'}</div>
             </div>
           </div>
+          {deletingInFrozen && (
+            <Alert
+              showIcon
+              type="error"
+              message="⚠ 该计划在冷冻区（1-3 天内开工）"
+              description="冷冻区计划受冷冻保护，必须填写破冻理由才能删除。破冻操作会记入操作日志（is_frozen_break=true），便于事后追溯。"
+            />
+          )}
           <div>
             <div style={{ marginBottom: 8, color: '#595959' }}>删除原因</div>
             <Input.TextArea
@@ -2839,6 +2868,19 @@ export default function SchedulePlans() {
               showCount
             />
           </div>
+          {deletingInFrozen && (
+            <div>
+              <div style={{ marginBottom: 8, color: '#cf1322', fontWeight: 600 }}>破冻理由（必填）</div>
+              <Input.TextArea
+                value={breakFrozenReason}
+                onChange={(e) => setBreakFrozenReason(e.target.value)}
+                rows={3}
+                placeholder="例如：客户紧急改交期、设备突发故障、临时插单"
+                maxLength={200}
+                showCount
+              />
+            </div>
+          )}
         </Space>
       </Modal>
 

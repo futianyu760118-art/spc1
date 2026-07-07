@@ -28,6 +28,7 @@ class ProductionSchedulePlan(Base):
     is_active = Column(Boolean, nullable=False, default=True, index=True, comment="当前生效版本")
     source_promised_date = Column(Date, nullable=True, comment="排产时承诺交期快照")
     source_order_qty = Column(Numeric(15, 2), nullable=True, comment="排产时订单数量快照")
+    planned_qty = Column(Numeric(15, 2), nullable=True, comment="v2 Q8：本段计划负责的数量（用于拆分对账，默认=source_order_qty）")
     source_product_code = Column(String(64), nullable=True, comment="排产时产品编码快照")
     source_product_model = Column(String(128), nullable=True, comment="排产时产品型号快照")
     source_upph = Column(Numeric(15, 2), nullable=True, comment="排产时UPPH快照")
