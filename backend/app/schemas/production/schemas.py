@@ -688,6 +688,7 @@ class ProductionScheduleOperationLogOut(BaseModel):
     remark: Optional[str]
     affected_plan_ids: Optional[str]
     previous_version_id: Optional[int]
+    is_frozen_break: bool = False  # v2 阶段 2：是否破冻操作
 
     model_config = {"from_attributes": True}
 

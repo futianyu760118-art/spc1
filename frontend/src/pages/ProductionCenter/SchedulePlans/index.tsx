@@ -955,7 +955,7 @@ export default function SchedulePlans() {
     }
   }
 
-  const handleAutoSchedule = async () => {
+  const handleAutoSchedule = async (confirmRisky: boolean = false) => {
     try {
       const values = await scheduleForm.validateFields()
       const planDate = values.plan_date ? values.plan_date.format('YYYY-MM-DD') : null
@@ -967,8 +967,31 @@ export default function SchedulePlans() {
         upph: selectedOrder?.schedule_bucket === 'lean' ? values.upph : undefined,
         daily_work_hours: values.daily_work_hours ?? undefined,
         owner: values.owner,
+        confirm_risky: confirmRisky,
       }
       const res: any = await productionApi.autoSchedule(payload)
+
+      // v2 阶段 4：周日生产/前挪强制人工确认
+      if (res.data?.needs_confirm && !confirmRisky) {
+        const calcResult = res.data?.calculation_result || {}
+        const warningText = res.data?.message || '此排产需要人工确认'
+        Modal.confirm({
+          title: '⚠ 排产风险确认',
+          content: (
+            <div>
+              <p style={{ color: '#cf1322', fontWeight: 600 }}>{warningText}</p>
+              {calcResult.work_hour_summary && <p>{calcResult.work_hour_summary}</p>}
+              <p style={{ color: '#595959' }}>确认后将按此方案落库。取消则不排产。</p>
+            </div>
+          ),
+          okText: '确认排产',
+          cancelText: '取消',
+          okButtonProps: { danger: true },
+          onOk: () => handleAutoSchedule(true),
+        })
+        return
+      }
+
       const result = res.data?.calculation_result || {}
       invalidatePageCaches()
       setScheduleModalOpen(false)
@@ -2697,6 +2720,7 @@ export default function SchedulePlans() {
             { title: '操作时间', dataIndex: 'operation_at', width: 160, render: (v: string) => formatDateTime(v) },
             { title: '操作人', dataIndex: 'operator', width: 110, render: (v: string) => v || '-' },
             { title: '操作类型', dataIndex: 'operation_type', width: 130, render: (v: string) => <Tag color="blue">{v || '-'}</Tag> },
+            { title: '破冻', dataIndex: 'is_frozen_break', width: 80, render: (v: boolean) => v ? <Tag color="red">破冻</Tag> : '-' },
             { title: '订单号', dataIndex: 'order_no', width: 150, render: (v: string) => v || '-' },
             { title: '行号', dataIndex: 'line_no', width: 90, render: (v: string) => v || '-' },
             { title: '版本', dataIndex: 'plan_version', width: 80, render: (v: number) => v ? `V${v}` : '-' },
