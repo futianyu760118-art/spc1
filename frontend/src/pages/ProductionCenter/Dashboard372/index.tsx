@@ -15,6 +15,7 @@ interface ZoneKpi {
   kitReadyRate?: number
   shortageCount?: number
   etaDelayCount?: number
+  pendingKitCount?: number
 }
 
 interface AnomalyItem {
@@ -253,6 +254,7 @@ export default function Dashboard372() {
             kitReadyRate: d.material?.kit_ready_rate ?? undefined,
             shortageCount: d.material?.shortage_count ?? undefined,
             etaDelayCount: d.material?.eta_delay_count ?? undefined,
+            pendingKitCount: d.material?.pending_kit_count ?? undefined,
           },
           pending: {
             todoCount: d.pending?.todo_count ?? 0,
@@ -397,10 +399,18 @@ export default function Dashboard372() {
             style={{ marginBottom: 16 }}
           >
             <div style={{ display: 'flex', gap: 12, marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #f1f5f9' }}>
+              {renderZoneStat('待备料', material.pendingKitCount, ' 单')}
               {renderZoneStat('齐套率', material.kitReadyRate !== undefined ? Math.round((material.kitReadyRate || 0) * 100) : undefined, '%')}
               {renderZoneStat('缺料', material.shortageCount, ' 单', (material.shortageCount || 0) > 0)}
               {renderZoneStat('ETA延期', material.etaDelayCount, ' 单', (material.etaDelayCount || 0) > 0)}
             </div>
+            <Alert
+              type="info"
+              showIcon
+              message="齐套率暂为占位（假设全部齐套）"
+              description="齐套中心完善后接入真实缺料/ETA 数据（v2 阶段 3）。当前「待备料」为配料区真实计划数。"
+              style={{ marginBottom: 8 }}
+            />
             <div style={{ maxHeight: 480, overflowY: 'auto' }}>
               {filteredMaterialCards.length === 0
                 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="配料区暂无备料计划" />

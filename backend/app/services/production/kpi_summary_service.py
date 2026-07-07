@@ -89,6 +89,18 @@ async def get_kpi_summary(db: AsyncSession) -> dict[str, Any]:
     )
     frozen_locked_count = (await db.execute(frozen_locked_stmt)).scalar() or 0
 
+    # === 🟢 配料栏（plan_date 归属 4-10 天） ===
+    # v2 阶段 3：齐套数据暂用占位（kit_ready_rate=1.0 假设全部齐套），
+    # 等 kit_analysis_service 完善后接入真实数据。
+    # 待备料单数（配料区计划数）用真实查询。
+    material_start = today + timedelta(days=4)
+    material_end = today + timedelta(days=10)
+    material_pending_stmt = select(func.count()).select_from(ProductionSchedulePlan).where(
+        ProductionSchedulePlan.is_active.is_(True),
+        ProductionSchedulePlan.plan_date.between(material_start, material_end),
+    )
+    material_pending_count = (await db.execute(material_pending_stmt)).scalar() or 0
+
     return {
         "today": {
             "target_qty": target_qty,
@@ -98,12 +110,13 @@ async def get_kpi_summary(db: AsyncSession) -> dict[str, Any]:
         },
         "frozen": {
             "locked_count": frozen_locked_count,
-            "frozen_break_count": 0,  # 占位，等阶段 2 干预机制接入（需要 is_frozen_break 字段）
+            "frozen_break_count": 0,
         },
         "material": {
-            "kit_ready_rate": None,  # 阶段 3 物料齐套接入
-            "shortage_count": None,
-            "eta_delay_count": None,
+            "kit_ready_rate": 1.0,  # 阶段 3 占位：假设全部齐套，等 kit_analysis 接入
+            "shortage_count": 0,    # 阶段 3 占位
+            "eta_delay_count": 0,   # 阶段 3 占位
+            "pending_kit_count": material_pending_count,  # 真实：待备料单数（配料区计划数）
         },
         "pending": {
             "todo_count": todo_count,
