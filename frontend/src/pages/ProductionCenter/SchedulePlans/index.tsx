@@ -2247,7 +2247,6 @@ export default function SchedulePlans() {
               showSizeChanger: false,
               showQuickJumper: false,
               onChange: (page, pageSize) => { 
-                console.log("=== todo table pagination change:", page, pageSize);
                 setOrderPage(page); 
                 setOrderPageSize(pageSize);
               },
