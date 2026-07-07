@@ -34,6 +34,10 @@ import {
   IdcardOutlined,
   SafetyOutlined,
   ApiOutlined,
+  ThunderboltOutlined,
+  ScheduleOutlined,
+  AlertOutlined,
+  HomeOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { usePermissionStore, PermNode } from '../store/permission'
@@ -188,8 +192,12 @@ const allMenuItems: PermissionAwareItem[] = [
     label: '生产协同中心',
     permission: 'production',
     children: [
+      { key: '/production-dashboard', icon: <HomeOutlined />, label: '372 驾驶舱', permission: 'production.overview' },
+      { key: '/todo-workbench', icon: <ThunderboltOutlined />, label: '待排工作台', permission: 'production.schedule_plans' },
+      { key: '/change-events', icon: <AlertOutlined />, label: '变更事件中心', permission: 'production.schedule_plans' },
+      { key: '/schedule-plans', icon: <ProjectOutlined />, label: '已排计划', permission: 'production.schedule_plans' },
+      { key: '/schedule-board', icon: <ScheduleOutlined />, label: '排产看板', permission: 'production.schedule_plans' },
       { key: '/production-overview', icon: <DashboardOutlined />, label: '生产总览', permission: 'production.overview' },
-      { key: '/schedule-plans', icon: <ProjectOutlined />, label: '计划排产', permission: 'production.schedule_plans' },
       { key: '/product-process-capacities', icon: <DatabaseOutlined />, label: '产品工序产能', permission: 'production.product_process_capacities' },
       { key: '/front-process', icon: <ContainerOutlined />, label: '前道管理', permission: 'production.front_process' },
       { key: '/smt', icon: <ExperimentOutlined />, label: '贴片管理', permission: 'production.smt' },
@@ -341,6 +349,9 @@ const pathToGroupKey: Record<string, string> = {
   '/kit-analysis': 'material-center',
   '/supplier-risk': 'material-center',
   '/supplier-payment': 'material-center',
+  '/production-dashboard': 'production-center',
+  '/todo-workbench': 'production-center',
+  '/change-events': 'production-center',
   '/production-overview': 'production-center',
   '/schedule-plans': 'production-center',
   '/product-process-capacities': 'production-center',
@@ -405,6 +416,10 @@ const pathToPermission: Record<string, string> = {
   '/quality-issues': 'exceptions.quality',
   '/product-samples': 'exceptions.product_samples',
   '/closure-tracking': 'exceptions.closure',
+  '/production-dashboard': 'production.overview',
+  '/todo-workbench': 'production.schedule_plans',
+  '/change-events': 'production.schedule_plans',
+  '/schedule-board': 'production.schedule_plans',
   '/production-overview': 'production.overview',
   '/schedule-plans': 'production.schedule_plans',
   '/product-process-capacities': 'production.product_process_capacities',
@@ -480,7 +495,19 @@ export default function MainLayout() {
   // 动态菜单项：优先使用 API 数据，fallback 到硬编码
   const dynamicMenuItems = useMemo(() => {
     if (permLoaded && permTree.length > 0) {
-      return buildMenuItemsFromTree(permTree)
+      const items = buildMenuItemsFromTree(permTree)
+      // 注入 v2 新页面（共享 schedule_plans 权限，不在后端权限树里）
+      const v2ExtraItems: PermissionAwareItem[] = [
+        { key: '/production-dashboard', icon: <HomeOutlined />, label: '372 驾驶舱', permission: 'production.overview' },
+        { key: '/todo-workbench', icon: <ThunderboltOutlined />, label: '待排工作台', permission: 'production.schedule_plans' },
+        { key: '/change-events', icon: <AlertOutlined />, label: '变更事件中心', permission: 'production.schedule_plans' },
+        { key: '/schedule-board', icon: <ScheduleOutlined />, label: '排产看板', permission: 'production.schedule_plans' },
+      ]
+      return items.map(item =>
+        item.permission === 'production'
+          ? { ...item, children: [...v2ExtraItems, ...(item.children || [])] }
+          : item
+      )
     }
     return allMenuItems
   }, [permLoaded, permTree])
@@ -657,7 +684,8 @@ export default function MainLayout() {
     if (isSupplierUser()) {
       return toAntdItems(filterSupplierPortalMenu(dynamicMenuItems, hasPermission))
     }
-    return toAntdItems(filterMenuByPermission(dynamicMenuItems, hasPermission))
+    const filtered = filterMenuByPermission(dynamicMenuItems, hasPermission)
+    return toAntdItems(filtered)
   }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)

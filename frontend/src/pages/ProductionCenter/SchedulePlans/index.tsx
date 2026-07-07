@@ -5,64 +5,51 @@ import { ArrowUpOutlined, CheckCircleOutlined, ClockCircleOutlined, DeleteOutlin
 import dayjs from 'dayjs'
 import { productionApi } from '../../../services/api'
 import { formatDate, formatDateTime } from '../../../utils'
-
-const DEPARTMENTS = ['计划', '采购', '生产', '品质', '仓储']
-const WORKSPACES = [
-  { key: 'planner_hub', label: '计划排产工作台' },
-  { key: 'plan_board', label: '已排计划' },
-  { key: 'schedule_board', label: '排产看板' },
-]
-const PLANNER_HUB_TABS = [
-  { key: 'todo_workbench', label: '待处理' },
-  { key: 'change_events', label: '变更事件' },
-]
-const BUCKET_OPTIONS = [
-  { value: 'all', label: '全部' },
-  { value: 'lean', label: '精益' },
-  { value: 'assembly', label: '装配-组装' },
-  { value: 'packaging', label: '装配-包装' },
-  { value: 'mixed', label: '组装+包装' },
-  { value: 'pending', label: '待确认' },
-]
-const PLAN_BUCKET_VIEW_OPTIONS = [
-  { key: 'all', label: '全部计划' },
-  { key: 'lean', label: '精益页面' },
-  { key: 'assembly', label: '组装页面' },
-  { key: 'packaging', label: '包装页面' },
-]
-const WORKSPACE_STORAGE_KEY = 'production_schedule_workspace_v3'
-const TODO_FILTER_OPTIONS = [
-  { value: 'all', label: '全部待处理' },
-  { value: 'reschedule', label: '待重排' },
-  { value: 'ready', label: '待排产' },
-  { value: 'pending', label: '待确认' },
-]
-const TODO_BUCKET_WORKSPACE_OPTIONS = [
-  { value: 'all', label: '全部' },
-  { value: 'lean', label: '精益' },
-  { value: 'assembly', label: '组装' },
-  { value: 'packaging', label: '包装' },
-]
-const PLAN_SCOPE_OPTIONS = [
-  { value: 'active', label: '当前计划' },
-  { value: 'reschedule', label: '待重排' },
-  { value: 'history', label: '历史计划' },
-]
-const EVENT_TYPE_OPTIONS = [
-  { value: 'all', label: '全部事件' },
-  { value: 'upph_change', label: 'UPPH变化' },
-  { value: 'bucket_change', label: '排产段变化' },
-  { value: 'due_date_change', label: '交期变化' },
-  { value: 'quantity_change', label: '数量变化' },
-]
-
-const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  planned: { label: '已计划', color: 'blue' },
-  in_progress: { label: '执行中', color: 'processing' },
-  completed: { label: '已完成', color: 'success' },
-  delayed: { label: '延期', color: 'warning' },
-  cancelled: { label: '已取消', color: 'default' },
-}
+import {
+  DEPARTMENTS,
+  WORKSPACES,
+  PLANNER_HUB_TABS,
+  BUCKET_OPTIONS,
+  PLAN_BUCKET_VIEW_OPTIONS,
+  WORKSPACE_STORAGE_KEY,
+  TODO_FILTER_OPTIONS,
+  TODO_BUCKET_WORKSPACE_OPTIONS,
+  PLAN_SCOPE_OPTIONS,
+  EVENT_TYPE_OPTIONS,
+  STATUS_MAP,
+  PRIORITY_MAP,
+  RISK_MAP,
+  IMPACT_MAP,
+  EVENT_TYPE_MAP,
+  DELIVERY_STATUS_MAP,
+  BUCKET_COLOR_MAP,
+  ORDER_POOL_STATUS_COLOR_MAP,
+  TODO_STATUS_META,
+  ORDER_STAT_CARD_STYLE_MAP,
+  LEAN_CAPACITY_LOAD_MAP,
+  PAGE_CACHE_TTL_MS,
+} from './constants'
+import {
+  CopyableText,
+  renderCopyableText,
+  normalizePlanBoardBucket,
+  buildScheduleBoardLink,
+  getTaskNo,
+  getTargetReadyDateValue,
+  renderDeliveryStatusTag,
+  getDelayDaysDisplay,
+  getProjectedRescheduleEndDate,
+  getProjectedRescheduleStartDate,
+  renderBucketTag,
+  renderSchedulingStatusTag,
+  getReadableSchedulingReason,
+  renderSchedulingReasonCell,
+  renderWorkhourSuggestionCell,
+  renderUpphDeltaTag,
+  hasConflictAvoidance,
+  renderPlanExplainSummaryCell,
+  renderPlanExplainPanel,
+} from './helpers'
 
 const PERF_DEBUG = import.meta.env.DEV
 
@@ -78,308 +65,6 @@ const stringifyPerfPayload = (value: any) => {
   } catch {
     return undefined
   }
-}
-
-const PRIORITY_MAP: Record<string, { label: string; color: string }> = {
-  low: { label: '低', color: 'default' },
-  normal: { label: '普通', color: 'blue' },
-  high: { label: '高', color: 'orange' },
-  urgent: { label: '紧急', color: 'red' },
-}
-
-const RISK_MAP: Record<string, { label: string; color: string }> = {
-  red: { label: '红色', color: 'red' },
-  yellow: { label: '黄色', color: 'gold' },
-  blue: { label: '蓝色', color: 'blue' },
-  green: { label: '绿色', color: 'green' },
-}
-
-const IMPACT_MAP: Record<string, { label: string; color: string; priority: number }> = {
-  high: { label: '高', color: 'red', priority: 1 },
-  medium: { label: '中', color: 'orange', priority: 2 },
-  low: { label: '低', color: 'blue', priority: 3 },
-}
-
-const EVENT_TYPE_MAP: Record<string, { label: string; color: string }> = {
-  upph_change: { label: 'UPPH变化', color: 'purple' },
-  bucket_change: { label: '排产段变化', color: 'magenta' },
-  due_date_change: { label: '交期变化', color: 'gold' },
-  quantity_change: { label: '数量变化', color: 'cyan' },
-}
-
-const DELIVERY_STATUS_MAP: Record<string, { label: string; color: string }> = {
-  delayed: { label: '已延期', color: 'red' },
-  upcoming: { label: '临期', color: 'orange' },
-  normal: { label: '正常', color: 'green' },
-  early: { label: '提前', color: 'blue' },
-  unknown: { label: '待确认', color: 'default' },
-}
-
-const BUCKET_COLOR_MAP: Record<string, string> = {
-  lean: 'blue',
-  assembly: 'purple',
-  packaging: 'cyan',
-  mixed: 'gold',
-  pending: 'default',
-}
-
-const ORDER_POOL_STATUS_COLOR_MAP: Record<string, string> = {
-  ready: 'success',
-  pending: 'warning',
-  excluded: 'default',
-  scheduled: 'processing',
-}
-
-const TODO_STATUS_META: Record<string, { label: string; color: string; priority: number }> = {
-  reschedule: { label: '待重排', color: 'error', priority: 0 },
-  ready: { label: '待排产', color: 'processing', priority: 1 },
-  pending: { label: '待确认', color: 'warning', priority: 2 },
-}
-
-const ORDER_STAT_CARD_STYLE_MAP: Record<string, { background: string; border: string }> = {
-  ready: { background: '#e6f4ff', border: '#91caff' },
-  pending: { background: '#fff7e6', border: '#ffd591' },
-  excluded: { background: '#fafafa', border: '#d9d9d9' },
-  scheduled: { background: '#f6ffed', border: '#b7eb8f' },
-  missing_upph: { background: '#fff1f0', border: '#ffa39e' },
-}
-
-const LEAN_CAPACITY_LOAD_MAP: Record<string, { label: string; color: string }> = {
-  normal: { label: '正常', color: 'success' },
-  overtime: { label: '需加班', color: 'warning' },
-  sunday_production: { label: '周日生产', color: 'processing' },
-  move_earlier: { label: '需前挪', color: 'error' },
-}
-
-const PAGE_CACHE_TTL_MS = 30 * 1000
-
-const CopyableText = ({ value, label = '内容' }: { value?: string | number | null; label?: string }) => {
-  const [copied, setCopied] = useState(false)
-  if (value === null || value === undefined || value === '') return '-'
-
-  const handleCopy = async () => {
-    const text = String(value).trim()
-    if (!text) return
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      message.success(`已复制${label}`)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      message.error(`复制${label}失败，请手动复制`)
-    }
-  }
-
-  return (
-    <Tooltip title={copied ? `${label}已复制` : `点击复制${label}`}>
-      <span
-        role="button"
-        tabIndex={0}
-        onClick={handleCopy}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            handleCopy()
-          }
-        }}
-        style={{
-          cursor: 'copy',
-          userSelect: 'text',
-          color: copied ? '#389e0d' : '#1677ff',
-          textDecoration: copied ? 'none' : 'underline',
-          textDecorationStyle: 'dotted',
-          textUnderlineOffset: 3,
-        }}
-      >
-        {value}
-      </span>
-    </Tooltip>
-  )
-}
-
-const renderCopyableText = (value?: string | number | null, label = '内容') => <CopyableText value={value} label={label} />
-const normalizePlanBoardBucket = (bucket?: string | null) => (
-  bucket && ['lean', 'assembly', 'packaging'].includes(bucket) ? bucket : 'all'
-)
-const buildScheduleBoardLink = (row?: any) => {
-  const params = new URLSearchParams()
-  params.set('source', 'schedule_plans')
-  params.set('view', 'week')
-  if (row?.id) params.set('planId', String(row.id))
-  if (row?.order_no) params.set('keyword', row.order_no)
-  if (row?.schedule_bucket && ['lean', 'assembly', 'packaging', 'mixed', 'pending'].includes(row.schedule_bucket)) {
-    params.set('bucket', row.schedule_bucket)
-  }
-  const planDate = row?.start_date || row?.plan_date
-  if (planDate) params.set('planDate', planDate)
-  return `/schedule-board?${params.toString()}`
-}
-
-const getTaskNo = (row: any) => {
-  if (row?.task_no) return row.task_no
-  if (!row?.id) return null
-  const referenceDate = row?.created_at || row?.plan_date
-  const datePart = referenceDate ? dayjs(referenceDate).format('YYYYMMDD') : '00000000'
-  const versionPart = row?.plan_version || 1
-  return `SC${datePart}-${String(row.id).padStart(6, '0')}-V${versionPart}`
-}
-
-const getTargetReadyDateValue = (row: any) => {
-  if (row?.target_ready_date) return row.target_ready_date
-  if (row?.customer_due_date) return dayjs(row.customer_due_date).subtract(2, 'day').format('YYYY-MM-DD')
-  if (row?.source_promised_date) return dayjs(row.source_promised_date).subtract(2, 'day').format('YYYY-MM-DD')
-  return null
-}
-
-const renderDeliveryStatusTag = (statusValue?: string, row?: any) => {
-  const item = DELIVERY_STATUS_MAP[statusValue || 'unknown'] || DELIVERY_STATUS_MAP.unknown
-  const targetReadyDate = getTargetReadyDateValue(row)
-  if (statusValue === 'delayed') {
-    return <Tag color={item.color} icon={<ExclamationCircleOutlined />}>{item.label}</Tag>
-  }
-  if (statusValue === 'upcoming') {
-    return <Tag color={item.color} icon={<ClockCircleOutlined />}>{item.label}</Tag>
-  }
-  if (statusValue === 'early') {
-    const aheadDays = targetReadyDate && row?.end_date
-      ? Math.max(dayjs(targetReadyDate).startOf('day').diff(dayjs(row.end_date).startOf('day'), 'day'), 0)
-      : 0
-    return <Tag color={item.color} icon={<ArrowUpOutlined />}>{aheadDays > 0 ? `${item.label}${aheadDays}天` : item.label}</Tag>
-  }
-  if (statusValue === 'normal') {
-    return <Tag color={item.color} icon={<CheckCircleOutlined />}>{item.label}</Tag>
-  }
-  return <Tag color={item.color}>{item.label}</Tag>
-}
-
-const getDelayDaysDisplay = (row: any) => {
-  const targetReadyDate = getTargetReadyDateValue(row)
-  if (!targetReadyDate || !row?.end_date) return { text: '-', color: '#999' }
-  const diffDays = dayjs(row.end_date).startOf('day').diff(dayjs(targetReadyDate).startOf('day'), 'day')
-  if (diffDays > 0) return { text: `+${diffDays}天`, color: '#cf1322' }
-  if (diffDays < 0) return { text: `提前${Math.abs(diffDays)}天`, color: '#389e0d' }
-  return { text: '0天', color: '#1677ff' }
-}
-
-const getProjectedRescheduleEndDate = (row: any) => {
-  const targetReadyDate = getTargetReadyDateValue(row)
-  if (!targetReadyDate || !row?.current_days_needed) return null
-  let startDate = dayjs(targetReadyDate).startOf('day').subtract((row.current_days_needed || 1) - 1, 'day')
-  const today = dayjs().startOf('day')
-  if (startDate.isBefore(today)) startDate = today
-  return startDate.add((row.current_days_needed || 1) - 1, 'day')
-}
-
-const getProjectedRescheduleStartDate = (row: any) => {
-  const targetReadyDate = getTargetReadyDateValue(row)
-  if (!targetReadyDate || !row?.current_days_needed) return null
-  let startDate = dayjs(targetReadyDate).startOf('day').subtract((row.current_days_needed || 1) - 1, 'day')
-  const today = dayjs().startOf('day')
-  if (startDate.isBefore(today)) startDate = today
-  return startDate
-}
-
-const renderBucketTag = (row: any) => {
-  const label = row?.schedule_bucket_label || '未归类'
-  const color = BUCKET_COLOR_MAP[row?.schedule_bucket || 'pending'] || 'default'
-  return <Tag color={color}>{label}</Tag>
-}
-
-const renderSchedulingStatusTag = (row: any) => {
-  const label = row?.display_status_label || row?.scheduling_status_label || '待确认'
-  const color = ORDER_POOL_STATUS_COLOR_MAP[row?.display_status || row?.scheduling_status || 'pending'] || 'default'
-  return <Tag color={color}>{label}</Tag>
-}
-
-const getReadableSchedulingReason = (row: any) => {
-  const reasonCode = String(row?.scheduling_reason_code || '')
-  const status = String(row?.display_status || row?.scheduling_status || '')
-
-  if (reasonCode === 'no_capacity_match') return '未命中产能，请检查 BOM/产品编码'
-  if (reasonCode === 'non_schedulable_workshop') return '命中其他车间，当前不参与自动排产'
-  if (reasonCode === 'bucket_unclassified') return '工序未识别，暂未归类到精益/组装/包装'
-  if (reasonCode === 'lean_missing_upph') return '已命中精益，但缺有效 UPPH'
-  if (reasonCode === 'missing_upph') return '已命中产能，但缺有效 UPPH'
-  if (reasonCode === 'assembly_rule_pending') {
-    return status === 'ready' ? '已命中组装，满足排产条件' : '已命中组装，但组装阶段 UPPH 缺失'
-  }
-  if (reasonCode === 'packaging_rule_pending') {
-    return status === 'ready' ? '已命中包装，满足排产条件' : '已命中包装，但包装阶段 UPPH 缺失'
-  }
-  if (reasonCode === 'mixed_bucket_pending') {
-    return status === 'ready' ? '已识别组装+包装两段，满足排产条件' : '同时命中组装/包装，但阶段 UPPH 仍不完整'
-  }
-  if (reasonCode === 'zero_quantity') return '订单数量无效，当前不参与自动排产'
-  if (reasonCode === 'already_scheduled') return '已存在有效排产计划'
-  if (reasonCode === 'lean_ready') return '已命中精益，满足排产条件'
-  if (reasonCode === 'ready') return '满足排产条件'
-  return row?.scheduling_reason || '-'
-}
-
-const renderSchedulingReasonCell = (row: any) => {
-  const reason = getReadableSchedulingReason(row)
-  return <span>{reason}</span>
-}
-
-const renderWorkhourSuggestionCell = (row: any) => {
-  if (!row?.recommended_daily_hours) return <span style={{ color: '#999' }}>待试算</span>
-  const status = LEAN_CAPACITY_LOAD_MAP[row.capacity_load_status || 'normal'] || LEAN_CAPACITY_LOAD_MAP.normal
-  return (
-    <Tooltip title={row.work_hour_summary || undefined}>
-      <Space direction="vertical" size={2} style={{ width: '100%' }}>
-        <span style={{ fontWeight: 600 }}>{Number(row.recommended_daily_hours).toFixed(2)} 小时/天</span>
-        <Tag color={status.color}>{row.capacity_load_status_label || status.label}</Tag>
-      </Space>
-    </Tooltip>
-  )
-}
-
-const renderUpphDeltaTag = (row: any) => {
-  const current = Number(row?.upph ?? row?.current_upph ?? 0)
-  const source = Number(row?.source_upph ?? 0)
-  if (!source || !current) return <Tag>待补快照</Tag>
-  const deltaRatio = (current - source) / source
-  if (Math.abs(deltaRatio) < 0.01) return <Tag>基本不变</Tag>
-  if (deltaRatio > 0) return <Tag color="success">{`+${(deltaRatio * 100).toFixed(1)}%`}</Tag>
-  return <Tag color="error">{`${(deltaRatio * 100).toFixed(1)}%`}</Tag>
-}
-
-const hasConflictAvoidance = (row: any) => String(row?.remark || '').includes('产能避让')
-
-const renderPlanExplainSummaryCell = (row: any) => {
-  const targetReadyDate = formatDate(getTargetReadyDateValue(row))
-  const summaryParts = [
-    targetReadyDate ? `备货目标日 ${targetReadyDate}` : '',
-    row?.capacity_load_status_label || '',
-    row?.needs_sunday_work ? '周日生产' : '',
-    row?.needs_move_earlier ? `前挪 ${row?.move_earlier_days || 0} 天` : '',
-    hasConflictAvoidance(row) ? '已避让冲突' : '',
-  ].filter(Boolean)
-
-  return (
-    <span style={{ fontWeight: 500 }}>{summaryParts.join('；') || '按排产规则自动生成'}</span>
-  )
-}
-
-const renderPlanExplainPanel = (row: any) => {
-  const summary = [
-    row?.schedule_bucket_label ? `排产段：${row.schedule_bucket_label}` : '',
-    row?.recommended_daily_hours ? `建议工时：${Number(row.recommended_daily_hours).toFixed(2)} 小时/天` : '',
-    row?.capacity_load_status_label ? `负荷状态：${row.capacity_load_status_label}` : '',
-    hasConflictAvoidance(row) ? '已执行冲突避让' : '',
-    row?.remark ? '详细冲突备注已保留在后端调试链路' : '',
-  ].filter(Boolean).join('；')
-
-  return (
-    <div style={{ padding: '4px 8px' }}>
-      <Alert
-        showIcon
-        type={row?.delivery_status === 'delayed' || row?.needs_move_earlier ? 'warning' : 'info'}
-        message="排产摘要"
-        description={summary || `当前按 ${row?.schedule_bucket_label || '默认'} 规则生成计划。`}
-      />
-    </div>
-  )
 }
 
 export default function SchedulePlans() {
@@ -2235,6 +1920,11 @@ export default function SchedulePlans() {
   return (
     <div>
       <div className="card-modern" style={{ padding: '12px 20px', marginBottom: 16 }}>
+        <Space style={{ marginBottom: 8 }}>
+          <Button type="primary" ghost onClick={() => navigate('/todo-workbench')}>📋 待排工作台 →</Button>
+          <Button type="primary" ghost onClick={() => navigate('/change-events')}>🔄 变更事件中心 →</Button>
+          <span style={{ color: '#94a3b8', fontSize: 12 }}>（已独立成页，本页只保留已排计划）</span>
+        </Space>
         <Tabs
           activeKey={workspace}
           onChange={(key) => {
@@ -2246,7 +1936,7 @@ export default function SchedulePlans() {
             setPlanPage(1)
             setAlertPage(1)
           }}
-          items={WORKSPACES.map((item) => ({ key: item.key, label: item.label }))}
+          items={WORKSPACES.filter((item) => item.key !== 'planner_hub').map((item) => ({ key: item.key, label: item.label }))}
         />
 
         {workspace === 'planner_hub' && (

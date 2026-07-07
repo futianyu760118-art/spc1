@@ -36,7 +36,10 @@ import Organizations from './pages/BasicDataCenter/Organizations'
 import Positions from './pages/BasicDataCenter/Positions'
 import Employees from './pages/BasicDataCenter/Employees'
 import ProductionOverview from './pages/ProductionCenter/ProductionOverview/index'
+import Dashboard372 from './pages/ProductionCenter/Dashboard372/index'
 import SchedulePlans from './pages/ProductionCenter/SchedulePlans/index'
+import TodoWorkbench from './pages/ProductionCenter/TodoWorkbench/index'
+import ChangeEvents from './pages/ProductionCenter/ChangeEvents/index'
 import ScheduleBoard from './pages/ProductionCenter/ScheduleBoard/index'
 import FrontProcess from './pages/ProductionCenter/FrontProcess/index'
 import SMT from './pages/ProductionCenter/SMT/index'
@@ -146,7 +149,10 @@ export default function App() {
           <Route path="closure-tracking" element={<ClosureTracking />} />
           <Route path="production" element={<Navigate to="/production-overview" replace />} />
           <Route path="production-overview" element={<ProductionOverview />} />
+          <Route path="production-dashboard" element={<Dashboard372 />} />
           <Route path="schedule-plans" element={<SchedulePlans />} />
+          <Route path="todo-workbench" element={<TodoWorkbench />} />
+          <Route path="change-events" element={<ChangeEvents />} />
           <Route path="schedule-board" element={<ScheduleBoard />} />
           <Route path="front-process" element={<FrontProcess />} />
           <Route path="smt" element={<SMT />} />
