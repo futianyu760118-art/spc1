@@ -634,11 +634,13 @@ class DeleteSchedulePlanPreviewOut(BaseModel):
     affected_count: int = 0
     affected_plan_ids: List[int] = Field(default_factory=list)
     items: List[DeleteSchedulePlanBackfillItemOut] = Field(default_factory=list)
+    in_frozen: bool = False  # v2 阶段 2：是否在冷冻区（前端据此提示破冻）
 
 
 class DeleteSchedulePlanConfirmRequest(BaseModel):
     reason: Optional[str] = None
     execute_backfill: bool = False
+    break_frozen_reason: Optional[str] = None  # v2 阶段 2：破冻理由（冷冻区必填）
 
 
 class DeleteBackfillExecuteItemIn(BaseModel):

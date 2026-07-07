@@ -684,6 +684,7 @@ async def _log_schedule_operation(
     remark: Optional[str] = None,
     affected_plan_ids: Optional[List[int]] = None,
     previous_version_id: Optional[int] = None,
+    is_frozen_break: bool = False,
 ) -> Optional[ProductionScheduleOperationLog]:
     """记录排产操作日志（日志表缺失时不影响主业务事务）"""
     import json
@@ -702,6 +703,7 @@ async def _log_schedule_operation(
                 remark=remark,
                 affected_plan_ids=json.dumps(affected_plan_ids) if affected_plan_ids else None,
                 previous_version_id=previous_version_id,
+                is_frozen_break=is_frozen_break,
             )
             db.add(log_item)
             await db.flush([log_item])
@@ -934,6 +936,7 @@ def _build_delete_preview_response(
     record: ProductionSchedulePlan,
     remark: Optional[str],
     preview_result: dict,
+    in_frozen: bool = False,
 ) -> dict:
     return {
         "plan_id": record.id,
@@ -953,6 +956,7 @@ def _build_delete_preview_response(
             }
             for item in (preview_result.get("items") or [])
         ],
+        "in_frozen": in_frozen,
     }
 
 
@@ -4009,6 +4013,7 @@ async def list_schedule_plans(
     needs_reschedule: Optional[bool] = Query(None),
     is_active: Optional[bool] = Query(True),
     schedule_bucket: Optional[str] = Query(None, pattern="^(lean|assembly|packaging|mixed|pending)$"),
+    time_zone: Optional[str] = Query(None, pattern="^(today|frozen|material|pending)$"),
     read_context: dict = Depends(_get_production_schedule_read_context),
 ):
     # 列表查询优先走数据库已固化字段，避免切页时全量动态重算。
@@ -4016,6 +4021,38 @@ async def list_schedule_plans(
     timings_ms: dict[str, float] = {}
     dependency_timings_ms = dict(read_context.get("dependency_timings_ms") or {})
     db: AsyncSession = read_context["db"]
+
+    # v2 R1: time_zone 动态派生，WHERE 展开为 plan_date 范围条件（不走 CASE WHEN，走索引）
+    # today 口径特殊：用区间相交（在产），其他用 plan_date 归属
+    today_date = date.today()
+    if time_zone == "today":
+        # R2: 今日栏口径 = 区间相交 start_date <= today AND end_date >= today
+        conditions_initial = [
+            ProductionSchedulePlan.is_active == True,
+            ProductionSchedulePlan.start_date <= today_date,
+            ProductionSchedulePlan.end_date >= today_date,
+        ]
+    elif time_zone == "frozen":
+        conditions_initial = [
+            ProductionSchedulePlan.is_active == True,
+            ProductionSchedulePlan.plan_date.between(today_date + timedelta(days=1), today_date + timedelta(days=3)),
+        ]
+    elif time_zone == "material":
+        conditions_initial = [
+            ProductionSchedulePlan.is_active == True,
+            ProductionSchedulePlan.plan_date.between(today_date + timedelta(days=4), today_date + timedelta(days=10)),
+        ]
+    elif time_zone == "pending":
+        conditions_initial = [
+            ProductionSchedulePlan.is_active == True,
+            or_(
+                ProductionSchedulePlan.plan_date.is_(None),
+                ProductionSchedulePlan.plan_date > today_date + timedelta(days=10),
+            ),
+        ]
+    else:
+        conditions_initial = []
+
     cache_key = (
         page,
         page_size,
@@ -4027,6 +4064,7 @@ async def list_schedule_plans(
         needs_reschedule,
         is_active,
         schedule_bucket or "",
+        time_zone or "",
     )
     cached_page = _get_runtime_page_cache(
         _schedule_plan_list_cache,
@@ -4035,17 +4073,18 @@ async def list_schedule_plans(
     )
     if cached_page is not None:
         logger.info(
-            "schedule-plans timing page=%s page_size=%s total=%s needs_reschedule=%s keyword=%s bucket=%s timings_ms=%s",
+            "schedule-plans timing page=%s page_size=%s total=%s needs_reschedule=%s keyword=%s bucket=%s time_zone=%s timings_ms=%s",
             page,
             page_size,
             cached_page.total,
             needs_reschedule,
             bool(keyword),
             schedule_bucket or "all",
+            time_zone or "all",
             {"cache_hit": True},
         )
         return ResponseModel(data=cached_page)
-    conditions = []
+    conditions = list(conditions_initial)
     if department:
         conditions.append(ProductionSchedulePlan.department == department)
     if status:
@@ -4223,8 +4262,10 @@ async def update_schedule_plan(
 async def get_delete_schedule_plan_preview(
     record_id: int,
     reason: Optional[str] = Query(None, description="删除原因"),
+    break_frozen_reason: Optional[str] = Query(None, description="破冻理由（冷冻区操作必填）"),
     read_context: dict = Depends(_get_production_schedule_read_context),
 ):
+    from app.services.production.frozen_zone_service import is_plan_in_frozen_zone, require_break_frozen_reason
     request_started_at = perf_counter()
     dependency_timings_ms = dict(read_context.get("dependency_timings_ms") or {})
     db: AsyncSession = read_context["db"]
@@ -4235,6 +4276,10 @@ async def get_delete_schedule_plan_preview(
         raise HTTPException(status_code=404, detail="计划不存在")
     if not record.is_active:
         raise HTTPException(status_code=400, detail="仅允许删除当前有效计划")
+
+    # v2 阶段 2：冷冻区干预机制 — 必须提供破冻理由
+    require_break_frozen_reason(record.plan_date, break_frozen_reason)
+    in_frozen = is_plan_in_frozen_zone(record.plan_date)
 
     delete_service = PlanDeleteAndBackfillService(db)
     if not delete_service.can_participate_backfill(record):
@@ -4260,6 +4305,7 @@ async def get_delete_schedule_plan_preview(
         record=record,
         remark=remark,
         preview_result=preview_result,
+        in_frozen=in_frozen,
     )))
 
 
@@ -4280,6 +4326,11 @@ async def confirm_delete_schedule_plan(
         raise HTTPException(status_code=404, detail="计划不存在")
     if not record.is_active:
         raise HTTPException(status_code=400, detail="仅允许删除当前有效计划")
+
+    # v2 阶段 2：冷冻区干预机制 — 必须提供破冻理由
+    from app.services.production.frozen_zone_service import is_plan_in_frozen_zone, require_break_frozen_reason
+    require_break_frozen_reason(record.plan_date, data.break_frozen_reason)
+    in_frozen = is_plan_in_frozen_zone(record.plan_date)
 
     delete_service = PlanDeleteAndBackfillService(db)
     if not delete_service.can_participate_backfill(record):
@@ -4316,6 +4367,7 @@ async def confirm_delete_schedule_plan(
         line_no=record.line_no,
         remark=remark,
         affected_plan_ids=preview_result.get("affected_plan_ids"),
+        is_frozen_break=in_frozen,
     )
     await db.delete(record)
     delete_mark_ms = round((perf_counter() - step_started_at) * 1000, 2)

@@ -38,6 +38,8 @@ class ProductionSchedulePlan(Base):
     sync_batch_no = Column(String(50), nullable=True, comment="最近一次同步批次号")
     locked_by = Column(String(64), nullable=True, comment="锁定人")
     locked_at = Column(DateTime, nullable=True, comment="锁定时间")
+    frozen_locked_by = Column(String(64), nullable=True, comment="冷冻锁定人（v2 阶段2：业务锁定 vs 冷冻锁定分离）")
+    frozen_locked_at = Column(DateTime, nullable=True, comment="冷冻锁定时间")
     confirmed_by = Column(String(64), nullable=True, comment="确认人")
     confirmed_at = Column(DateTime, nullable=True, comment="确认时间")
     remark = Column(Text, nullable=True)
