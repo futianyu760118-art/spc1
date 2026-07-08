@@ -192,7 +192,7 @@ const allMenuItems: PermissionAwareItem[] = [
     label: '生产协同中心',
     permission: 'production',
     children: [
-      { key: '/production-dashboard', icon: <HomeOutlined />, label: '372 驾驶舱', permission: 'production.overview' },
+        { key: '/production-dashboard', icon: <HomeOutlined />, label: '生产驾驶舱', permission: 'production.overview' },
       { key: '/todo-workbench', icon: <ThunderboltOutlined />, label: '待排工作台', permission: 'production.schedule_plans' },
       { key: '/change-events', icon: <AlertOutlined />, label: '变更事件中心', permission: 'production.schedule_plans' },
       { key: '/schedule-plans', icon: <ProjectOutlined />, label: '排产台账', permission: 'production.schedule_plans' },
@@ -201,7 +201,8 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/product-process-capacities', icon: <DatabaseOutlined />, label: '产品工序产能', permission: 'production.product_process_capacities' },
       { key: '/front-process', icon: <ContainerOutlined />, label: '前道管理', permission: 'production.front_process' },
       { key: '/smt', icon: <ExperimentOutlined />, label: '贴片管理', permission: 'production.smt' },
-      { key: '/lean', icon: <AuditOutlined />, label: '精益管理', permission: 'production.lean' },
+      { key: '/lean', icon: <AuditOutlined />, label: '精益今日看板', permission: 'production.lean' },
+      { key: '/lean-management', icon: <AuditOutlined />, label: '精益管理', permission: 'production.lean' },
       { key: '/assembly', icon: <ToolOutlined />, label: '组装管理', permission: 'production.assembly' },
       { key: '/packaging', icon: <ContainerOutlined />, label: '包装管理', permission: 'production.packaging' },
       { key: '/process-exceptions', icon: <WarningOutlined />, label: '工序异常池', permission: 'production.exceptions' },
@@ -358,6 +359,8 @@ const pathToGroupKey: Record<string, string> = {
   '/front-process': 'production-center',
   '/smt': 'production-center',
   '/lean': 'production-center',
+  '/lean-today': 'production-center',
+  '/lean-management': 'production-center',
   '/assembly': 'production-center',
   '/packaging': 'production-center',
   '/process-exceptions': 'production-center',
@@ -426,6 +429,8 @@ const pathToPermission: Record<string, string> = {
   '/front-process': 'production.front_process',
   '/smt': 'production.smt',
   '/lean': 'production.lean',
+  '/lean-today': 'production.lean',
+  '/lean-management': 'production.lean',
   '/assembly': 'production.assembly',
   '/packaging': 'production.packaging',
   '/process-exceptions': 'production.exceptions',
@@ -498,10 +503,12 @@ export default function MainLayout() {
       const items = buildMenuItemsFromTree(permTree)
       // 注入 v2 新页面（共享 schedule_plans 权限，不在后端权限树里）
       const v2ExtraItems: PermissionAwareItem[] = [
-        { key: '/production-dashboard', icon: <HomeOutlined />, label: '372 驾驶舱', permission: 'production.overview' },
+      { key: '/production-dashboard', icon: <HomeOutlined />, label: '生产驾驶舱', permission: 'production.overview' },
         { key: '/todo-workbench', icon: <ThunderboltOutlined />, label: '待排工作台', permission: 'production.schedule_plans' },
         { key: '/change-events', icon: <AlertOutlined />, label: '变更事件中心', permission: 'production.schedule_plans' },
         { key: '/schedule-board', icon: <ScheduleOutlined />, label: '排产看板', permission: 'production.schedule_plans' },
+        { key: '/lean-today', icon: <AuditOutlined />, label: '精益今日看板', permission: 'production.lean' },
+        { key: '/lean-management', icon: <AuditOutlined />, label: '精益管理', permission: 'production.lean' },
       ]
       return items.map(item =>
         item.permission === 'production'

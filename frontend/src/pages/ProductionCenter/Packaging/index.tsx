@@ -1,6 +1,5 @@
-import ProcessCrudPage from '../components/ProcessCrudPage'
-import { packagingConfig } from './config'
+import WorkshopDashboard from '../components/WorkshopDashboard'
 
 export default function Packaging() {
-  return <ProcessCrudPage config={packagingConfig} />
+  return <WorkshopDashboard processType="packaging" title="包装管理" />
 }

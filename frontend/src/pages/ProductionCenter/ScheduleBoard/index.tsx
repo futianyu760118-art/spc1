@@ -413,12 +413,6 @@ export default function ScheduleBoard() {
     <div>
       <div className="card-modern" style={{ padding: 16, marginBottom: 16 }}>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            showIcon
-            type="info"
-            message="排产看板首版已独立"
-            description="首版看板只读复用已排计划数据，不影响现有计划排产、删除补位与重排链路；当前优先提供周视图、负荷概览和执行进度。"
-          />
           {focusedPlanId ? (
             <Alert
               showIcon

@@ -44,6 +44,7 @@ import ScheduleBoard from './pages/ProductionCenter/ScheduleBoard/index'
 import FrontProcess from './pages/ProductionCenter/FrontProcess/index'
 import SMT from './pages/ProductionCenter/SMT/index'
 import Lean from './pages/ProductionCenter/Lean/index'
+import LeanManagement from './pages/ProductionCenter/Lean/management'
 import Assembly from './pages/ProductionCenter/Assembly/index'
 import Packaging from './pages/ProductionCenter/Packaging/index'
 import ProcessExceptions from './pages/ProductionCenter/ProcessExceptions/index'
@@ -156,7 +157,9 @@ export default function App() {
           <Route path="schedule-board" element={<ScheduleBoard />} />
           <Route path="front-process" element={<FrontProcess />} />
           <Route path="smt" element={<SMT />} />
+          <Route path="lean-today" element={<Lean />} />
           <Route path="lean" element={<Lean />} />
+          <Route path="lean-management" element={<LeanManagement />} />
           <Route path="assembly" element={<Assembly />} />
           <Route path="packaging" element={<Packaging />} />
           <Route path="product-process-capacities" element={<ProductProcessCapacity />} />

@@ -2,17 +2,6 @@
 
 export const DEPARTMENTS = ['计划', '采购', '生产', '品质', '仓储']
 
-export const WORKSPACES = [
-  { key: 'planner_hub', label: '计划排产工作台' },
-  { key: 'plan_board', label: '排产台账' },
-  { key: 'schedule_board', label: '排产看板' },
-]
-
-export const PLANNER_HUB_TABS = [
-  { key: 'todo_workbench', label: '待处理' },
-  { key: 'change_events', label: '变更事件' },
-]
-
 export const BUCKET_OPTIONS = [
   { value: 'all', label: '全部' },
   { value: 'lean', label: '精益' },
@@ -28,8 +17,6 @@ export const PLAN_BUCKET_VIEW_OPTIONS = [
   { key: 'assembly', label: '组装页面' },
   { key: 'packaging', label: '包装页面' },
 ]
-
-export const WORKSPACE_STORAGE_KEY = 'production_schedule_workspace_v3'
 
 export const TODO_FILTER_OPTIONS = [
   { value: 'all', label: '全部待处理' },
@@ -147,6 +134,7 @@ export const LEAN_CAPACITY_LOAD_MAP: Record<string, StatusMeta> = {
   overtime: { label: '需加班', color: 'warning' },
   sunday_production: { label: '周日生产', color: 'processing' },
   move_earlier: { label: '需前挪', color: 'error' },
+  capacity_overflow: { label: '产能超限', color: 'error' },
 }
 
 export const PAGE_CACHE_TTL_MS = 30 * 1000

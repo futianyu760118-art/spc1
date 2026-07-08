@@ -1,6 +1,5 @@
-import ProcessCrudPage from '../components/ProcessCrudPage'
-import { leanConfig } from './config'
+import WorkshopFrontView from '../components/WorkshopFrontView'
 
 export default function Lean() {
-  return <ProcessCrudPage config={leanConfig} />
+  return <WorkshopFrontView processType="lean" workshopLabel="精益车间" />
 }

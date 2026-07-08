@@ -311,7 +311,7 @@ export default function Dashboard372() {
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
         <Row align="middle" justify="space-between" gutter={16}>
           <Col>
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>生产驾驶舱 · 372</div>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>生产驾驶舱</div>
             <div style={{ color: '#64748b', fontSize: 12 }}>
               🔴 今日执行（在产） · 🟡 冷冻区（1-3 天锁定） · 🟢 配料区（4-10 天备料）
             </div>

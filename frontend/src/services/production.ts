@@ -6,6 +6,7 @@ export const productionApi = {
   getOverview: () => api.get('/production/overview'),
   getKpiSummary: () => api.get('/production/kpi-summary'),
   getTodayCards: () => api.get('/production/kpi-summary/today-cards'),
+  getWorkshopOverview: (params: Record<string, any>) => api.get('/production/kpi-summary/workshop-overview', { params }),
   listSchedulePlans: (params: Record<string, any>) => api.get('/production/schedule-plans', { params }),
   createSchedulePlan: (data: Record<string, any>) => api.post('/production/schedule-plans', data),
   updateSchedulePlan: (id: number, data: Record<string, any>) => api.put(`/production/schedule-plans/${id}`, data),

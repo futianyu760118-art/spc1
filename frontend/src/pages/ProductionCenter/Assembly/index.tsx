@@ -1,6 +1,5 @@
-import ProcessCrudPage from '../components/ProcessCrudPage'
-import { assemblyConfig } from './config'
+import WorkshopDashboard from '../components/WorkshopDashboard'
 
 export default function Assembly() {
-  return <ProcessCrudPage config={assemblyConfig} />
+  return <WorkshopDashboard processType="assembly" title="组装管理" />
 }

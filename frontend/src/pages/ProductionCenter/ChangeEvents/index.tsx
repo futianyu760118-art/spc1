@@ -8,6 +8,7 @@ import { formatDate, formatDateTime } from '../../../utils'
 import { BUCKET_OPTIONS, EVENT_TYPE_OPTIONS, EVENT_TYPE_MAP, IMPACT_MAP } from '../SchedulePlans/constants'
 import { renderBucketTag, renderCopyableText } from '../SchedulePlans/helpers'
 import RescheduleModal from '../components/RescheduleModal'
+import CollapsibleStats from '../components/CollapsibleStats'
 
 interface ChangeEventRow {
   event_id: string
@@ -36,6 +37,7 @@ export default function ChangeEvents() {
   const navigate = useNavigate()
   const [rescheduleModalOpen, setRescheduleModalOpen] = useState(false)
   const [reschedulePlanData, setReschedulePlanData] = useState<any>(null)
+  const [activeStat, setActiveStat] = useState<string | null>(null)
 
   const openReschedulePreview = (row: any) => {
     setReschedulePlanData(row)
@@ -232,17 +234,58 @@ export default function ChangeEvents() {
           </Col>
         </Row>
 
-        {/* 统计卡 */}
+        {/* 统计卡（可折叠） */}
+        <CollapsibleStats title="变更统计" storageKey="change_events" summary={`待处理 ${stats.pending} · 高影响 ${stats.high} · UPPH变化 ${stats.upph_change}`}>
         <Row gutter={12} style={{ marginBottom: 12 }}>
-          <Col><Statistic title="待处理事件" value={stats.pending} /></Col>
-          <Col><Statistic title="高影响" value={stats.high} valueStyle={{ color: '#cf1322' }} /></Col>
-          <Col><Statistic title="UPPH变化" value={stats.upph_change} /></Col>
-          <Col><Statistic title="排产段变化" value={stats.bucket_change} /></Col>
-          <Col><Statistic title="交期变化" value={stats.due_date_change} /></Col>
-          <Col><Statistic title="数量变化" value={stats.quantity_change} /></Col>
-          <Col><Statistic title="暂不处理" value={stats.watching} /></Col>
-          <Col><Statistic title="已处理" value={stats.resolved} /></Col>
+          {[
+            { key: 'pending', label: '待处理事件', value: stats.pending, color: '#cf1322', filter: { only_pending: true } },
+            { key: 'high', label: '高影响', value: stats.high, color: '#cf1322', filter: { impact_level: 'high' } },
+            { key: 'upph_change', label: 'UPPH变化', value: stats.upph_change, color: '#722ed1', filter: { event_type: 'upph_change' } },
+            { key: 'bucket_change', label: '排产段变化', value: stats.bucket_change, color: '#eb2f96', filter: { event_type: 'bucket_change' } },
+            { key: 'due_date_change', label: '交期变化', value: stats.due_date_change, color: '#fa8c16', filter: { event_type: 'due_date_change' } },
+            { key: 'quantity_change', label: '数量变化', value: stats.quantity_change, color: '#13c2c2', filter: { event_type: 'quantity_change' } },
+            { key: 'watching', label: '暂不处理', value: stats.watching, color: '#8c8c8c', filter: { process_status: 'watching' } },
+            { key: 'resolved', label: '已处理', value: stats.resolved, color: '#52c41a', filter: { process_status: 'resolved' } },
+          ].map((item) => {
+            const active = activeStat === item.key
+            return (
+              <Col key={item.key} xs={12} md={6} lg={3}>
+                <div
+                  className="card-modern"
+                  style={{
+                    padding: 12,
+                    cursor: 'pointer',
+                    background: active ? '#f0f5ff' : '#fff',
+                    border: active ? '2px solid #1677ff' : '1px solid #f0f0f0',
+                  }}
+                  onClick={() => {
+                    if (active) {
+                      // 再点一次取消筛选
+                      setActiveStat(null)
+                      setOnlyPending(false)
+                      setImpactLevel(undefined)
+                      setEventTypeFilter('all')
+                    } else {
+                      setActiveStat(item.key)
+                      const f = item.filter
+                      setOnlyPending(f.only_pending || false)
+                      setImpactLevel(f.impact_level)
+                      setEventTypeFilter(f.event_type || 'all')
+                    }
+                    setPage(1)
+                  }}
+                >
+                  <Statistic
+                    title={item.label}
+                    value={item.value}
+                    valueStyle={{ color: item.color, fontSize: 22 }}
+                  />
+                </div>
+              </Col>
+            )
+          })}
         </Row>
+        </CollapsibleStats>
 
         {/* 工具栏 */}
         <Row gutter={12} align="middle">

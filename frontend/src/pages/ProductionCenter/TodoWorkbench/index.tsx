@@ -10,6 +10,7 @@ import { TODO_FILTER_OPTIONS, TODO_BUCKET_WORKSPACE_OPTIONS, TODO_STATUS_META } 
 import { renderBucketTag, renderCopyableText, renderSchedulingReasonCell, renderSchedulingStatusTag } from '../SchedulePlans/helpers'
 import ScheduleModal from '../components/ScheduleModal'
 import BatchScheduleModal from '../components/BatchScheduleModal'
+import CollapsibleStats from '../components/CollapsibleStats'
 
 interface TodoRow {
   id: number
@@ -215,7 +216,8 @@ export default function TodoWorkbench() {
             ))}
           </Space>
 
-          {/* 统计卡 */}
+          {/* 统计卡（可折叠） */}
+          <CollapsibleStats title="待排统计" storageKey="todo_workbench" summary={`待排产 ${counts.ready} · 待重排 ${counts.reschedule} · 待确认 ${counts.pending}`}>
           <Row gutter={12}>
             {[
               { key: 'reschedule', label: '待重排', value: counts.reschedule, color: '#cf1322' },
@@ -241,6 +243,7 @@ export default function TodoWorkbench() {
               </Col>
             ))}
           </Row>
+          </CollapsibleStats>
 
           {/* 工具栏 */}
           <Row gutter={12} align="middle">

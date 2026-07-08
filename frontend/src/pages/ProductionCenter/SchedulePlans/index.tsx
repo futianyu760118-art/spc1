@@ -7,11 +7,8 @@ import { productionApi } from '../../../services/api'
 import { formatDate, formatDateTime } from '../../../utils'
 import {
   DEPARTMENTS,
-  WORKSPACES,
-  PLANNER_HUB_TABS,
   BUCKET_OPTIONS,
   PLAN_BUCKET_VIEW_OPTIONS,
-  WORKSPACE_STORAGE_KEY,
   TODO_FILTER_OPTIONS,
   TODO_BUCKET_WORKSPACE_OPTIONS,
   PLAN_SCOPE_OPTIONS,
@@ -74,8 +71,8 @@ const stringifyPerfPayload = (value: any) => {
 export default function SchedulePlans() {
   const location = useLocation()
   const navigate = useNavigate()
-  const [workspace, setWorkspace] = useState('planner_hub')
-  const [plannerHubTab, setPlannerHubTab] = useState('todo_workbench')
+  const workspace = 'plan_board'
+  const plannerHubTab = 'todo_workbench'
   const [loading, setLoading] = useState(false)
   const [workHours, setWorkHours] = useState(8)
   const [workHoursByBucket, setWorkHoursByBucket] = useState<Record<string, number>>({})
@@ -199,7 +196,6 @@ export default function SchedulePlans() {
     planDate?: string | null
     status?: string
   }) => {
-    setWorkspace('plan_board')
     setPlanScope(options?.scope || 'active')
     setPlanPage(1)
     setPlanStatus(options?.status)
@@ -608,15 +604,6 @@ export default function SchedulePlans() {
     setSelectedOrderRows([])
   }, [])
 
-  const handlePlannerHubTabChange = useCallback((key: string) => {
-    setPlannerHubTab(key)
-    setSelectedOrderKeys([])
-    setSelectedOrderRows([])
-    setSelectedImpactKeys([])
-    setOrderPage(1)
-    setAlertPage(1)
-  }, [])
-
   const handleRefreshTodoSnapshots = useCallback(async () => {
     try {
       setRefreshingSnapshots(true)
@@ -643,21 +630,24 @@ export default function SchedulePlans() {
   }, [invalidatePageCaches, month, orderKeyword, refreshTodoWorkbenchPanel, riskLevel, year])
 
   useEffect(() => { loadWorkHours() }, [loadWorkHours])
-  useEffect(() => { localStorage.setItem(WORKSPACE_STORAGE_KEY, workspace) }, [workspace])
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
-    const workspaceParam = params.get('workspace')
     const planIdParam = Number(params.get('planId') || 0)
-    if (workspaceParam !== 'plan_board' && planIdParam <= 0) return
-
     const planDateParam = params.get('planDate')
     const keywordParam = params.get('keyword') || ''
     const bucketParam = params.get('bucket')
     const scopeParam = params.get('scope')
+    const hasPlanBoardContext = Boolean(
+      planIdParam > 0 ||
+      planDateParam ||
+      keywordParam ||
+      bucketParam ||
+      scopeParam
+    )
+    if (!hasPlanBoardContext) return
     const targetDate = planDateParam ? dayjs(planDateParam) : null
 
-    setWorkspace('plan_board')
     setPlanScope(scopeParam === 'history' || scopeParam === 'reschedule' ? scopeParam : 'active')
     setPlanPage(1)
     setPlanPageSize(100)
@@ -1235,24 +1225,7 @@ export default function SchedulePlans() {
       if (executeBackfill) {
         openPlanBoardView({ scope: 'active', bucket: preview?.release_bucket || 'all' })
       } else {
-        // #region debug-point delete-only-refresh-flow
-        logSchedulePlansPerf('delete-confirm-navigate', {
-          fromWorkspace: workspace,
-          fromPlannerHubTab: plannerHubTab,
-          toWorkspace: 'planner_hub',
-          toPlannerHubTab: 'todo_workbench',
-          orderKeyword: targetTodoKeyword,
-          orderBucketFilter: targetTodoBucket,
-          skipSnapshotReconcileOnce: true,
-        })
-        // #endregion
-        todoWorkbenchSkipSnapshotReconcileRef.current = true
-        setWorkspace('planner_hub')
-        setPlannerHubTab('todo_workbench')
-        setOrderPage(1)
-        setTodoStatusFilter('all')
-        setOrderKeyword(targetTodoKeyword)
-        setOrderBucketFilter(targetTodoBucket)
+        navigate('/todo-workbench')
       }
     } catch (e: any) {
       logSchedulePlansPerf('delete-confirm-error', {
@@ -1967,392 +1940,99 @@ export default function SchedulePlans() {
   return (
     <div>
       <div className="card-modern" style={{ padding: '12px 20px', marginBottom: 16 }}>
-        <Space style={{ marginBottom: 8 }}>
-          <Button type="primary" ghost onClick={() => navigate('/todo-workbench')}>📋 待排工作台 →</Button>
-          <Button type="primary" ghost onClick={() => navigate('/change-events')}>🔄 变更事件中心 →</Button>
-          <span style={{ color: '#94a3b8', fontSize: 12 }}>（排产台账：查看/编辑/删除已排计划；待排与变更已独立成页）</span>
-        </Space>
-        <Tabs
-          activeKey={workspace}
-          onChange={(key) => {
-            setWorkspace(key)
-            setSelectedOrderKeys([])
-            setSelectedOrderRows([])
-            setSelectedImpactKeys([])
-            setOrderPage(1)
-            setPlanPage(1)
-            setAlertPage(1)
-          }}
-          items={WORKSPACES.filter((item) => item.key !== 'planner_hub').map((item) => ({ key: item.key, label: item.label }))}
-        />
-
-        {workspace === 'planner_hub' && (
-          <Tabs
-            activeKey={plannerHubTab}
-            onChange={handlePlannerHubTabChange}
-            items={PLANNER_HUB_TABS.map((item) => ({ key: item.key, label: item.label }))}
-          />
-        )}
-
-        {workspace === 'planner_hub' && plannerHubTab === 'todo_workbench' && (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Tabs
-              activeKey={orderBucketFilter}
-              onChange={handleTodoBucketWorkspaceChange}
-              items={TODO_BUCKET_WORKSPACE_OPTIONS.map((item) => ({
-                key: item.value,
-                label: `${item.label} (${todoBucketCounts[item.value as keyof typeof todoBucketCounts] || 0})`,
-              }))}
-            />
-            <Row gutter={12}>
-              {[
-                { key: 'reschedule', label: '待重排', value: todoCounts.reschedule, color: '#cf1322' },
-                { key: 'ready', label: '待排产', value: todoCounts.ready, color: '#1677ff' },
-                { key: 'pending', label: '待确认', value: todoCounts.pending, color: '#fa8c16' },
-              ].map((item) => (
-                <Col key={item.label} xs={12} md={8}>
-                  {(() => {
-                    const isActive = todoStatusFilter === item.key
-                    return (
-                      <div
-                        className="card-modern"
-                        style={{
-                          padding: 16,
-                          cursor: 'pointer',
-                          background: isActive ? '#f0f5ff' : '#fff',
-                          border: isActive ? '1px solid #1677ff' : '1px solid #f0f0f0',
-                          boxShadow: isActive ? '0 0 0 2px rgba(22,119,255,0.08)' : 'none',
-                        }}
-                        onClick={() => {
-                          setTodoStatusFilter(item.key)
-                          setSelectedOrderKeys([])
-                          setSelectedOrderRows([])
-                        }}
-                      >
-                        <Statistic title={item.label} value={item.value} valueStyle={{ color: item.color, fontSize: 24 }} />
-                      </div>
-                    )
-                  })()}
-                </Col>
-              ))}
-            </Row>
-            <Row gutter={12} align="middle">
-              <Col>
-                <Select value={year} onChange={(v) => { setYear(v); setOrderPage(1) }} style={{ width: 110 }} options={Array.from({ length: 7 }, (_, i) => ({ value: dayjs().year() - 3 + i, label: `${dayjs().year() - 3 + i}年` }))} />
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Row align="middle" justify="space-between">
+            <Col>
+              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>排产台账</div>
+              <div style={{ color: '#64748b', fontSize: 12 }}>
+                面向计划与管理的后台操作页，聚焦计划查询、调整、删除、重排、历史与日志
+              </div>
+            </Col>
+            <Col>
+              <Space>
+                <Button size="small" onClick={() => navigate('/todo-workbench')}>📋 待排工作台</Button>
+                <Button size="small" onClick={() => navigate('/change-events')}>🔄 变更事件中心</Button>
+                <Button size="small" onClick={() => navigate('/schedule-board')}>📅 排产看板</Button>
+                <Button size="small" onClick={() => navigate('/production-dashboard')}>🏠 驾驶舱</Button>
+              </Space>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            {planStats.map((item) => (
+              <Col key={item.label} xs={12} md={6}>
+                <div className="card-modern" style={{ padding: 16 }}>
+                  <Statistic title={item.label} value={item.value} valueStyle={{ color: item.color, fontSize: 24 }} />
+                </div>
               </Col>
-              <Col>
-                <Select value={month} onChange={(v) => { setMonth(v); setOrderPage(1) }} style={{ width: 90 }} options={Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1}月` }))} />
-              </Col>
-              <Col>
-                <Input
-                  prefix={<SearchOutlined />}
-                  value={orderKeyword}
-                  onChange={(e) => { setOrderKeyword(e.target.value); setOrderPage(1) }}
-                  placeholder="搜索订单/BOM/产品"
-                  allowClear
-                  style={{ width: 240 }}
-                />
-              </Col>
-              <Col>
-                <Select value={todoStatusFilter} onChange={(v) => { setTodoStatusFilter(v); setSelectedOrderKeys([]); setSelectedOrderRows([]) }} style={{ width: 130 }} options={TODO_FILTER_OPTIONS} />
-              </Col>
-              <Col flex="auto" />
-              <Col>
-                <Space>
-                  <span style={{ color: '#595959' }}>
-                    当前入口 {todoTotal} 条，待排产 {todoCounts.ready} 条，待重排 {todoCounts.reschedule} 条，已选 {selectedOrderRows.length} 条
-                  </span>
-                  <Button onClick={handleDetectChanges}>检测变更</Button>
-                  <Button loading={refreshingSnapshots} onClick={handleRefreshTodoSnapshots}>刷新快照</Button>
-                  <Button icon={<ReloadOutlined />} onClick={() => { refreshTodoWorkbenchPanel(true) }}>刷新</Button>
-                  <Tooltip title={orderSelectableCount > 0 ? `当前已选中 ${orderSelectableCount} 条待排产订单` : '当前未勾选待排产订单'}>
-                    <Button type="primary" icon={<ThunderboltOutlined />} disabled={selectedOrderRows.length === 0} onClick={openBatchSchedule}>
-                      批量排产
-                    </Button>
-                  </Tooltip>
-                  <Tooltip title={selectedRescheduleRows.length > 0 ? `当前已选中 ${selectedRescheduleRows.length} 条待重排行` : '当前未勾选待重排行'}>
-                    <Button type="primary" ghost icon={<ThunderboltOutlined />} disabled={selectedRescheduleRows.length === 0} onClick={openBatchReschedulePreview}>
-                      批量重排
-                    </Button>
-                  </Tooltip>
-                </Space>
-              </Col>
-            </Row>
-          </Space>
-        )}
-
-        {workspace === 'plan_board' && (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Row gutter={12}>
-              {planStats.map((item) => (
-                <Col key={item.label} xs={12} md={6}>
-                  <div className="card-modern" style={{ padding: 16 }}>
-                    <Statistic title={item.label} value={item.value} valueStyle={{ color: item.color, fontSize: 24 }} />
-                  </div>
-                </Col>
-              ))}
-            </Row>
-            <Row gutter={12} align="middle">
-              <Col>
-                <Select value={planScope} onChange={(v) => { setPlanScope(v); setPlanPage(1) }} style={{ width: 120 }} options={PLAN_SCOPE_OPTIONS} />
-              </Col>
-              <Col>
-                <Input
-                  prefix={<SearchOutlined />}
-                  value={planKeyword}
-                  onChange={(e) => { setPlanKeyword(e.target.value); setPlanPage(1) }}
-                  placeholder="搜索订单/产品/型号"
-                  allowClear
-                  style={{ width: 240 }}
-                />
-              </Col>
-              <Col>
-                <Select allowClear placeholder="计划状态" value={planStatus} onChange={(v) => { setPlanStatus(v); setPlanPage(1) }} style={{ width: 130 }} options={Object.entries(STATUS_MAP).map(([value, item]) => ({ value, label: item.label }))} />
-              </Col>
-              <Col>
-                <DatePicker.RangePicker onChange={(dates) => {
-                  setPlanDateRange(dates && dates[0] && dates[1] ? [dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')] : null)
-                  setPlanPage(1)
-                }} />
-              </Col>
-              <Col flex="auto" />
-              <Col>
-                <Space>
-                  <Button onClick={openSimulate}>测试试算</Button>
-                  <Button onClick={openLeanPlanBoard}>只看精益计划</Button>
-                  <Button onClick={openLeanRescheduleBoard}>只看精益待重排</Button>
-                  <Button onClick={() => openOperationLogs()}>操作日志</Button>
-                  <Button icon={<ReloadOutlined />} onClick={() => { loadPlanBoard(true) }}>刷新</Button>
-                  <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增计划</Button>
-                </Space>
-              </Col>
-            </Row>
-            <Tabs
-              activeKey={planBucketFilter}
-              onChange={(key) => {
-                setPlanBucketFilter(key)
+            ))}
+          </Row>
+          <Row gutter={12} align="middle">
+            <Col>
+              <Select value={planScope} onChange={(v) => { setPlanScope(v); setPlanPage(1) }} style={{ width: 120 }} options={PLAN_SCOPE_OPTIONS} />
+            </Col>
+            <Col>
+              <Input
+                prefix={<SearchOutlined />}
+                value={planKeyword}
+                onChange={(e) => { setPlanKeyword(e.target.value); setPlanPage(1) }}
+                placeholder="搜索订单/产品/型号"
+                allowClear
+                style={{ width: 240 }}
+              />
+            </Col>
+            <Col>
+              <Select allowClear placeholder="计划状态" value={planStatus} onChange={(v) => { setPlanStatus(v); setPlanPage(1) }} style={{ width: 130 }} options={Object.entries(STATUS_MAP).map(([value, item]) => ({ value, label: item.label }))} />
+            </Col>
+            <Col>
+              <DatePicker.RangePicker onChange={(dates) => {
+                setPlanDateRange(dates && dates[0] && dates[1] ? [dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')] : null)
                 setPlanPage(1)
-              }}
-              items={PLAN_BUCKET_VIEW_OPTIONS.map((item) => ({ key: item.key, label: item.label }))}
-            />
-          </Space>
-        )}
-
-        {workspace === 'planner_hub' && plannerHubTab === 'change_events' && (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Row gutter={12} align="middle">
-              <Col>
-                <Statistic title="待处理事件" value={eventStats.pending} />
-              </Col>
-              <Col>
-                <Statistic title="高影响" value={eventStats.high} />
-              </Col>
-              <Col>
-                <Statistic title="UPPH变化" value={eventStats.upph_change} />
-              </Col>
-              <Col>
-                <Statistic title="排产段变化" value={eventStats.bucket_change} />
-              </Col>
-              <Col>
-                <Statistic title="交期变化" value={eventStats.due_date_change} />
-              </Col>
-              <Col>
-                <Statistic title="数量变化" value={eventStats.quantity_change} />
-              </Col>
-              <Col>
-                <Statistic title="暂不处理" value={eventStats.watching} />
-              </Col>
-              <Col>
-                <Statistic title="已处理" value={eventStats.resolved} />
-              </Col>
-              <Col flex="auto" />
-              <Col>
-                <Input
-                  prefix={<SearchOutlined />}
-                  value={alertKeyword}
-                  onChange={(e) => { setAlertKeyword(e.target.value); setAlertPage(1) }}
-                  placeholder="搜索订单/产品/负责人"
-                  allowClear
-                  style={{ width: 220 }}
-                />
-              </Col>
-              <Col>
-                <Select value={impactBucketFilter} onChange={(v) => { setImpactBucketFilter(v); setAlertPage(1) }} style={{ width: 130 }} options={BUCKET_OPTIONS} />
-              </Col>
-              <Col>
-                <Select allowClear placeholder="影响等级" value={impactLevel} onChange={(v) => { setImpactLevel(v); setAlertPage(1) }} style={{ width: 120 }} options={Object.entries(IMPACT_MAP).map(([value, item]) => ({ value, label: item.label }))} />
-              </Col>
-              <Col>
-                <Select value={eventTypeFilter} onChange={(v) => { setEventTypeFilter(v); setAlertPage(1) }} style={{ width: 130 }} options={EVENT_TYPE_OPTIONS} />
-              </Col>
-              <Col>
-                <Button type={onlyPendingEvents ? 'primary' : 'default'} onClick={() => { setOnlyPendingEvents((prev) => !prev); setAlertPage(1) }}>
-                  {onlyPendingEvents ? '只看待处理' : '全部事件'}
-                </Button>
-              </Col>
-              <Col>
-                <Space>
-                  <Button onClick={() => handleSelectImpactRows('lean')}>勾选当前精益</Button>
-                  <Button disabled={selectedImpactKeys.length === 0} onClick={() => handleUpdateEventStatus('watching')}>批量暂不处理</Button>
-                  <Button disabled={selectedImpactKeys.length === 0} onClick={() => handleUpdateEventStatus('resolved')}>批量已处理</Button>
-                  <Button icon={<ReloadOutlined />} onClick={() => { loadImpactPlans(true) }}>刷新</Button>
-                  <Button type="primary" icon={<ThunderboltOutlined />} disabled={selectedBatchPlanIds.length === 0} onClick={() => setBatchPreviewOpen(true)}>
-                    预览并重排
-                  </Button>
-                </Space>
-              </Col>
-            </Row>
-          </Space>
-        )}
-
-        {workspace === 'schedule_board' && (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Alert
-              showIcon
-              type="info"
-              message="排产看板入口已预留"
-              description="这里后续承接甘特图、时间轴、车间泳道、组装包装衔接、产能负荷和拖拽调整。当前先保留工作台和已排计划原功能不变。"
-            />
-            <Row gutter={12}>
-              <Col xs={24} md={8}>
-                <div className="card-modern" style={{ padding: 16, minHeight: 120 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 8 }}>未来放什么</div>
-                  <div style={{ color: '#595959', lineHeight: 1.8 }}>按日期看生产节奏、按车间看负荷、按订单看组装与包装衔接。</div>
-                </div>
-              </Col>
-              <Col xs={24} md={8}>
-                <div className="card-modern" style={{ padding: 16, minHeight: 120 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 8 }}>先去哪里处理</div>
-                  <div style={{ color: '#595959', lineHeight: 1.8 }}>今天先排什么，回工作台；已经排了什么，去已排计划。</div>
-                </div>
-              </Col>
-              <Col xs={24} md={8}>
-                <div className="card-modern" style={{ padding: 16, minHeight: 120 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 8 }}>后续能力</div>
-                  <div style={{ color: '#595959', lineHeight: 1.8 }}>甘特图、泳道图、拖拽调整、冲突高亮、延期预警定位。</div>
-                </div>
-              </Col>
-            </Row>
-            <Space>
-              <Button type="primary" onClick={() => navigate('/schedule-board')}>进入独立排产看板</Button>
-              <Button type="primary" onClick={() => { setWorkspace('planner_hub'); setPlannerHubTab('todo_workbench') }}>回计划排产工作台</Button>
-              <Button onClick={() => setWorkspace('plan_board')}>去已排计划</Button>
-            </Space>
-          </Space>
-        )}
+              }} />
+            </Col>
+            <Col flex="auto" />
+            <Col>
+              <Space>
+                <Button onClick={openSimulate}>测试试算</Button>
+                <Button onClick={openLeanPlanBoard}>只看精益计划</Button>
+                <Button onClick={openLeanRescheduleBoard}>只看精益待重排</Button>
+                <Button onClick={() => openOperationLogs()}>操作日志</Button>
+                <Button icon={<ReloadOutlined />} onClick={() => { loadPlanBoard(true) }}>刷新</Button>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增计划</Button>
+              </Space>
+            </Col>
+          </Row>
+          <Tabs
+            activeKey={planBucketFilter}
+            onChange={(key) => {
+              setPlanBucketFilter(key)
+              setPlanPage(1)
+            }}
+            items={PLAN_BUCKET_VIEW_OPTIONS.map((item) => ({ key: item.key, label: item.label }))}
+          />
+        </Space>
       </div>
 
-      <div className="card-modern" style={{ padding: '0 0 4px', marginBottom: ['planner_hub', 'plan_board', 'schedule_board'].includes(workspace) ? 16 : 0 }}>
-        {workspace === 'planner_hub' && plannerHubTab === 'todo_workbench' && (
-          <Table
-            rowKey={(row: any) => row.id || `${row.order_no}-${row.line_no}-${row.todo_kind}`}
-            rowSelection={{
-              selectedRowKeys: selectedOrderKeys,
-              onChange: (keys, rows) => {
-                setSelectedOrderKeys(keys)
-                setSelectedOrderRows(rows)
-              },
-              getCheckboxProps: (row: any) => ({ disabled: row.todo_kind === 'pending' }),
-            }}
-            columns={todoColumns}
-            dataSource={filteredTodoItems}
-            loading={loading}
-            size="small"
-            scroll={{ x: 1680, y: 600 }}
-            locale={{
-              emptyText: (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="当前筛选下没有待处理事项，可切换筛选或先检测变更。"
-                />
-              ),
-            }}
-            pagination={{
-              total: todoTotal,
-              current: orderPage,
-              pageSize: orderPageSize,
-              showSizeChanger: false,
-              showQuickJumper: false,
-              onChange: (page, pageSize) => { 
-                setOrderPage(page); 
-                setOrderPageSize(pageSize);
-              },
-              showTotal: (total) => `共 ${total} 条`,
-            }}
-          />
-        )}
-
-        {workspace === 'plan_board' && (
-          <Table
-            rowKey="id"
-            columns={planColumns}
-            dataSource={planData}
-            loading={loading}
-            size="small"
-            scroll={{ x: 2350, y: 600 }}
-            onRow={(row: any) => ({
-              style: Number(row.id) === highlightPlanId ? { backgroundColor: '#fffbe6' } : undefined,
-            })}
-            pagination={{
-              total: planTotal,
-              current: planPage,
-              pageSize: planPageSize,
-              showSizeChanger: true,
-              onChange: (page, pageSize) => { setPlanPage(page); setPlanPageSize(pageSize) },
-              showTotal: (total) => `共 ${total} 条`,
-            }}
-          />
-        )}
-
-        {workspace === 'planner_hub' && plannerHubTab === 'change_events' && (
-          <Table
-            rowKey="event_id"
-            rowSelection={{
-              selectedRowKeys: selectedImpactKeys,
-              onChange: (keys, rows) => {
-                setSelectedImpactKeys(keys)
-                setSelectedBatchPlanIds(Array.from(new Set((rows as any[]).map((row) => Number(row.id)).filter(Boolean))))
-              },
-              getCheckboxProps: (row: any) => ({ disabled: row.process_status !== 'pending' }),
-            }}
-            columns={changeEventColumns}
-            dataSource={eventData}
-            loading={loading}
-            size="small"
-            pagination={{
-              total: eventTotal,
-              current: alertPage,
-              pageSize: alertPageSize,
-              showSizeChanger: true,
-              onChange: (page, pageSize) => { setAlertPage(page); setAlertPageSize(pageSize) },
-              showTotal: (total) => `共 ${total} 条`,
-            }}
-            scroll={{ x: 1750 }}
-            locale={{ emptyText: <Empty description="当前没有需要处理的变更事件。" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-          />
-        )}
+      <div className="card-modern" style={{ padding: '0 0 4px', marginBottom: 16 }}>
+        <Table
+          rowKey="id"
+          columns={planColumns}
+          dataSource={planData}
+          loading={loading}
+          size="small"
+          scroll={{ x: 2350, y: 600 }}
+          onRow={(row: any) => ({
+            style: Number(row.id) === highlightPlanId ? { backgroundColor: '#fffbe6' } : undefined,
+          })}
+          pagination={{
+            total: planTotal,
+            current: planPage,
+            pageSize: planPageSize,
+            showSizeChanger: true,
+            onChange: (page, pageSize) => { setPlanPage(page); setPlanPageSize(pageSize) },
+            showTotal: (total) => `共 ${total} 条`,
+          }}
+        />
       </div>
-
-      {workspace === 'planner_hub' && plannerHubTab === 'todo_workbench' && (
-        <div className="card-modern" style={{ padding: 16 }}>
-          <Space size={8} wrap>
-            <Tag color="red">待重排 {todoCounts.reschedule}</Tag>
-            <Tag color="blue">待排产 {todoCounts.ready}</Tag>
-            <Tag color="orange">待确认 {todoCounts.pending}</Tag>
-            <Tag color="red">缺UPPH {todoStats.missing_upph || 0}</Tag>
-            <Button size="small" onClick={() => { setWorkspace('planner_hub'); handlePlannerHubTabChange('change_events') }}>查看变更事件</Button>
-            <Button
-              size="small"
-              onClick={() => {
-                handleTodoBucketWorkspaceChange('lean')
-                setTodoStatusFilter('pending')
-              }}
-            >
-              只看精益待确认
-            </Button>
-          </Space>
-        </div>
-      )}
 
       <Drawer
         title={detailSource === 'order_pool' ? '订单详情' : '排产详情'}
