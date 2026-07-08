@@ -1969,7 +1969,7 @@ export default function SchedulePlans() {
         <Space style={{ marginBottom: 8 }}>
           <Button type="primary" ghost onClick={() => navigate('/todo-workbench')}>📋 待排工作台 →</Button>
           <Button type="primary" ghost onClick={() => navigate('/change-events')}>🔄 变更事件中心 →</Button>
-          <span style={{ color: '#94a3b8', fontSize: 12 }}>（已独立成页，本页只保留已排计划）</span>
+          <span style={{ color: '#94a3b8', fontSize: 12 }}>（排产台账：查看/编辑/删除已排计划；待排与变更已独立成页）</span>
         </Space>
         <Tabs
           activeKey={workspace}

@@ -195,7 +195,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/production-dashboard', icon: <HomeOutlined />, label: '372 驾驶舱', permission: 'production.overview' },
       { key: '/todo-workbench', icon: <ThunderboltOutlined />, label: '待排工作台', permission: 'production.schedule_plans' },
       { key: '/change-events', icon: <AlertOutlined />, label: '变更事件中心', permission: 'production.schedule_plans' },
-      { key: '/schedule-plans', icon: <ProjectOutlined />, label: '已排计划', permission: 'production.schedule_plans' },
+      { key: '/schedule-plans', icon: <ProjectOutlined />, label: '排产台账', permission: 'production.schedule_plans' },
       { key: '/schedule-board', icon: <ScheduleOutlined />, label: '排产看板', permission: 'production.schedule_plans' },
       { key: '/production-overview', icon: <DashboardOutlined />, label: '生产总览', permission: 'production.overview' },
       { key: '/product-process-capacities', icon: <DatabaseOutlined />, label: '产品工序产能', permission: 'production.product_process_capacities' },

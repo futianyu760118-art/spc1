@@ -4,7 +4,7 @@ export const DEPARTMENTS = ['计划', '采购', '生产', '品质', '仓储']
 
 export const WORKSPACES = [
   { key: 'planner_hub', label: '计划排产工作台' },
-  { key: 'plan_board', label: '已排计划' },
+  { key: 'plan_board', label: '排产台账' },
   { key: 'schedule_board', label: '排产看板' },
 ]
 

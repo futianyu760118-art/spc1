@@ -184,10 +184,21 @@ export default function TodoWorkbench() {
   return (
     <div>
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
-        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>待排工作台</div>
-        <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
-          从巨无霸拆出的独立页面 · 待排/待重排/待确认订单集中处理 · 接口真实数据
-        </div>
+        <Row align="middle" justify="space-between">
+          <Col>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>待排工作台</div>
+            <div style={{ color: '#64748b', fontSize: 12 }}>
+              待排/待重排/待确认订单集中处理 · 接口真实数据
+            </div>
+          </Col>
+          <Col>
+            <Space>
+              <Button size="small" onClick={() => navigate('/change-events')}>🔄 变更事件中心</Button>
+              <Button size="small" onClick={() => navigate('/schedule-plans')}>📊 排产台账</Button>
+              <Button size="small" onClick={() => navigate('/production-dashboard')}>🏠 驾驶舱</Button>
+            </Space>
+          </Col>
+        </Row>
 
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           {/* bucket 切换 */}
@@ -298,14 +309,17 @@ export default function TodoWorkbench() {
       </div>
 
       <div style={{ color: '#94a3b8', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>
-        待排工作台 · 真实数据来自 getTodoWorkbench 接口 · 单条排产直接弹 Modal，重排/查看跳巨无霸
+        待排工作台 · 真实数据来自 getTodoWorkbench 接口 · 单条/批量排产直接弹 Modal，重排/查看跳排产台账
       </div>
 
       <ScheduleModal
         open={scheduleModalOpen}
         orderData={scheduleOrder}
         onClose={() => { setScheduleModalOpen(false); setScheduleOrder(null) }}
-        onSuccess={() => load()}
+        onSuccess={() => {
+          load()
+          message.success('排产成功，已自动刷新列表', 2)
+        }}
       />
 
       <BatchScheduleModal
@@ -316,6 +330,7 @@ export default function TodoWorkbench() {
           setSelectedRowKeys([])
           setSelectedRows([])
           load()
+          message.success('批量排产完成，已自动刷新列表', 2)
         }}
       />
     </div>

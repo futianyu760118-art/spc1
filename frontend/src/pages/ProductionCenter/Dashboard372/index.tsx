@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Card, Col, Row, Statistic, Tag, DatePicker, Segmented, Empty, Progress, Button, Alert, message } from 'antd'
+import { Card, Col, Row, Space, Statistic, Tag, DatePicker, Segmented, Empty, Progress, Button, Alert, message } from 'antd'
 import { ArrowLeftOutlined, ArrowRightOutlined } from '@ant-design/icons'
 import dayjs, { Dayjs } from 'dayjs'
 import { productionApi } from '../../../services/api'
@@ -336,6 +336,17 @@ export default function Dashboard372() {
             />
           </Col>
         </Row>
+      </div>
+
+      {/* 快速入口：4 个页面直达 */}
+      <div className="card-modern" style={{ padding: '12px 20px', marginBottom: 16 }}>
+        <Space wrap>
+          <span style={{ color: '#64748b', fontSize: 13, fontWeight: 600 }}>快速入口：</span>
+          <Button size="small" type="primary" onClick={() => navigate('/todo-workbench')}>📋 待排工作台</Button>
+          <Button size="small" onClick={() => navigate('/change-events')}>🔄 变更事件中心</Button>
+          <Button size="small" onClick={() => navigate('/schedule-plans')}>📊 排产台账</Button>
+          <Button size="small" onClick={() => navigate('/schedule-board')}>📅 排产看板</Button>
+        </Space>
       </div>
 
       {/* 三栏驾驶舱 */}

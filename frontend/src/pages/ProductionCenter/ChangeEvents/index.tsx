@@ -190,7 +190,7 @@ export default function ChangeEvents() {
             disabled={!row.needs_reschedule || row.process_status === 'resolved'}
             onClick={() => navigate(`/schedule-plans?workspace=planner_hub&planId=${row.id}`)}
           >
-            去巨无霸处理
+            去排产台账处理
           </Button>
           {row.process_status === 'pending' ? (
             <>
@@ -208,10 +208,21 @@ export default function ChangeEvents() {
   return (
     <div>
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
-        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>变更事件中心</div>
-        <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
-          从巨无霸拆出的独立页面 · 全部变更事件集中处理 · 接口真实数据
-        </div>
+        <Row align="middle" justify="space-between">
+          <Col>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>变更事件中心</div>
+            <div style={{ color: '#64748b', fontSize: 12 }}>
+              全部变更事件集中处理 · 接口真实数据
+            </div>
+          </Col>
+          <Col>
+            <Space>
+              <Button size="small" onClick={() => navigate('/todo-workbench')}>📋 待排工作台</Button>
+              <Button size="small" onClick={() => navigate('/schedule-plans')}>📊 排产台账</Button>
+              <Button size="small" onClick={() => navigate('/production-dashboard')}>🏠 驾驶舱</Button>
+            </Space>
+          </Col>
+        </Row>
 
         {/* 统计卡 */}
         <Row gutter={12} style={{ marginBottom: 12 }}>
@@ -288,7 +299,7 @@ export default function ChangeEvents() {
       </div>
 
       <div style={{ color: '#94a3b8', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>
-        变更事件中心 · 真实数据来自 listChangeEvents 接口 · 单条/批量重排仍走巨无霸（v2 7.2 新旧共存）
+        变更事件中心 · 真实数据来自 listChangeEvents 接口 · 重排操作跳转排产台账
       </div>
     </div>
   )
