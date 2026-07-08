@@ -53,6 +53,7 @@ import {
 import ScheduleModal from '../components/ScheduleModal'
 import DeleteModal from '../components/DeleteModal'
 import BatchScheduleModal from '../components/BatchScheduleModal'
+import RescheduleModal from '../components/RescheduleModal'
 
 const PERF_DEBUG = import.meta.env.DEV
 
@@ -2531,58 +2532,12 @@ export default function SchedulePlans() {
         </Space>
       </Modal>
 
-      <Modal
-        title={`重排预览${reschedulePreviewData?.order_no ? ` - ${reschedulePreviewData.order_no}` : ''}`}
+      <RescheduleModal
         open={reschedulePreviewOpen}
-        destroyOnHidden
-        onCancel={() => {
-          setReschedulePreviewOpen(false)
-          setReschedulePreviewRow(null)
-        }}
-        onOk={async () => {
-          if (!reschedulePreviewData?.id) return
-          setReschedulePreviewOpen(false)
-          await handleReschedule(reschedulePreviewData.id)
-          setReschedulePreviewRow(null)
-        }}
-        okText="确认重排"
-        cancelText="取消"
-        confirmLoading={loading}
-        width={820}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            showIcon
-            type={(reschedulePreviewData?.change_days || 0) > 0 ? 'warning' : 'info'}
-            message="先看影响，再决定是否重排"
-            description="这里展示触发重排的变更原因，以及按最新订单快照和当前能力口径预估后的日期影响。"
-          />
-          <Descriptions bordered size="small" column={2}>
-            <Descriptions.Item label="这是什么" span={2}>
-              {reschedulePreviewData?.order_no || '-'} / {reschedulePreviewData?.line_no || '-'}，当前版本 V{reschedulePreviewData?.plan_version || 1}
-            </Descriptions.Item>
-            <Descriptions.Item label="为什么弹出来" span={2}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <span>触发事件：{EVENT_TYPE_MAP[reschedulePreviewData?.event_type || 'upph_change']?.label || '变更事件'}</span>
-                <span>变更前：{reschedulePreviewData?.before_value_text || '-'}</span>
-                <span>变更后：{reschedulePreviewData?.after_value_text || '-'}</span>
-                <span>{reschedulePreviewData?.impact_reason || reschedulePreviewData?.reschedule_reason || 'UPPH 变化后建议重排'}</span>
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="如果我做了会怎样" span={2}>
-              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                <span>旧计划：{formatDate(reschedulePreviewData?.start_date)} 至 {formatDate(reschedulePreviewData?.end_date)}</span>
-                <span>新计划：{formatDate(reschedulePreviewData?.projected_start_date)} 至 {formatDate(reschedulePreviewData?.projected_end_date)}</span>
-                <span>变化天数：{reschedulePreviewData?.change_days === null || reschedulePreviewData?.change_days === undefined ? '无法预估' : `${reschedulePreviewData.change_days > 0 ? '+' : ''}${reschedulePreviewData.change_days} 天`}</span>
-                <span>交期影响：{renderDeliveryStatusTag(reschedulePreviewData?.projected_status, { target_ready_date: reschedulePreviewData?.target_ready_date, end_date: reschedulePreviewData?.projected_end_date })}</span>
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="我现在可以做什么" span={2}>
-              <span>确认后将按最新订单快照与当前能力重新生成新版本计划，旧版本保留为历史记录。</span>
-            </Descriptions.Item>
-          </Descriptions>
-        </Space>
-      </Modal>
+        planData={reschedulePreviewRow}
+        onClose={() => { setReschedulePreviewOpen(false); setReschedulePreviewRow(null) }}
+        onSuccess={async () => { invalidatePageCaches(); await refreshAllViews() }}
+      />
 
 
       <Modal

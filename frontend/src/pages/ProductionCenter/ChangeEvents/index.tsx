@@ -7,6 +7,7 @@ import { productionApi } from '../../../services/api'
 import { formatDate, formatDateTime } from '../../../utils'
 import { BUCKET_OPTIONS, EVENT_TYPE_OPTIONS, EVENT_TYPE_MAP, IMPACT_MAP } from '../SchedulePlans/constants'
 import { renderBucketTag, renderCopyableText } from '../SchedulePlans/helpers'
+import RescheduleModal from '../components/RescheduleModal'
 
 interface ChangeEventRow {
   event_id: string
@@ -33,6 +34,13 @@ interface ChangeEventRow {
 
 export default function ChangeEvents() {
   const navigate = useNavigate()
+  const [rescheduleModalOpen, setRescheduleModalOpen] = useState(false)
+  const [reschedulePlanData, setReschedulePlanData] = useState<any>(null)
+
+  const openReschedulePreview = (row: any) => {
+    setReschedulePlanData(row)
+    setRescheduleModalOpen(true)
+  }
   const [data, setData] = useState<ChangeEventRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -188,9 +196,9 @@ export default function ChangeEvents() {
             size="small"
             type="primary"
             disabled={!row.needs_reschedule || row.process_status === 'resolved'}
-            onClick={() => navigate(`/schedule-plans?workspace=planner_hub&planId=${row.id}`)}
+            onClick={() => openReschedulePreview(row)}
           >
-            去排产台账处理
+            预览重排
           </Button>
           {row.process_status === 'pending' ? (
             <>
@@ -299,8 +307,15 @@ export default function ChangeEvents() {
       </div>
 
       <div style={{ color: '#94a3b8', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>
-        变更事件中心 · 真实数据来自 listChangeEvents 接口 · 重排操作跳转排产台账
+        变更事件中心 · 真实数据来自 listChangeEvents 接口 · 预览重排直接弹 Modal
       </div>
+
+      <RescheduleModal
+        open={rescheduleModalOpen}
+        planData={reschedulePlanData}
+        onClose={() => { setRescheduleModalOpen(false); setReschedulePlanData(null) }}
+        onSuccess={() => load()}
+      />
     </div>
   )
 }
