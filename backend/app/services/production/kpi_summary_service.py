@@ -13,7 +13,7 @@
 - 待排：plan_date 为空 或 plan_date > today+10
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from sqlalchemy import func, select
@@ -22,7 +22,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.production.schedule_plan import ProductionSchedulePlan
 
 
+# 进程内缓存（不依赖 Redis，TTL 30 秒）
+_kpi_cache: dict[str, tuple[datetime, Any]] = {}
+_KPI_CACHE_TTL = timedelta(seconds=30)
+
+
+def _get_cached(key: str) -> Any | None:
+    item = _kpi_cache.get(key)
+    if item and datetime.now() - item[0] < _KPI_CACHE_TTL:
+        return item[1]
+    return None
+
+
+def _set_cached(key: str, value: Any) -> None:
+    _kpi_cache[key] = (datetime.now(), value)
+
+
 async def get_kpi_summary(db: AsyncSession) -> dict[str, Any]:
+    # 进程内缓存命中则直接返回
+    cached = _get_cached('kpi_summary')
+    if cached is not None:
+        return cached
+
     today = date.today()
 
     # === 🔴 今日栏（区间相交口径，R2） ===
@@ -101,7 +122,7 @@ async def get_kpi_summary(db: AsyncSession) -> dict[str, Any]:
     )
     material_pending_count = (await db.execute(material_pending_stmt)).scalar() or 0
 
-    return {
+    result = {
         "today": {
             "target_qty": target_qty,
             "completed_qty": completed_qty,
@@ -131,10 +152,17 @@ async def get_kpi_summary(db: AsyncSession) -> dict[str, Any]:
             "orders": ["today", "pending"],
         },
     }
+    _set_cached('kpi_summary', result)
+    return result
 
 
 async def get_today_cards(db: AsyncSession) -> list[dict[str, Any]]:
     """今日在产计划卡片（区间相交口径，R2）"""
+    # 进程内缓存
+    cached = _get_cached('today_cards')
+    if cached is not None:
+        return cached
+
     today = date.today()
 
     stmt = select(
@@ -175,6 +203,7 @@ async def get_today_cards(db: AsyncSession) -> list[dict[str, Any]]:
             "status": r.status,
             "needs_reschedule": bool(r.needs_reschedule),
         })
+    _set_cached('today_cards', cards)
     return cards
 
 
@@ -190,3 +219,116 @@ def _resolve_bucket(source_process_type: Optional[str]) -> str:
     if pt == "packaging":
         return "packaging"
     return "mixed"
+
+
+async def get_workshop_overview(db: AsyncSession, process_type: str) -> dict[str, Any]:
+    """车间概况：统计卡 + 趋势图 + 重点订单，从排产计划自动派生
+
+    process_type: 'lean' / 'assembly' / 'packaging'
+    """
+    today = date.today()
+    ten_days_later = today + timedelta(days=10)
+
+    # 1. 统计卡：总单数 / 在产 / 待产（未来） / 已完成
+    base_filter = [
+        ProductionSchedulePlan.is_active.is_(True),
+        ProductionSchedulePlan.source_process_type == process_type,
+    ]
+    total_stmt = select(func.count()).select_from(ProductionSchedulePlan).where(*base_filter)
+    total_count = (await db.execute(total_stmt)).scalar() or 0
+
+    in_progress_stmt = select(func.count()).select_from(ProductionSchedulePlan).where(
+        *base_filter,
+        ProductionSchedulePlan.start_date <= today,
+        ProductionSchedulePlan.end_date >= today,
+    )
+    in_progress_count = (await db.execute(in_progress_stmt)).scalar() or 0
+
+    upcoming_stmt = select(func.count()).select_from(ProductionSchedulePlan).where(
+        *base_filter,
+        ProductionSchedulePlan.plan_date > today,
+    )
+    upcoming_count = (await db.execute(upcoming_stmt)).scalar() or 0
+
+    completed_stmt = select(func.count()).select_from(ProductionSchedulePlan).where(
+        *base_filter,
+        ProductionSchedulePlan.status == "completed",
+    )
+    completed_count = (await db.execute(completed_stmt)).scalar() or 0
+
+    # 2. 趋势图：近 10 天每天的计划数和计划量
+    trend_stmt = (
+        select(
+            ProductionSchedulePlan.plan_date,
+            func.count().label("order_count"),
+            func.coalesce(func.sum(ProductionSchedulePlan.source_order_qty), 0).label("total_qty"),
+        )
+        .where(
+            *base_filter,
+            ProductionSchedulePlan.plan_date >= today,
+            ProductionSchedulePlan.plan_date <= ten_days_later,
+        )
+        .group_by(ProductionSchedulePlan.plan_date)
+        .order_by(ProductionSchedulePlan.plan_date)
+    )
+    trend_rows = (await db.execute(trend_stmt)).all()
+    trend = [
+        {
+            "date": r.plan_date.isoformat() if r.plan_date else None,
+            "order_count": r.order_count,
+            "total_qty": float(r.total_qty or 0),
+        }
+        for r in trend_rows
+    ]
+
+    # 3. 重点订单 TOP 5（按 source_order_qty 降序，在产优先）
+    top_stmt = (
+        select(
+            ProductionSchedulePlan.id,
+            ProductionSchedulePlan.order_no,
+            ProductionSchedulePlan.line_no,
+            ProductionSchedulePlan.product_code,
+            ProductionSchedulePlan.model_code,
+            ProductionSchedulePlan.source_order_qty,
+            ProductionSchedulePlan.plan_date,
+            ProductionSchedulePlan.start_date,
+            ProductionSchedulePlan.end_date,
+            ProductionSchedulePlan.status,
+        )
+        .where(*base_filter)
+        .order_by(
+            # 在产优先（start_date <= today），然后按数量降序
+            (ProductionSchedulePlan.start_date <= today).desc(),
+            ProductionSchedulePlan.source_order_qty.desc().nullslast(),
+        )
+        .limit(5)
+    )
+    top_rows = (await db.execute(top_stmt)).all()
+    top_orders = [
+        {
+            "order_no": r.order_no or "-",
+            "line_no": r.line_no,
+            "product_code": r.product_code,
+            "model_code": r.model_code,
+            "qty": float(r.source_order_qty) if r.source_order_qty else None,
+            "plan_date": r.plan_date.isoformat() if r.plan_date else None,
+            "start_date": r.start_date.isoformat() if r.start_date else None,
+            "end_date": r.end_date.isoformat() if r.end_date else None,
+            "status": r.status,
+        }
+        for r in top_rows
+    ]
+
+    workshop_labels = {"lean": "精益车间", "assembly": "组装车间", "packaging": "包装车间"}
+    return {
+        "process_type": process_type,
+        "workshop_label": workshop_labels.get(process_type, process_type),
+        "stats": {
+            "total": total_count,
+            "in_progress": in_progress_count,
+            "upcoming": upcoming_count,
+            "completed": completed_count,
+        },
+        "trend": trend,
+        "top_orders": top_orders,
+    }

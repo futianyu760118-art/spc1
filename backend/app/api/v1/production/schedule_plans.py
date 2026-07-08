@@ -379,6 +379,10 @@ DELETE_PREVIEW_CACHE_TTL_SECONDS = 60
 _effective_reschedule_map_cache: dict[tuple, tuple[datetime, dict[int, dict[str, object]]]] = {}
 _todo_workbench_cache: dict[tuple, tuple[datetime, PageResult]] = {}
 _schedule_plan_list_cache: dict[tuple, tuple[datetime, PageResult]] = {}
+
+# 变更事件缓存（逐条检测太重，30 秒内复用）
+_change_events_cache: list = []
+_change_events_ts: float = 0
 _delete_preview_cache: dict[int, tuple[datetime, dict]] = {}
 _order_snapshot_table_ready = False
 
@@ -923,6 +927,7 @@ LEAN_CAPACITY_LOAD_LABELS = {
     "overtime": "需加班",
     "sunday_production": "周日生产",
     "move_earlier": "需前挪",
+    "capacity_overflow": "产能超限",
 }
 
 
@@ -2236,7 +2241,6 @@ async def _find_active_plan_conflicts(
     conditions = [
         ProductionSchedulePlan.department == department,
         ProductionSchedulePlan.is_active == True,
-        ProductionSchedulePlan.status == "planned",
         ProductionSchedulePlan.start_date <= end_date,
         ProductionSchedulePlan.end_date >= start_date,
     ]
@@ -4783,32 +4787,27 @@ async def list_schedule_change_events(
     schedule_bucket: Optional[str] = Query(None, pattern="^(lean|assembly|packaging|mixed|pending)$"),
     event_type: Optional[str] = Query(None, pattern="^(upph_change|bucket_change|due_date_change|quantity_change)$"),
     only_pending: bool = Query(False, description="是否只看待处理事件"),
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "read")),
+    token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ):
-    conditions = [ProductionSchedulePlan.is_active == True]
-    if department:
-        conditions.append(ProductionSchedulePlan.department == department)
-    if keyword:
-        like = f"%{keyword}%"
-        conditions.append(
-            or_(
-                ProductionSchedulePlan.order_no.ilike(like),
-                ProductionSchedulePlan.line_no.ilike(like),
-                ProductionSchedulePlan.product_code.ilike(like),
-                ProductionSchedulePlan.model_code.ilike(like),
-                ProductionSchedulePlan.owner.ilike(like),
-            )
+    current_user = decode_access_token(token)
+    # 进程内缓存：变更事件计算很重（逐条检测），30 秒内复用
+    import time as _time
+    global _change_events_cache, _change_events_ts
+    if _change_events_cache and (_time.time() - _change_events_ts) < 30:
+        items = list(_change_events_cache)
+    else:
+        conditions_change = [ProductionSchedulePlan.is_active == True]
+        result = await db.execute(
+            select(ProductionSchedulePlan)
+            .where(*conditions_change)
+            .order_by(ProductionSchedulePlan.plan_date.desc(), ProductionSchedulePlan.id.desc())
         )
-
-    result = await db.execute(
-        select(ProductionSchedulePlan)
-        .where(*conditions)
-        .order_by(ProductionSchedulePlan.plan_date.desc(), ProductionSchedulePlan.id.desc())
-    )
-    plans = list(result.scalars().all())
-    impact_config = await _get_impact_config(db)
-    items = await _build_schedule_change_event_items(db, plans, impact_config=impact_config)
+        plans = list(result.scalars().all())
+        impact_config = await _get_impact_config(db)
+        items = await _build_schedule_change_event_items(db, plans, impact_config=impact_config)
+        _change_events_cache = list(items)
+        _change_events_ts = _time.time()
 
     if impact_level:
         items = [item for item in items if item.impact_level == impact_level]
