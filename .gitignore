@@ -43,3 +43,5 @@ backend/perf_test.py
 backend/migrate_frozen.py
 backend/seed_process_test_data.py
 backend/test_delete_preview.py
+
+*.tar
