@@ -347,13 +347,7 @@ export default function PriceChangeNew() {
               <Select options={['3%','6%','13%'].map(v=>({value:v,label:v}))} placeholder="选择" />
             </Form.Item>
           </div>
-          <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 8, background: '#f8fafc', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: '#64748b' }}>录单提示</span>
-            <span style={{ fontSize: 12, color: '#334155' }}>供应商选定后会自动带出联系人、电话、地址</span>
-            <span style={{ fontSize: 12, color: '#334155' }}>物料选定后会优先带出该供应商最近采购价</span>
-            <span style={{ fontSize: 12, color: '#334155' }}>绿色标签表示系统自动带出，灰色表示手工录入</span>
-            {supplierCode ? <Tag color="blue" style={{ marginInlineEnd: 0 }}>当前供应商编码 {supplierCode}</Tag> : null}
-          </div>
+
         </Form>
       </div>
 
