@@ -6,14 +6,16 @@ import {
   CalendarOutlined,
   PieChartOutlined,
   CheckSquareOutlined,
+  ShoppingCartOutlined,
 } from '@ant-design/icons'
 import TodayOverview from './components/TodayOverview'
 import RollingRisk14Days from './components/RollingRisk14Days'
 import OrderRiskDistribution from './components/OrderRiskDistribution'
 import ClosureAchievement from './components/ClosureAchievement'
+import ProcurementBoard from './components/ProcurementBoard'
 import { dashboardApi, riskApi } from '../../services/api'
 
-type DashboardTab = 'today' | 'rolling' | 'distribution' | 'closure'
+type DashboardTab = 'today' | 'rolling' | 'distribution' | 'closure' | 'procurement'
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('today')
@@ -185,6 +187,13 @@ export default function Dashboard() {
           loading={closureLoading}
         />
       ),
+    },
+    {
+      key: 'procurement',
+      label: (
+        <span><ShoppingCartOutlined style={{ marginRight: 6 }} />采购看板</span>
+      ),
+      children: <ProcurementBoard />,
     },
   ]
 

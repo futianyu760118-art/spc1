@@ -34,6 +34,8 @@ import {
   IdcardOutlined,
   SafetyOutlined,
   ApiOutlined,
+  EnvironmentOutlined,
+  StockOutlined,
   ClockCircleOutlined,
   ThunderboltOutlined,
   ScheduleOutlined,
@@ -45,7 +47,7 @@ import { usePermissionStore, PermNode } from '../store/permission'
 import { authApi, notificationApi } from '../services/api'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
-import { FloatingAssistant, TopBarAssistant } from '../components/Assistant'
+import { FloatingAssistant } from '../components/Assistant'
 import FontSizeSetting from '../components/FontSizeSetting'
 import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
 
@@ -78,6 +80,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'orders.list': <UnorderedListOutlined />,
   'orders.run_orders': <RocketOutlined />,
   'orders.risk_pool': <WarningOutlined />,
+  'orders.inventory_check': <CheckOutlined />,
   'materials.purchase_plan': <ShoppingCartOutlined />,
   'materials.issues': <WarningOutlined />,
   'materials.long_lead': <ContainerOutlined />,
@@ -114,10 +117,12 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'basicdata.data.skus': <ContainerOutlined />,
   'basicdata.data.products': <FileTextOutlined />,
   'basicdata.data.warehouses': <ContainerOutlined />,
+  'basicdata.data.locations': <EnvironmentOutlined />,
   'basicdata.data.processes': <RocketOutlined />,
   'basicdata.data.organizations': <TeamOutlined />,
   'basicdata.data.positions': <IdcardOutlined />,
   'basicdata.data.employees': <UserOutlined />,
+  'basicdata.data.inventory': <StockOutlined />,
   'basicdata.feedback': <MessageOutlined />,
   'basicdata.files': <FolderOpenOutlined />,
   'basicdata.data_supply': <ApiOutlined />,
@@ -171,6 +176,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/orders', icon: <UnorderedListOutlined />, label: '订单总控台', permission: 'orders.list' },
       { key: '/run-orders', icon: <RocketOutlined />, label: '跑单管理', permission: 'orders.run_orders' },
       { key: '/order-risk-pool', icon: <WarningOutlined />, label: '订单风险池', permission: 'orders.risk_pool' },
+      { key: '/inventory-check', icon: <CheckOutlined />, label: '订单物料盘点', permission: 'orders.inventory_check' },
     ],
   },
   {
@@ -272,10 +278,12 @@ const allMenuItems: PermissionAwareItem[] = [
           { key: '/basicdata/skus', icon: <ContainerOutlined />, label: 'SKU', permission: 'basicdata.data' },
           { key: '/basicdata/products', icon: <FileTextOutlined />, label: '产品', permission: 'basicdata.data' },
           { key: '/basicdata/warehouses', icon: <ContainerOutlined />, label: '仓库', permission: 'basicdata.data' },
+          { key: '/basicdata/locations', icon: <EnvironmentOutlined />, label: '库位', permission: 'basicdata.data' },
           { key: '/basicdata/processes', icon: <RocketOutlined />, label: '工序', permission: 'basicdata.data' },
           { key: '/basicdata/organizations', icon: <TeamOutlined />, label: '组织', permission: 'basicdata.data' },
           { key: '/basicdata/positions', icon: <IdcardOutlined />, label: '岗位', permission: 'basicdata.data' },
           { key: '/basicdata/employees', icon: <UserOutlined />, label: '人员', permission: 'basicdata.data' },
+          { key: '/basicdata/inventory', icon: <StockOutlined />, label: '库存', permission: 'basicdata.data' },
         ],
       },
       { key: '/users', icon: <UserOutlined />, label: '用户管理', permission: 'users' },
@@ -292,10 +300,11 @@ const allMenuItems: PermissionAwareItem[] = [
     key: 'purchase-center',
     icon: <AccountBookOutlined />,
     label: '采购中心',
+    permission: 'purchase',
     children: [
-      { key: '/purchase/price-change', icon: <FileTextOutlined />, label: '调价单管理' },
-      { key: '/purchase/price-change/pending', icon: <ClockCircleOutlined />, label: '待我审批' },
-      { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置' },
+      { key: '/purchase/price-change', icon: <FileTextOutlined />, label: '调价单管理', permission: 'purchase.price_change' },
+      { key: '/purchase/price-change/pending', icon: <ClockCircleOutlined />, label: '待我审批', permission: 'purchase.price_change.pending' },
+      { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置', permission: 'purchase.price_change.config' },
     ],
   },
 ]
@@ -351,10 +360,22 @@ function toAntdItems(items: PermissionAwareItem[]): any[] {
   }))
 }
 
+function findPurchase(menuItems: PermissionAwareItem[]): PermissionAwareItem | undefined {
+  for (const item of menuItems) {
+    if (item.label === '采购中心') return item
+    if (item.children) {
+      const found = findPurchase(item.children)
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
 const pathToGroupKey: Record<string, string> = {
   '/orders': 'order-delivery',
   '/run-orders': 'order-delivery',
   '/order-risk-pool': 'order-delivery',
+  '/inventory-check': 'order-delivery',
   '/purchase-plan': 'material-center',
   '/material-issues': 'material-center',
   '/long-lead-materials': 'material-center',
@@ -402,10 +423,12 @@ const pathToGroupKey: Record<string, string> = {
   '/basicdata/skus': 'basicdata-management',
   '/basicdata/products': 'basicdata-management',
   '/basicdata/warehouses': 'basicdata-management',
+  '/basicdata/locations': 'basicdata-management',
   '/basicdata/processes': 'basicdata-management',
   '/basicdata/organizations': 'basicdata-management',
   '/basicdata/positions': 'basicdata-management',
   '/basicdata/employees': 'basicdata-management',
+  '/basicdata/inventory': 'basicdata-management',
   '/users': 'basicdata-center',
   '/roles': 'basicdata-center',
   '/audit': 'basicdata-center',
@@ -423,6 +446,7 @@ const pathToPermission: Record<string, string> = {
   '/domestic-orders': 'orders.list',
   '/domestic-shipment': 'orders.list',
   '/order-risk-pool': 'orders.risk_pool',
+  '/inventory-check': 'orders.inventory_check',
   '/purchase-plan': 'materials.purchase_plan',
   '/material-issues': 'materials.issues',
   '/long-lead-materials': 'materials.long_lead',
@@ -470,14 +494,20 @@ const pathToPermission: Record<string, string> = {
   '/basicdata/skus': 'basicdata.data',
   '/basicdata/products': 'basicdata.data',
   '/basicdata/warehouses': 'basicdata.data',
+  '/basicdata/locations': 'basicdata.data',
   '/basicdata/processes': 'basicdata.data',
   '/basicdata/organizations': 'basicdata.data',
   '/basicdata/positions': 'basicdata.data',
   '/basicdata/employees': 'basicdata.data',
+  '/basicdata/inventory': 'basicdata.data',
   '/basicdata/feedback': 'basicdata.feedback',
   '/basicdata/files': 'basicdata.files',
   '/basicdata/data-supply': 'basicdata.data_supply',
   '/announcements': 'announcements',
+  '/purchase/price-change': 'purchase.price_change',
+  '/purchase/price-change/new': 'purchase.price_change',
+  '/purchase/price-change/pending': 'purchase.price_change.pending',
+  '/purchase/price-change/config': 'purchase.price_change.config',
 }
 
 function getRequiredPermission(pathname: string, dynamicMap?: Record<string, string>): string | undefined {
@@ -531,17 +561,28 @@ export default function MainLayout() {
           ? { ...item, children: [...v2ExtraItems, ...(item.children || [])] }
           : item
       )
-      // 采购中心（新模块，不在权限树里）
-      merged.push({
-        key: 'purchase-center',
-        icon: <AccountBookOutlined />,
-        label: '采购中心',
-        children: [
-          { key: '/purchase/price-change', icon: <FileTextOutlined />, label: '调价单管理' },
-          { key: '/purchase/price-change/pending', icon: <ClockCircleOutlined />, label: '待我审批' },
-          { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置' },
-        ],
-      })
+      // 采购中心：若权限树已有则注入子菜单，否则新增整个模块
+      const purchaseChildren: PermissionAwareItem[] = [
+        { key: '/purchase/price-change', icon: <FileTextOutlined />, label: '调价单管理', permission: 'purchase.price_change' },
+        { key: '/purchase/price-change/pending', icon: <ClockCircleOutlined />, label: '待我审批', permission: 'purchase.price_change.pending' },
+        { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置', permission: 'purchase.price_change.config' },
+      ]
+      const existingPurchase = findPurchase(merged)
+      if (existingPurchase) {
+        const existingKeys = new Set((existingPurchase.children || []).map(c => c.key))
+        const newChildren = purchaseChildren.filter(c => !existingKeys.has(c.key))
+        if (newChildren.length > 0) {
+          existingPurchase.children = [...(existingPurchase.children || []), ...newChildren]
+        }
+      } else {
+        merged.push({
+          key: 'purchase-center',
+          icon: <AccountBookOutlined />,
+          label: '采购中心',
+          permission: 'purchase',
+          children: purchaseChildren,
+        })
+      }
       return merged
     }
     return allMenuItems
@@ -791,7 +832,6 @@ export default function MainLayout() {
           <Space size="middle">
             {!isShareUser() && !isSupplierUser() && canUseTopbar.share && <ShareButton />}
             {!isSupplierUser() && canUseTopbar.feedback && <FeedbackButton />}
-            {!isSupplierUser() && canUseTopbar.aiSearch && <TopBarAssistant />}
             {canUseTopbar.fontSize && <FontSizeSetting />}
             {canUseTopbar.notifications && (
               <Popover
@@ -882,9 +922,16 @@ export default function MainLayout() {
                   <div style={{ width: 30, height: 30, borderRadius: 8, background: 'linear-gradient(135deg, #6366f1, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <UserOutlined style={{ color: '#fff', fontSize: 'calc(0.875rem * var(--font-size-scale))' }} />
                   </div>
-                  <span style={{ color: '#334155', fontSize: 'calc(0.875rem * var(--font-size-scale))', fontWeight: 500 }}>
-                    {currentUser && 'display_name' in currentUser ? (currentUser.display_name || currentUser.username) : '用户'}
-                  </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+                    <span style={{ color: '#334155', fontSize: 'calc(0.875rem * var(--font-size-scale))', fontWeight: 500 }}>
+                      {currentUser && 'display_name' in currentUser ? (currentUser.display_name || currentUser.username) : '用户'}
+                    </span>
+                    {currentUser && 'position_name' in currentUser && currentUser.position_name && (
+                      <span style={{ color: '#94a3b8', fontSize: 'calc(0.75rem * var(--font-size-scale))', fontWeight: 400 }}>
+                        {currentUser.position_name}
+                      </span>
+                    )}
+                  </div>
                 </Space>
               </Dropdown>
             )}
@@ -978,6 +1025,9 @@ export default function MainLayout() {
           )}
         </Content>
       </Layout>
+
+      {/* AI 智能助手：右下角悬浮球，可自由拖动，闲置自动收进右侧边 */}
+      {!isSupplierUser() && canUseTopbar.aiSearch && <FloatingAssistant />}
     </Layout>
   )
 }

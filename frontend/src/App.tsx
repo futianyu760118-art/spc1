@@ -15,6 +15,7 @@ import KitAnalysis from './pages/MaterialCenter/KitAnalysis/index'
 import SupplierRisk from './pages/MaterialCenter/SupplierRisk/index'
 import SupplierPayment from './pages/MaterialCenter/SupplierPayment/index'
 import OrderDetail from './pages/OrderDelivery/OrderDetail/index'
+import InventoryCheck from './pages/OrderDelivery/InventoryCheck/index'
 import IssueLedger from './pages/ExceptionCenter/IssueLedger/index'
 import ExceptionPool from './pages/ExceptionCenter/ExceptionPool/index'
 import IssueLogView from './pages/ExceptionCenter/IssueLogView/index'
@@ -52,6 +53,8 @@ import Processes from './pages/BasicDataCenter/Processes'
 import Organizations from './pages/BasicDataCenter/Organizations'
 import Positions from './pages/BasicDataCenter/Positions'
 import Employees from './pages/BasicDataCenter/Employees'
+import Locations from './pages/BasicDataCenter/Locations'
+import Inventory from './pages/BasicDataCenter/Inventory'
 import ProductionOverview from './pages/ProductionCenter/ProductionOverview/index'
 import Dashboard372 from './pages/ProductionCenter/Dashboard372/index'
 import SchedulePlans from './pages/ProductionCenter/SchedulePlans/index'
@@ -173,6 +176,7 @@ export default function App() {
                             <Route path="purchase-plan" element={<PurchasePlan/>}/>
                             <Route path="material-issues" element={<MaterialIssues/>}/>
                             <Route path="long-lead-materials" element={<LongLeadMaterials/>}/>
+                            <Route path="inventory-check" element={<InventoryCheck />} />
                             <Route path="kit-analysis" element={<KitAnalysis/>}/>
                             <Route path="supplier-risk" element={<SupplierRisk/>}/>
                             <Route path="supplier-payment" element={<SupplierPayment/>}/>
@@ -226,6 +230,8 @@ export default function App() {
                             <Route path="basicdata/organizations" element={<Organizations/>} key="organizations"/>
                             <Route path="basicdata/positions" element={<Positions/>} key="positions"/>
                             <Route path="basicdata/employees" element={<Employees/>} key="employees"/>
+                            <Route path="basicdata/locations" element={<Locations />} key="locations" />
+                            <Route path="basicdata/inventory" element={<Inventory />} key="inventory" />
                             <Route path="basicdata/feedback" element={<FeedbackManagement/>} key="feedback"/>
                             <Route path="basicdata/files" element={<FileManagement/>} key="files"/>
                             <Route path="basicdata/data-supply" element={<DataSupply/>} key="data-supply"/>

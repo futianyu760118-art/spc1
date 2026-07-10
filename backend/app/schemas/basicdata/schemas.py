@@ -26,6 +26,7 @@ class UserInfo(BaseModel):
     ui_preferences: Optional[dict] = None
     is_default_password: bool = True
     login_version: int = 0
+    position_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -241,9 +242,11 @@ class ProductOut(ProductBase):
 
 # ── Warehouse ──
 class WarehouseBase(BaseModel):
+    wh_id: Optional[int] = None
+    parent_wh_id: Optional[int] = None
     wh_code: str
     wh_name: str
-    wh_type: str
+    wh_type: Optional[str] = None
     address: Optional[str] = None
     manager_id: Optional[int] = None
     is_enabled: int = 1
@@ -254,6 +257,8 @@ class WarehouseCreate(WarehouseBase):
 
 
 class WarehouseUpdate(BaseModel):
+    wh_id: Optional[int] = None
+    parent_wh_id: Optional[int] = None
     wh_name: Optional[str] = None
     wh_type: Optional[str] = None
     address: Optional[str] = None
@@ -264,6 +269,45 @@ class WarehouseUpdate(BaseModel):
 class WarehouseOut(WarehouseBase):
     id: int
     create_time: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ── Location ──
+class LocationBase(BaseModel):
+    location_id: int
+    location_group_id: Optional[int] = None
+    location_code: Optional[str] = None
+    location_name: Optional[str] = None
+    location_full_name: Optional[str] = None
+    depth: Optional[int] = 0
+    detail_flag: Optional[int] = 0
+    parent_id: Optional[int] = None
+    is_deleted: Optional[int] = 0
+    system_type: Optional[int] = 0
+    data_source: Optional[str] = None
+
+
+class LocationCreate(LocationBase):
+    pass
+
+
+class LocationUpdate(BaseModel):
+    location_group_id: Optional[int] = None
+    location_code: Optional[str] = None
+    location_name: Optional[str] = None
+    location_full_name: Optional[str] = None
+    depth: Optional[int] = None
+    detail_flag: Optional[int] = None
+    parent_id: Optional[int] = None
+    is_deleted: Optional[int] = None
+    system_type: Optional[int] = None
+
+
+class LocationOut(LocationBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 

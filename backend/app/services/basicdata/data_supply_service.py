@@ -400,6 +400,7 @@ async def log_call(
     ip_address: Optional[str],
     user_agent: Optional[str],
     duration_ms: float,
+    error_message: Optional[str] = None,
 ):
     """记录调用日志"""
     log = DataSupplyCallLog(
@@ -412,9 +413,17 @@ async def log_call(
         ip_address=ip_address,
         user_agent=user_agent,
         duration_ms=duration_ms,
+        error_message=error_message,
     )
     db.add(log)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # 日志写入失败不应掩盖业务异常；回滚后吞掉，避免污染外层事务
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 async def get_call_statistics(

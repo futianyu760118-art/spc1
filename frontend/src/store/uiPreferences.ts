@@ -42,7 +42,7 @@ export const useUiPreferencesStore = create<UiPreferencesState>((set, get) => {
       set({ preferences: next })
       localStorage.setItem(UI_PREFS_KEY, JSON.stringify(next))
 
-      authApi.updateUiPreferences(next).catch((err) => {
+      authApi.updatePreferences({ ui_preferences: next }).catch((err: Error) => {
         console.error('Failed to save column visibility preference:', err)
       })
     },

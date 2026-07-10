@@ -16,6 +16,7 @@ interface UserInfo {
   ui_preferences?: Record<string, any> | null
   is_default_password: boolean
   login_version: number
+  position_name?: string | null
 }
 
 interface ShareUserInfo {

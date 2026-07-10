@@ -1,5 +1,15 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+# config.py 位于 backend/app/core/，项目根目录为其上三级
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILES = (
+    _PROJECT_ROOT / ".env.local",
+    _PROJECT_ROOT / ".env",
+    Path(".env.local"),
+    Path(".env"),
+)
 
 
 class Settings(BaseSettings):
@@ -18,6 +28,7 @@ class Settings(BaseSettings):
     ERP_SYNC_QUERY_TIMEOUT: int = 600  # 单次 ERP 查询超时(秒)，防止无限挂起
     ERP_SYNC_ENABLED: bool = False  # 是否启用 ERP 同步
     ERP_SYNC_DEFAULT_PASSWORD: str = "admin123"  # 自动创建用户的默认密码
+    UPPH_MATCH_MODE: str="bom_code"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -69,7 +80,7 @@ class Settings(BaseSettings):
     AI_DASHSCOPE_MODEL: str = "qwen-plus"
     AI_REQUEST_TIMEOUT: int = 30
 
-    model_config = {"env_file": (".env.local", ".env"), "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache

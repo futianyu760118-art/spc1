@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Table, Tag, Button, Modal, Form, Input, Space, message, Popconfirm, Row, Col, Checkbox, Tree, Radio, Divider, Alert } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, SafetyOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, SafetyOutlined, ThunderboltOutlined, SearchOutlined } from '@ant-design/icons'
 import { userApi } from '../../services/api'
 import { useAuthStore } from '../../store/auth'
 import { usePermissionStore, PermNode } from '../../store/permission'
@@ -113,6 +113,14 @@ const FALLBACK_PERMISSION_TREE: PermTreeNode[] = [
       { key: 'settings', label: '同步SQL配置' },
     ],
   },
+  {
+    key: 'purchase', label: '采购中心',
+    children: [
+      { key: 'purchase.price_change', label: '调价单管理' },
+      { key: 'purchase.price_change.pending', label: '待我审批' },
+      { key: 'purchase.price_change.config', label: '审批配置' },
+    ],
+  },
 ]
 
 function flattenLeaves(nodes: PermTreeNode[]): string[] {
@@ -208,6 +216,7 @@ function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<s
     const allActs = PERMISSION_ACTIONS.map(a => a.key)
     if (children && children.length > 0) {
       children.forEach(c => { next[c.key] = checked ? [...allActs] : [] })
+      next[key] = checked ? [...allActs] : []
     } else {
       next[key] = checked ? [...allActs] : []
     }
@@ -323,6 +332,7 @@ export default function RoleManagement() {
   const [rolePageSize, setRolePageSize] = useState(20)
   const [roleTotal, setRoleTotal] = useState(0)
   const [roleQuery, setRoleQuery] = useState<{ sortBy?: string; sortOrder?: string; filters?: Record<string, string[]> }>({})
+  const [keyword, setKeyword] = useState('')
   const [roleModalOpen, setRoleModalOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<RoleItem | null>(null)
   const [roleForm] = Form.useForm()
@@ -335,18 +345,20 @@ export default function RoleManagement() {
   const [bgMode, setBgMode] = useState<'grant' | 'revoke' | 'replace'>('grant')
   const [bgSubmitting, setBgSubmitting] = useState(false)
 
-  const fetchRoles = async (opts?: { page?: number; pageSize?: number; sortBy?: string; sortOrder?: string; filters?: Record<string, string[]> }) => {
+  const fetchRoles = async (opts?: { page?: number; pageSize?: number; sortBy?: string; sortOrder?: string; filters?: Record<string, string[]>; keyword?: string }) => {
     const p = opts?.page ?? rolePage
     const ps = opts?.pageSize ?? rolePageSize
     const sortBy = opts?.sortBy ?? roleQuery.sortBy
     const sortOrder = opts?.sortOrder ?? roleQuery.sortOrder
     const filters = opts?.filters ?? roleQuery.filters
+    const kw = opts?.keyword ?? keyword
     setRoleQuery({ sortBy, sortOrder, filters })
     setRoleLoading(true)
     try {
       const params: any = { page: p, page_size: ps }
       if (sortBy) params.sort_by = sortBy
       if (sortOrder) params.sort_order = sortOrder
+      if (kw?.trim()) params.keyword = kw.trim()
       if (filters?.role_code?.length) params.role_code = filters.role_code.join(',')
       if (filters?.org_name?.length) params.org_name = filters.org_name.join(',')
       if (filters?.position_name?.length) params.position_name = filters.position_name.join(',')
@@ -513,7 +525,23 @@ export default function RoleManagement() {
     <div style={{ height: 'calc(100vh - 130px)', display: 'flex', flexDirection: 'column' }}>
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
         <Row gutter={12} align="middle">
-          <Col flex="auto" />
+          <Col flex="auto">
+            <Input
+              prefix={<SearchOutlined />}
+              placeholder="搜索角色编码 / 角色名称"
+              value={keyword}
+              allowClear
+              onChange={(e) => {
+                setKeyword(e.target.value)
+                if (!e.target.value) {
+                  setRolePage(1)
+                  fetchRoles({ page: 1, keyword: '' })
+                }
+              }}
+              onPressEnter={() => { setRolePage(1); fetchRoles({ page: 1 }) }}
+              style={{ width: 280 }}
+            />
+          </Col>
           <Col><Space>
             <Button icon={<ReloadOutlined />} onClick={() => fetchRoles()}>刷新</Button>
             <Button icon={<ThunderboltOutlined />} onClick={openBatchGrant}>批量授权</Button>

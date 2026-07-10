@@ -25,6 +25,7 @@ interface InvoiceDetail {
   settlement_method: string
   invoice_amount: number
   remain_payable: number
+  paid_amount: number
 }
 
 interface SupplierPaymentRow {
@@ -372,6 +373,8 @@ export default function SupplierPayment() {
                   render: (v: number) => v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
                 { title: '剩余应付', dataIndex: 'remain_payable', width: 120, align: 'right' as const,
                   render: (v: number) => <span style={{ color: v > 0 ? '#e11d48' : '#16a34a' }}>{v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> },
+                { title: '已付款金额', dataIndex: 'paid_amount', width: 120, align: 'right' as const,
+                  render: (v: number) => v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
               ]
               return (
                 <Table

@@ -9,8 +9,9 @@
 - handler: 异步处理函数 (ctx: ExternalCallContext) -> Any
 """
 
+import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable, Dict, List, Optional
+from typing import Any, Callable, Awaitable, Dict, List, Optional, Tuple
 
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,8 +95,34 @@ def get_endpoint_by_code(endpoint_code: str) -> Optional[ExternalEndpoint]:
 
 
 def get_endpoint_by_route(method: str, path: str) -> Optional[ExternalEndpoint]:
-    """按 HTTP 方法和路径查找已注册的 endpoint"""
+    """按 HTTP 方法和路径查找已注册的 endpoint（支持 {param} 路径参数）"""
     return _PATH_INDEX.get(method.upper(), {}).get(path)
+
+
+def match_endpoint_by_route(method: str, path: str) -> Tuple[Optional[ExternalEndpoint], dict]:
+    """按 HTTP 方法和路径匹配已注册的 endpoint，支持 {param} 路径参数
+
+    返回 (endpoint, path_params)，若未匹配则 (None, {})。
+    优先精确匹配，其次按 {param} 模式匹配。
+    """
+    path_map = _PATH_INDEX.get(method.upper(), {})
+    if not path_map:
+        return None, {}
+
+    # 精确匹配优先
+    if path in path_map:
+        return path_map[path], {}
+
+    # 模式匹配：{param} → ([^/]+)
+    for registered_path, endpoint in path_map.items():
+        pattern = re.sub(r"\{([^}]+)\}", r"(?P<\1>[^/]+)", registered_path)
+        if "{" not in registered_path:
+            continue
+        m = re.fullmatch(pattern, path)
+        if m:
+            return endpoint, m.groupdict()
+
+    return None, {}
 
 
 def list_endpoints() -> List[ExternalEndpoint]:

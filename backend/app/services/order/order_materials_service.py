@@ -37,6 +37,7 @@ STATUS_LABELS = {
     "overdue": "逾期未到",
     "partial_received": "部分到",
     "fully_received": "已到齐",
+    "in_stock": "有库存",
 }
 
 
@@ -124,8 +125,10 @@ def _material_property_label(material_property: Optional[int]) -> Optional[str]:
 
 
 def _status(material_property: Optional[int], po_summary: Optional[MaterialPoSummary]) -> str:
+    if material_property == 2:
+        return "not_ordered"
     if not po_summary or po_summary.po_count == 0:
-        return "self_made_unlinked" if material_property == 2 else "not_ordered"
+        return "not_ordered"
     received_qty = po_summary.received_qty
     po_qty = po_summary.po_qty
     # 状态纯按收料数量推导（已到料状态已移除）
@@ -139,8 +142,6 @@ def _status(material_property: Optional[int], po_summary: Optional[MaterialPoSum
 
 
 def _kit_met(status: str, material_property: Optional[int]) -> bool:
-    if material_property == 2 and status == "self_made_unlinked":
-        return True
     # 仅「已到齐」视为齐套；部分到（缺量）不计入
     return status == "fully_received"
 
@@ -250,6 +251,7 @@ def _build_line_materials(
         product_code=line.product_code,
         product_name=line.product_name,
         product_model=getattr(line, "product_model", None),
+        bom_no=getattr(line, "bom_no", None),
         order_qty=_to_float(line.order_qty),
         promised_date=line.promised_date,
         total_materials=total,

@@ -3,7 +3,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, cast, String
 from sqlalchemy.orm import aliased
 
 from app.core.database import get_db
@@ -17,6 +17,7 @@ from app.schemas.basicdata.schemas import (
     SKUCreate, SKUUpdate, SKUOut,
     ProductCreate, ProductUpdate, ProductOut,
     WarehouseCreate, WarehouseUpdate, WarehouseOut,
+    LocationCreate, LocationUpdate, LocationOut,
     ProcessCreate, ProcessUpdate, ProcessOut,
     OrganizationCreate, OrganizationUpdate, OrganizationOut, OrganizationTreeNode, OrganizationWithLeaderOut,
     PositionOut,
@@ -24,7 +25,8 @@ from app.schemas.basicdata.schemas import (
 )
 from app.models.basicdata import (
     Customer, Supplier, Material, SKU, Product,
-    Warehouse, Process, Organization, Employee, Position,
+    Warehouse, Location, Process, Organization, Employee, Position,
+    Inventory,
 )
 from app.services.basicdata.position_role_service import sync_user_role_from_employee
 router = APIRouter()
@@ -691,6 +693,110 @@ async def delete_warehouse(warehouse_id: int, db: AsyncSession = Depends(get_db)
     return {"message": "删除成功"}
 
 
+# ── Location ──
+@router.get("/locations", response_model=ResponseModel[dict])
+async def list_locations(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="搜索编码/名称"),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query(None),
+    depth: Optional[str] = Query(None, description="层级深度筛选，逗号分隔"),
+    detail_flag: Optional[str] = Query(None, description="明细标识筛选，逗号分隔"),
+    db: AsyncSession = Depends(get_db)
+):
+    """查询库位列表（分页+排序+筛选）"""
+    SORTABLE = {
+        'location_id': Location.location_id,
+        'location_code': Location.location_code,
+        'location_name': Location.location_name,
+        'depth': Location.depth,
+        'detail_flag': Location.detail_flag,
+    }
+    query = select(Location).where(Location.is_deleted == 0)
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.where(or_(
+            cast(Location.location_id, String).ilike(like),
+            Location.location_code.ilike(like),
+            Location.location_name.ilike(like),
+            Location.location_full_name.ilike(like),
+        ))
+    if depth:
+        depths = [int(d.strip()) for d in depth.split(",") if d.strip().isdigit()]
+        if depths:
+            query = query.where(Location.depth.in_(depths))
+    if detail_flag:
+        flags = [int(f.strip()) for f in detail_flag.split(",") if f.strip().isdigit()]
+        if flags:
+            query = query.where(Location.detail_flag.in_(flags))
+
+    count_q = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_q)).scalar() or 0
+    query = _apply_sort(query, Location, sort_by, sort_order, SORTABLE)
+    result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
+    items = [LocationOut.model_validate(r) for r in result.scalars().all()]
+    return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/locations/{location_id}", response_model=LocationOut)
+async def get_location(location_id: int, db: AsyncSession = Depends(get_db)):
+    """查询单个库位"""
+    result = await db.execute(select(Location).filter(Location.id == location_id))
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="库位不存在")
+    return item
+
+
+@router.post("/locations", response_model=LocationOut)
+async def create_location(location: LocationCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+    """创建库位"""
+    result = await db.execute(select(Location).filter(Location.location_id == location.location_id))
+    existing = result.scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=400, detail="库位ID已存在")
+    
+    db_item = Location(**location.model_dump())
+    db.add(db_item)
+    await db.flush()
+    await log_audit(db, "location", db_item.id, "create", operator=current_user["username"])
+    await db.commit()
+    await db.refresh(db_item)
+    return db_item
+
+
+@router.put("/locations/{location_id}", response_model=LocationOut)
+async def update_location(location_id: int, location: LocationUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+    """更新库位"""
+    result = await db.execute(select(Location).filter(Location.id == location_id))
+    db_item = result.scalar_one_or_none()
+    if not db_item:
+        raise HTTPException(status_code=404, detail="库位不存在")
+    
+    update_data = location.model_dump(exclude_unset=True)
+    await log_audit(db, "location", db_item.id, "update", old_obj=db_item, update_data=update_data, operator=current_user["username"])
+    for field, value in update_data.items():
+        setattr(db_item, field, value)
+    await db.commit()
+    await db.refresh(db_item)
+    return db_item
+
+
+@router.delete("/locations/{location_id}")
+async def delete_location(location_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+    """删除库位"""
+    result = await db.execute(select(Location).filter(Location.id == location_id))
+    db_item = result.scalar_one_or_none()
+    if not db_item:
+        raise HTTPException(status_code=404, detail="库位不存在")
+    
+    await log_audit(db, "location", db_item.id, "delete", operator=current_user["username"])
+    await db.delete(db_item)
+    await db.commit()
+    return {"message": "删除成功"}
+
+
 # ── Process ──
 @router.get("/processes", response_model=ResponseModel[dict])
 async def list_processes(
@@ -1225,3 +1331,84 @@ async def get_organization_employees(
     result = await db.execute(query)
     items = [_employee_out(employee, position_name) for employee, position_name in result.all()]
     return ResponseModel(data={"items": items, "total": len(items)})
+
+
+# ── Inventory ──
+SORTABLE_INVENTORY = {
+    "material_code": Inventory.material_code,
+    "wh_code": Inventory.wh_code,
+    "qty_on_hand": Inventory.qty_on_hand,
+    "locked_qty": Inventory.locked_qty,
+    "balance_qty": Inventory.balance_qty,
+    "updated_at": Inventory.updated_at,
+}
+
+
+@router.get("/inventory", response_model=ResponseModel[dict])
+async def list_inventory(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="模糊搜索物料编码/名称/仓库名称"),
+    material_code: Optional[str] = Query(None, description="物料编码精确筛选"),
+    wh_code: Optional[str] = Query(None, description="仓库编码精确筛选"),
+    batch_no: Optional[str] = Query(None, description="批次号精确筛选"),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query("asc"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data", "read")),
+):
+    query = select(Inventory)
+    count_query = select(func.count()).select_from(Inventory)
+
+    if keyword:
+        like = f"%{keyword}%"
+        filter_cond = or_(
+            Inventory.material_code.ilike(like),
+            Inventory.material_name.ilike(like),
+            Inventory.wh_name.ilike(like),
+        )
+        query = query.where(filter_cond)
+        count_query = count_query.where(filter_cond)
+    if material_code:
+        query = query.where(Inventory.material_code == material_code)
+        count_query = count_query.where(Inventory.material_code == material_code)
+    if wh_code:
+        query = query.where(Inventory.wh_code == wh_code)
+        count_query = count_query.where(Inventory.wh_code == wh_code)
+    if batch_no:
+        query = query.where(Inventory.batch_no == batch_no)
+        count_query = count_query.where(Inventory.batch_no == batch_no)
+
+    total = (await db.execute(count_query)).scalar() or 0
+
+    query = _apply_sort(query, Inventory, sort_by, sort_order, SORTABLE_INVENTORY)
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    items = result.scalars().all()
+
+    return ResponseModel(data={
+        "items": [
+            {
+                "id": inv.id,
+                "material_id": inv.material_id,
+                "material_code": inv.material_code,
+                "material_name": inv.material_name,
+                "wh_id": inv.wh_id,
+                "wh_code": inv.wh_code,
+                "wh_name": inv.wh_name,
+                "location_id": inv.location_id,
+                "location_name": inv.location_name,
+                "qty_on_hand": float(inv.qty_on_hand) if inv.qty_on_hand else 0,
+                "locked_qty": float(inv.locked_qty) if inv.locked_qty else 0,
+                "balance_qty": float(inv.balance_qty) if inv.balance_qty else 0,
+                "qty_in_transit": float(inv.qty_in_transit) if inv.qty_in_transit else 0,
+                "batch_no": inv.batch_no,
+                "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                "updated_at": inv.updated_at.isoformat() if inv.updated_at else None,
+            }
+            for inv in items
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    })

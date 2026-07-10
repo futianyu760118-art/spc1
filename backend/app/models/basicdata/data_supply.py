@@ -59,4 +59,5 @@ class DataSupplyCallLog(Base):
     ip_address = Column(String(64), nullable=True, comment="请求来源 IP")
     user_agent = Column(String(256), nullable=True, comment="请求 User-Agent")
     duration_ms = Column(Numeric(10, 2), nullable=True, comment="响应耗时(ms)")
+    error_message = Column(Text, nullable=True, comment="错误信息")
     called_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)

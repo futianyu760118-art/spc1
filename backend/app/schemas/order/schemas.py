@@ -51,6 +51,7 @@ class SaleOrderOut(BaseModel):
     risk_score: Optional[float] = None
     risk_factors: Optional[dict] = None
     risk_assessed_at: Optional[datetime] = None
+    field_synced_at: Optional[dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -365,6 +366,7 @@ class OrderProductMaterialsOut(BaseModel):
     product_code: Optional[str] = None
     product_name: Optional[str] = None
     product_model: Optional[str] = None
+    bom_no: Optional[str] = None
     order_qty: Optional[float] = None
     promised_date: Optional[date] = None
     total_materials: int = 0

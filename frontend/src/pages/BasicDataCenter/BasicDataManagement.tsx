@@ -91,6 +91,23 @@ interface Warehouse {
   create_time: string
 }
 
+interface Location {
+  id: number
+  location_id: string
+  location_group_id?: string
+  location_code?: string
+  location_name?: string
+  location_full_name?: string
+  depth?: number
+  detail_flag?: number
+  parent_id?: string
+  is_deleted?: number
+  system_type?: number
+  data_source?: string
+  created_at: string
+  updated_at: string
+}
+
 interface Process {
   id: number
   process_code: string
@@ -504,6 +521,47 @@ const WarehouseForm = ({ form }: { form: any }) => (
   </Form>
 )
 
+const LocationForm = ({ form }: { form: any }) => (
+  <Form form={form} layout="vertical">
+    <Form.Item name="location_id" label="库位ID" rules={[{ required: true }]}>
+      <Input placeholder="请输入库位ID" />
+    </Form.Item>
+    <Form.Item name="location_code" label="库位编码">
+      <Input placeholder="请输入库位编码" />
+    </Form.Item>
+    <Form.Item name="location_name" label="库位名称">
+      <Input placeholder="请输入库位名称" />
+    </Form.Item>
+    <Form.Item name="location_full_name" label="库位全称">
+      <Input placeholder="请输入库位全称" />
+    </Form.Item>
+    <Form.Item name="location_group_id" label="库位分组ID">
+      <Input placeholder="请输入库位分组ID" />
+    </Form.Item>
+    <Form.Item name="parent_id" label="父库位ID">
+      <Input placeholder="请输入父库位ID" />
+    </Form.Item>
+    <Form.Item name="depth" label="层级深度" initialValue={0}>
+      <InputNumber style={{ width: '100%' }} placeholder="请输入层级深度" />
+    </Form.Item>
+    <Form.Item name="detail_flag" label="明细标识" initialValue={0}>
+      <Select>
+        <Select.Option value={1}>是</Select.Option>
+        <Select.Option value={0}>否</Select.Option>
+      </Select>
+    </Form.Item>
+    <Form.Item name="system_type" label="系统类型" initialValue={0}>
+      <InputNumber style={{ width: '100%' }} placeholder="请输入系统类型" />
+    </Form.Item>
+    <Form.Item name="is_deleted" label="是否删除" initialValue={0}>
+      <Select>
+        <Select.Option value={1}>是</Select.Option>
+        <Select.Option value={0}>否</Select.Option>
+      </Select>
+    </Form.Item>
+  </Form>
+)
+
 const ProcessForm = ({ form }: { form: any }) => (
   <Form form={form} layout="vertical">
     <Form.Item name="process_code" label="工序编码" rules={[{ required: true }]}>
@@ -678,6 +736,22 @@ export default function BasicDataManagement() {
     },
   ]
 
+  const locationColumns = [
+    { title: '库位ID', dataIndex: 'location_id', key: 'location_id', sorter: true },
+    { title: '库位编码', dataIndex: 'location_code', key: 'location_code', sorter: true },
+    { title: '库位名称', dataIndex: 'location_name', key: 'location_name', sorter: true },
+    { title: '库位全称', dataIndex: 'location_full_name', key: 'location_full_name', sorter: true },
+    { title: '层级', dataIndex: 'depth', key: 'depth', sorter: true, filters: [{ text: '0', value: '0' }, { text: '1', value: '1' }, { text: '2', value: '2' }, { text: '3', value: '3' }] },
+    {
+      title: '明细',
+      dataIndex: 'detail_flag',
+      key: 'detail_flag',
+      sorter: true,
+      filters: [{ text: '是', value: '1' }, { text: '否', value: '0' }],
+      render: (flag: number) => <Tag color={flag === 1 ? 'blue' : 'default'}>{flag === 1 ? '是' : '否'}</Tag>,
+    },
+  ]
+
   const processColumns = [
     { title: '工序编码', dataIndex: 'process_code', key: 'process_code', sorter: true },
     { title: '工序名称', dataIndex: 'process_name', key: 'process_name', sorter: true },
@@ -799,6 +873,18 @@ export default function BasicDataManagement() {
           columns={warehouseColumns}
           FormComponent={WarehouseForm}
           title="仓库"
+        />
+      ),
+    },
+    {
+      key: 'locations',
+      label: '库位',
+      children: (
+        <BasicDataTable
+          apiPath="/locations"
+          columns={locationColumns}
+          FormComponent={LocationForm}
+          title="库位"
         />
       ),
     },

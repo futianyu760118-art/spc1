@@ -82,8 +82,8 @@ export const authApi = {
   getMe: () => api.get('/basicdata/auth/me'),
   changePassword: (old_password: string, new_password: string) =>
     api.put('/basicdata/auth/change-password', { old_password, new_password }),
-  updatePreferences: (font_size_scale: string) =>
-    api.put('/basicdata/auth/preferences', { font_size_scale }),
+  updatePreferences: (data: { font_size_scale?: string; ui_preferences?: Record<string, any> }) =>
+    api.put('/basicdata/auth/preferences', data),
 }
 
 export const permissionApi = {
@@ -103,6 +103,7 @@ export const dashboardApi = {
   getRollingRisk: () => api.get('/dashboard/rolling-risk'),
   getOrderRiskDistribution: () => api.get('/dashboard/order-risk-distribution'),
   getClosureAchievement: () => api.get('/dashboard/closure-achievement'),
+  getProcurementBoard: (targetDate?: string) => api.get('/dashboard/procurement-board', { params: targetDate ? { target_date: targetDate } : {} }),
 }
 
 // ============ 订单交付中心 ============
@@ -118,6 +119,7 @@ export const orderApi = {
   update: (orderNo: string, data: Record<string, any>) => api.put(`/orders/${orderNo}`, data),
   exportOrders: (params: Record<string, any>) =>
     api.get('/orders/export', { params, responseType: 'blob' }),
+  getShippingAnalytics: () => api.get('/orders/shipping-analytics'),
 }
 
 export const runOrderApi = {
@@ -149,6 +151,7 @@ export const materialApi = {
     ids: number[]
     eta?: string
     owner?: string
+    owner_id?: number
     supplier_account?: string
     actual_arrival_date?: string
     inspection_date?: string
@@ -194,6 +197,17 @@ export const materialApi = {
     api.get('/materials/kit-analysis', { params }),
   getOrderMaterials: (orderNo: string, params: Record<string, any>) =>
     api.get(`/materials/kit-analysis/${orderNo}/materials`, { params }),
+  // 订单物料盘点
+  createInventoryCheck: (orderNo: string, data: { note?: string }) =>
+    api.post(`/materials/orders/${orderNo}/inventory-check`, data),
+  getLatestInventoryCheck: (orderNo: string) =>
+    api.get(`/materials/orders/${orderNo}/inventory-check/latest`),
+  getInventoryCheckHistory: (orderNo: string) =>
+    api.get(`/materials/orders/${orderNo}/inventory-check/history`),
+  getInventoryCheckDetail: (orderNo: string, checkId: number) =>
+    api.get(`/materials/orders/${orderNo}/inventory-check/${checkId}`),
+  getRecentInventoryChecks: (params: Record<string, any> = {}) =>
+    api.get('/materials/inventory-check/recent', { params }),
   // 供应商风险
   getSupplierRisk: (params: Record<string, any>) =>
     api.get('/materials/supplier-risk', { params }),
@@ -346,18 +360,19 @@ export const importExportApi = {
 export const dataSupplyApi = {
   listAvailableTypes: () => api.get('/basicdata/data-supply/configs/available-types'),
   dataTypeOptions: () => api.get('/basicdata/data-supply/data-type-options'),
-  listConfigs: (params: Record<string, any>) => api.get('/basicdata/data-supply/configs', { params }),
+  listConfigs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/configs', { params }),
   createConfig: (data: Record<string, any>) => api.post('/basicdata/data-supply/configs', data),
   updateConfig: (configId: number, data: Record<string, any>) =>
     api.put(`/basicdata/data-supply/configs/${configId}`, data),
   deleteConfig: (configId: number) => api.delete(`/basicdata/data-supply/configs/${configId}`),
-  listApiKeys: (params: Record<string, any>) => api.get('/basicdata/data-supply/api-keys', { params }),
+  listApiKeys: (params?: Record<string, any>) => api.get('/basicdata/data-supply/api-keys', { params }),
   createApiKey: (data: Record<string, any>) => api.post('/basicdata/data-supply/api-keys', data),
   updateApiKey: (keyId: number, data: Record<string, any>) =>
     api.put(`/basicdata/data-supply/api-keys/${keyId}`, data),
   deleteApiKey: (keyId: number) => api.delete(`/basicdata/data-supply/api-keys/${keyId}`),
-  listCallLogs: (params: Record<string, any>) => api.get('/basicdata/data-supply/call-logs', { params }),
-  getStatistics: (params: Record<string, any> = {}) => api.get('/basicdata/data-supply/statistics', { params }),
+  listEndpoints: () => api.get('/basicdata/data-supply/endpoints'),
+  listCallLogs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/call-logs', { params }),
+  getStatistics: (params?: Record<string, any>) => api.get('/basicdata/data-supply/statistics', { params }),
 }
 
 // ============ 规则配置中心 ============
@@ -541,31 +556,4 @@ export const shareApi = {
   revoke: (id: number) => api.delete(`/share/${id}`),
 }
 
-// ============ 权限定义 ============
-export const permissionApi = {
-  tree: () => api.get('/permissions/tree'),
-  list: () => api.get('/permissions'),
-  routeMap: () => api.get('/permissions/route-map'),
-}
 
-// ============ 数据供给 (基础数据与集成中心) ============
-export const dataSupplyApi = {
-  // 数据范围配置
-  listAvailableTypes: () => api.get('/basicdata/data-supply/configs/available-types'),
-  dataTypeOptions: () => api.get('/basicdata/data-supply/data-type-options'),
-  listConfigs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/configs', { params }),
-  createConfig: (data: Record<string, any>) => api.post('/basicdata/data-supply/configs', data),
-  updateConfig: (id: number, data: Record<string, any>) => api.put(`/basicdata/data-supply/configs/${id}`, data),
-  deleteConfig: (id: number) => api.delete(`/basicdata/data-supply/configs/${id}`),
-  // API Key 管理
-  listApiKeys: (params?: Record<string, any>) => api.get('/basicdata/data-supply/api-keys', { params }),
-  createApiKey: (data: Record<string, any>) => api.post('/basicdata/data-supply/api-keys', data),
-  updateApiKey: (id: number, data: Record<string, any>) => api.put(`/basicdata/data-supply/api-keys/${id}`, data),
-  deleteApiKey: (id: number) => api.delete(`/basicdata/data-supply/api-keys/${id}`),
-  // 对外接口清单（供 API Key 表单勾选权限）
-  listEndpoints: () => api.get('/basicdata/data-supply/endpoints'),
-  // 调用日志
-  listCallLogs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/call-logs', { params }),
-  // 统计
-  getStatistics: (params?: Record<string, any>) => api.get('/basicdata/data-supply/statistics', { params }),
-}

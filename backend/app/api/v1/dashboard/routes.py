@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
+from datetime import date
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker
@@ -13,6 +14,7 @@ from app.schemas.dashboard.schemas import (
     RollingRiskData,
     OrderRiskDistributionData,
     ClosureAchievement,
+    ProcurementBoardData,
 )
 from app.schemas.order.schemas import MaterialDemandOut
 from app.services.dashboard.dashboard_service import DashboardService
@@ -156,4 +158,17 @@ async def get_risk_distribution(
 ):
     service = DashboardService(db)
     data = await service.get_risk_distribution()
+    return ResponseModel(data=data)
+
+
+@router.get("/procurement-board", response_model=ResponseModel[ProcurementBoardData])
+async def get_procurement_board(
+    target_date: Optional[str] = Query(None, description="目标日期，格式 YYYY-MM-DD，默认今天"),
+    current_user: dict = Depends(PermissionChecker("dashboard", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """供应链驾驶舱 — 采购看板（大屏）"""
+    target = date.fromisoformat(target_date) if target_date else None
+    service = DashboardService(db)
+    data = await service.get_procurement_board(target_date=target)
     return ResponseModel(data=data)

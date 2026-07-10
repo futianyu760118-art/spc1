@@ -11,7 +11,7 @@ import re
 from datetime import datetime, date, timedelta
 from typing import Optional
 
-from sqlalchemy import create_engine, text, select, cast, String
+from sqlalchemy import create_engine, text, select, cast, String, Column
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,7 @@ from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.material.material_demand import MaterialDemand
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.material.purchase_invoice import PurchaseInvoice
+from app.models.material.payment_apply import PaymentApply
 from app.models.basicdata.sync_sql_config import SyncSqlConfig
 from app.models.basicdata.customer import Customer
 from app.models.basicdata.supplier import Supplier
@@ -29,6 +30,8 @@ from app.models.basicdata.product import Product
 from app.models.basicdata.bom import Bom
 from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.warehouse import Warehouse
+from app.models.basicdata.location import Location
+from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.process import Process
 from app.models.basicdata.organization import Organization
 from app.models.basicdata.employee import Employee
@@ -236,10 +239,18 @@ class ERPSyncService:
 
     @staticmethod
     def _map_row(row: dict, mapping: dict) -> dict:
-        """根据字段映射转换一行数据"""
+        """根据字段映射转换一行数据
+        支持两种映射格式:
+          "FCol": "spc_col"                          (简单格式)
+          "FCol": {"target": "spc_col", "remark": "备注"} (带备注格式)
+        """
         mapped = {}
         for key, value in row.items():
-            target_key = mapping.get(key, key)
+            map_entry = mapping.get(key, key)
+            if isinstance(map_entry, dict):
+                target_key = map_entry.get("target", key)
+            else:
+                target_key = map_entry
             if value is not None:
                 if isinstance(value, datetime):
                     value = value.date()
@@ -363,12 +374,29 @@ class ERPSyncService:
                 stats["skipped"] += 1
                 continue
             row_dict[key_fields[0]] = first
-            # 第二业务键缺省（如 line_no -> "1"）
+            # 第二及后续业务键 — 如果是 nullable 字段且值为空则保持 None（不要强制填 "1"）
+            # 这样支持如 (material_code, wh_code, null) 当 location_id 不存在时仍能正确去重
             for kf in key_fields[1:]:
-                val = str(row_dict.get(kf, "")).strip()
-                if not val:
-                    val = "1"
-                row_dict[kf] = val
+                val = row_dict.get(kf)
+                if val is None:
+                    # 保持 None，不要填充默认值
+                    continue
+                val_str = str(val).strip()
+                if not val_str:
+                    # 仍为空字符串，检查该列是否可为空
+                    col = getattr(model_class, kf, None)
+                    if col is None or not hasattr(col, 'property') or not isinstance(col.property.column, Column):
+                        # 无法判断，填充 "1" 保持兼容
+                        val_str = "1"
+                    else:
+                        column = col.property.column
+                        if column.nullable:
+                            # 列允许空，保持 None
+                            row_dict.pop(kf, None)
+                            continue
+                        # 不允许空则填 "1"
+                        val_str = "1"
+                row_dict[kf] = val_str
             # 默认值填充
             if defaults:
                 for tgt, src in defaults.items():
@@ -383,8 +411,12 @@ class ERPSyncService:
                 if col.nullable:
                     continue
                 if col.default is not None or col.server_default is not None:
-                    row_dict.pop(col.name, None)
-            key = tuple(str(row_dict.get(f, "")).strip() for f in key_fields)
+                    if row_dict.get(col.name) is None:
+                        row_dict.pop(col.name, None)
+            key = tuple(
+                None if row_dict.get(f) is None else str(row_dict.get(f, "")).strip()
+                for f in key_fields
+            )
             deduped[key] = row_dict
 
         prepared = list(deduped.values())
@@ -396,6 +428,23 @@ class ERPSyncService:
 
         # 2) 一次性预加载已有记录（按第一个业务键分块 IN 查询，避免超大 IN）
         in_col = getattr(model_class, key_fields[0])
+        # 业务键在上方统一转为 str 用于去重；但 IN 查询的值必须匹配列的
+        # 原生 Python 类型，否则 PostgreSQL 会报
+        # "operator does not exist: integer = character varying"
+        # （如 MrpPlanOrder.sale_order_id 是 Integer 列）
+        try:
+            in_python_type = in_col.type.python_type
+        except (AttributeError, NotImplementedError):
+            in_python_type = str
+
+        def _coerce_in_value(v):
+            if in_python_type is str or isinstance(v, in_python_type):
+                return v
+            try:
+                return in_python_type(v)
+            except (ValueError, TypeError):
+                return v
+
         in_values: list = []
         seen = set()
         for key in deduped.keys():
@@ -407,12 +456,16 @@ class ERPSyncService:
         existing_map: dict[tuple, object] = {}
         chunk = 1000
         for i in range(0, len(in_values), chunk):
-            chunk_vals = in_values[i:i + chunk]
+            chunk_vals = [_coerce_in_value(v) for v in in_values[i:i + chunk]]
             res = await self.spc_db.execute(
                 select(model_class).where(in_col.in_(chunk_vals))
             )
             for obj in res.scalars():
-                k = tuple(str(getattr(obj, f, "")).strip() for f in key_fields)
+                k = tuple(
+                    None if getattr(obj, f, None) is None
+                    else str(getattr(obj, f, "")).strip()
+                    for f in key_fields
+                )
                 existing_map[k] = obj
         logger.info(f"{label}: 预加载 {len(existing_map)} 条已有记录")
 
@@ -420,7 +473,10 @@ class ERPSyncService:
         created_keys: set = set()
 
         def _process_row(row_dict: dict) -> str:
-            key = tuple(str(row_dict.get(f, "")).strip() for f in key_fields)
+            key = tuple(
+                None if row_dict.get(f) is None else str(row_dict.get(f, "")).strip()
+                for f in key_fields
+            )
             obj = existing_map.get(key)
             if obj is not None:
                 if getattr(obj, "data_source", None) not in ("erp", None, ""):
@@ -469,7 +525,10 @@ class ERPSyncService:
                 # flush 失败时本批新增对象随 rollback 失效，
                 # 需从缓存移除以便逐行重跑时重新插入
                 for row_dict in batch:
-                    key = tuple(str(row_dict.get(f, "")).strip() for f in key_fields)
+                    key = tuple(
+                None if row_dict.get(f) is None else str(row_dict.get(f, "")).strip()
+                for f in key_fields
+            )
                     if key in created_keys:
                         existing_map.pop(key, None)
                         created_keys.discard(key)
@@ -601,11 +660,20 @@ class ERPSyncService:
 
                     if existing:
                         if getattr(existing, "data_source", None) in ("erp", None, ""):
+                            changed = {}
                             for k, v in row_dict.items():
                                 if k == "order_no":
                                     continue
                                 if getattr(existing, k, None) != v and v is not None:
                                     setattr(existing, k, v)
+                                    changed[k] = True
+
+                            if changed:
+                                now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+                                times = dict(existing.field_synced_at or {})
+                                times.update({k: now_str for k in changed})
+                                existing.field_synced_at = times
+
                             if hasattr(existing, "data_source"):
                                 existing.data_source = "erp"
                             stats["updated"] += 1
@@ -1521,8 +1589,9 @@ class ERPSyncService:
                 try:
                     await self.spc_db.begin_nested()
                     row_dict = self._map_row(row, mapping)
+                    wh_id = row_dict.get("wh_id")
                     wh_code = str(row_dict.get("wh_code", "")).strip()
-                    if not wh_code:
+                    if not wh_id and not wh_code:
                         stats["skipped"] += 1
                         await self.spc_db.commit()
                         continue
@@ -1530,15 +1599,22 @@ class ERPSyncService:
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
                     row_dict = self._coerce_row_types(row_dict, Warehouse)
 
-                    result = await self.spc_db.execute(
-                        select(Warehouse).where(Warehouse.wh_code == wh_code)
-                    )
-                    existing = result.scalar_one_or_none()
+                    existing = None
+                    if wh_id:
+                        result = await self.spc_db.execute(
+                            select(Warehouse).where(Warehouse.wh_id == wh_id)
+                        )
+                        existing = result.scalar_one_or_none()
+                    if not existing and wh_code:
+                        result = await self.spc_db.execute(
+                            select(Warehouse).where(Warehouse.wh_code == wh_code)
+                        )
+                        existing = result.scalar_one_or_none()
 
                     if existing:
                         if getattr(existing, "data_source", None) in ("erp", None, ""):
                             for k, v in row_dict.items():
-                                if k == "wh_code":
+                                if k in ("wh_id", "wh_code"):
                                     continue
                                 if getattr(existing, k, None) != v and v is not None:
                                     setattr(existing, k, v)
@@ -1570,6 +1646,87 @@ class ERPSyncService:
         except Exception as e:
             stats["errors"].append(str(e))
             logger.exception(f"仓库同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
+    # 库位同步
+    # ------------------------------------------------------------------
+    async def sync_locations(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
+        """同步库位"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("locations")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条库位记录")
+            valid_cols = self._get_model_columns(Location)
+
+            for row in rows:
+                try:
+                    await self.spc_db.begin_nested()
+                    row_dict = self._map_row(row, mapping)
+                    location_id = row_dict.get("location_id")
+                    if not location_id:
+                        stats["skipped"] += 1
+                        await self.spc_db.commit()
+                        continue
+
+                    row_dict = self._filter_model_fields(row_dict, valid_cols)
+                    row_dict = self._coerce_row_types(row_dict, Location)
+
+                    result = await self.spc_db.execute(
+                        select(Location).where(Location.location_id == location_id)
+                    )
+                    existing = result.scalar_one_or_none()
+
+                    if existing:
+                        if getattr(existing, "data_source", None) in ("erp", None, ""):
+                            for k, v in row_dict.items():
+                                if k == "location_id":
+                                    continue
+                                if getattr(existing, k, None) != v and v is not None:
+                                    setattr(existing, k, v)
+                            if hasattr(existing, "data_source"):
+                                existing.data_source = "erp"
+                            stats["updated"] += 1
+                        else:
+                            stats["skipped"] += 1
+                    else:
+                        location = Location(**row_dict)
+                        if hasattr(location, "data_source"):
+                            location.data_source = "erp"
+                        self.spc_db.add(location)
+                        stats["created"] += 1
+
+                    stats["synced"] += 1
+                    await self.spc_db.commit()
+                except Exception as e:
+                    try:
+                        await self.spc_db.rollback()
+                    except Exception:
+                        pass
+                    stats["errors"].append(f"库位 {row_dict.get('location_id')}: {e}")
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"库位同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"库位同步异常: {e}")
         finally:
             self._close_erp(keep_alive=True)
 
@@ -2288,6 +2445,96 @@ class ERPSyncService:
         return stats
 
     # ------------------------------------------------------------------
+    # 付款申请同步
+    # ------------------------------------------------------------------
+    async def sync_payment_applies(
+        self, since: Optional[datetime] = None, custom_params: Optional[dict] = None
+    ) -> dict:
+        """同步付款申请数据。幂等依据: payment_apply_no。"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("payment_applies")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条付款申请记录")
+            valid_cols = self._get_model_columns(PaymentApply)
+
+            for row in rows:
+                row_dict: dict = {}
+                try:
+                    await self.spc_db.begin_nested()
+                    row_dict = self._map_row(row, mapping)
+                    payment_apply_no = str(row_dict.get("payment_apply_no", "")).strip()
+                    if not payment_apply_no:
+                        stats["skipped"] += 1
+                        await self.spc_db.commit()
+                        continue
+
+                    # 统一类型
+                    row_dict["payment_apply_no"] = payment_apply_no
+                    row_dict = self._filter_model_fields(row_dict, valid_cols)
+                    row_dict = self._coerce_row_types(row_dict, PaymentApply)
+
+                    result = await self.spc_db.execute(
+                        select(PaymentApply).where(
+                            PaymentApply.payment_apply_no == payment_apply_no
+                        )
+                    )
+                    existing = result.scalar_one_or_none()
+
+                    if existing:
+                        changed = False
+                        for k, v in row_dict.items():
+                            if k == "payment_apply_no":
+                                continue
+                            if v is not None and getattr(existing, k, None) != v:
+                                setattr(existing, k, v)
+                                changed = True
+                        if changed:
+                            stats["updated"] += 1
+                        else:
+                            existing.updated_at = datetime.now()
+                            stats["skipped"] += 1
+                    else:
+                        row_dict.setdefault("data_source", "erp")
+                        apply = PaymentApply(**row_dict)
+                        self.spc_db.add(apply)
+                        stats["created"] += 1
+
+                    stats["synced"] += 1
+                    await self.spc_db.commit()
+                except Exception as e:
+                    try:
+                        await self.spc_db.rollback()
+                    except Exception:
+                        pass
+                    stats["errors"].append(
+                        f"付款申请 {row_dict.get('payment_apply_no')}: {e}"
+                    )
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"付款申请同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"付款申请同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
     # 品质异常同步
     # ------------------------------------------------------------------
     async def sync_quality_issues(
@@ -2452,6 +2699,77 @@ class ERPSyncService:
         return stats
 
     # ------------------------------------------------------------------
+    # 即时库存同步
+    # ------------------------------------------------------------------
+    async def sync_inventory(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
+        """同步即时库存余额（全量覆盖快照）。幂等依据: (material_id, wh_id, location_id)。"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("inventory")
+
+            params = {}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条即时库存记录")
+
+            if rows and len(rows) > 0:
+                sample_row = rows[0]
+                logger.info(f"即时库存 原始第一行(前5字段): {dict(list(sample_row.items())[:5])}")
+                logger.info(f"即时库存 字段映射: {mapping}")
+                sample_mapped = self._map_row(sample_row, mapping)
+                logger.info(f"即时库存 映射后第一行: {sample_mapped}")
+
+            erp_keys: set[tuple] = set()
+
+            stats = await self._bulk_upsert(
+                Inventory,
+                rows,
+                mapping,
+                key_fields=["material_id", "wh_id", "location_id"],
+                label="即时库存",
+            )
+
+            valid_cols = self._get_model_columns(Inventory)
+            for row in rows:
+                row_dict = self._map_row(row, mapping)
+                mid = row_dict.get("material_id")
+                wid = row_dict.get("wh_id")
+                lid = row_dict.get("location_id")
+                if mid and wid:
+                    erp_keys.add((mid, wid, lid))
+
+            if erp_keys:
+                all_existing = await self.spc_db.execute(
+                    select(Inventory).where(Inventory.data_source == "erp")
+                )
+                all_existing_list = all_existing.scalars().all()
+                deleted_count = 0
+                for inv in all_existing_list:
+                    key = (inv.material_id, inv.wh_id, inv.location_id)
+                    if key not in erp_keys:
+                        await self.spc_db.delete(inv)
+                        deleted_count += 1
+                if deleted_count:
+                    await self.spc_db.flush()
+                    await self.spc_db.commit()
+                    logger.info(f"即时库存清理: 删除 {deleted_count} 条ERP中已不存在的库存记录")
+
+            logger.info(f"即时库存同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"即时库存同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
     # 全量同步
     # ------------------------------------------------------------------
     async def sync_all(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
@@ -2471,14 +2789,17 @@ class ERPSyncService:
             results["boms"] = await self.sync_boms(since, custom_params)
             results["bom_details"] = await self.sync_bom_details(since, custom_params)
             results["warehouses"] = await self.sync_warehouses(since, custom_params)
+            results["locations"] = await self.sync_locations(since, custom_params)
             results["processes"] = await self.sync_processes(since, custom_params)
             results["organizations"] = await self.sync_organizations(since, custom_params)
             results["positions"] = await self.sync_positions(since, custom_params)
             results["employees"] = await self.sync_employees(since, custom_params)
             results["employee_organizations"] = await self.sync_employee_organizations(since, custom_params)
             results["purchase_invoices"] = await self.sync_purchase_invoices(since, custom_params)
+            results["payment_applies"] = await self.sync_payment_applies(since, custom_params)
             results["quality_issues"] = await self.sync_quality_issues(since, custom_params)
             results["mrp_plan_orders"] = await self.sync_mrp_plan_orders(since, custom_params)
+            results["inventory"] = await self.sync_inventory(since, custom_params)
             return results
         finally:
             self._close_erp()

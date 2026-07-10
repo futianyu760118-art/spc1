@@ -39,6 +39,7 @@ SORTABLE_COLUMNS = {
     'actual_arrival_date': PurchaseOrder.actual_arrival_date,
     'inspection_date': PurchaseOrder.inspection_date,
     'owner': PurchaseOrder.owner,
+    'owner_id': PurchaseOrder.owner_id,
     'is_closed': PurchaseOrder.is_closed,
     'is_stagnant': PurchaseOrder.received_qty,  # 呆滞按收料数量排序
     'po_status': PurchaseOrder.po_status,
@@ -70,6 +71,7 @@ EXPORT_COLUMNS = [
     ExportColumn('arrival_hour_note', '小时节点', 14),
     ExportColumn('inspection_date', '检验日期', 12),
     ExportColumn('owner', '责任人', 10),
+    ExportColumn('owner_id', '责任人ID', 10),
     ExportColumn('po_status', '状态', 10),
     ExportColumn('is_closed', '关闭', 8),
     ExportColumn('is_stagnant', '呆滞', 8),
@@ -88,6 +90,7 @@ def _build_filters(
     spec_model: Optional[str] = None,
     unit: Optional[str] = None,
     owner: Optional[str] = None,
+    owner_id: Optional[int] = None,
     arrival_hour_note: Optional[str] = None,
     po_date_start: Optional[str] = None,
     po_date_end: Optional[str] = None,
@@ -126,6 +129,8 @@ def _build_filters(
         base.append(PurchaseOrder.unit.ilike(f'%{unit}%'))
     if owner:
         base.append(PurchaseOrder.owner.ilike(f'%{owner}%'))
+    if owner_id is not None:
+        base.append(PurchaseOrder.owner_id == owner_id)
     if arrival_hour_note:
         base.append(PurchaseOrder.arrival_hour_note.ilike(f'%{arrival_hour_note}%'))
     if po_date_start:
@@ -186,11 +191,13 @@ def _build_filters(
                     or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0)
                     & PurchaseOrder.eta.isnot(None)
                     & (PurchaseOrder.eta < today)
+                    & (PurchaseOrder.is_closed == 0)
                 )
             elif s == 'pending':
                 status_conditions.append(
                     or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0)
                     & or_(PurchaseOrder.eta.is_(None), PurchaseOrder.eta >= today)
+                    & (PurchaseOrder.is_closed == 0)
                 )
         if stagnant_filter:
             base.append(
@@ -284,6 +291,7 @@ async def list_purchase_plan(
     spec_model: Optional[str] = Query(None),
     unit: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
+    owner_id: Optional[int] = Query(None),
     arrival_hour_note: Optional[str] = Query(None),
     po_date_start: Optional[str] = Query(None),
     po_date_end: Optional[str] = Query(None),
@@ -307,7 +315,7 @@ async def list_purchase_plan(
     base = _build_filters(
         None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
-        material_property=material_property, spec_model=spec_model, unit=unit, owner=owner,
+        material_property=material_property, spec_model=spec_model, unit=unit, owner=owner, owner_id=owner_id,
         arrival_hour_note=arrival_hour_note,
         po_date_start=po_date_start, po_date_end=po_date_end,
         eta_start=eta_start, eta_end=eta_end,
@@ -368,6 +376,7 @@ async def batch_update_purchase_plan(
     if (
         data.eta is None
         and data.owner is None
+        and data.owner_id is None
         and data.supplier_account is None
         and data.actual_arrival_date is None
         and data.inspection_date is None
@@ -382,6 +391,8 @@ async def batch_update_purchase_plan(
         update_fields['eta'] = data.eta
     if data.owner is not None:
         update_fields['owner'] = data.owner
+    if data.owner_id is not None:
+        update_fields['owner_id'] = data.owner_id
     if data.supplier_account is not None:
         update_fields['supplier_account'] = data.supplier_account
     if data.actual_arrival_date is not None:
@@ -391,7 +402,7 @@ async def batch_update_purchase_plan(
     if data.is_closed is not None:
         update_fields['is_closed'] = data.is_closed
 
-    allowed_clear_fields = {'eta', 'owner', 'supplier_account', 'actual_arrival_date', 'inspection_date'}
+    allowed_clear_fields = {'eta', 'owner', 'owner_id', 'supplier_account', 'actual_arrival_date', 'inspection_date'}
     if data.clear_fields:
         for f in data.clear_fields:
             if f in allowed_clear_fields:
@@ -425,7 +436,7 @@ async def batch_update_purchase_plan(
     await log_audit(db, "purchase_order", 0, "batch_update",
                     field_name="batch_eta_owner",
                     new_value=(
-                        f"ids={data.ids}, eta={data.eta}, owner={data.owner}, "
+                        f"ids={data.ids}, eta={data.eta}, owner={data.owner}, owner_id={data.owner_id}, "
                         f"supplier_account={data.supplier_account}, actual_arrival_date={data.actual_arrival_date}, "
                         f"inspection_date={data.inspection_date}, clear_fields={data.clear_fields}"
                     ),
@@ -496,6 +507,7 @@ async def export_purchase_plan(
     spec_model: Optional[str] = Query(None),
     unit: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
+    owner_id: Optional[int] = Query(None),
     arrival_hour_note: Optional[str] = Query(None),
     po_date_start: Optional[str] = Query(None),
     po_date_end: Optional[str] = Query(None),
@@ -521,7 +533,7 @@ async def export_purchase_plan(
         None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
         material_property=material_property,
-        spec_model=spec_model, unit=unit, owner=owner,
+        spec_model=spec_model, unit=unit, owner=owner, owner_id=owner_id,
         arrival_hour_note=arrival_hour_note,
         po_date_start=po_date_start, po_date_end=po_date_end,
         eta_start=eta_start, eta_end=eta_end,
@@ -560,6 +572,7 @@ async def export_purchase_plan(
             'arrival_hour_note': item.arrival_hour_note or '',
             'inspection_date': str(item.inspection_date) if item.inspection_date else '',
             'owner': item.owner or '',
+            'owner_id': item.owner_id or '',
             'po_status': STATUS_LABELS.get(item.po_status, item.po_status),
             'is_closed': '已关闭' if item.is_closed == 1 else '',
             'is_stagnant': f'呆滞 +{item.stagnant_qty}' if item.is_stagnant else '',
@@ -596,6 +609,7 @@ async def get_purchase_plan_stats(
     spec_model: Optional[str] = Query(None),
     unit: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
+    owner_id: Optional[int] = Query(None),
     arrival_hour_note: Optional[str] = Query(None),
     po_date_start: Optional[str] = Query(None),
     po_date_end: Optional[str] = Query(None),
@@ -622,7 +636,7 @@ async def get_purchase_plan_stats(
         None if supplier_scope else supplier_name, supplier_account, order_no, po_status, keyword,
         material_code=material_code, material_name=material_name,
         material_property=material_property,
-        spec_model=spec_model, unit=unit, owner=owner,
+        spec_model=spec_model, unit=unit, owner=owner, owner_id=owner_id,
         arrival_hour_note=arrival_hour_note,
         po_date_start=po_date_start, po_date_end=po_date_end,
         eta_start=eta_start, eta_end=eta_end,
@@ -665,22 +679,24 @@ async def get_purchase_plan_stats(
     )
     fully_received = fully_result.scalar() or 0
 
-    # 逾期未到（无收料，且 eta 超期）
+    # 逾期未到（无收料，且 eta 超期，排除已关闭）
     overdue_result = await db.execute(
         select(func.count(PurchaseOrder.id)).where(
             or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0),
             PurchaseOrder.eta.isnot(None),
             PurchaseOrder.eta < today,
+            PurchaseOrder.is_closed == 0,
             *base
         )
     )
     overdue = overdue_result.scalar() or 0
 
-    # 待到料（无收料，未逾期）
+    # 待到料（无收料，未逾期，排除已关闭）
     pending_result = await db.execute(
         select(func.count(PurchaseOrder.id)).where(
             or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0),
             or_(PurchaseOrder.eta.is_(None), PurchaseOrder.eta >= today),
+            PurchaseOrder.is_closed == 0,
             *base
         )
     )

@@ -27,6 +27,7 @@ from app.services.basicdata.data_supply_service import (
 from .registry import (
     ExternalCallContext,
     get_endpoint_by_route,
+    match_endpoint_by_route,
     list_endpoint_dicts,
 )
 # 触发 endpoints 包导入，使所有 @register_external 装饰器生效
@@ -78,7 +79,7 @@ async def _merge_params(request: Request) -> dict:
 
 async def _dispatch(method: str, path: str, request: Request, db: AsyncSession) -> Any:
     """统一分发：按 method + path 查找 endpoint 并执行"""
-    endpoint = get_endpoint_by_route(method, path)
+    endpoint, path_params = match_endpoint_by_route(method, path)
     if not endpoint:
         raise HTTPException(status_code=404, detail=f"未找到对外接口: {method} /external{path}")
 
@@ -95,8 +96,10 @@ async def _dispatch(method: str, path: str, request: Request, db: AsyncSession) 
     if client_ip and not check_ip_whitelist(key_obj, client_ip):
         raise HTTPException(status_code=403, detail=f"IP {client_ip} 不在白名单内")
 
-    # 合并参数
+    # 合并参数（query + body + 路径参数）
     params = await _merge_params(request)
+    if path_params:
+        params.update(path_params)
 
     ctx = ExternalCallContext(
         db=db,
@@ -122,6 +125,12 @@ async def _dispatch(method: str, path: str, request: Request, db: AsyncSession) 
         result = None
         response_status = 500
         response_count = 0
+        error_msg = str(e)
+        # 业务异常可能已让当前事务进入 aborted 状态，先回滚以免污染后续写日志操作
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         # 记录日志后重新抛出
         duration_ms = (time.time() - start_time) * 1000
         await log_call(
@@ -135,8 +144,9 @@ async def _dispatch(method: str, path: str, request: Request, db: AsyncSession) 
             ip_address=client_ip,
             user_agent=ctx.user_agent,
             duration_ms=duration_ms,
+            error_message=error_msg,
         )
-        raise HTTPException(status_code=500, detail=f"接口内部错误: {e}")
+        raise HTTPException(status_code=500, detail=f"接口内部错误: {error_msg}")
 
     # 记录调用日志
     duration_ms = (time.time() - start_time) * 1000

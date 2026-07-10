@@ -13,4 +13,6 @@ from app.services.assistant.tools import (  # noqa: F401
     search_eta_updates,
     search_users,
     suggest_actions,
+    search_kit_analysis,
+    search_bom_details,
 )

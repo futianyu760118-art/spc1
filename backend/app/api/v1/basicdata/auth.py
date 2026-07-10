@@ -18,6 +18,7 @@ from app.core.permissions import merge_role_permission_additions
 from app.core.token_blacklist import add_token_to_blacklist
 from app.models.basicdata.user import SysUser, SysRole
 from app.models.basicdata.supplier import Supplier
+from app.models.basicdata.employee import Employee
 from app.schemas.basicdata.schemas import TokenResponse, UserInfo
 from app.schemas.common import ResponseModel
 
@@ -143,6 +144,16 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
     else:
         is_default = user.is_default_password
 
+    # 获取关联员工的岗位名称；员工未关联时回退到角色名称
+    position_name = None
+    if user.emp_code:
+        emp_result = await db.execute(
+            select(Employee.position).where(Employee.emp_code == user.emp_code)
+        )
+        position_name = emp_result.scalar_one_or_none()
+    if not position_name:
+        position_name = role.role_name
+
     return ResponseModel(data=UserInfo(
         id=user.id,
         username=user.username,
@@ -156,6 +167,7 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
         ui_preferences=user.ui_preferences,
         is_default_password=is_default,
         login_version=user.login_version,
+        position_name=position_name,
     ))
 
 

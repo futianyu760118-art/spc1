@@ -231,7 +231,7 @@ export default function OrderDetail() {
   const [sortedKitMaterials, setSortedKitMaterials] = useState<KitMaterialItem[]>([])
   const [kitTableFilters, setKitTableFilters] = useState<Record<string, any>>({})
 
-  const [activeTab, setActiveTab] = useState('info')
+  const [activeTab, setActiveTab] = useState('kit')
 
   const handleTabChange = (key: string) => {
     setActiveTab(key)
@@ -383,9 +383,16 @@ export default function OrderDetail() {
     fetchDetail()
   }, [orderNo, lineNo])
 
+  useEffect(() => {
+    if (activeTab === 'kit' && orderNo && kitMaterials.length === 0 && !kitMaterialsLoading) {
+      fetchKitMaterials()
+    }
+  }, [activeTab, orderNo, kitMaterials.length, kitMaterialsLoading, fetchKitMaterials])
+
   const productColumns = [
     { title: '行号', dataIndex: 'line_no', key: 'line_no', width: 80 },
     { title: '产品编码', dataIndex: 'product_code', key: 'product_code', width: 130 },
+    { title: 'BOM编号', dataIndex: 'bom_no', key: 'bom_no', render: (v: string | null) => v || '-' },
     { title: '产品名称', dataIndex: 'product_name', key: 'product_name', ellipsis: true },
     { title: '产品型号', dataIndex: 'product_model', key: 'product_model', width: 130, ellipsis: true },
     { title: '订单数量', dataIndex: 'order_qty', key: 'order_qty', width: 90, render: (v: number | null) => v?.toLocaleString() || '-' },

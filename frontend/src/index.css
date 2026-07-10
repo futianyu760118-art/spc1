@@ -126,15 +126,7 @@ body {
 }
 
 /* ===== 数据供给：Tabs 标签栏吸顶（紧贴 header 下方） ===== */
-.data-supply-tabs > .ant-tabs-nav {
-  margin: 0;
-  position: sticky;
-  top: 56px;            /* header 高度，吸在 header 正下方 */
-  z-index: 8;           /* 低于 header(9)，避免遮挡 header */
-  background: #fff;
-  padding: 8px 0 0;
-}
-/* 解除 AntD 内部 nav-wrap 的 overflow:hidden，否则 sticky 失效 */
+/* 容器整体 sticky 由组件 inline style 控制，此处仅修复 AntD 内部 overflow */
 .data-supply-tabs .ant-tabs-nav-wrap {
   overflow: visible !important;
 }

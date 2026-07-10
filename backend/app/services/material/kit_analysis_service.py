@@ -13,9 +13,12 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.basicdata.material import Material
+from app.models.basicdata.inventory import Inventory
+from app.models.basicdata.bom import Bom
+from app.models.basicdata.bom_detail import BomDetail
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.material.purchase_order import PurchaseOrder
-from app.models.order.sale_order import SaleOrder
+from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.schemas.material.schemas import KitAnalysisItem, KitAnalysisMaterialItem
 from app.services.common.sync_filter import get_purchase_order_sync_filters
 # 复用订单物料服务中的状态推断与 PO 汇总逻辑，保证齐套口径一致
@@ -66,6 +69,8 @@ MATERIAL_SORT_KEYS = {
     "status",
     "is_stagnant",
     "bill_type",
+    "bom_demand_qty",
+    "transit_qty",
 }
 
 
@@ -115,6 +120,298 @@ def _resolve_material_property(
     return None
 
 
+def _allocate_stock(
+    order_priority: list[str],
+    plan_materials: dict[tuple[str, str], dict],
+    po_groups: dict[tuple[str, str], dict],
+    stock_by_material: dict[str, Decimal],
+) -> dict[tuple[str, str], Decimal]:
+    """按订单优先级分配物料级库存，返回每个 (order, material) 的可用库存。
+
+    可用库存 = 该订单轮到自己时物料库存的剩余量（已被排在前面的订单按净需求占用）。
+    净需求 = max(0, base_plan_qty - received_qty)。
+    """
+    available_map: dict[tuple[str, str], Decimal] = {}
+    for (order_no, material_code), plan_info in plan_materials.items():
+        # 仅对真实存在的物料做分配；先按物料分组初始化为 0
+        available_map.setdefault((order_no, material_code), Decimal("0"))
+
+    for material_code, total_stock in stock_by_material.items():
+        remaining = total_stock if total_stock is not None else Decimal("0")
+        for order_no in order_priority:
+            key = (order_no, material_code)
+            if key not in plan_materials:
+                continue
+            # 当前订单看到的可用库存 = 此时物料的剩余量
+            available_map[key] = remaining
+            # 占用净需求
+            base_qty = plan_materials[key].get("base_plan_qty") or Decimal("0")
+            po_info = po_groups.get(key)
+            received = Decimal("0")
+            if po_info and po_info.get("has_received_qty"):
+                received = po_info["received_qty"] or Decimal("0")
+            net_demand = base_qty - received
+            if net_demand < 0:
+                net_demand = Decimal("0")
+            remaining = remaining - net_demand
+            if remaining < 0:
+                remaining = Decimal("0")
+    return available_map
+
+
+async def _get_stock_by_material(
+    db: AsyncSession,
+    material_codes: list[str],
+) -> dict[str, Decimal]:
+    """从 Inventory 表按物料编码汇总结存数量（所有仓库 + 库位汇总）。
+    若 Inventory 表无数据，回退为 None（调用方使用 MrpPlanOrder.stock_qty 兜底）。
+    """
+    if not material_codes:
+        return {}
+    result = await db.execute(
+        select(
+            Inventory.material_code,
+            func.sum(Inventory.balance_qty).label("total_balance"),
+        )
+        .where(Inventory.material_code.in_(material_codes))
+        .group_by(Inventory.material_code)
+    )
+    stock_map: dict[str, Decimal] = {}
+    for row in result:
+        mc = row.material_code
+        total = row.total_balance
+        if mc and total is not None:
+            stock_map[mc] = Decimal(str(total))
+    return stock_map
+
+
+def _order_priority_sort_key(order_no: str, promised_dates: dict[str, Optional[date]]) -> tuple:
+    promised = promised_dates.get(order_no)
+    # 交期为空排最后；同交期按订单号
+    return (promised is None, promised or date.max, order_no)
+
+
+async def _compute_available_stock_for_order(
+    db: AsyncSession,
+    target_order_no: str,
+    material_codes: list[str],
+) -> dict[str, Decimal]:
+    """计算 target_order 各物料的可用库存（扣减其他订单按合同交期优先占用）。
+
+    用于单订单物料明细场景：需查询涉及这些物料的所有订单，按交期分配库存。
+    """
+    if not material_codes:
+        return {}
+
+    # 1. 涉及这些物料的全部订单
+    involved_result = await db.execute(
+        select(MrpPlanOrder.sale_order_no)
+        .where(MrpPlanOrder.material_code.in_(material_codes))
+        .distinct()
+    )
+    involved_orders = sorted({r.sale_order_no for r in involved_result if r.sale_order_no})
+    if not involved_orders:
+        return {}
+
+    # 2. 这些订单的合同交期（用于排序），并排除已关闭订单（与汇总口径一致）
+    so_result = await db.execute(
+        select(SaleOrder.order_no, SaleOrder.promised_date)
+        .where(SaleOrder.order_no.in_(involved_orders), SaleOrder.is_closed == 0)
+        .distinct()
+    )
+    promised: dict[str, Optional[date]] = {}
+    open_orders: set[str] = set()
+    for r in so_result:
+        promised.setdefault(r.order_no, r.promised_date)
+        open_orders.add(r.order_no)
+    # 仅保留未关闭订单参与库存竞争；目标订单即便已关闭仍需展示自身明细
+    active_orders = {o for o in involved_orders if o in open_orders or o == target_order_no}
+    order_priority = sorted(
+        active_orders,
+        key=lambda o: _order_priority_sort_key(o, promised),
+    )
+
+    # 3. 这些订单对这些物料的需求 + 物料级库存
+    plan_q = select(
+        MrpPlanOrder.sale_order_no,
+        MrpPlanOrder.material_code,
+        MrpPlanOrder.base_plan_qty,
+        MrpPlanOrder.stock_qty,
+    ).where(
+        MrpPlanOrder.sale_order_no.in_(active_orders),
+        MrpPlanOrder.material_code.in_(material_codes),
+    )
+    plan_materials: dict[tuple[str, str], dict] = {}
+    stock_by_material: dict[str, Decimal] = {}
+
+    plan_result = await db.execute(plan_q)
+    plan_rows = plan_result.all()
+
+    # 填充 plan_materials（需求数据）
+    for row in plan_rows:
+        if not row.sale_order_no or not row.material_code:
+            continue
+        key = (row.sale_order_no, row.material_code)
+        rec = plan_materials.setdefault(key, {"base_plan_qty": Decimal("0")})
+        if row.base_plan_qty is not None:
+            rec["base_plan_qty"] += row.base_plan_qty
+
+    # 优先从 Inventory 表获取实时库存，Inventory 无该物料时按物料回退 MrpPlanOrder.stock_qty
+    inv_stock = await _get_stock_by_material(db, material_codes)
+    stock_by_material = dict(inv_stock)
+    for row in plan_rows:
+        if not row.sale_order_no or not row.material_code:
+            continue
+        if row.material_code in inv_stock:
+            continue
+        if row.stock_qty is not None:
+            prev = stock_by_material.get(row.material_code)
+            if prev is None or row.stock_qty > prev:
+                stock_by_material[row.material_code] = row.stock_qty
+
+    # 4. 收料聚合
+    sync_filters = await get_purchase_order_sync_filters(db)
+    po_q = select(
+        PurchaseOrder.order_no,
+        PurchaseOrder.material_code,
+        PurchaseOrder.received_qty,
+    ).where(
+        PurchaseOrder.order_no.in_(active_orders),
+        PurchaseOrder.material_code.in_(material_codes),
+        *sync_filters,
+    )
+    po_received: dict[tuple[str, str], Decimal] = {}
+    for row in await db.execute(po_q):
+        if not row.order_no or not row.material_code:
+            continue
+        key = (row.order_no, row.material_code)
+        po_received[key] = po_received.get(key, Decimal("0")) + (row.received_qty or Decimal("0"))
+
+    po_groups: dict[tuple[str, str], dict] = {}
+    for key, recv in po_received.items():
+        po_groups[key] = {"received_qty": recv, "has_received_qty": True}
+
+    # 5. 分配
+    available_map = _allocate_stock(order_priority, plan_materials, po_groups, stock_by_material)
+    return {
+        mat: available_map.get((target_order_no, mat), Decimal("0"))
+        for mat in material_codes
+    }
+
+
+async def _get_bom_demand_map(
+    db: AsyncSession,
+    order_no: str,
+) -> tuple[dict[str, Decimal], dict[str, tuple[str, str]]]:
+    """通过 SaleOrderLine → BomDetail → Material 计算各物料的 BOM 需求量与归属产品。
+
+    递归展开多层 BOM：若 BomDetail 中的子件物料本身有子 BOM（scm_bom 中存在该 material_id 的记录），
+    则继续往下展开，将所有层级的物料拆解成列表放到同一层。
+    需求量 = 本级 standard_qty × 上级需求量，跨多行聚合求和；子级除以 base_qty 换算。
+    返回 (demand_map, product_map)，其中：
+      demand_map:  dict[material_code -> bom_demand_qty]
+      product_map: dict[material_code -> (product_code, product_name)]
+    """
+    # 1. 查询销售订单明细行
+    line_result = await db.execute(
+        select(SaleOrderLine)
+        .where(SaleOrderLine.order_no == order_no)
+    )
+    lines = line_result.scalars().all()
+    if not lines:
+        return {}, {}
+
+    # 2. 构建根 BOM 需求量与归属产品
+    root_bom_demands: dict[str, Decimal] = {}
+    root_products: dict[str, tuple[str, str]] = {}
+    for line in lines:
+        bom_id = str(line.bom_id) if getattr(line, "bom_id", None) else None
+        if not bom_id:
+            continue
+        order_qty = line.order_qty if line.order_qty is not None else Decimal("0")
+        root_bom_demands[bom_id] = root_bom_demands.get(bom_id, Decimal("0")) + order_qty
+        if bom_id not in root_products:
+            root_products[bom_id] = (line.product_code or "", line.product_name or "")
+    if not root_bom_demands:
+        return {}, {}
+
+    # 3. BFS 逐层展开
+    demand: dict[str, Decimal] = {}
+    product: dict[str, tuple[str, str]] = {}
+    visited_bom_ids: set[str] = set()
+    material_map: dict[str, Material] = {}
+    # queue: [(bom_id, demand_factor, product_info)]
+    queue: list[tuple[str, Decimal, tuple[str, str]]] = [
+        (bid, demand_factor, root_products.get(bid, ("", "")))
+        for bid, demand_factor in root_bom_demands.items()
+    ]
+
+    while queue:
+        level_bom_ids = {bid for bid, _, _ in queue if bid not in visited_bom_ids}
+        if not level_bom_ids:
+            break
+        visited_bom_ids.update(level_bom_ids)
+
+        # 查询当前层级的 BomDetail
+        detail_result = await db.execute(
+            select(BomDetail).where(BomDetail.bom_id.in_(level_bom_ids))
+        )
+        details_list = detail_result.scalars().all()
+
+        # 按 bom_id 分组，同时收集子物料 ID
+        bom_detail_map: dict[str, list[tuple[str, Decimal]]] = {}
+        child_material_ids: set[str] = set()
+        for d in details_list:
+            if d.material_id and d.standard_qty is not None:
+                bom_detail_map.setdefault(d.bom_id, []).append((d.material_id, d.standard_qty))
+                child_material_ids.add(d.material_id)
+
+        if not child_material_ids:
+            break
+
+        # 查询新出现的 Material 主数据
+        new_material_ids = child_material_ids - set(material_map.keys())
+        if new_material_ids:
+            mat_result = await db.execute(
+                select(Material).where(Material.material_id.in_(new_material_ids))
+            )
+            for m in mat_result.scalars().all():
+                material_map[m.material_id] = m
+
+        # 查询子物料中哪些有子 BOM
+        sub_material_boms: dict[str, Bom] = {}
+        bom_result = await db.execute(
+            select(Bom).where(Bom.material_id.in_(child_material_ids))
+        )
+        for b in bom_result.scalars().all():
+            sub_material_boms[b.material_id] = b
+
+        # 计算本级需求量，并构建下一层级队列
+        next_queue: list[tuple[str, Decimal, tuple[str, str]]] = []
+        for bom_id, demand_factor, product_info in queue:
+            if bom_id not in bom_detail_map:
+                continue
+            for material_id, standard_qty in bom_detail_map[bom_id]:
+                master = material_map.get(material_id)
+                if not master:
+                    continue
+                material_code = master.material_code
+                material_demand = standard_qty * demand_factor
+                demand[material_code] = demand.get(material_code, Decimal("0")) + material_demand
+                if material_code not in product:
+                    product[material_code] = product_info
+
+                # 检查子物料是否有子 BOM，有则入队继续展开
+                sub_bom = sub_material_boms.get(material_id)
+                if sub_bom and sub_bom.bom_id not in visited_bom_ids:
+                    base_qty = sub_bom.base_qty if sub_bom.base_qty else Decimal("1")
+                    next_queue.append((sub_bom.bom_id, material_demand / base_qty, product_info))
+
+        queue = next_queue
+
+    return demand, product
+
+
 async def _get_plan_order_material_items(
     db: AsyncSession,
     order_no: str,
@@ -136,6 +433,9 @@ async def _get_plan_order_material_items(
         )
         master_map = {m.material_code: m for m in master_result.scalars().all()}
 
+    # 从 Inventory 表获取实时库存（回退到 MrpPlanOrder.stock_qty）
+    inv_stock_map = await _get_stock_by_material(db, material_codes)
+
     po_map: dict[str, list[PurchaseOrder]] = {}
     if material_codes:
         sync_filters = await get_purchase_order_sync_filters(db)
@@ -149,9 +449,19 @@ async def _get_plan_order_material_items(
         for po in po_result.scalars().all():
             po_map.setdefault(po.material_code, []).append(po)
 
+    # 跨订单库存分配：扣减其他订单（按合同交期优先）占用后的可用库存
+    available_stock_map = await _compute_available_stock_for_order(db, order_no, material_codes)
+
+    # BOM需求量：通过 SaleOrderLine → BomDetail → Material 计算
+    bom_demand_map, product_map = await _get_bom_demand_map(db, order_no)
+
     items: list[KitAnalysisMaterialItem] = []
     for plan in plans:
         if not plan.material_code:
+            continue
+        base_qty = plan.base_plan_qty or Decimal("0")
+        # MRP数量为0的物料不展开
+        if base_qty == 0:
             continue
         pos = po_map.get(plan.material_code, [])
         po_summary = _summarize_pos(pos)
@@ -170,6 +480,25 @@ async def _get_plan_order_material_items(
             if received_qty is not None and po_qty is not None and received_qty > po_qty
             else None
         )
+
+        # 库存满足净需求时视作已到齐，与汇总口径保持一致
+        # 净需求 = 需求量 - 已收料；自制(2)/配置类(7)不参与齐套统计
+        received_for_net = received_qty if received_qty is not None else Decimal("0")
+        net_demand = base_qty - received_for_net
+        if net_demand < 0:
+            net_demand = Decimal("0")
+        available_stock = available_stock_map.get(plan.material_code) or Decimal("0")
+        stock_met = (
+            net_demand > 0
+            and available_stock >= net_demand
+            and material_property not in (2, 7)
+        )
+        if stock_met and status != "fully_received":
+            status = "fully_received"
+        # 库存 >= MRP数量 且无对应订单时，状态显示"有库存"并记入齐套
+        stock_qty_val = inv_stock_map.get(plan.material_code) or plan.stock_qty or Decimal("0")
+        if stock_qty_val >= base_qty and not pos:
+            status = "in_stock"
         material_type = plan.material_type
         material_name = (
             plan.material_name
@@ -180,6 +509,8 @@ async def _get_plan_order_material_items(
         items.append(KitAnalysisMaterialItem(
             material_code=plan.material_code,
             material_name=material_name,
+            product_code=product_map.get(plan.material_code, (None, None))[0] or None,
+            product_name=product_map.get(plan.material_code, (None, None))[1] or None,
             material_property=material_property,
             material_property_label=_material_property_label(material_property),
             material_type=material_type,
@@ -188,7 +519,8 @@ async def _get_plan_order_material_items(
             order_qty=_to_float(plan.base_plan_qty),
             mrp_qty=_to_float(plan.base_plan_qty),
             po_qty=_to_float(po_qty),
-            stock_qty=_to_float(plan.stock_qty),
+            stock_qty=_to_float(inv_stock_map.get(plan.material_code) or plan.stock_qty),
+            available_stock_qty=_to_float(available_stock_map.get(plan.material_code)),
             shortage_qty=(
                 _to_float(po_qty - received_qty)
                 if po_qty is not None and received_qty is not None and po_qty > received_qty
@@ -210,6 +542,12 @@ async def _get_plan_order_material_items(
             is_closed=po_summary.is_closed if po_summary else 0,
             bill_type=bill_type,
             bill_type_label=BILL_TYPE_LABELS.get(bill_type),
+            bom_demand_qty=_to_float(bom_demand_map.get(plan.material_code)),
+            transit_qty=_to_float(
+                po_qty - received_qty
+                if po_qty is not None and received_qty is not None and po_qty > received_qty
+                else (po_qty if po_qty is not None and po_qty > 0 else None)
+            ),
         ))
 
     return items
@@ -274,6 +612,10 @@ async def get_kit_analysis(
 
     # 2. 从 MRP 计划订单获取对应订单的物料清单
     plan_materials: dict[tuple[str, str], dict] = {}
+    stock_by_material: dict[str, Decimal] = {}
+    # 「有库存」判定库存（与明细口径一致：Inventory 可用量为 0/缺失时回退 MRP 快照库存）
+    in_stock_qty_by_material: dict[str, Decimal] = {}
+    material_codes: list[str] = []
     if order_nos:
         plan_query = select(
             MrpPlanOrder.sale_order_no,
@@ -283,10 +625,14 @@ async def get_kit_analysis(
             MrpPlanOrder.material_property,
             MrpPlanOrder.need_date,
             MrpPlanOrder.is_closed,
+            MrpPlanOrder.stock_qty,
         ).where(MrpPlanOrder.sale_order_no.in_(order_nos))
         plan_result = await db.execute(plan_query)
-        for row in plan_result:
+        plan_rows = plan_result.all()
+        for row in plan_rows:
             if not row.sale_order_no or not row.material_code:
+                continue
+            if row.base_plan_qty is None or row.base_plan_qty == 0:
                 continue
             key = (row.sale_order_no, row.material_code)
             if key not in plan_materials:
@@ -300,9 +646,33 @@ async def get_kit_analysis(
             if row.base_plan_qty is not None:
                 plan_materials[key]["base_plan_qty"] += row.base_plan_qty
 
+        material_codes = sorted({mat_code for _, mat_code in plan_materials})
+
+        # MRP 快照库存（按物料取最大值），用于 Inventory 无实时数据时回退
+        plan_stock_by_material: dict[str, Decimal] = {}
+        for row in plan_rows:
+            if not row.material_code or row.stock_qty is None:
+                continue
+            prev = plan_stock_by_material.get(row.material_code)
+            if prev is None or row.stock_qty > prev:
+                plan_stock_by_material[row.material_code] = row.stock_qty
+
+        # 库存分配基准：优先 Inventory 实时可用量，Inventory 无该物料时回退 MRP 快照库存
+        inv_stock = await _get_stock_by_material(db, material_codes)
+        stock_by_material = dict(inv_stock)
+        for mat_code, snapshot_qty in plan_stock_by_material.items():
+            if mat_code not in inv_stock:
+                stock_by_material[mat_code] = snapshot_qty
+
+        # 「有库存」判定库存：与明细 inv_stock_map.get(code) or plan.stock_qty 完全一致
+        # （Inventory 可用量为 0 时同样回退 MRP 快照库存，确保有库存物料计入已到齐）
+        in_stock_qty_by_material = {
+            mat_code: (inv_stock.get(mat_code) or plan_stock_by_material.get(mat_code) or Decimal("0"))
+            for mat_code in material_codes
+        }
+
     # 3. 从采购订单获取对应物料的采购/收料数据
     sync_filters = await get_purchase_order_sync_filters(db)
-    material_codes = sorted({mat_code for _, mat_code in plan_materials})
     po_groups: dict[tuple[str, str], dict] = {}
     if order_nos and material_codes:
         po_query = select(
@@ -335,8 +705,10 @@ async def get_kit_analysis(
                     "actual_arrival_date": None,
                     "inspection_date": None,
                     "is_closed": 0,
+                    "po_count": 0,
                 },
             )
+            group["po_count"] += 1
             if row.po_qty is not None:
                 group["po_qty"] += row.po_qty
                 group["has_po_qty"] = True
@@ -358,7 +730,14 @@ async def get_kit_analysis(
             if row.is_closed and row.is_closed == 1:
                 group["is_closed"] = 1
 
-    # 4. 按销售订单计算齐套指标
+    # 4. 按合同交期计算订单优先级，分配物料级库存得到每个 (order,material) 的可用库存
+    order_priority = sorted(
+        order_nos,
+        key=lambda o: _order_priority_sort_key(o, promised_dates),
+    )
+    available_map = _allocate_stock(order_priority, plan_materials, po_groups, stock_by_material)
+
+    # 5. 按销售订单计算齐套指标
     items: List[KitAnalysisItem] = []
     per_order_materials: dict[str, list[tuple[str, dict]]] = {}
     for (sale_order_no, material_code), plan_info in plan_materials.items():
@@ -389,7 +768,7 @@ async def get_kit_analysis(
                     material_property=material_property,
                     supplier_name=None,
                     po_no=None,
-                    po_count=0,
+                    po_count=po_info.get("po_count", 0),
                     first_eta=None,
                     latest_eta=None,
                 )
@@ -402,8 +781,23 @@ async def get_kit_analysis(
             fully_received = has_po and has_received and po_info["received_qty"] >= po_info["po_qty"]
             partial_received = has_received and (not has_po or po_info["received_qty"] < po_info["po_qty"])
 
-            # 已到齐
-            if kit_met or fully_received:
+            # 库存满足：可用库存 ≥ 净需求(需求 - 已收料)，且净需求 > 0
+            base_qty = plan_info.get("base_plan_qty") or Decimal("0")
+            received_for_net = po_info["received_qty"] if (po_info and po_info.get("has_received_qty")) else Decimal("0")
+            net_demand = base_qty - received_for_net
+            if net_demand < 0:
+                net_demand = Decimal("0")
+            available = available_map.get((current_order_no, material_code), Decimal("0"))
+            stock_met = net_demand > 0 and available >= net_demand
+
+            # 「有库存」状态：库存 >= MRP数量 且无对应采购订单（与明细口径一致）
+            stock_qty_for_mat = in_stock_qty_by_material.get(material_code) or Decimal("0")
+            in_stock = stock_qty_for_mat >= base_qty and not po_info
+
+            # 已到齐 — 自制、配置类不参与齐套统计（有库存/库存覆盖除外）
+            # 「有库存」状态的物料同样按已齐套计算
+            material_prop = material_property if material_property is not None else BILL_TYPE_TO_MATERIAL_PROPERTY.get(bill_type)
+            if (material_prop not in (2, 7) and (kit_met or fully_received or stock_met)) or in_stock:
                 received_count += 1
             # 部分到
             elif partial_received:
@@ -412,9 +806,9 @@ async def get_kit_analysis(
             elif not has_po and status in ("not_ordered", "not_scheduled"):
                 not_ordered_count += 1
 
-            # 逾期：有 PO 且 ETA 早于今天但未到齐
+            # 逾期：有 PO 且 ETA 早于今天但未到齐、库存也不满足
             if po_info and po_info.get("eta") and po_info["eta"] < date.today():
-                if not fully_received and not kit_met:
+                if not fully_received and not kit_met and not stock_met and not in_stock:
                     overdue_count += 1
 
             # 呆滞：收料数量 > 下单数量

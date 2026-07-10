@@ -23,7 +23,7 @@ export const useThemeStore = create<ThemeState>((set, get) => {
 
       // Save to database in the background
       try {
-        await authApi.updatePreferences(scale.toString())
+        await authApi.updatePreferences({ font_size_scale: scale.toString() })
       } catch (error) {
         console.error('Failed to save font size preference:', error)
       }
