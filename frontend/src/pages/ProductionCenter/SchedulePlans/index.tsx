@@ -52,7 +52,39 @@ import DeleteModal from '../components/DeleteModal'
 import BatchScheduleModal from '../components/BatchScheduleModal'
 import RescheduleModal from '../components/RescheduleModal'
 
-const PERF_DEBUG = import.meta.env.DEV
+const PERF_DEBUG = false
+
+type TodoWorkbenchStats = {
+  ready: number
+  pending: number
+  reschedule: number
+  missing_upph: number
+  bucket_counts?: {
+    all: number
+    lean: number
+    assembly: number
+    packaging: number
+  }
+  dependency_timings_ms?: Record<string, any>
+  timings_ms?: Record<string, any>
+  synced_scheduled_snapshots?: number
+}
+
+type PlanBoardCacheEntry = {
+  ts: number
+  items: any[]
+  total: number
+  backendTimingsMs?: Record<string, any>
+  dependencyTimingsMs?: Record<string, any>
+}
+
+type PlanBoardInflightResult = {
+  items: any[]
+  total: number
+  apiMs: number
+  backendTimingsMs?: Record<string, any>
+  dependencyTimingsMs?: Record<string, any>
+}
 
 const logSchedulePlansPerf = (event: string, payload: Record<string, any>) => {
   if (!PERF_DEBUG) return
@@ -71,8 +103,8 @@ const stringifyPerfPayload = (value: any) => {
 export default function SchedulePlans() {
   const location = useLocation()
   const navigate = useNavigate()
-  const workspace = 'plan_board'
-  const plannerHubTab = 'todo_workbench'
+  const workspace: string = 'plan_board'
+  const plannerHubTab: string = 'todo_workbench'
   const [loading, setLoading] = useState(false)
   const [workHours, setWorkHours] = useState(8)
   const [workHoursByBucket, setWorkHoursByBucket] = useState<Record<string, number>>({})
@@ -82,7 +114,7 @@ export default function SchedulePlans() {
 
   const [todoData, setTodoData] = useState<any[]>([])
   const [todoTotal, setTodoTotal] = useState(0)
-  const [todoStats, setTodoStats] = useState<Record<string, number>>({
+  const [todoStats, setTodoStats] = useState<TodoWorkbenchStats>({
     ready: 0,
     pending: 0,
     reschedule: 0,
@@ -136,11 +168,11 @@ export default function SchedulePlans() {
   const [selectedBatchPlanIds, setSelectedBatchPlanIds] = useState<number[]>([])
   const [batchPreviewOpen, setBatchPreviewOpen] = useState(false)
   const [missingUpphData, setMissingUpphData] = useState<any[]>([])
-  const todoWorkbenchCacheRef = useRef<Record<string, { ts: number; items: any[]; total: number; stats: any }>>({})
-  const planBoardCacheRef = useRef<Record<string, { ts: number; items: any[]; total: number }>>({})
+  const todoWorkbenchCacheRef = useRef<Record<string, { ts: number; items: any[]; total: number; stats: TodoWorkbenchStats }>>({})
+  const planBoardCacheRef = useRef<Record<string, PlanBoardCacheEntry>>({})
   const impactPlansCacheRef = useRef<Record<string, { ts: number; items: any[]; total: number; stats: any }>>({})
   const todoWorkbenchInflightRef = useRef<Record<string, Promise<{ items: any[]; total: number; stats: any; apiMs: number }>>>({})
-  const planBoardInflightRef = useRef<Record<string, Promise<{ items: any[]; total: number; apiMs: number }>>>({})
+  const planBoardInflightRef = useRef<Record<string, Promise<PlanBoardInflightResult>>>({})
   const impactPlansInflightRef = useRef<Record<string, Promise<{ items: any[]; total: number; stats: any; apiMs: number }>>>({})
   const todoWorkbenchSkipSnapshotReconcileRef = useRef(false)
   const invalidatePageCaches = useCallback(() => {
@@ -431,6 +463,8 @@ export default function SchedulePlans() {
   const loadPlanBoard = useCallback(async (force = false) => {
     if (!force && workspace !== 'plan_board') return
     const requestStartedAt = performance.now()
+    const monthStart = dayjs(`${year}-${String(month).padStart(2, '0')}-01`).startOf('month').format('YYYY-MM-DD')
+    const monthEnd = dayjs(monthStart).endOf('month').format('YYYY-MM-DD')
     setLoading(true)
     try {
       const params: Record<string, any> = {
@@ -438,8 +472,6 @@ export default function SchedulePlans() {
         page_size: planPageSize,
         is_active: planScope !== 'history',
       }
-      const monthStart = dayjs(`${year}-${String(month).padStart(2, '0')}-01`).startOf('month').format('YYYY-MM-DD')
-      const monthEnd = dayjs(monthStart).endOf('month').format('YYYY-MM-DD')
       if (planKeyword.trim()) params.keyword = planKeyword.trim()
       if (planStatus) params.status = planStatus
       if (planBucketFilter !== 'all') params.schedule_bucket = planBucketFilter

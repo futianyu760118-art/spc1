@@ -299,21 +299,31 @@ export default function ScheduleBoard() {
     })
   }, [bucketFilter, plans, weekDays])
 
-  const progressStats = useMemo(() => {
-    const statusCount: Record<string, number> = {
+  const progressStats = useMemo<{
+    total: number
+    delayed: number
+    reschedule: number
+    planned: number
+    in_progress: number
+    completed: number
+  }>(() => {
+    const statusCount: {
+      planned: number
+      in_progress: number
+      completed: number
+    } = {
       planned: 0,
       in_progress: 0,
       completed: 0,
-      delayed: 0,
     }
     plans.forEach((item) => {
-      const key = item.status || 'planned'
-      if (statusCount[key] !== undefined) statusCount[key] += 1
+      const key = (item.status || 'planned') as keyof typeof statusCount
+      if (key in statusCount) statusCount[key] += 1
     })
     return {
       total: plans.length,
-      delayed: plans.filter((item) => getDelayFlag(item)).length,
       reschedule: plans.filter((item) => item.needs_reschedule).length,
+      delayed: plans.filter((item) => getDelayFlag(item)).length,
       ...statusCount,
     }
   }, [plans])

@@ -34,6 +34,7 @@ import {
   IdcardOutlined,
   SafetyOutlined,
   ApiOutlined,
+  ClockCircleOutlined,
   ThunderboltOutlined,
   ScheduleOutlined,
   AlertOutlined,
@@ -287,6 +288,16 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/announcements', icon: <NotificationOutlined />, label: '公告管理', permission: 'announcements' },
     ],
   },
+  {
+    key: 'purchase-center',
+    icon: <AccountBookOutlined />,
+    label: '采购中心',
+    children: [
+      { key: '/purchase/price-change', icon: <FileTextOutlined />, label: '调价单管理' },
+      { key: '/purchase/price-change/pending', icon: <ClockCircleOutlined />, label: '待我审批' },
+      { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置' },
+    ],
+  },
 ]
 
 function filterMenuByPermission(items: PermissionAwareItem[], hasPermission: (resource: string, action: string) => boolean): PermissionAwareItem[] {
@@ -361,6 +372,11 @@ const pathToGroupKey: Record<string, string> = {
   '/lean': 'production-center',
   '/lean-today': 'production-center',
   '/lean-management': 'production-center',
+
+  '/purchase/price-change': 'purchase-center',
+  '/purchase/price-change/new': 'purchase-center',
+  '/purchase/price-change/pending': 'purchase-center',
+  '/purchase/price-change/config': 'purchase-center',
   '/assembly': 'production-center',
   '/packaging': 'production-center',
   '/process-exceptions': 'production-center',
@@ -510,11 +526,23 @@ export default function MainLayout() {
         { key: '/lean-today', icon: <AuditOutlined />, label: '精益今日看板', permission: 'production.lean' },
         { key: '/lean-management', icon: <AuditOutlined />, label: '精益管理', permission: 'production.lean' },
       ]
-      return items.map(item =>
+      const merged = items.map(item =>
         item.permission === 'production'
           ? { ...item, children: [...v2ExtraItems, ...(item.children || [])] }
           : item
       )
+      // 采购中心（新模块，不在权限树里）
+      merged.push({
+        key: 'purchase-center',
+        icon: <AccountBookOutlined />,
+        label: '采购中心',
+        children: [
+          { key: '/purchase/price-change', icon: <FileTextOutlined />, label: '调价单管理' },
+          { key: '/purchase/price-change/pending', icon: <ClockCircleOutlined />, label: '待我审批' },
+          { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置' },
+        ],
+      })
+      return merged
     }
     return allMenuItems
   }, [permLoaded, permTree])

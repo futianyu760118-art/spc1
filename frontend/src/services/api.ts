@@ -1,6 +1,6 @@
 import axios from 'axios'
-import { message } from 'antd'
 import { useAuthStore } from '../store/auth'
+import { getGlobalMessageApi } from '../utils/antdMessage'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -24,6 +24,7 @@ api.interceptors.response.use(
     return data
   },
   (error) => {
+    const messageApi = getGlobalMessageApi()
     const status = error.response?.status
     const forceLogout = error.response?.headers?.['x-force-logout']
     if (status === 401) {
@@ -31,35 +32,35 @@ api.interceptors.response.use(
       error.message = detail
       const { isShareUser, exitShare, logout } = useAuthStore.getState()
       if (isShareUser()) {
-        message.warning(detail, 2)
+        messageApi?.warning({ content: detail, duration: 2 })
         setTimeout(() => {
           exitShare()
           window.location.href = '/login'
         }, 1500)
       } else if (forceLogout === 'true') {
-        message.warning(detail, 2)
+        messageApi?.warning({ content: detail, duration: 2 })
         setTimeout(() => {
           logout()
           window.location.href = '/login'
         }, 1500)
       } else {
-        message.error(detail)
+        messageApi?.error(detail)
         logout()
         window.location.href = '/login'
       }
     } else if (status === 403) {
       const detail = error.response?.data?.detail || '权限不足，无法执行此操作'
       error.message = detail
-      message.error(detail)
+      messageApi?.error(detail)
     } else if (status === 404) {
       error.message = error.response?.data?.detail || '请求的资源不存在'
-      message.error(error.message)
+      messageApi?.error(error.message)
     } else if (status && status >= 500) {
       error.message = error.response?.data?.detail || '服务器错误，请稍后重试'
-      message.error(error.message)
+      messageApi?.error(error.message)
     } else if (!error.response) {
       error.message = '网络连接失败，请检查网络连接后重试'
-      message.error(error.message)
+      messageApi?.error(error.message)
     }
     return Promise.reject(error)
   },
