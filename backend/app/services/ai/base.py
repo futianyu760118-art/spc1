@@ -37,10 +37,19 @@ class ToolResult:
 
 
 @dataclass
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass
 class ChatWithToolsResult:
     """chat_with_tools 的返回值"""
-    text: Optional[str] = None       # LLM 直接文本回复（无 tool call 时）
-    tool_calls: List[ToolCall] = field(default_factory=list)  # LLM 请求的工具调用
+    text: Optional[str] = None
+    tool_calls: List[ToolCall] = field(default_factory=list)
+    usage: Optional[TokenUsage] = None
+    thinking: Optional[str] = None
 
 
 class NotSupportedError(Exception):

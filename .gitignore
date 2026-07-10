@@ -31,6 +31,9 @@ backend_dev.log
 frontend_dev.log
 *.dev.log
 
+# Agent run logs
+backend/logs/assistant/
+
 # Build cache
 *.tsbuildinfo
 

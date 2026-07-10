@@ -80,6 +80,13 @@ class Settings(BaseSettings):
     AI_DASHSCOPE_MODEL: str = "qwen-plus"
     AI_REQUEST_TIMEOUT: int = 30
 
+    # Agent 稳固性
+    AI_SUMMARY_ENABLED: bool = True
+    AI_SUMMARY_TOKEN_LIMIT: int = 80000
+    AI_RUN_LOG_DIR: str = ""
+    AI_LOG_RETENTION_DAYS: int = 30
+    AI_MAX_AGENT_DURATION_S: int = 120
+
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

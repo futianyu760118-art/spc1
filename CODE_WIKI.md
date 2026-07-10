@@ -244,7 +244,7 @@ async def list_orders():
 
 **职责**: 单层LLM + Tool Calling智能助手
 
-**核心方法**: `run(message, db, session_id, conversation_history)`
+**核心方法**: `run(message, db, session_id, conversation_history, trace_id, user_id)`
 
 **意图识别类型**:
 - `QUERY_DATA`: 需要查询系统数据
@@ -264,6 +264,20 @@ async def list_orders():
 - `search_users`: 搜索用户
 - `get_dashboard_summary`: 获取驾驶舱概览
 - `suggest_actions`: 生成行动建议
+- `search_kit_analysis`: 查询订单齐套
+- `search_bom_details`: 查询产品BOM明细
+
+**稳固性增强（2026-07-10 引入）**:
+- **自动上下文摘要**: `context_manager.py` — token 估算 + LLM 摘要，阈值 80k，可通过 `AI_SUMMARY_ENABLED` 关闭
+- **优雅重试**: `retry.py` — 指数退避装饰器 `async_retry(RetryConfig(...))`，默认 LLM 3 次、工具 1 次
+- **取消机制**: `cancellation.py` — `CancellationRegistry` 管理 `asyncio.Event`，客户端断连 / 后端超时触发
+- **结构化日志**: `run_logger.py` — JSONL 异步写入 `backend/logs/assistant/{date}/{trace_id}.jsonl`
+- **思考过程透传**: `agent_stream.py` 的 `ThinkTagFilter` 累积 `<think>...</think>` 内容并推送 `event:thinking` 事件
+- **SSE 终态事件**: 新增 `event:cancelled`，含 `reason`（client_disconnected / timeout）
+
+**新增 API 端点**:
+- `GET /api/v1/assistant/logs`: 列出 Agent 运行日志文件（按 date / session_id 过滤）
+- `GET /api/v1/assistant/logs/{trace_id}`: 读取指定 trace 的完整 JSONL 日志
 
 ### 5.4 调度器
 
