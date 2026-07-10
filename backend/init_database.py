@@ -259,6 +259,9 @@ class DatabaseInitializer:
             "production_schedule_operation_log": {
                 "is_frozen_break": "BOOLEAN NOT NULL DEFAULT FALSE",
             },
+            "approval_config": {
+                "biz_name": "VARCHAR(128)",
+            },
             "mrp_plan_order": {
                 "stock_qty": "NUMERIC(15,2)",
                 "audit_date": "DATE",
@@ -342,20 +345,6 @@ class DatabaseInitializer:
                 print(f"  Employee oa_user_id unique constraint skipped: {e}")
             try:
                 await conn.execute(text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_warehouse_wh_id ON scm_warehouse (wh_id) WHERE wh_id IS NOT NULL"
-                ))
-                print("  Unique constraint uq_scm_warehouse_wh_id ensured")
-            except Exception as e:
-                print(f"  Warehouse wh_id unique constraint skipped: {e}")
-            try:
-                await conn.execute(text(
-                    "ALTER TABLE scm_warehouse ALTER COLUMN wh_type DROP NOT NULL"
-                ))
-                print("  Warehouse wh_type set to nullable")
-            except Exception as e:
-                print(f"  Warehouse wh_type nullable skipped: {e}")
-            try:
-                await conn.execute(text(
                     "ALTER TABLE scm_position ALTER COLUMN position_code DROP NOT NULL"
                 ))
                 await conn.execute(text(
@@ -430,7 +419,6 @@ class DatabaseInitializer:
                             "orders.list": ["create", "read", "update", "delete", "import"],
                             "orders.run_orders": ["create", "read", "update", "delete", "import"],
                             "orders.risk_pool": ["create", "read", "update", "delete", "import"],
-                            "orders.inventory_check": ["create", "read", "update", "delete", "import"],
                             "materials.purchase_plan": ["create", "read", "update", "delete", "import"],
                             "materials.issues": ["create", "read", "update", "delete", "import"],
                             "materials.long_lead": ["create", "read", "update", "delete", "import"],
@@ -534,6 +522,8 @@ class DatabaseInitializer:
                             "materials.kit_analysis": ["create", "read", "update", "import"],
                             "materials.supplier_risk": ["create", "read", "update", "import"],
                             "materials.supplier_payment": ["create", "read", "update", "import"],
+                            "purchase.price_change": ["create", "read", "update"],
+                            "purchase.price_change.pending": ["read"],
                             "exceptions.pool": ["read"],
                             "exceptions.issue_log": ["read"],
                             "exceptions.change_log": ["read"],
@@ -609,6 +599,9 @@ class DatabaseInitializer:
                             "materials.kit_analysis": ["create", "read", "update", "delete", "import"],
                             "materials.supplier_risk": ["create", "read", "update", "delete", "import"],
                             "materials.supplier_payment": ["create", "read", "update", "delete", "import"],
+                            "purchase.price_change": ["create", "read", "update", "delete"],
+                            "purchase.price_change.pending": ["read"],
+                            "purchase.price_change.config": ["create", "read", "update", "delete"],
                             "exceptions.pool": ["read", "update"],
                             "exceptions.issue_log": ["read", "update"],
                             "exceptions.change_log": ["read", "update"],
