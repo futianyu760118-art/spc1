@@ -51,6 +51,7 @@ class SyncScheduler:
             "payment_applies": "sync_payment_applies",
             "quality_issues": "sync_quality_issues",
             "mrp_plan_orders": "sync_mrp_plan_orders",
+            "production_task_orders": "sync_production_task_orders",
             "inventory": "sync_inventory",
         }
 

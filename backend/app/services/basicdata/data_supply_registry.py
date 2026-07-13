@@ -74,10 +74,11 @@ register_data_type(DataTypeDefinition(
     model_name="Supplier",
     exposed_fields=[
         "id", "supplier_code", "supplier_name", "supplier_short",
-        "supplier_type", "contact_person", "contact_phone", "payment_terms", "status",
+        "supplier_type", "contact_person", "contact_phone", "fax",
+        "address", "erp_supply_id", "payment_terms", "status",
     ],
     filter_fields=["supplier_type", "status"],
-    mask_fields=["contact_phone"],
+    mask_fields=["contact_phone", "fax"],
     search_fields=["supplier_code", "supplier_name"],
 ))
 
@@ -87,7 +88,7 @@ register_data_type(DataTypeDefinition(
     description="物料主数据",
     model_name="Material",
     exposed_fields=[
-        "id", "material_id", "material_code", "material_name", "spec_model",
+        "id", "erp_material_id", "material_code", "material_name", "spec_model",
         "material_type", "unit_of_measure", "brand", "is_purchase", "is_produce", "status",
     ],
     filter_fields=["material_type", "is_purchase", "is_produce", "status"],
@@ -286,4 +287,24 @@ register_data_type(DataTypeDefinition(
     ],
     filter_fields=["status", "work_order_id"],
     search_fields=["work_order_id"],
+))
+
+register_data_type(DataTypeDefinition(
+    data_type="production_task_orders",
+    data_name="生产任务单",
+    description="OA 生产任务单（车间作业级）",
+    model_name="ProductionTaskOrder",
+    exposed_fields=[
+        "id", "task_id", "task_no", "workshop",
+        "material_code", "material_name",
+        "planned_start_date", "planned_end_date",
+        "actual_start_date", "actual_end_date",
+        "task_qty", "repair_qty", "actual_qty",
+        "task_type", "sale_order_no",
+        "start_flag", "is_closed", "audit_status", "mrp_flag",
+        "audit_user_id", "request_user_id", "supplier_id",
+        "erp_updated_at", "updated_at",
+    ],
+    filter_fields=["workshop", "task_type", "is_closed", "audit_status", "mrp_flag", "sale_order_no"],
+    search_fields=["task_no", "material_name"],
 ))

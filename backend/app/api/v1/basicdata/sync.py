@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 VALID_SYNC_TYPES = [
     "orders", "order_details", "materials", "purchase_orders", "customers", "suppliers",
     "materials_masterdata", "skus", "products", "boms", "bom_details", "warehouses", "locations", "processes",
-    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "payment_applies", "quality_issues", "mrp_plan_orders", "inventory", "all",
+    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "payment_applies", "quality_issues", "mrp_plan_orders", "production_task_orders", "inventory", "all",
 ]
 
 
@@ -93,6 +93,7 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
                 "payment_applies": lambda: service.sync_payment_applies(sync_params.get("since"), custom_params),
                 "quality_issues": lambda: service.sync_quality_issues(sync_params.get("since"), custom_params),
                 "mrp_plan_orders": lambda: service.sync_mrp_plan_orders(sync_params.get("since"), custom_params),
+                "production_task_orders": lambda: service.sync_production_task_orders(sync_params.get("since"), custom_params),
                 "inventory": lambda: service.sync_inventory(sync_params.get("since"), custom_params),
                 "all": lambda: service.sync_all(sync_params.get("since"), custom_params),
             }

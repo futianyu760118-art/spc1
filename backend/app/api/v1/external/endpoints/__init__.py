@@ -16,3 +16,4 @@ from . import production  # noqa: F401
 from . import human_resources  # noqa: F401
 from . import inventory  # noqa: F401
 from . import warehouse  # noqa: F401
+from . import production_task_orders  # noqa: F401

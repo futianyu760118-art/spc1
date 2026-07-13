@@ -32,6 +32,7 @@ from app.models.material.purchase_invoice import PurchaseInvoice
 from app.models.production.process_progress import ProcessProgress
 from app.models.production.process_exception import ProcessException
 from app.models.production.schedule_plan import ProductionSchedulePlan
+from app.models.production.production_task_order import ProductionTaskOrder
 from app.models.exception.risk_issue import RiskIssue
 from app.models.exception.issue_log import IssueLog
 from app.models.exception.change_log import ChangeLog
@@ -181,6 +182,9 @@ class DatabaseInitializer:
             },
             "scm_supplier": {
                 "data_source": "VARCHAR(32)",
+                "fax": "VARCHAR(50)",
+                "address": "VARCHAR(256)",
+                "erp_supply_id": "INTEGER UNIQUE",
             },
             "scm_material": {
                 "data_source": "VARCHAR(32)",
@@ -299,6 +303,10 @@ class DatabaseInitializer:
                         print(f"  Drop {table}.{col} skipped: {e}")
         print(f"Column migration completed ({added} statements executed)")
 
+        # scm_material: material_id -> erp_material_id (int), parent_id -> int
+        # scm_bom / scm_bom_detail: material_id -> int
+        await self.migrate_scm_material_erp_id()
+
         # 确保 is_closed 列存在且类型为 integer（独立事务，避免被其他语句回滚）
         for table in ("sale_order", "purchase_order"):
             try:
@@ -362,6 +370,60 @@ class DatabaseInitializer:
                 print("  Position indexes ensured")
             except Exception as e:
                 print(f"  Position indexes skipped: {e}")
+
+    async def migrate_scm_material_erp_id(self):
+        """将 scm_material.material_id 改名为 erp_material_id (INTEGER),
+        并把 parent_id / scm_bom.material_id / scm_bom_detail.material_id 改为 INTEGER.
+        幂等: 通过 information_schema 检查列是否已是目标类型/名称。"""
+        print("Migrating scm_material to erp_material_id (int)...")
+        async with self.engine.begin() as conn:
+            exists = (await conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='scm_material' AND column_name='erp_material_id'"
+            ))).scalar()
+            if not exists:
+                try:
+                    await conn.execute(text(
+                        "ALTER TABLE scm_material ALTER COLUMN material_id "
+                        "TYPE INTEGER USING material_id::integer"
+                    ))
+                    await conn.execute(text(
+                        "ALTER TABLE scm_material RENAME COLUMN material_id TO erp_material_id"
+                    ))
+                    print("  scm_material: material_id -> erp_material_id (int)")
+                except Exception as e:
+                    print(f"  scm_material rename/type skipped: {e}")
+            else:
+                print("  scm_material.erp_material_id already exists, skip rename")
+
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE scm_material ALTER COLUMN parent_id "
+                    "TYPE INTEGER USING parent_id::integer"
+                ))
+                print("  scm_material.parent_id -> integer")
+            except Exception as e:
+                print(f"  scm_material.parent_id type change skipped: {e}")
+
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE scm_bom ALTER COLUMN material_id "
+                    "TYPE INTEGER USING material_id::integer"
+                ))
+                print("  scm_bom.material_id -> integer")
+            except Exception as e:
+                print(f"  scm_bom.material_id type change skipped: {e}")
+
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE scm_bom_detail ALTER COLUMN material_id "
+                    "TYPE INTEGER USING material_id::integer"
+                ))
+                print("  scm_bom_detail.material_id -> integer")
+            except Exception as e:
+                print(f"  scm_bom_detail.material_id type change skipped: {e}")
+
+        print("scm_material erp_material_id migration done")
 
     async def rebuild_mrp_plan_order(self):
         """按 PRD 重建 mrp_plan_order 表（销售订单ID + 物料ID 联合主键）。
@@ -1303,6 +1365,45 @@ ORDER BY so.FID, mat.FItemID
                         sync_enabled=True,
                         created_by="admin",
                     ),
+                    SyncSqlConfig(
+                        sync_type="production_task_orders",
+                        description="OA 生产任务单 — 从OA数据库 oa_production_task 表拉取（占位SQL，部署时需根据实际表名/字段调整）",
+                        sql_text="""
+SELECT
+    CAST(FID AS INT)                       AS task_id,
+    CAST(FBillNo AS VARCHAR(64))           AS task_no,
+    CAST(FWorkShop AS VARCHAR(128))        AS workshop,
+    CAST(FMaterialCode AS VARCHAR(64))     AS material_code,
+    CAST(FMaterialName AS VARCHAR(256))    AS material_name,
+    CAST(FPlanStartDate AS DATE)           AS planned_start_date,
+    CAST(FPlanEndDate AS DATE)             AS planned_end_date,
+    CAST(FActualStartDate AS DATE)         AS actual_start_date,
+    CAST(FActualEndDate AS DATE)           AS actual_end_date,
+    CAST(FQty AS DECIMAL(15,2))            AS task_qty,
+    CAST(FRepairQty AS DECIMAL(15,2))      AS repair_qty,
+    CAST(FActualQty AS DECIMAL(15,2))      AS actual_qty,
+    CAST(FType AS VARCHAR(64))             AS task_type,
+    CAST(FSaleOrderNo AS VARCHAR(64))      AS sale_order_no,
+    CAST(FStartFlag AS INT)                AS start_flag,
+    CAST(FClosed AS INT)                   AS is_closed,
+    CAST(FStatus AS INT)                   AS audit_status,
+    CAST(FMrpFlag AS INT)                  AS mrp_flag,
+    CAST(FAuditUserId AS INT)              AS audit_user_id,
+    CAST(FRequestUserId AS INT)            AS request_user_id,
+    CAST(FSupplierId AS INT)               AS supplier_id,
+    FModifyDate                            AS erp_updated_at
+FROM oa_production_task
+WHERE FModifyDate >= :since
+ORDER BY FModifyDate DESC
+                        """.strip(),
+                        field_mapping_json=None,
+                        sync_interval="1h",
+                        sync_strategy="incremental",
+                        sync_priority=5,
+                        is_active=True,
+                        sync_enabled=True,
+                        created_by="admin",
+                    ),
                     # ---- 基础数据同步配置（占位，需根据实际 ERP 表结构配置 SQL 后启用） ----
                     SyncSqlConfig(
                         sync_type="customers",
@@ -1319,7 +1420,7 @@ ORDER BY so.FID, mat.FItemID
                     SyncSqlConfig(
                         sync_type="suppliers",
                         description="供应商 — 从ERP供应商表拉取",
-                        sql_text="SELECT supplier_code, supplier_name, supplier_short, supplier_type, contact_person, contact_phone, payment_terms, status FROM T_BD_SUPPLIER WHERE FModifyDate >= :since ORDER BY supplier_code",
+                        sql_text="SELECT supplier_code, supplier_name, supplier_short, supplier_type, contact_person, contact_phone, fax, address, erp_supply_id, payment_terms, status FROM T_BD_SUPPLIER WHERE FModifyDate >= :since ORDER BY supplier_code",
                         field_mapping_json=None,
                         is_active=False,
                         sync_enabled=False,
