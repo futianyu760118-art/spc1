@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
@@ -9,7 +9,7 @@ import { useAntTableQuery } from '@/hooks/useAntTableQuery'
 import { materialApi } from '@/services/api'
 import { formatDateTime } from '@/utils'
 import { useUiPreferencesStore } from '@/store/uiPreferences'
-import { stockCheckTourSteps, STOCK_CHECK_TOUR_ID } from './StockCheckTour'
+import { stockCheckIntroSteps, stockCheckDetailSteps, STOCK_CHECK_INTRO_TOUR_ID, STOCK_CHECK_DETAIL_TOUR_ID } from './StockCheckTour'
 
 interface StockCheckItem {
   id: number
@@ -62,39 +62,9 @@ export default function StockCheckPage() {
 
   const [activeCheck, setActiveCheck] = useState<StockCheck | null>(null)
   const [items, setItems] = useState<StockCheckItem[]>([])
-  const [recent, setRecent] = useState<StockCheck[]>([])
-  const [recentTotal, setRecentTotal] = useState(0)
-  const [recentPage, setRecentPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [savingAll, setSavingAll] = useState(false)
-
-  const loadRecent = useCallback(async (params: {
-    page?: number
-    page_size?: number
-    keyword?: string
-    sort_by?: string
-    sort_order?: 'asc' | 'desc'
-    status?: string[]
-    date_from?: string
-    date_to?: string
-  } = {}) => {
-    try {
-      const { page: p = 1, page_size: ps = 20, ...rest } = params
-      const query: any = { page: p, page_size: ps }
-      if (rest.keyword) query.keyword = rest.keyword
-      if (rest.status?.length) query.status = rest.status.join(',')
-      if (rest.date_from) query.date_from = rest.date_from
-      if (rest.date_to) query.date_to = rest.date_to
-      if (rest.sort_by) query.sort_by = rest.sort_by
-      if (rest.sort_order) query.sort_order = rest.sort_order
-      const res: any = await materialApi.getRecentStockChecks(query)
-      setRecent(res.data?.items || [])
-      setRecentTotal(res.data?.total || 0)
-      setRecentPage(p)
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || e.message || '加载最近盘点失败')
-    }
-  }, [])
+  const [dateRange, setDateRange] = useState<[string?, string?]>([])
 
   const loadCheck = useCallback(async (checkId: number) => {
     setLoading(true)
@@ -110,34 +80,6 @@ export default function StockCheckPage() {
     }
   }, [])
 
-  const handleCreate = useCallback(async (no: string) => {
-    setLoading(true)
-    try {
-      const res: any = await materialApi.createStockCheckFromOrder(no, {})
-      const c: StockCheck = res.data
-      message.success(`已创建盘点单 ${c.check_no}`)
-      setActiveCheck(c)
-      setItems(c.items || [])
-      await loadRecent({ page: 1 })
-    } catch (e: any) {
-      message.error(e?.response?.data?.detail || e.message || '创建盘点单失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [loadRecent])
-
-  const handleSearch = useCallback(() => {
-    if (searchText.trim()) {
-      setParams({ orderNo: searchText.trim() })
-      setOrderNo(searchText.trim())
-    } else {
-      setParams({})
-      setOrderNo('')
-      setActiveCheck(null)
-      setItems([])
-    }
-  }, [searchText, setParams])
-
   const STATUS_OPTIONS = [
     { text: '待盘点', value: 'open' },
     { text: '进行中', value: 'in_progress' },
@@ -148,7 +90,7 @@ export default function StockCheckPage() {
   const {
     tableProps: recentTableProps,
     searchInput: recentSearchInput,
-    keyword: recentKeyword,
+    reload: reloadRecentList,
   } = useAntTableQuery({
     fetchData: async (params) => {
       const res: any = await materialApi.getRecentStockChecks({
@@ -164,16 +106,40 @@ export default function StockCheckPage() {
       return { items: res.data?.items || [], total: res.data?.total || 0 }
     },
     filterToQuery: (filters) => ({
-      status: filters.status as string[] | undefined,
+      status: (filters.status as string[] | undefined)?.join(','),
+      date_from: dateRange[0],
+      date_to: dateRange[1],
     }),
+    extraDeps: [dateRange],
   })
 
-  const [dateRange, setDateRange] = useState<[string?, string?]>([])
+  const handleCreate = useCallback(async (no: string) => {
+    setLoading(true)
+    try {
+      const res: any = await materialApi.createStockCheckFromOrder(no, {})
+      const c: StockCheck = res.data
+      message.success(`已创建盘点单 ${c.check_no}`)
+      setActiveCheck(c)
+      setItems(c.items || [])
+      reloadRecentList()
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e.message || '创建盘点单失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [reloadRecentList])
 
-  const reloadRecent = useCallback(() => {
-    setRecentPage(1)
-    loadRecent({ page: 1, keyword: recentKeyword })
-  }, [recentKeyword, loadRecent])
+  const handleSearch = useCallback(() => {
+    if (searchText.trim()) {
+      setParams({ orderNo: searchText.trim() })
+      setOrderNo(searchText.trim())
+    } else {
+      setParams({})
+      setOrderNo('')
+      setActiveCheck(null)
+      setItems([])
+    }
+  }, [searchText, setParams])
 
   useEffect(() => {
     if (orderNo && !activeCheck) {
@@ -187,23 +153,21 @@ export default function StockCheckPage() {
     }
   }, [orderNo, activeCheck, loadCheck])
 
-  useEffect(() => {
-    if (!activeCheck) {
-      // hook drives reload; nothing to do here
-    }
-  }, [activeCheck])
-
   const newbieMode = useUiPreferencesStore(s => s.preferences?.newbie_mode !== false)
   const seenTour = useUiPreferencesStore(s => s.preferences?.['tours_seen']?.[STOCK_CHECK_TOUR_ID])
   const setUiFlag = useUiPreferencesStore(s => s.setFlag)
   const [tourOpen, setTourOpen] = useState(false)
 
+  // list view 只显示前 2 步(搜索+创建),detail view 显示全 5 步
+  const tourSteps = (activeCheck ? stockCheckTourSteps! : stockCheckTourSteps!.slice(0, 2)) ?? []
+
   useEffect(() => {
     if (!newbieMode) return
     if (seenTour) return
+    if (!activeCheck) return
     const t = setTimeout(() => setTourOpen(true), 500)
     return () => clearTimeout(t)
-  }, [newbieMode, seenTour])
+  }, [newbieMode, seenTour, activeCheck])
 
   const handleTourClose = useCallback(() => {
     const current = useUiPreferencesStore.getState().getFlag('tours_seen', {}) as Record<string, boolean>
@@ -426,12 +390,15 @@ export default function StockCheckPage() {
                   ])
                 }}
               />
-              <Button icon={<ReloadOutlined />} onClick={reloadRecent}>刷新</Button>
+              <Button icon={<ReloadOutlined />} onClick={reloadRecentList}>刷新</Button>
             </Space>
           </div>
           <Table
             rowKey="id"
-            {...(recentTableProps as any)}
+            dataSource={recentTableProps.dataSource}
+            loading={recentTableProps.loading}
+            pagination={recentTableProps.pagination}
+            onChange={recentTableProps.onChange}
             scroll={{ x: 1400 }}
             columns={[
               { title: '盘点单号', dataIndex: 'check_no', width: 180, sorter: true },
@@ -524,7 +491,7 @@ export default function StockCheckPage() {
       )}
       <Tour
         open={tourOpen}
-        steps={stockCheckTourSteps}
+        steps={tourSteps}
         onClose={handleTourClose}
         onFinish={handleTourClose}
       />
