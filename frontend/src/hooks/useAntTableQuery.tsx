@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Input } from 'antd'
 import type { InputRef } from 'antd'
+import type { FilterValue, SorterResult, TableCurrentDataSource, TablePaginationConfig } from 'antd/es/table/interface'
 
 export interface AntTableFetchParams {
   page: number
@@ -19,9 +20,10 @@ export interface AntTableFetchResult<T = unknown> {
 export interface UseAntTableQueryOptions<TFilters extends Record<string, unknown> = Record<string, unknown>> {
   fetchData: (params: AntTableFetchParams & TFilters) => Promise<AntTableFetchResult>
   defaultPageSize?: number
-  filterToQuery?: (filters: Record<string, (string | number)[] | null>) => TFilters
+  filterToQuery?: (filters: Record<string, FilterValue | null>) => TFilters
   debounceMs?: number
   initialKeyword?: string
+  extraDeps?: ReadonlyArray<unknown>
 }
 
 export interface UseAntTableQueryResult {
@@ -43,9 +45,10 @@ export interface UseAntTableQueryResult {
       onChange: (page: number, pageSize: number) => void
     }
     onChange: (
-      pagination: { current?: number; pageSize?: number },
-      filters: Record<string, (string | number)[] | null>,
-      sorter: { field?: string | number; order?: 'ascend' | 'descend' | null },
+      pagination: TablePaginationConfig,
+      filters: Record<string, FilterValue | null>,
+      sorter: SorterResult<any> | SorterResult<any>[],
+      extra: TableCurrentDataSource<any>,
     ) => void
   }
   reload: () => void
@@ -54,7 +57,7 @@ export interface UseAntTableQueryResult {
 export function useAntTableQuery<TFilters extends Record<string, unknown> = Record<string, unknown>>(
   options: UseAntTableQueryOptions<TFilters>,
 ): UseAntTableQueryResult {
-  const { fetchData, defaultPageSize = 20, filterToQuery, debounceMs = 300, initialKeyword = '' } = options
+  const { fetchData, defaultPageSize = 20, filterToQuery, debounceMs = 300, initialKeyword = '', extraDeps = [] } = options
 
   const [keyword, setKeyword] = useState<string>(initialKeyword)
   const [debouncedKeyword, setDebouncedKeyword] = useState<string>(initialKeyword)
@@ -62,7 +65,7 @@ export function useAntTableQuery<TFilters extends Record<string, unknown> = Reco
   const [pageSize, setPageSize] = useState<number>(defaultPageSize)
   const [sortBy, setSortBy] = useState<string | undefined>(undefined)
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | undefined>(undefined)
-  const [filters, setFilters] = useState<Record<string, (string | number)[] | null>>({})
+  const [filters, setFilters] = useState<Record<string, FilterValue | null>>({})
   const [data, setData] = useState<any[]>([])
   const [total, setTotal] = useState<number>(0)
   const [loading, setLoading] = useState<boolean>(false)
@@ -78,7 +81,7 @@ export function useAntTableQuery<TFilters extends Record<string, unknown> = Reco
 
   useEffect(() => {
     setPage(1)
-  }, [debouncedKeyword, sortBy, sortOrder, JSON.stringify(filters)])
+  }, [debouncedKeyword, sortBy, sortOrder, JSON.stringify(filters), ...extraDeps])
 
   useEffect(() => {
     abortRef.current?.abort()
@@ -110,13 +113,13 @@ export function useAntTableQuery<TFilters extends Record<string, unknown> = Reco
         if (!ctrl.signal.aborted) setLoading(false)
       })
     return () => ctrl.abort()
-  }, [page, pageSize, debouncedKeyword, sortBy, sortOrder, JSON.stringify(filters), reloadTick])
+  }, [page, pageSize, debouncedKeyword, sortBy, sortOrder, JSON.stringify(filters), reloadTick, ...extraDeps])
 
   const onChange = useCallback(
     (
-      pagination: { current?: number; pageSize?: number },
-      nextFilters: Record<string, (string | number)[] | null>,
-      sorter: { field?: string | number; order?: 'ascend' | 'descend' | null },
+      pagination: TablePaginationConfig,
+      nextFilters: Record<string, FilterValue | null>,
+      sorter: SorterResult<any> | SorterResult<any>[],
     ) => {
       if (pagination.current) setPage(pagination.current)
       if (pagination.pageSize && pagination.pageSize !== pageSize) {
@@ -124,10 +127,17 @@ export function useAntTableQuery<TFilters extends Record<string, unknown> = Reco
         setPage(1)
       }
       setFilters(nextFilters || {})
-      const fieldKey = typeof sorter.field === 'string' ? sorter.field : undefined
-      if (fieldKey && (sorter.order === 'ascend' || sorter.order === 'descend')) {
+      const single = Array.isArray(sorter) ? sorter[0] : sorter
+      const rawField = single?.field
+      const fieldKey = typeof rawField === 'string'
+        ? rawField
+        : typeof single?.columnKey === 'string'
+          ? single.columnKey
+          : undefined
+      const order = single?.order
+      if (fieldKey && (order === 'ascend' || order === 'descend')) {
         setSortBy(fieldKey)
-        setSortOrder(sorter.order === 'ascend' ? 'asc' : 'desc')
+        setSortOrder(order === 'ascend' ? 'asc' : 'desc')
       } else {
         setSortBy(undefined)
         setSortOrder(undefined)
@@ -162,7 +172,11 @@ export function useAntTableQuery<TFilters extends Record<string, unknown> = Reco
       showSizeChanger: true,
       showTotal: (t: number) => `共 ${t} 条`,
       pageSizeOptions: ['20', '50', '100'],
-      onChange: (p: number, ps: number) => onChange({ current: p, pageSize: ps }, filters, { order: sortOrder === 'asc' ? 'ascend' : sortOrder === 'desc' ? 'descend' : null, field: sortBy }),
+      onChange: (p: number, ps: number) => onChange(
+        { current: p, pageSize: ps } as TablePaginationConfig,
+        filters,
+        { order: sortOrder === 'asc' ? 'ascend' : sortOrder === 'desc' ? 'descend' : null, field: sortBy } as SorterResult<any>,
+      ),
     },
     onChange,
   }
