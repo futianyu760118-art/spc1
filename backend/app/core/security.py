@@ -105,6 +105,7 @@ _SHARE_PATH_TO_RESOURCE: dict[str, str] = {
     "/kit-analysis": "materials.kit_analysis",
     "/supplier-risk": "materials.supplier_risk",
     "/supplier-payment": "materials.supplier_payment",
+    "/subcontract-orders": "materials.subcontract_orders",
     "/issues": "exceptions",
     "/issue-log": "exceptions.issue_log",
     "/change-log": "exceptions.change_log",
