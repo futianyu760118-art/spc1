@@ -248,6 +248,33 @@ export const materialApi = {
     api.get('/materials/supplier-payment', { params }),
   getSupplierPaymentSummary: (params: Record<string, any> = {}) =>
     api.get('/materials/supplier-payment/summary', { params }),
+  // 委外订单
+  listSubcontractOrders: (params: Record<string, any>) =>
+    api.get('/materials/subcontract-orders', { params }),
+  getSubcontractOrder: (id: number) =>
+    api.get(`/materials/subcontract-orders/${id}`),
+  getSubcontractOrderDetails: (id: number, params: Record<string, any> = {}) =>
+    api.get(`/materials/subcontract-orders/${id}/details`, { params }),
+  createSubcontractOrder: (data: Record<string, any>) =>
+    api.post('/materials/subcontract-orders', data),
+  updateSubcontractOrder: (id: number, data: Record<string, any>) =>
+    api.put(`/materials/subcontract-orders/${id}`, data),
+  batchUpdateSubcontractOrders: (data: { ids: number[]; status?: string; remark?: string }) =>
+    api.put('/materials/subcontract-orders/batch', data),
+  deleteSubcontractOrder: (id: number) =>
+    api.delete(`/materials/subcontract-orders/${id}`),
+  importSubcontractOrders: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/materials/subcontract-orders/import', fd)
+  },
+  exportSubcontractOrders: (params: Record<string, any>) =>
+    api.get('/materials/subcontract-orders/export', { params, responseType: 'blob' }),
+  addSubcontractOrderDetail: (id: number, data: Record<string, any>) =>
+    api.post(`/materials/subcontract-orders/${id}/details`, data),
+  updateSubcontractOrderDetail: (id: number, detailId: number, data: Record<string, any>) =>
+    api.put(`/materials/subcontract-orders/${id}/details/${detailId}`, data),
+  deleteSubcontractOrderDetail: (id: number, detailId: number) =>
+    api.delete(`/materials/subcontract-orders/${id}/details/${detailId}`),
 }
 
 // ============ 供应商即时沟通 ============
