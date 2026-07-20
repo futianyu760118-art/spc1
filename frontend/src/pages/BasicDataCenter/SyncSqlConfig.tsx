@@ -78,6 +78,8 @@ const SYNC_TYPE_LABELS: Record<string, string> = {
   quality_issues: '品质异常',
   mrp_plan_orders: 'MRP计划订单',
   inventory: '即时库存',
+  subcontract_orders: '委外订单',
+  subcontract_order_details: '委外订单明细',
 }
 
 const SYNC_INTERVAL_OPTIONS = [
@@ -664,6 +666,8 @@ export default function SyncSqlConfig() {
                   { value: 'inventory', label: '即时库存' },
                   { value: 'purchase_invoices', label: '采购开票' },
                   { value: 'quality_issues', label: '品质异常' },
+                  { value: 'subcontract_orders', label: '委外订单' },
+                  { value: 'subcontract_order_details', label: '委外订单明细' },
                 ]}
               />
             </Form.Item>

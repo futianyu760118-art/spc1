@@ -626,8 +626,10 @@ export default function OrderList() {
         order_qty_total: stats.order_qty_total || 0,
         order_amount_total: stats.order_amount_total || 0,
       })
-    } catch {
-      message.error('获取订单列表失败')
+    } catch (err: any) {
+      const detail = err?.response?.data?.message || err?.response?.data?.detail || err?.message || '未知错误'
+      console.error('[OrderList] fetchOrders failed:', err)
+      message.error(`获取订单列表失败: ${detail}`)
     } finally {
       setLoading(false)
     }
@@ -1780,7 +1782,7 @@ export default function OrderList() {
         <Space size="small">
           <Tooltip title="盘点物料库存">
             <Button type="link" size="small"
-              onClick={() => navigate(`/inventory-check?orderNo=${r.order_no}`)}
+              onClick={() => navigate(`/stock-check?orderNo=${r.order_no}`)}
               style={{ color: '#6366f1', fontSize: 'calc(0.75rem * var(--font-size-scale))' }}
             >盘点</Button>
           </Tooltip>

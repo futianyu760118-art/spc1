@@ -56,7 +56,7 @@ async def bom_details_list(ctx: ExternalCallContext) -> dict:
         Material.material_name,
         Bom.bom_no,
     ).outerjoin(
-        Material, BomDetail.material_id == Material.material_id
+        Material, BomDetail.material_id == Material.erp_material_id
     ).outerjoin(
         Bom, BomDetail.bom_id == Bom.bom_id
     )

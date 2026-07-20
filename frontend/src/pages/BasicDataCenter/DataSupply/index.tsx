@@ -1358,10 +1358,414 @@ export default function DataSupply() {
     const baseUrl = `http://${host}/api/v1/basicdata/data-supply`
     const externalBase = `http://${host}/api/v1/external`
 
-    const typeRows = dataTypeOptions.map(o => `| ${o.value} | ${o.label} | （由配置决定） |`).join('\n')
+    // ── 数据类型字段说明：取自 Registry 的 exposed_fields/filter_fields/mask_fields ──
+    const typeDetailMap = new Map(availableTypes.map(t => [t.data_type, t]))
+    const typeRows = dataTypeOptions.map(o => {
+      const t = typeDetailMap.get(o.value)
+      const fields = t?.exposed_fields?.length ? t.exposed_fields.join('、') : '（由配置决定）'
+      const filters = t?.filter_fields?.length ? t.filter_fields.join('、') : '-'
+      const masks = t?.mask_fields?.length ? t.mask_fields.join('、') : '-'
+      return `| ${o.value} | ${o.label} | ${fields} | ${filters} | ${masks} |`
+    }).join('\n')
+
     const endpointRows = endpointOptions.map(e =>
       `| ${e.endpoint_code} | ${e.name} | \`${e.method} ${e.path}\` | ${e.description} |`
     ).join('\n')
+
+    // ── 各对外接口的请求参数 / 响应字段明细（来自后端 endpoints/*.py 的实现） ──
+    // 若字段变动，需同步更新此处
+    const ENDPOINT_DETAILS: Record<string, {
+      params: Array<[string, string, string]>
+      fields: Array<[string, string]>
+    }> = {
+      'orders.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（订单号 / 客户 / 产品名 模糊匹配）'],
+          ['status', '否', '订单状态，多选逗号分隔，如 open,closed'],
+          ['customer_code', '否', '客户编码精确匹配'],
+          ['risk_level', '否', '风险等级，多选逗号分隔，如 red,yellow'],
+          ['promised_date_start', '否', '合同交期开始日期 YYYY-MM-DD'],
+          ['promised_date_end', '否', '合同交期结束日期 YYYY-MM-DD'],
+          ['updated_after', '否', '增量同步，仅返回 updated_at >= 此时间的记录 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['order_no', '订单号'], ['line_no', '订单行号'],
+          ['customer', '客户名称'], ['customer_code', '客户编码'],
+          ['product_code', '产品编码'], ['product_name', '产品名称'],
+          ['order_qty', '订单数量'], ['completed_qty', '已完成数量'],
+          ['order_amount', '订单金额'], ['status', '订单状态'],
+          ['risk_level', '风险等级'], ['promised_date', '合同交期'],
+          ['planned_start_date', '计划开始日期'], ['owner', '负责人'],
+          ['updated_at', '更新时间'],
+        ],
+      },
+      'boms.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['material_code', '否', '物料代码精确匹配（关联 scm_material）'],
+          ['bom_no', '否', 'BOM 编号模糊匹配'],
+          ['bom_version', '否', 'BOM 版本号精确匹配'],
+          ['bom_type', '否', 'BOM 类型精确匹配'],
+          ['use_status', '否', '使用状态精确匹配'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['bom_id', 'BOM ID'], ['bom_no', 'BOM 编号'],
+          ['material_id', '物料 ERP ID'], ['material_code', '物料代码（带 material_code 时返回）'],
+          ['material_name', '物料名称（带 material_code 时返回）'],
+          ['parent_material_id', '父物料 ID'], ['bom_version', 'BOM 版本号'],
+          ['bom_type', 'BOM 类型'], ['base_qty', '基本用量'],
+          ['unit_id', '单位 ID'], ['use_status', '使用状态'],
+          ['disabled_status', '禁用状态'], ['void_flag', '作废标志'],
+          ['update_time', '更新时间'],
+        ],
+      },
+      'bom_details.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['bom_id', '否', 'BOM ID 精确匹配'],
+          ['material_id', '否', '物料 ID 精确匹配（BOM 明细中的物料）'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '明细ID'], ['bom_id', 'BOM ID'], ['bom_no', 'BOM 编号'],
+          ['line_no', '行号'], ['material_id', '物料 ID'],
+          ['material_code', '物料代码'], ['material_name', '物料名称'],
+          ['standard_qty', '标准用量'], ['aux_qty', '辅助用量'],
+          ['material_type', '物料类型'], ['config_type', '配置类型'],
+          ['lead_offset_days', '提前期偏移天数'], ['back_flush', '倒冲标志'],
+          ['scrap_rate', '损耗率'], ['oper_sn', '工序序号'],
+          ['process_id', '工序 ID'], ['warehouse_id', '仓库 ID'],
+          ['location_id', '库位 ID'], ['valid_date', '生效日期'],
+          ['invalid_date', '失效日期'], ['unit_id', '单位 ID'],
+          ['customer_bom_code', '客户 BOM 编码'], ['aux_attr_id', '辅助属性 ID'],
+          ['material_size', '物料规格'], ['kit_flag', '套件标志'],
+          ['data_source', '数据来源'], ['create_time', '创建时间'],
+          ['update_time', '更新时间'],
+        ],
+      },
+      'customers.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（客户编码 / 名称 / 简称 模糊匹配）'],
+          ['customer_level', '否', '客户等级，多选逗号分隔'],
+          ['industry_type', '否', '所属行业'],
+          ['status', '否', '状态，多选逗号分隔 (1-启用 0-禁用)'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['customer_code', '客户编码'],
+          ['customer_name', '客户名称'], ['customer_short', '客户简称'],
+          ['customer_level', '客户等级'], ['industry_type', '所属行业'],
+          ['credit_code', '统一社会信用代码'], ['status', '状态'],
+          ['update_time', '更新时间'],
+        ],
+      },
+      'suppliers.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（供应商编码 / 名称 / 简称 模糊匹配）'],
+          ['supplier_type', '否', '供应商类型精确匹配'],
+          ['status', '否', '状态，多选逗号分隔 (1-启用 0-禁用)'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['supplier_code', '供应商编码'],
+          ['supplier_name', '供应商名称'], ['supplier_short', '供应商简称'],
+          ['supplier_type', '供应商类型'], ['contact_person', '联系人'],
+          ['contact_phone', '联系电话（脱敏 138****1234）'],
+          ['payment_terms', '付款条件'], ['status', '状态'],
+          ['update_time', '更新时间'],
+        ],
+      },
+      'materials.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（物料编码 / 名称 / 规格型号 模糊匹配）'],
+          ['material_type', '否', '物料分类精确匹配'],
+          ['is_purchase', '否', '是否可采购 (0/1)'],
+          ['is_produce', '否', '是否可生产 (0/1)'],
+          ['status', '否', '状态，多选逗号分隔 (1-启用 0-禁用)'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['erp_material_id', 'ERP 物料 ID'],
+          ['material_code', '物料编码'], ['material_name', '物料名称'],
+          ['spec_model', '规格型号'], ['material_type', '物料分类'],
+          ['unit_of_measure', '单位'], ['brand', '品牌'],
+          ['is_purchase', '是否可采购'], ['is_produce', '是否可生产'],
+          ['status', '状态'], ['supplier_id', '供应商 ERP ID'],
+          ['supplier_name', '供应商名称'], ['order_unit_price', '采购单价'],
+          ['last_outbound_date', '最近出库日期'], ['update_time', '更新时间'],
+        ],
+      },
+      'products.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（产品编码模糊匹配）'],
+          ['product_line', '否', '产品线精确匹配'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['product_code', '产品编码'],
+          ['product_line', '产品线'], ['tech_version', '工艺版本'],
+          ['bom_version', 'BOM 版本'], ['default_warehouse', '默认仓库'],
+          ['warranty_days', '保修天数'], ['upph', 'UPPH（每小时产量）'],
+          ['update_time', '更新时间'],
+        ],
+      },
+      'purchase_orders.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（PO 号 / 物料名称 / 订单号 模糊匹配）'],
+          ['po_status', '否', 'PO 状态，多选逗号分隔'],
+          ['supplier_code', '否', '供应商编码精确匹配'],
+          ['order_no', '否', '关联销售订单号精确匹配'],
+          ['material_code', '否', '物料编码精确匹配'],
+          ['eta_start', '否', 'ETA 开始日期 YYYY-MM-DD'],
+          ['eta_end', '否', 'ETA 结束日期 YYYY-MM-DD'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['po_no', 'PO 号'], ['detail_id', '明细 ID'],
+          ['order_no', '关联销售订单号'], ['material_code', '物料编码'],
+          ['material_name', '物料名称'], ['spec_model', '规格型号'],
+          ['material_type_name', '物料分类名称'], ['supplier_code', '供应商编码'],
+          ['supplier_name', '供应商名称'], ['po_qty', '采购数量'],
+          ['received_qty', '已收数量'], ['po_price', '采购单价'],
+          ['unit', '单位'], ['po_date', 'PO 日期'],
+          ['po_status', 'PO 状态'], ['eta', '预计到货日'],
+          ['actual_arrival_date', '实际到货日'], ['inspection_date', '检验日'],
+          ['owner', '负责人'], ['is_closed', '是否关闭'],
+          ['updated_at', '更新时间'],
+        ],
+      },
+      'schedule_plans.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（订单号 / 产品编码 模糊匹配）'],
+          ['department', '否', '部门精确匹配'],
+          ['status', '否', '计划状态，多选逗号分隔 (planned/confirmed/locked/in_progress/done/...)'],
+          ['order_no', '否', '订单号精确匹配'],
+          ['product_code', '否', '产品编码精确匹配'],
+          ['plan_date_start', '否', '排产开始日期 YYYY-MM-DD'],
+          ['plan_date_end', '否', '排产结束日期 YYYY-MM-DD'],
+          ['include_inactive', '否', '是否包含历史版本 (1-是 0-否，默认 0 只返回 is_active=True)'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['department', '部门'], ['plan_date', '排产日期'],
+          ['order_no', '订单号'], ['line_no', '订单行号'],
+          ['product_code', '产品编码'], ['model_code', '型号编码'],
+          ['quantity', '计划数量'], ['owner', '负责人'],
+          ['start_date', '开始日期'], ['end_date', '结束日期'],
+          ['priority', '优先级'], ['status', '状态'],
+          ['upph', 'UPPH'], ['plan_version', '计划版本'],
+          ['is_active', '是否生效版本'], ['confirmed_by', '确认人'],
+          ['confirmed_at', '确认时间'], ['updated_at', '更新时间'],
+        ],
+      },
+      'organizations.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（oa_org_id / org_name 模糊匹配）'],
+          ['org_type', '否', '组织类型精确匹配'],
+          ['status', '否', '状态，多选逗号分隔 (1-启用 0-禁用)'],
+        ],
+        fields: [
+          ['oa_org_id', 'OA 组织 ID'], ['org_name', '组织名称'],
+          ['org_type', '组织类型'], ['parent_code', '父组织 OA ID'],
+          ['leader_name', '负责人姓名'], ['status', '状态'],
+        ],
+      },
+      'positions.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（position_code / position_name 模糊匹配）'],
+          ['status', '否', '状态，多选逗号分隔 (1-启用 0-禁用)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['position_code', '岗位编码'],
+          ['position_name', '岗位名称'], ['status', '状态'],
+        ],
+      },
+      'employees.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（oa_user_id / emp_name 模糊匹配）'],
+          ['org_id', '否', '组织 oa_org_id 筛选'],
+          ['position_code', '否', '岗位编码筛选'],
+          ['status', '否', '状态，多选逗号分隔'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['oa_user_id', 'OA 用户 ID'],
+          ['emp_name', '员工姓名'], ['org_id', '组织 OA ID'],
+          ['org_name', '组织名称'], ['position_name', '岗位名称'],
+          ['phone', '手机号（脱敏）'], ['email', '邮箱'],
+          ['status', '状态'],
+        ],
+      },
+      'organizations.employees': {
+        params: [
+          ['oa_org_id', '是', '组织 OA ID（路径参数），返回该组织及其所有子组织下的员工'],
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（oa_user_id / emp_name 模糊匹配）'],
+          ['position_code', '否', '岗位编码筛选'],
+          ['status', '否', '状态，多选逗号分隔'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['oa_user_id', 'OA 用户 ID'],
+          ['emp_name', '员工姓名'], ['org_id', '组织 OA ID'],
+          ['org_name', '组织名称'], ['position_name', '岗位名称'],
+          ['phone', '手机号（脱敏）'], ['email', '邮箱'],
+          ['status', '状态'],
+        ],
+      },
+      'inventory.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（物料编码 / 物料名称 / 仓库名称 模糊匹配）'],
+          ['material_code', '否', '物料编码精确匹配'],
+          ['wh_code', '否', '仓库编码精确匹配'],
+          ['batch_no', '否', '批次号精确匹配'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['material_id', '物料 ID'],
+          ['material_code', '物料编码'], ['material_name', '物料名称'],
+          ['wh_id', '仓库 ID'], ['wh_code', '仓库编码'],
+          ['wh_name', '仓库名称'], ['location_id', '库位 ID'],
+          ['location_name', '库位名称'], ['qty_on_hand', '现存量'],
+          ['locked_qty', '锁定数量'], ['balance_qty', '可用数量'],
+          ['qty_in_transit', '在途数量'], ['unit_price', '单位成本'],
+          ['ending_balance', '期末结存'], ['batch_no', '批次号'],
+          ['updated_at', '更新时间'],
+        ],
+      },
+      'warehouses.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（仓库编码 / 仓库名称 模糊匹配）'],
+          ['wh_type', '否', '仓库类型精确匹配'],
+          ['wh_attribute', '否', '仓库属性精确匹配 (10-良品 11-在检 12-不良)'],
+          ['is_enabled', '否', '是否启用 (0/1)'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['wh_id', '仓库 ERP ID'],
+          ['parent_wh_id', '父仓库 ID'], ['wh_code', '仓库编码'],
+          ['wh_name', '仓库名称'], ['wh_type', '仓库类型'],
+          ['wh_attribute', '仓库属性'], ['plan_area', '规划区域'],
+          ['is_workshop', '是否车间仓'], ['is_enabled', '是否启用'],
+          ['updated_at', '更新时间'],
+        ],
+      },
+      'locations.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（库位编码 / 名称 / 全称 模糊匹配）'],
+          ['parent_id', '否', '父库位 ID 精确匹配'],
+          ['detail_flag', '否', '明细标识 (0/1)'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['location_id', '库位 ERP ID'],
+          ['location_group_id', '库位组 ID'], ['location_code', '库位编码'],
+          ['location_name', '库位名称'], ['location_full_name', '库位全称'],
+          ['depth', '层级深度'], ['detail_flag', '明细标识'],
+          ['parent_id', '父库位 ID'], ['updated_at', '更新时间'],
+        ],
+      },
+      'production_task_orders.list': {
+        params: [
+          ['page', '否', '页码，默认 1'],
+          ['page_size', '否', '每页条数，默认 20，最大 200'],
+          ['keyword', '否', '关键字（任务单号 / 物料名称 模糊匹配）'],
+          ['workshop', '否', '生产车间精确匹配'],
+          ['task_type', '否', '类型精确匹配'],
+          ['is_closed', '否', '是否关闭 (0/1)'],
+          ['audit_status', '否', '审核状态 (0=未审核 1=已审核)'],
+          ['mrp_flag', '否', 'MRP 标志 (0/1)'],
+          ['sale_order_no', '否', '销售订单号精确匹配'],
+          ['updated_after', '否', '增量同步 (ISO 8601)'],
+        ],
+        fields: [
+          ['id', '记录ID'], ['task_id', '任务单 ERP ID'],
+          ['task_no', '任务单号'], ['workshop', '车间'],
+          ['material_code', '物料编码'], ['material_name', '物料名称'],
+          ['planned_start_date', '计划开始日期'],
+          ['planned_end_date', '计划结束日期'],
+          ['actual_start_date', '实际开始日期'],
+          ['actual_end_date', '实际结束日期'],
+          ['task_qty', '任务数量'], ['repair_qty', '返修数量'],
+          ['actual_qty', '实际数量'], ['task_type', '类型'],
+          ['sale_order_no', '销售订单号'], ['sale_order_id', '销售订单 ID'],
+          ['start_flag', '开工标志'], ['is_closed', '是否关闭'],
+          ['audit_status', '审核状态'], ['mrp_flag', 'MRP 标志'],
+          ['audit_user_id', '审核人 ID'], ['request_user_id', '申请人 ID'],
+          ['supplier_id', '供应商 ID'], ['erp_updated_at', 'ERP 更新时间'],
+          ['updated_at', '更新时间'],
+        ],
+      },
+    }
+
+    // 按 tags 分组渲染对外接口明细
+    const groupedEndpoints = endpointOptions.reduce<Record<string, EndpointOption[]>>((acc, e) => {
+      const tag = e.tags?.[0] || '其他'
+      ;(acc[tag] = acc[tag] || []).push(e)
+      return acc
+    }, {})
+
+    const endpointDetails = Object.entries(groupedEndpoints).map(([tag, list]) => {
+      const blocks = list.map(e => {
+        const detail = ENDPOINT_DETAILS[e.endpoint_code]
+        const paramRows = (detail?.params?.length
+          ? detail.params.map(([n, r, d]) => `| \`${n}\` | ${r} | ${d} |`)
+          : ['| （见后端 docstring） |  |  |']
+        ).join('\n')
+        const fieldRows = (detail?.fields?.length
+          ? detail.fields.map(([n, d]) => `| \`${n}\` | ${d} |`)
+          : ['| （由返回结果决定） |  |']
+        ).join('\n')
+        const fullPath = `${externalBase}${e.path.replace(/^\/external/, '')}`
+        return `#### ${e.name}（\`${e.endpoint_code}\`）
+
+\`${e.method} ${fullPath}\`
+
+${e.description}
+
+**请求参数**
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+${paramRows}
+
+**响应字段（items 元素）**
+
+| 字段 | 说明 |
+|------|------|
+${fieldRows}
+`
+      }).join('\n')
+      return `### ${tag}\n\n${blocks}`
+    }).join('\n\n')
 
     return `# 数据供给 API 使用说明
 
@@ -1415,7 +1819,10 @@ export default function DataSupply() {
 |---------------|------|------|------|
 ${endpointRows}
 
-每个接口均支持 page / page_size 分页、keyword 关键字、updated_after 增量同步，具体筛选条件见各接口文档。
+> 所有对外接口共用统一响应格式（见 5.3），items 元素字段见下方各接口明细。
+> 通用查询参数：page / page_size 分页、keyword 关键字、updated_after 增量同步（部分接口不支持）。
+
+${endpointDetails}
 
 ## 5. 通用数据供给接口
 
@@ -1450,10 +1857,15 @@ ${endpointRows}
 }
 \`\`\`
 
+> items 元素字段随 data_type 不同而异，详见第 6 章「可用数据类型」。
+
 ## 6. 可用数据类型
 
-| data_type | 中文名 | 暴露字段 |
-|-----------|--------|----------|
+> 暴露字段由 Registry 注册表决定，API Key 实际可见字段以「数据范围配置」中的 allowed_fields 为准。
+> filter_fields 为可筛选字段，mask_fields 为脱敏字段（如手机号、信用代码）。
+
+| data_type | 中文名 | 暴露字段 | 可筛选字段 | 脱敏字段 |
+|-----------|--------|----------|------------|----------|
 ${typeRows}
 
 ## 7. 调用示例

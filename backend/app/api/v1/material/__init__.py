@@ -7,4 +7,4 @@ from app.api.v1.material.kit_analysis import router as kit_analysis_router
 from app.api.v1.material.supplier_risk import router as supplier_risk_router
 from app.api.v1.material.supplier_payment import router as supplier_payment_router
 from app.api.v1.material.supplier_message import router as supplier_message_router
-from app.api.v1.material.inventory_check import router as inventory_check_router
+from app.api.v1.material.stock_check import router as stock_check_router

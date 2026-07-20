@@ -49,10 +49,10 @@ def format_table(items: list) -> str:
         return "（无数据）"
 
     headers = ["id", "物料编码", "物料名称", "仓库", "库位",
-               "现有量", "锁定量", "结存量", "在途量", "批次号", "更新时间"]
+               "现有量", "锁定量", "结存量", "在途量", "单价", "期末余额", "批次号", "更新时间"]
     keys = ["id", "material_code", "material_name", "wh_name", "location_name",
             "qty_on_hand", "locked_qty", "balance_qty", "qty_in_transit",
-            "batch_no", "updated_at"]
+            "unit_price", "ending_balance", "batch_no", "updated_at"]
 
     rows = []
     for item in items:

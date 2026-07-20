@@ -684,7 +684,7 @@ export default function UserManagement() {
       render: (_: any, record: UserItem) => (
         <Space size="small">
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
-          {isAdmin && <Button size="small" icon={<KeyOutlined />} onClick={() => openResetPwd(record)} title="重置密码" />}
+          {hasPermission('users', 'reset_password') && <Button size="small" icon={<KeyOutlined />} onClick={() => openResetPwd(record)} title="重置密码" />}
           {isAdmin && (
             <Popconfirm title="确认删除该用户？" onConfirm={() => handleDelete(record.id)}>
               <Button size="small" icon={<DeleteOutlined />} danger />
@@ -723,7 +723,7 @@ export default function UserManagement() {
                   </span>
                   <Button size="small" loading={batchLoading} onClick={() => handleBatchToggleActive(true)}>批量启用</Button>
                   <Button size="small" loading={batchLoading} onClick={() => handleBatchToggleActive(false)}>批量停用</Button>
-                  <Button size="small" icon={<KeyOutlined />} loading={batchLoading} onClick={() => openConfirmModal('reset_password')}>批量重置密码</Button>
+                  {hasPermission('users', 'reset_password') && <Button size="small" icon={<KeyOutlined />} loading={batchLoading} onClick={() => openConfirmModal('reset_password')}>批量重置密码</Button>}
                   {isAdmin && (
                     <Button size="small" danger icon={<DeleteOutlined />} loading={batchLoading} onClick={() => openConfirmModal('delete')}>批量删除</Button>
                   )}

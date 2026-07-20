@@ -10,10 +10,26 @@ from app.core.security import PermissionChecker
 from app.core.audit import log_audit
 from app.models.order.run_order import RunOrder
 from app.models.order.sale_order import SaleOrder
+from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.order.schemas import RunOrderOut, RunOrderCreate, RunOrderUpdate
 
 router = APIRouter()
+
+_mrp_min_run_time = (
+    select(
+        MrpPlanOrder.sale_order_no.label("order_no"),
+        func.min(MrpPlanOrder.mrp_run_time).label("mrp_run_time"),
+    )
+    .where(MrpPlanOrder.sale_order_no.isnot(None))
+    .group_by(MrpPlanOrder.sale_order_no)
+    .subquery()
+)
+
+_mrp_min_run_time_days = (
+    (func.date(_mrp_min_run_time.c.mrp_run_time) - SaleOrder.order_date)
+    .label("mrp_run_days")
+)
 
 RUN_ORDER_SORTABLE_COLUMNS = {
     'customer_code': SaleOrder.customer_code,
@@ -22,8 +38,8 @@ RUN_ORDER_SORTABLE_COLUMNS = {
     'order_type': SaleOrder.order_nature,
     'contract_date': SaleOrder.order_date,
     'delivery_date': SaleOrder.promised_date,
-    'run_date': RunOrder.run_date,
-    'run_days': RunOrder.run_days,
+    'run_date': _mrp_min_run_time.c.mrp_run_time,
+    'run_days': _mrp_min_run_time_days,
     'order_amount': RunOrder.order_amount,
     'po_placed_date': SaleOrder.order_date,
     'material_ready_date': SaleOrder.material_ready_date,
@@ -52,8 +68,14 @@ async def list_run_orders(
         SaleOrder,
         RunOrder,
         RunOrder.id.label('run_order_id'),
-        case((RunOrder.id.isnot(None), True), else_=False).label('is_synced')
-    ).outerjoin(RunOrder, SaleOrder.order_no == RunOrder.order_no)
+        case((RunOrder.id.isnot(None), True), else_=False).label('is_synced'),
+        _mrp_min_run_time.c.mrp_run_time.label('mrp_run_time'),
+        _mrp_min_run_time_days.label('mrp_run_days'),
+    ).outerjoin(
+        RunOrder, SaleOrder.order_no == RunOrder.order_no
+    ).outerjoin(
+        _mrp_min_run_time, _mrp_min_run_time.c.order_no == SaleOrder.order_no
+    )
     
     count_query = select(func.count(SaleOrder.id.distinct())).outerjoin(RunOrder, SaleOrder.order_no == RunOrder.order_no)
 
@@ -89,14 +111,30 @@ async def list_run_orders(
     total = total_result.scalar()
 
     # 全局统计（基于已同步的跑单数据）
-    global_stats_query = select(
+    counts_query = select(
         func.count(RunOrder.id).label('total'),
         func.sum(case((RunOrder.completed_date.isnot(None), 1), else_=0)).label('completed_count'),
         func.sum(case((RunOrder.shipped_date.isnot(None), 1), else_=0)).label('shipped_count'),
-        func.avg(RunOrder.run_days).label('avg_days'),
     )
-    global_stats_result = await db.execute(global_stats_query)
-    global_stats = global_stats_result.first()
+    avg_query = (
+        select(func.avg(
+            func.date(_mrp_min_run_time.c.mrp_run_time) - SaleOrder.order_date
+        ).label('avg_days'))
+        .select_from(SaleOrder)
+        .join(_mrp_min_run_time, _mrp_min_run_time.c.order_no == SaleOrder.order_no)
+        .where(_mrp_min_run_time.c.mrp_run_time.isnot(None))
+        .where(SaleOrder.order_date.isnot(None))
+    )
+    counts_result = await db.execute(counts_query)
+    counts = counts_result.first()
+    avg_result = await db.execute(avg_query)
+    avg_row = avg_result.first()
+    global_stats = (
+        counts.total,
+        counts.completed_count,
+        counts.shipped_count,
+        avg_row.avg_days if avg_row else None,
+    )
 
     # 构建排序子句
     order_clauses = []
@@ -117,9 +155,19 @@ async def list_run_orders(
         sale_order = row[0]
         run_order = row[1]
         is_synced = row.is_synced
+        mrp_run_time = row.mrp_run_time
+        po_placed_date = sale_order.order_date
+        run_date_val = mrp_run_time.date() if mrp_run_time else None
+        run_days_val = (
+            (mrp_run_time.date() - po_placed_date).days
+            if (mrp_run_time and po_placed_date) else None
+        )
         if run_order:
             item = RunOrderOut.model_validate(run_order)
             item.is_synced = True
+            item.run_date = run_date_val
+            item.run_days = run_days_val
+            item.order_amount = float(sale_order.order_amount) if sale_order.order_amount else item.order_amount
         else:
             # 从 sale_order 映射到 RunOrderOut
             item = RunOrderOut(
@@ -130,9 +178,9 @@ async def list_run_orders(
                 order_type=sale_order.order_nature,
                 contract_date=sale_order.order_date,
                 delivery_date=sale_order.promised_date,
-                run_date=None,
-                run_days=None,
-                order_amount=None,
+                run_date=run_date_val,
+                run_days=run_days_val,
+                order_amount=float(sale_order.order_amount) if sale_order.order_amount else None,
                 packaging_not_released=None,
                 po_placed_date=sale_order.order_date,
                 material_ready_date=sale_order.material_ready_date,
@@ -151,10 +199,10 @@ async def list_run_orders(
 
     page_result = PageResult(total=total, page=page, page_size=page_size, items=items)
     page_result.stats = {
-        'total': global_stats.total or 0,
-        'completed_count': global_stats.completed_count or 0,
-        'shipped_count': global_stats.shipped_count or 0,
-        'avg_days': round(global_stats.avg_days, 1) if global_stats.avg_days else 0,
+        'total': global_stats[0] or 0,
+        'completed_count': global_stats[1] or 0,
+        'shipped_count': global_stats[2] or 0,
+        'avg_days': round(global_stats[3], 1) if global_stats[3] else 0,
     }
 
     return ResponseModel(data=page_result)
@@ -166,11 +214,29 @@ async def get_run_order(
     current_user: dict = Depends(PermissionChecker("orders.run_orders", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(RunOrder).where(RunOrder.id == run_order_id))
-    run_order = result.scalar_one_or_none()
-    if not run_order:
+    result = await db.execute(
+        select(
+            RunOrder,
+            _mrp_min_run_time.c.mrp_run_time.label('mrp_run_time'),
+            SaleOrder.order_date.label('po_placed_date'),
+        )
+        .outerjoin(SaleOrder, SaleOrder.order_no == RunOrder.order_no)
+        .outerjoin(_mrp_min_run_time, _mrp_min_run_time.c.order_no == RunOrder.order_no)
+        .where(RunOrder.id == run_order_id)
+    )
+    row = result.first()
+    if not row:
         raise HTTPException(status_code=404, detail="跑单记录不存在")
-    return ResponseModel(data=RunOrderOut.model_validate(run_order))
+    run_order = row[0]
+    mrp_run_time = row.mrp_run_time
+    po_placed_date = row.po_placed_date
+    out = RunOrderOut.model_validate(run_order)
+    out.run_date = mrp_run_time.date() if mrp_run_time else None
+    out.run_days = (
+        (mrp_run_time.date() - po_placed_date).days
+        if (mrp_run_time and po_placed_date) else None
+    )
+    return ResponseModel(data=out)
 
 
 @router.post("", response_model=ResponseModel[RunOrderOut])
@@ -212,6 +278,7 @@ async def sync_from_order(
         customer_code=sale_order.customer_code,
         order_no=sale_order.order_no,
         order_qty=float(sale_order.order_qty) if sale_order.order_qty else None,
+        order_amount=float(sale_order.order_amount) if sale_order.order_amount else None,
         order_type=sale_order.order_nature,
         contract_date=sale_order.order_date,
         delivery_date=sale_order.promised_date,

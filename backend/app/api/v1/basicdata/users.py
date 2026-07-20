@@ -746,7 +746,7 @@ async def update_user(
 async def reset_password(
     user_id: int,
     body: PasswordReset,
-    current_user: dict = Depends(PermissionChecker("users", "update")),
+    current_user: dict = Depends(PermissionChecker("users", "reset_password")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(SysUser).where(SysUser.id == user_id))
@@ -915,7 +915,7 @@ async def batch_toggle_active(
 @router.put("/batch/reset-password", response_model=ResponseModel[dict])
 async def batch_reset_password(
     body: BatchResetPasswordBody,
-    current_user: dict = Depends(PermissionChecker("users", "update")),
+    current_user: dict = Depends(PermissionChecker("users", "reset_password")),
     db: AsyncSession = Depends(get_db),
 ):
     matched_ids = await _resolve_users_for_batch(db, body.user_ids, body.filter)

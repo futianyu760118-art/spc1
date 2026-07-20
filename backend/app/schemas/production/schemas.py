@@ -145,6 +145,52 @@ class ProcessProgressUpdate(BaseModel):
     status: Optional[str] = None
 
 
+# ============ 前道管理（以生产任务单为主体） ============
+
+class FrontProcessTaskOut(BaseModel):
+    """前道管理列表行：任务单字段(只读) + 手工字段 + sale_order 关联字段"""
+    # 任务单标识（用作主键/编辑键）
+    task_id: Optional[int] = None
+    task_no: Optional[str] = None
+    # 任务单只读字段
+    workshop: Optional[str] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    sale_order_no: Optional[str] = None
+    task_qty: Optional[float] = None
+    planned_start_date: Optional[date] = None
+    planned_end_date: Optional[date] = None
+    actual_start_date: Optional[date] = None
+    actual_end_date: Optional[date] = None
+    is_closed: Optional[int] = None
+    # sale_order 关联字段
+    customer_code: Optional[str] = None
+    customer: Optional[str] = None
+    order_date: Optional[date] = None
+    promised_date: Optional[date] = None
+    product_name: Optional[str] = None
+    product_model: Optional[str] = None
+    # 手工填写字段
+    shell_status: Optional[str] = None
+    frame_status: Optional[str] = None
+    handle_status: Optional[str] = None
+    bracket_status: Optional[str] = None
+    remark: Optional[str] = None
+    status: str = "pending"
+
+    model_config = {"from_attributes": True}
+
+
+class FrontProcessRecordUpdate(BaseModel):
+    """前道管理编辑表单：仅允许更新手工填写字段"""
+    shell_status: Optional[str] = None
+    frame_status: Optional[str] = None
+    handle_status: Optional[str] = None
+    bracket_status: Optional[str] = None
+    remark: Optional[str] = None
+    status: Optional[str] = None
+
+
 # ============ Production schedule plans ============
 
 class ProductionSchedulePlanOut(BaseModel):

@@ -45,17 +45,11 @@ export const productionApi = {
     api.get('/production/schedule-plans/debug-trace', { params }),
   // 缺少UPPH的产品
   listMissingUpphProducts: (params: Record<string, any>) => api.get('/production/schedule-plans/missing-upph-products', { params }),
-  // 前道管理
+  // 前道管理（数据主体：喷塑/压铸车间未关闭的生产任务单）
   listFrontProcess: (params: Record<string, any>) =>
     api.get('/production/front-process', { params }),
-  createFrontProcess: (data: Record<string, any>) =>
-    api.post('/production/front-process', data),
-  updateFrontProcess: (id: number, data: Record<string, any>) =>
-    api.put(`/production/front-process/${id}`, data),
-  importFrontProcess: (file: File) => {
-    const fd = new FormData(); fd.append('file', file)
-    return api.post('/production/front-process/import', fd)
-  },
+  updateFrontProcess: (task_id: number, data: Record<string, any>) =>
+    api.put(`/production/front-process/${task_id}`, data),
   // 贴片管理
   listSMT: (params: Record<string, any>) =>
     api.get('/production/smt', { params }),

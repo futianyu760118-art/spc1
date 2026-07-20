@@ -33,6 +33,7 @@ from app.models.production.process_progress import ProcessProgress
 from app.models.production.process_exception import ProcessException
 from app.models.production.schedule_plan import ProductionSchedulePlan
 from app.models.production.production_task_order import ProductionTaskOrder
+from app.models.production.front_process_record import FrontProcessRecord
 from app.models.exception.risk_issue import RiskIssue
 from app.models.exception.issue_log import IssueLog
 from app.models.exception.change_log import ChangeLog
@@ -166,6 +167,9 @@ class DatabaseInitializer:
                 "arrival_hour_note": "VARCHAR(256)",
                 "inspection_date": "DATE",
             },
+            "production_task_order": {
+                "sale_order_id": "INTEGER",
+            },
             "process_progress": {
                 "product_code": "VARCHAR(64)",
                 "line_no": "VARCHAR(32)",
@@ -191,6 +195,9 @@ class DatabaseInitializer:
                 "material_id": "VARCHAR(50) UNIQUE",
                 "parent_id": "VARCHAR(50)",
                 "is_deleted": "INTEGER DEFAULT 0",
+                "supplier_id": "INTEGER",
+                "order_unit_price": "NUMERIC(15,4)",
+                "last_outbound_date": "DATE",
             },
             "scm_sku": {
                 "data_source": "VARCHAR(32)",
@@ -270,6 +277,10 @@ class DatabaseInitializer:
                 "stock_qty": "NUMERIC(15,2)",
                 "audit_date": "DATE",
             },
+            "scm_inventory": {
+                "unit_price": "NUMERIC(15,6) NOT NULL DEFAULT 0",
+                "ending_balance": "NUMERIC(15,2) NOT NULL DEFAULT 0",
+            },
         }
         # 删除已废弃的列
         drop_columns = {
@@ -281,27 +292,40 @@ class DatabaseInitializer:
             ],
         }
         added = 0
-        async with self.engine.begin() as conn:
-            for table, columns in new_columns.items():
-                for col, col_type in columns.items():
-                    try:
+        # 每条 ALTER 独立事务：避免单条失败导致整批回滚（asyncpg 下事务一旦
+        # aborted，后续语句全部报错并被 except 吞掉，最终整批被回滚）。
+        for table, columns in new_columns.items():
+            for col, col_type in columns.items():
+                try:
+                    async with self.engine.begin() as conn:
                         await conn.execute(text(
                             f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {col_type}"
                         ))
-                        added += 1
-                    except Exception as e:
-                        print(f"  Column {table}.{col} skipped: {e}")
-            # 删除废弃列
-            for table, cols in drop_columns.items():
-                for col in cols:
-                    try:
+                    added += 1
+                except Exception as e:
+                    print(f"  Column {table}.{col} skipped: {e}")
+        # 删除废弃列
+        for table, cols in drop_columns.items():
+            for col in cols:
+                try:
+                    async with self.engine.begin() as conn:
                         await conn.execute(text(
                             f"ALTER TABLE {table} DROP COLUMN IF EXISTS {col}"
                         ))
-                        added += 1
-                    except Exception as e:
-                        print(f"  Drop {table}.{col} skipped: {e}")
+                    added += 1
+                except Exception as e:
+                    print(f"  Drop {table}.{col} skipped: {e}")
         print(f"Column migration completed ({added} statements executed)")
+
+        # 物料盘点单 order_no 改为可空,支持 manual 类型独立物料盘点
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE scm_inventory_check ALTER COLUMN order_no DROP NOT NULL"
+                ))
+            print("  scm_inventory_check.order_no set to nullable")
+        except Exception as e:
+            print(f"  ALTER scm_inventory_check.order_no DROP NOT NULL skipped: {e}")
 
         # scm_material: material_id -> erp_material_id (int), parent_id -> int
         # scm_bom / scm_bom_detail: material_id -> int
@@ -371,6 +395,31 @@ class DatabaseInitializer:
             except Exception as e:
                 print(f"  Position indexes skipped: {e}")
 
+    async def ensure_indexes(self):
+        """为已有表补充新增索引（CREATE INDEX IF NOT EXISTS）。与 migrate_columns 并列。"""
+        print("Ensuring additional indexes...")
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_scm_bom_detail_material_id ON scm_bom_detail (material_id)"
+                ))
+                print("  scm_bom_detail.material_id index ensured")
+            except Exception as e:
+                print(f"  scm_bom_detail.material_id index skipped: {e}")
+
+    async def drop_pto_sale_order_id_fk(self):
+        """production_task_order.sale_order_id 用于存放 ERP 的 FOrderInterID，
+        不是指向 SPC sale_order.id 的真实外键。幂等移除该 FK 约束，
+        避免 ERP 同步时触发外键违例（Alembic add_pto_sale_order_id 会加此约束，
+        但启动时不会跑 Alembic，这里兜底保证与 model 一致）。"""
+        print("Dropping production_task_order.sale_order_id FK if present...")
+        async with self.engine.begin() as conn:
+            await conn.execute(text(
+                "ALTER TABLE production_task_order "
+                "DROP CONSTRAINT IF EXISTS fk_production_task_order_sale_order_id"
+            ))
+        print("  done (idempotent)")
+
     async def migrate_scm_material_erp_id(self):
         """将 scm_material.material_id 改名为 erp_material_id (INTEGER),
         并把 parent_id / scm_bom.material_id / scm_bom_detail.material_id 改为 INTEGER.
@@ -424,6 +473,71 @@ class DatabaseInitializer:
                 print(f"  scm_bom_detail.material_id type change skipped: {e}")
 
         print("scm_material erp_material_id migration done")
+
+    async def migrate_stock_check_permission(self):
+        """将权限 orders.stock_check 重命名为 materials.stock_check，
+        从订单交付中心迁移到物料齐套中心。
+        幂等: 同步迁移 sys_permission 行以及 sys_role/sys_user 的 permissions JSONB。"""
+        print("Migrating permission orders.stock_check -> materials.stock_check...")
+        async with self.engine.begin() as conn:
+            # 1. sys_permission: 重命名行 (旧code存在且新code不存在时)
+            try:
+                old_exists = (await conn.execute(text(
+                    "SELECT 1 FROM sys_permission WHERE code = 'orders.stock_check'"
+                ))).scalar()
+                new_exists = (await conn.execute(text(
+                    "SELECT 1 FROM sys_permission WHERE code = 'materials.stock_check'"
+                ))).scalar()
+                if old_exists and not new_exists:
+                    await conn.execute(text(
+                        "UPDATE sys_permission SET code = 'materials.stock_check', "
+                        "module = 'materials', parent_code = 'materials' "
+                        "WHERE code = 'orders.stock_check'"
+                    ))
+                    print("  sys_permission: orders.stock_check -> materials.stock_check")
+                elif old_exists and new_exists:
+                    await conn.execute(text(
+                        "DELETE FROM sys_permission WHERE code = 'orders.stock_check'"
+                    ))
+                    print("  sys_permission: removed duplicate orders.stock_check")
+                else:
+                    print("  sys_permission: nothing to rename")
+            except Exception as e:
+                print(f"  sys_permission rename skipped: {e}")
+
+            # 2. sys_role.permissions: 复制旧key到新key, 再删除旧key
+            try:
+                await conn.execute(text(
+                    "UPDATE sys_role "
+                    "SET permissions = (permissions - 'orders.stock_check') "
+                    "|| jsonb_build_object('materials.stock_check', permissions->'orders.stock_check') "
+                    "WHERE permissions ? 'orders.stock_check' "
+                    "AND NOT permissions ? 'materials.stock_check'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_role SET permissions = permissions - 'orders.stock_check' "
+                    "WHERE permissions ? 'orders.stock_check'"
+                ))
+                print("  sys_role.permissions migrated")
+            except Exception as e:
+                print(f"  sys_role.permissions migration skipped: {e}")
+
+            # 3. sys_user.permissions (兼容历史数据)
+            try:
+                await conn.execute(text(
+                    "UPDATE sys_user "
+                    "SET permissions = (permissions - 'orders.stock_check') "
+                    "|| jsonb_build_object('materials.stock_check', permissions->'orders.stock_check') "
+                    "WHERE permissions ? 'orders.stock_check' "
+                    "AND NOT permissions ? 'materials.stock_check'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_user SET permissions = permissions - 'orders.stock_check' "
+                    "WHERE permissions ? 'orders.stock_check'"
+                ))
+                print("  sys_user.permissions migrated")
+            except Exception as e:
+                print(f"  sys_user.permissions migration skipped: {e}")
 
     async def rebuild_mrp_plan_order(self):
         """按 PRD 重建 mrp_plan_order 表（销售订单ID + 物料ID 联合主键）。
@@ -534,7 +648,7 @@ class DatabaseInitializer:
                             "orders.list": ["read", "update"],
                             "orders.run_orders": ["read", "update"],
                             "orders.risk_pool": ["read", "update"],
-                            "orders.inventory_check": ["read", "update"],
+                            "materials.stock_check": ["read", "update"],
                             "materials.purchase_plan": ["read"],
                             "materials.issues": ["read"],
                             "materials.long_lead": ["read"],
@@ -577,7 +691,7 @@ class DatabaseInitializer:
                             "orders.list": ["read"],
                             "orders.run_orders": ["read"],
                             "orders.risk_pool": ["read"],
-                            "orders.inventory_check": ["read"],
+                            "materials.stock_check": ["read"],
                             "materials.purchase_plan": ["create", "read", "update", "import"],
                             "materials.issues": ["create", "read", "update", "import"],
                             "materials.long_lead": ["create", "read", "update", "import"],
@@ -613,7 +727,7 @@ class DatabaseInitializer:
                             "orders.list": ["read", "update"],
                             "orders.run_orders": ["read", "update"],
                             "orders.risk_pool": ["read", "update"],
-                            "orders.inventory_check": ["read", "update"],
+                            "materials.stock_check": ["read", "update"],
                             "materials.purchase_plan": ["read", "update"],
                             "materials.issues": ["read", "update"],
                             "materials.long_lead": ["read", "update"],
@@ -654,7 +768,7 @@ class DatabaseInitializer:
                             "orders.list": ["read"],
                             "orders.run_orders": ["read"],
                             "orders.risk_pool": ["read"],
-                            "orders.inventory_check": ["read"],
+                            "materials.stock_check": ["read"],
                             "materials.purchase_plan": ["create", "read", "update", "delete", "import"],
                             "materials.issues": ["create", "read", "update", "delete", "import"],
                             "materials.long_lead": ["create", "read", "update", "delete", "import"],
@@ -1554,9 +1668,33 @@ ORDER BY FModifyDate DESC
                         created_by="admin",
                     ),
                     SyncSqlConfig(
+                        sync_type="subcontract_orders",
+                        description="委外订单 — 从ERP委外订单表拉取（幂等键: bill_no）",
+                        sql_text="-- TODO: 配置 ERP 委外订单查询 SQL，返回字段需包含: erp_order_id, bill_no, bill_date, bill_type, settlement_method, settle_date, supplier_id, department_id, salesman_id, manager_id, auditor_id, audit_date, creator_id, remark, voided_flag, closed_flag, status, bill_type_id, rejected_flag, close_date, plan_category, closer_id, erp_updated_at\nSELECT NULL AS erp_order_id, NULL AS bill_no, NULL AS bill_date, NULL AS bill_type, NULL AS settlement_method, NULL AS settle_date, NULL AS supplier_id, NULL AS department_id, NULL AS salesman_id, NULL AS manager_id, NULL AS auditor_id, NULL AS audit_date, NULL AS creator_id, NULL AS remark, NULL AS voided_flag, NULL AS closed_flag, NULL AS status, NULL AS bill_type_id, NULL AS rejected_flag, NULL AS close_date, NULL AS plan_category, NULL AS closer_id, NULL AS erp_updated_at WHERE 1 = 0 AND :since IS NOT NULL",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1h",
+                        sync_strategy="incremental",
+                        sync_priority=22,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="subcontract_order_details",
+                        description="委外订单明细 — 从ERP委外订单明细表拉取（幂等键: erp_order_id+detail_id）",
+                        sql_text="-- TODO: 配置 ERP 委外订单明细查询 SQL，返回字段需包含: erp_order_id, detail_id, line_no, unit_id, material_id, qty, delivery_qty, received_qty, returned_qty, amount, mrp_closed_flag, sale_order_line_no, sale_order_id, sale_order_no\nSELECT NULL AS erp_order_id, NULL AS detail_id, NULL AS line_no, NULL AS unit_id, NULL AS material_id, NULL AS qty, NULL AS delivery_qty, NULL AS received_qty, NULL AS returned_qty, NULL AS amount, NULL AS mrp_closed_flag, NULL AS sale_order_line_no, NULL AS sale_order_id, NULL AS sale_order_no WHERE 1 = 0 AND :since IS NOT NULL",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1h",
+                        sync_strategy="incremental",
+                        sync_priority=23,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
                         sync_type="inventory",
                         description="即时库存 — 从ERP库存表拉取（全量快照）",
-                        sql_text="-- TODO: 配置 ERP 即时库存查询 SQL，返回字段需包含: material_id, material_code, material_name, wh_id, wh_code, wh_name, location_id, location_name, qty_on_hand, locked_qty, balance_qty, qty_in_transit, batch_no\nSELECT NULL AS material_id, NULL AS material_code, NULL AS material_name, NULL AS wh_id, NULL AS wh_code, NULL AS wh_name, NULL AS location_id, NULL AS location_name, NULL AS qty_on_hand, NULL AS locked_qty, NULL AS balance_qty, NULL AS qty_in_transit, NULL AS batch_no WHERE 1 = 0",
+                        sql_text="-- TODO: 配置 ERP 即时库存查询 SQL，返回字段需包含: material_id, material_code, material_name, wh_id, wh_code, wh_name, location_id, location_name, qty_on_hand, locked_qty, balance_qty, qty_in_transit, unit_price, ending_balance, batch_no\nSELECT NULL AS material_id, NULL AS material_code, NULL AS material_name, NULL AS wh_id, NULL AS wh_code, NULL AS wh_name, NULL AS location_id, NULL AS location_name, NULL AS qty_on_hand, NULL AS locked_qty, NULL AS balance_qty, NULL AS qty_in_transit, NULL AS unit_price, NULL AS ending_balance, NULL AS batch_no WHERE 1 = 0",
                         field_mapping_json=None,
                         is_active=True,
                         sync_enabled=True,
@@ -1593,8 +1731,11 @@ ORDER BY FModifyDate DESC
             self.create_database()
             await self.create_tables()
             await self.migrate_columns()
+            await self.drop_pto_sale_order_id_fk()
+            await self.ensure_indexes()
             await self.rebuild_mrp_plan_order()
             await self.backfill_sale_order_id()
+            await self.migrate_stock_check_permission()
             await self.seed_roles()
             await self.seed_users()
             await self.seed_risk_rules()

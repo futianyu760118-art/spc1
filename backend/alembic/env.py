@@ -1,5 +1,5 @@
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 from alembic import context
 
 from app.core.config import get_settings
@@ -26,6 +26,17 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     connectable = engine_from_config(config.get_section(config.config_ini_section, {}), prefix="sqlalchemy.", poolclass=pool.NullPool)
     with connectable.connect() as connection:
+        # 兼容历史超长 revision id(>32)：确保版本表 version_num 列足够宽，幂等。
+        # 仅在 alembic_version 已存在时执行，避免空库首跑报错。
+        connection.execute(text(
+            "DO $$ BEGIN "
+            "  IF EXISTS (SELECT 1 FROM information_schema.columns "
+            "    WHERE table_name='alembic_version' AND column_name='version_num') THEN "
+            "    EXECUTE 'ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)'; "
+            "  END IF; "
+            "END $$"
+        ))
+        connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()

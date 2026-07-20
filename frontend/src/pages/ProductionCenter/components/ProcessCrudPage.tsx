@@ -17,7 +17,7 @@ export interface ProcessFormField {
 export interface ProcessCrudApi {
   list: (params: Record<string, any>) => Promise<any>
   update: (id: number, payload: Record<string, any>) => Promise<any>
-  importCsv: (file: File) => Promise<any>
+  importCsv?: (file: File) => Promise<any>
 }
 
 export interface ProcessExtraFilter {
@@ -36,9 +36,11 @@ export interface ProcessCrudConfig<T> {
   formFields: ProcessFormField[]
   rowClassName?: (record: T) => string
   extraFilters?: ProcessExtraFilter[]
+  showImport?: boolean
+  keyField?: string
 }
 
-export default function ProcessCrudPage<T extends { id: number; status: string }>({
+export default function ProcessCrudPage<T extends { status: string }>({
   config,
 }: {
   config: ProcessCrudConfig<T>
@@ -50,9 +52,11 @@ export default function ProcessCrudPage<T extends { id: number; status: string }
     searchPlaceholder = '搜索',
     api,
     columns,
-  formFields,
+    formFields,
     rowClassName,
     extraFilters,
+    showImport = true,
+    keyField = 'id',
   } = config
 
   const [data, setData] = useState<T[]>([])
@@ -88,6 +92,7 @@ export default function ProcessCrudPage<T extends { id: number; status: string }
   useEffect(() => { load() }, [load])
 
   const handleImport = async (file: File) => {
+    if (!api.importCsv) return
     try {
       const res: any = await api.importCsv(file)
       message.success(`导入完成：新增 ${res.data.created}，更新 ${res.data.updated}，跳过 ${res.data.skipped}`)
@@ -117,7 +122,7 @@ export default function ProcessCrudPage<T extends { id: number; status: string }
         const v = values[f.name]
         payload[f.name] = f.type === 'date' ? (v ? dayjs(v).format('YYYY-MM-DD') : null) : v
       }
-      await api.update(editRecord.id, payload)
+      await api.update((editRecord as any)[keyField], payload)
       message.success('保存成功')
       setEditModal(false)
       load()
@@ -148,7 +153,7 @@ export default function ProcessCrudPage<T extends { id: number; status: string }
   ]
 
   const tableProps: TableProps<T> = {
-    rowKey: 'id',
+    rowKey: keyField,
     dataSource: data,
     columns: finalColumns,
     loading,
@@ -194,9 +199,11 @@ export default function ProcessCrudPage<T extends { id: number; status: string }
           <Col>
             <Space>
               <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-              <Upload beforeUpload={(f) => { handleImport(f); return false }} showUploadList={false} accept=".csv">
-                <Button icon={<UploadOutlined />}>导入CSV</Button>
-              </Upload>
+              {showImport && api.importCsv && (
+                <Upload beforeUpload={(f) => { handleImport(f); return false }} showUploadList={false} accept=".csv">
+                  <Button icon={<UploadOutlined />}>导入CSV</Button>
+                </Upload>
+              )}
             </Space>
           </Col>
         </Row>

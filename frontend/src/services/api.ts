@@ -30,6 +30,12 @@ api.interceptors.response.use(
     if (status === 401) {
       const detail = error.response?.data?.detail || '登录已过期'
       error.message = detail
+      // 登录接口自身的 401（用户名/密码错误等）由 Login 页面 catch 自行提示，
+      // 不要再走全局 toast + 登出 + window.location.href 全页刷新逻辑，
+      // 否则会立刻把刚排队的错误提示 toast 销毁。
+      if (error.config?.url?.includes('/basicdata/auth/login')) {
+        return Promise.reject(error)
+      }
       const { isShareUser, exitShare, logout } = useAuthStore.getState()
       if (isShareUser()) {
         messageApi?.warning({ content: detail, duration: 2 })
@@ -197,17 +203,43 @@ export const materialApi = {
     api.get('/materials/kit-analysis', { params }),
   getOrderMaterials: (orderNo: string, params: Record<string, any>) =>
     api.get(`/materials/kit-analysis/${orderNo}/materials`, { params }),
-  // 订单物料盘点
-  createInventoryCheck: (orderNo: string, data: { note?: string }) =>
-    api.post(`/materials/orders/${orderNo}/inventory-check`, data),
-  getLatestInventoryCheck: (orderNo: string) =>
-    api.get(`/materials/orders/${orderNo}/inventory-check/latest`),
-  getInventoryCheckHistory: (orderNo: string) =>
-    api.get(`/materials/orders/${orderNo}/inventory-check/history`),
-  getInventoryCheckDetail: (orderNo: string, checkId: number) =>
-    api.get(`/materials/orders/${orderNo}/inventory-check/${checkId}`),
-  getRecentInventoryChecks: (params: Record<string, any> = {}) =>
-    api.get('/materials/inventory-check/recent', { params }),
+  // 物料盘点
+  createStockCheckFromOrder: (orderNo: string, data?: { title?: string; check_date?: string; remark?: string }) =>
+    api.post(`/materials/stock-check/from-order/${orderNo}`, data || {}),
+  getRecentStockChecks: (params: Record<string, any> = {}) =>
+    api.get('/materials/stock-check/recent', { params }),
+  getStockChecksByOrder: (orderNo: string) =>
+    api.get(`/materials/stock-check/by-order/${orderNo}`),
+  getStockCheck: (checkId: number) =>
+    api.get(`/materials/stock-check/${checkId}`),
+  getStockCheckItems: (checkId: number, params: Record<string, any> = {}) =>
+    api.get(`/materials/stock-check/${checkId}/items`, { params }),
+  updateStockCheckItem: (itemId: number, data: { actual_qty?: number; is_checked?: number; remark?: string }) =>
+    api.put(`/materials/stock-check/items/${itemId}`, data),
+  batchUpdateStockCheckItems: (checkId: number, items: Array<{ id: number; actual_qty?: number; is_checked?: number; remark?: string }>) =>
+    api.post('/materials/stock-check/items/batch', { check_id: checkId, items }),
+  completeStockCheck: (checkId: number) =>
+    api.post(`/materials/stock-check/${checkId}/complete`),
+  cancelStockCheck: (checkId: number) =>
+    api.post(`/materials/stock-check/${checkId}/cancel`),
+  getMaterialHistory: (params: { material_id: number }) =>
+    api.get('/materials/stock-check/material-history', { params }),
+  getMaterialOrderUsage: (params: {
+    material_id: number
+    page?: number
+    page_size?: number
+    keyword?: string
+    sort_by?: string
+    sort_order?: string
+  }) => api.get('/materials/stock-check/material-orders', { params }),
+  listMaterialCandidates: (params: { keyword?: string; page?: number; page_size?: number } = {}) =>
+    api.get('/materials/stock-check/material-candidates', { params }),
+  createStockCheckFromMaterials: (data: {
+    material_ids: number[]
+    title?: string
+    check_date?: string
+    remark?: string
+  }) => api.post('/materials/stock-check/from-materials', data),
   // 供应商风险
   getSupplierRisk: (params: Record<string, any>) =>
     api.get('/materials/supplier-risk', { params }),

@@ -59,6 +59,7 @@ const FALLBACK_PERMISSION_TREE: PermTreeNode[] = [
       { key: 'materials.kit_analysis', label: '齐套分析' },
       { key: 'materials.supplier_risk', label: '供应商风险分析' },
       { key: 'materials.supplier_payment', label: '供应商付款排程' },
+      { key: 'materials.stock_check', label: '物料盘点' },
     ],
   },
   {
@@ -162,6 +163,7 @@ const PERMISSION_ACTIONS = [
   { key: 'update', label: '编辑' },
   { key: 'delete', label: '删除' },
   { key: 'import', label: '导入' },
+  { key: 'reset_password', label: '重置密码' },
 ]
 
 interface RoleItem {

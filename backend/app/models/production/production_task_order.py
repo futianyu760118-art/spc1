@@ -23,6 +23,7 @@ class ProductionTaskOrder(Base):
     actual_qty = Column(Numeric(15, 2), nullable=True, comment="实做数量")
     task_type = Column(String(64), nullable=True, comment="类型")
     sale_order_no = Column(String(64), nullable=True, comment="销售订单号")
+    sale_order_id = Column(Integer, nullable=True, comment="销售订单ID (ERP FOrderInterID)")
     start_flag = Column(Integer, nullable=True, comment="开工标志 0/1")
     is_closed = Column(Integer, nullable=True, comment="是否关闭 0-未关闭 1-已关闭")
     audit_status = Column(Integer, nullable=True, comment="审核状态 0-未审核 1-已审核")
@@ -41,4 +42,5 @@ class ProductionTaskOrder(Base):
         Index("ix_production_task_order_task_no", "task_no"),
         Index("ix_production_task_order_material_code", "material_code"),
         Index("ix_production_task_order_sale_order_no", "sale_order_no"),
+        Index("ix_production_task_order_sale_order_id", "sale_order_id"),
     )

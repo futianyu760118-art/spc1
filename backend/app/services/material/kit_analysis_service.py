@@ -359,8 +359,8 @@ async def _get_bom_demand_map(
         details_list = detail_result.scalars().all()
 
         # 按 bom_id 分组，同时收集子物料 ID
-        bom_detail_map: dict[str, list[tuple[str, Decimal]]] = {}
-        child_material_ids: set[str] = set()
+        bom_detail_map: dict[str, list[tuple[int, Decimal]]] = {}
+        child_material_ids: set[int] = set()
         for d in details_list:
             if d.material_id and d.standard_qty is not None:
                 bom_detail_map.setdefault(d.bom_id, []).append((d.material_id, d.standard_qty))
@@ -373,13 +373,13 @@ async def _get_bom_demand_map(
         new_material_ids = child_material_ids - set(material_map.keys())
         if new_material_ids:
             mat_result = await db.execute(
-                select(Material).where(Material.material_id.in_(new_material_ids))
+                select(Material).where(Material.erp_material_id.in_(new_material_ids))
             )
             for m in mat_result.scalars().all():
-                material_map[m.material_id] = m
+                material_map[m.erp_material_id] = m
 
         # 查询子物料中哪些有子 BOM
-        sub_material_boms: dict[str, Bom] = {}
+        sub_material_boms: dict[int, Bom] = {}
         bom_result = await db.execute(
             select(Bom).where(Bom.material_id.in_(child_material_ids))
         )

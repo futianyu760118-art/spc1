@@ -258,8 +258,13 @@ async def materials_list(ctx: ExternalCallContext) -> dict:
     status = params.get("status")
     updated_after = _parse_dt(params.get("updated_after"))
 
-    # 默认排除已删除物料
-    query = select(Material).where(Material.is_deleted == 0)
+    # 默认排除已删除物料；左连接供应商取名称（保留无供应商的物料）
+    # 注：Material.supplier_id 存储的是 ERP 供应商内部ID，需关联 Supplier.erp_supply_id
+    query = (
+        select(Material, Supplier.supplier_name)
+        .outerjoin(Supplier, Material.supplier_id == Supplier.erp_supply_id)
+        .where(Material.is_deleted == 0)
+    )
     count_query = select(func.count()).select_from(query.subquery())
 
     if keyword:
@@ -303,22 +308,26 @@ async def materials_list(ctx: ExternalCallContext) -> dict:
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
-    rows = (await db.execute(query)).scalars().all()
+    rows = (await db.execute(query)).all()
 
     items = [{
-        "id": r.id,
-        "material_id": r.material_id,
-        "material_code": r.material_code,
-        "material_name": r.material_name,
-        "spec_model": r.spec_model,
-        "material_type": r.material_type,
-        "unit_of_measure": r.unit_of_measure,
-        "brand": r.brand,
-        "is_purchase": r.is_purchase,
-        "is_produce": r.is_produce,
-        "status": r.status,
-        "update_time": r.update_time.isoformat() if r.update_time else None,
-    } for r in rows]
+        "id": m.id,
+        "erp_material_id": m.erp_material_id,
+        "material_code": m.material_code,
+        "material_name": m.material_name,
+        "spec_model": m.spec_model,
+        "material_type": m.material_type,
+        "unit_of_measure": m.unit_of_measure,
+        "brand": m.brand,
+        "is_purchase": m.is_purchase,
+        "is_produce": m.is_produce,
+        "status": m.status,
+        "supplier_id": m.supplier_id,
+        "supplier_name": supplier_name,
+        "order_unit_price": float(m.order_unit_price) if m.order_unit_price is not None else None,
+        "last_outbound_date": m.last_outbound_date.isoformat() if m.last_outbound_date else None,
+        "update_time": m.update_time.isoformat() if m.update_time else None,
+    } for m, supplier_name in rows]
 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 

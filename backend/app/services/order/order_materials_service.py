@@ -190,11 +190,11 @@ async def get_order_product_materials(
     bom_detail_material_ids = sorted({
         d.material_id for details in bom_details_by_id.values() for d in details if d.material_id
     })
-    master_by_mid: dict[str, Material] = {}
+    master_by_mid: dict[int, Material] = {}
     if bom_detail_material_ids:
-        mid_result = await db.execute(select(Material).where(Material.material_id.in_(bom_detail_material_ids)))
+        mid_result = await db.execute(select(Material).where(Material.erp_material_id.in_(bom_detail_material_ids)))
         for m in mid_result.scalars().all():
-            master_by_mid[m.material_id] = m
+            master_by_mid[m.erp_material_id] = m
 
     result: list[OrderProductMaterialsOut] = []
     for line in lines:
@@ -208,7 +208,7 @@ async def get_order_product_materials(
 def _build_line_materials(
     line: SaleOrderLine,
     bom_details: list[BomDetail],
-    master_by_mid: dict[str, Material],
+    master_by_mid: dict[int, Material],
 ) -> OrderProductMaterialsOut:
     order_qty = line.order_qty
 
@@ -222,7 +222,7 @@ def _build_line_materials(
             req_qty = _to_float(detail.standard_qty)
 
         items.append(BomDetailItemOut(
-            material_id=detail.material_id,
+            material_id=str(detail.material_id) if detail.material_id is not None else None,
             material_code=master.material_code if master else None,
             material_name=master.material_name if master else None,
             spec_model=master.spec_model if master else None,

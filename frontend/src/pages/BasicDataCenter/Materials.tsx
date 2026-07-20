@@ -11,8 +11,8 @@ import api from '../../services/api'
 
 interface Material {
   id: number
-  material_id: string
-  parent_id?: string | null
+  erp_material_id: number
+  parent_id?: number | null
   material_code: string
   material_name: string
   spec_model?: string
@@ -28,24 +28,24 @@ interface Material {
 }
 
 interface TreeNode {
-  id: string
-  value: string
+  id: number
+  value: number
   title: string
-  key: string
+  key: number
   children?: TreeNode[]
 }
 
 const buildTreeData = (items: Material[]): TreeNode[] => {
-  const map: Record<string, TreeNode> = {}
+  const map: Record<number, TreeNode> = {}
   const roots: TreeNode[] = []
   for (const item of items) {
-    map[item.material_id] = { id: item.material_id, value: item.material_id, title: `${item.material_code} - ${item.material_name}`, key: item.material_id, children: [] }
+    map[item.erp_material_id] = { id: item.erp_material_id, value: item.erp_material_id, title: `${item.material_code} - ${item.material_name}`, key: item.erp_material_id, children: [] }
   }
   for (const item of items) {
     if (item.parent_id && map[item.parent_id]) {
-      map[item.parent_id].children!.push(map[item.material_id])
+      map[item.parent_id].children!.push(map[item.erp_material_id])
     } else {
-      roots.push(map[item.material_id])
+      roots.push(map[item.erp_material_id])
     }
   }
   return roots
@@ -63,7 +63,7 @@ const flattenTree = (nodes: Material[]): Material[] => {
   return result
 }
 
-const filterSelfFromTree = (nodes: TreeNode[], excludeId: string): TreeNode[] => {
+const filterSelfFromTree = (nodes: TreeNode[], excludeId: number): TreeNode[] => {
   return nodes
     .filter(n => n.id !== excludeId)
     .map(n => ({
@@ -79,8 +79,8 @@ interface MaterialFormProps {
 
 const MaterialForm = ({ form, treeData }: MaterialFormProps) => (
   <Form form={form} layout="vertical">
-    <Form.Item name="material_id" label="物料ID" rules={[{ required: true }]}>
-      <Input placeholder="请输入物料ID(外部系统)" />
+    <Form.Item name="erp_material_id" label="ERP物料ID" rules={[{ required: true }]}>
+      <InputNumber placeholder="请输入ERP物料ID" style={{ width: '100%' }} />
     </Form.Item>
     <Form.Item name="parent_id" label="上级物料">
       <TreeSelect
@@ -202,7 +202,7 @@ export default function Materials() {
     setModalVisible(true)
   }
 
-  const handleDelete = async (materialId: string) => {
+  const handleDelete = async (materialId: number) => {
     try {
       await api.delete(`/basicdata/materials/${materialId}`)
       message.success('删除成功')
@@ -216,11 +216,11 @@ export default function Materials() {
     try {
       const values = await form.validateFields()
       if (editingItem) {
-        if (values.parent_id === editingItem.material_id) {
+        if (values.parent_id === editingItem.erp_material_id) {
           message.error('上级物料不能选择自身')
           return
         }
-        await api.put(`/basicdata/materials/${editingItem.material_id}`, values)
+        await api.put(`/basicdata/materials/${editingItem.erp_material_id}`, values)
         message.success('更新成功')
       } else {
         await api.post('/basicdata/materials', values)
@@ -235,7 +235,7 @@ export default function Materials() {
   }
 
   const columns = [
-    { title: '物料ID', dataIndex: 'material_id', key: 'material_id', width: 120 },
+    { title: 'ERP物料ID', dataIndex: 'erp_material_id', key: 'erp_material_id', width: 120 },
     { title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 160 },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 180 },
     { title: '规格型号', dataIndex: 'spec_model', key: 'spec_model', width: 140 },
@@ -267,7 +267,7 @@ export default function Materials() {
       render: (_: any, record: Material) => (
         <Space size="small">
           <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
-          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.material_id)} okText="确认" cancelText="取消">
+          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.erp_material_id)} okText="确认" cancelText="取消">
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
@@ -340,7 +340,7 @@ export default function Materials() {
         onCancel={() => setModalVisible(false)}
         width={600}
       >
-        <MaterialForm form={form} treeData={editingItem ? filterSelfFromTree(parentTreeData, editingItem.material_id) : parentTreeData} />
+        <MaterialForm form={form} treeData={editingItem ? filterSelfFromTree(parentTreeData, editingItem.erp_material_id) : parentTreeData} />
       </Modal>
     </div>
   )

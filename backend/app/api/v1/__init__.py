@@ -25,7 +25,7 @@ api_router.include_router(material.supplier_risk_router, prefix="/materials/supp
 api_router.include_router(material.supplier_payment_router, prefix="/materials/supplier-payment", tags=["物料齐套中心-供应商付款排程"])
 api_router.include_router(material.supplier_message_router, prefix="/materials/supplier-messages", tags=["物料齐套中心-供应商即时沟通"])
 api_router.include_router(material.po_router, prefix="/materials", tags=["物料齐套中心-ERP采购订单"])
-api_router.include_router(material.inventory_check_router, prefix="/materials", tags=["物料齐套中心-订单物料盘点"])
+api_router.include_router(material.stock_check_router, prefix="/materials", tags=["物料齐套中心-物料盘点"])
 
 # Production center
 api_router.include_router(production.router, prefix="/production", tags=["生产协同中心"])

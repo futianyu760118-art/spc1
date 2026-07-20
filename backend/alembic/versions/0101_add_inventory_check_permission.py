@@ -8,7 +8,7 @@ from alembic import op
 import json
 
 revision = '0101'
-down_revision = '0100'
+down_revision = 'chg_inventory_uq'
 branch_labels = None
 depends_on = None
 

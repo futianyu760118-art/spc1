@@ -1,5 +1,6 @@
 """基础数据与集成中心 — 基础数据CRUD API"""
 
+import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,7 @@ from app.models.basicdata import (
 )
 from app.services.basicdata.position_role_service import sync_user_role_from_employee
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _apply_sort(query, model, sort_by: Optional[str], sort_order: Optional[str], sortable: dict):
@@ -286,18 +288,18 @@ async def get_material_tree(db: AsyncSession = Depends(get_db)):
     )
     all_items = result.scalars().all()
 
-    node_map: dict[str, MaterialTreeNode] = {}
+    node_map: dict[int, MaterialTreeNode] = {}
     roots: List[MaterialTreeNode] = []
     for item in all_items:
         node = MaterialTreeNode(
-            id=item.id, material_id=item.material_id, parent_id=item.parent_id,
+            id=item.id, erp_material_id=item.erp_material_id, parent_id=item.parent_id,
             material_code=item.material_code, material_name=item.material_name,
             spec_model=item.spec_model, material_type=item.material_type,
             unit_of_measure=item.unit_of_measure, brand=item.brand,
             is_purchase=item.is_purchase, is_produce=item.is_produce,
             status=item.status, children=[],
         )
-        node_map[item.material_id] = node
+        node_map[item.erp_material_id] = node
         if item.parent_id is None:
             roots.append(node)
         else:
@@ -313,7 +315,7 @@ async def get_material_tree(db: AsyncSession = Depends(get_db)):
 async def list_materials(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    parent_id: Optional[str] = Query(None, description="父级物料ID筛选, 'root'表示根级"),
+    parent_id: Optional[int] = Query(None, description="父级物料ID筛选, None表示根级"),
     keyword: Optional[str] = Query(None, description="搜索编码/名称"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query(None),
@@ -333,10 +335,7 @@ async def list_materials(
     }
     query = select(Material).filter(Material.is_deleted == 0)
     if parent_id is not None:
-        if parent_id == 'root':
-            query = query.filter(Material.parent_id.is_(None))
-        else:
-            query = query.filter(Material.parent_id == parent_id)
+        query = query.filter(Material.parent_id == parent_id)
     if keyword:
         like = f"%{keyword}%"
         query = query.where(or_(Material.material_code.ilike(like), Material.material_name.ilike(like)))
@@ -357,11 +356,11 @@ async def list_materials(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.get("/materials/{material_id}", response_model=MaterialOut)
-async def get_material(material_id: str, db: AsyncSession = Depends(get_db)):
+@router.get("/materials/{erp_material_id}", response_model=MaterialOut)
+async def get_material(erp_material_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个物料"""
     result = await db.execute(
-        select(Material).filter(Material.material_id == material_id, Material.is_deleted == 0)
+        select(Material).filter(Material.erp_material_id == erp_material_id, Material.is_deleted == 0)
     )
     item = result.scalar_one_or_none()
     if not item:
@@ -372,10 +371,10 @@ async def get_material(material_id: str, db: AsyncSession = Depends(get_db)):
 @router.post("/materials", response_model=MaterialOut)
 async def create_material(material: MaterialCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
     """创建物料"""
-    result = await db.execute(select(Material).filter(Material.material_id == material.material_id))
+    result = await db.execute(select(Material).filter(Material.erp_material_id == material.erp_material_id))
     existing = result.scalar_one_or_none()
     if existing:
-        raise HTTPException(status_code=400, detail="物料ID已存在")
+        raise HTTPException(status_code=400, detail="ERP物料ID已存在")
     
     db_item = Material(**material.model_dump())
     db.add(db_item)
@@ -386,10 +385,10 @@ async def create_material(material: MaterialCreate, db: AsyncSession = Depends(g
     return db_item
 
 
-@router.put("/materials/{material_id}", response_model=MaterialOut)
-async def update_material(material_id: str, material: MaterialUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+@router.put("/materials/{erp_material_id}", response_model=MaterialOut)
+async def update_material(erp_material_id: int, material: MaterialUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
     """更新物料"""
-    result = await db.execute(select(Material).filter(Material.material_id == material_id))
+    result = await db.execute(select(Material).filter(Material.erp_material_id == erp_material_id))
     db_item = result.scalar_one_or_none()
     if not db_item:
         raise HTTPException(status_code=404, detail="物料不存在")
@@ -403,11 +402,11 @@ async def update_material(material_id: str, material: MaterialUpdate, db: AsyncS
     return db_item
 
 
-@router.delete("/materials/{material_id}")
-async def delete_material(material_id: str, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+@router.delete("/materials/{erp_material_id}")
+async def delete_material(erp_material_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
     """逻辑删除物料"""
     result = await db.execute(
-        select(Material).filter(Material.material_id == material_id, Material.is_deleted == 0)
+        select(Material).filter(Material.erp_material_id == erp_material_id, Material.is_deleted == 0)
     )
     db_item = result.scalar_one_or_none()
     if not db_item:
@@ -912,9 +911,7 @@ async def get_organization_tree(db: AsyncSession = Depends(get_db), current_user
 
     node_map: dict[str, OrganizationTreeNode] = {}
     roots: List[OrganizationTreeNode] = []
-    
-    # 第一遍：创建所有节点
-    # 如果有 oa_org_id 则用 oa_org_id 作为key，否则用 id（转为字符串）
+
     for org, leader_name in all_items:
         node = OrganizationTreeNode(
             id=org.id,
@@ -929,26 +926,24 @@ async def get_organization_tree(db: AsyncSession = Depends(get_db), current_user
             data_source=org.data_source,
             children=[],
         )
-        # 使用 oa_org_id 或 id（转为字符串）作为key
-        node_key = org.oa_org_id if org.oa_org_id else str(org.id)
-        node_map[node_key] = node
-    
-    # 第二遍：构建树结构，parent_id 引用的是 oa_org_id
+        node_map[str(org.id)] = node
+
     for org, leader_name in all_items:
-        # 获取当前节点的key
-        node_key = org.oa_org_id if org.oa_org_id else str(org.id)
-        node = node_map.get(node_key)
+        node = node_map.get(str(org.id))
         if not node:
             continue
-        
+
         if org.parent_id is None or org.parent_id == 0:
             roots.append(node)
         else:
-            # parent_id 引用的是 oa_org_id
             parent = node_map.get(str(org.parent_id))
             if parent:
                 parent.children.append(node)
             else:
+                logger.warning(
+                    "组织 %s(id=%s) 的 parent_id=%s 找不到对应父组织，临时挂为根",
+                    org.org_code, org.id, org.parent_id,
+                )
                 roots.append(node)
     return ResponseModel(data=roots)
 
@@ -1340,6 +1335,8 @@ SORTABLE_INVENTORY = {
     "qty_on_hand": Inventory.qty_on_hand,
     "locked_qty": Inventory.locked_qty,
     "balance_qty": Inventory.balance_qty,
+    "unit_price": Inventory.unit_price,
+    "ending_balance": Inventory.ending_balance,
     "updated_at": Inventory.updated_at,
 }
 
@@ -1359,6 +1356,13 @@ async def list_inventory(
 ):
     query = select(Inventory)
     count_query = select(func.count()).select_from(Inventory)
+    sums_query = select(
+        func.coalesce(func.sum(Inventory.qty_on_hand), 0),
+        func.coalesce(func.sum(Inventory.locked_qty), 0),
+        func.coalesce(func.sum(Inventory.balance_qty), 0),
+        func.coalesce(func.sum(Inventory.qty_in_transit), 0),
+        func.coalesce(func.sum(Inventory.ending_balance), 0),
+    )
 
     if keyword:
         like = f"%{keyword}%"
@@ -1369,17 +1373,22 @@ async def list_inventory(
         )
         query = query.where(filter_cond)
         count_query = count_query.where(filter_cond)
+        sums_query = sums_query.where(filter_cond)
     if material_code:
         query = query.where(Inventory.material_code == material_code)
         count_query = count_query.where(Inventory.material_code == material_code)
+        sums_query = sums_query.where(Inventory.material_code == material_code)
     if wh_code:
         query = query.where(Inventory.wh_code == wh_code)
         count_query = count_query.where(Inventory.wh_code == wh_code)
+        sums_query = sums_query.where(Inventory.wh_code == wh_code)
     if batch_no:
         query = query.where(Inventory.batch_no == batch_no)
         count_query = count_query.where(Inventory.batch_no == batch_no)
+        sums_query = sums_query.where(Inventory.batch_no == batch_no)
 
     total = (await db.execute(count_query)).scalar() or 0
+    sum_on_hand, sum_locked, sum_balance, sum_in_transit, sum_ending = (await db.execute(sums_query)).one()
 
     query = _apply_sort(query, Inventory, sort_by, sort_order, SORTABLE_INVENTORY)
     query = query.offset((page - 1) * page_size).limit(page_size)
@@ -1402,6 +1411,8 @@ async def list_inventory(
                 "locked_qty": float(inv.locked_qty) if inv.locked_qty else 0,
                 "balance_qty": float(inv.balance_qty) if inv.balance_qty else 0,
                 "qty_in_transit": float(inv.qty_in_transit) if inv.qty_in_transit else 0,
+                "unit_price": float(inv.unit_price) if inv.unit_price else 0,
+                "ending_balance": float(inv.ending_balance) if inv.ending_balance else 0,
                 "batch_no": inv.batch_no,
                 "created_at": inv.created_at.isoformat() if inv.created_at else None,
                 "updated_at": inv.updated_at.isoformat() if inv.updated_at else None,
@@ -1411,4 +1422,11 @@ async def list_inventory(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "sums": {
+            "qty_on_hand": float(sum_on_hand or 0),
+            "locked_qty": float(sum_locked or 0),
+            "balance_qty": float(sum_balance or 0),
+            "qty_in_transit": float(sum_in_transit or 0),
+            "ending_balance": float(sum_ending or 0),
+        },
     })

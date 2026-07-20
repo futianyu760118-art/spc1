@@ -103,8 +103,8 @@ async def search_bom_details(db: AsyncSession, params: Dict[str, Any]) -> Dict[s
         return {"total": 0, "items": [], "error": f"未找到物料编码 {material_code}"}
 
     # 2. 查询该产品的 BOM 列表
-    bom_query = select(Bom).where(Bom.material_id == master.material_id)
-    count_query = select(func.count()).select_from(Bom).where(Bom.material_id == master.material_id)
+    bom_query = select(Bom).where(Bom.material_id == master.erp_material_id)
+    count_query = select(func.count()).select_from(Bom).where(Bom.material_id == master.erp_material_id)
 
     if bom_no:
         bom_query = bom_query.where(Bom.bom_no.ilike(f"%{bom_no}%"))
@@ -150,7 +150,7 @@ async def search_bom_details(db: AsyncSession, params: Dict[str, Any]) -> Dict[s
                 Material.spec_model,
                 Material.unit_of_measure,
             )
-            .outerjoin(Material, BomDetail.material_id == Material.material_id)
+            .outerjoin(Material, BomDetail.material_id == Material.erp_material_id)
             .where(BomDetail.bom_id.in_(bom_ids))
             .order_by(BomDetail.bom_id, BomDetail.line_no)
         )

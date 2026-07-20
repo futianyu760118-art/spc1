@@ -22,6 +22,8 @@ class Inventory(Base):
     locked_qty = Column(Numeric(15, 2), nullable=False, default=0, comment="锁定数量")
     balance_qty = Column(Numeric(15, 2), nullable=False, default=0, comment="结存数量")
     qty_in_transit = Column(Numeric(15, 2), nullable=False, default=0, comment="在途库存")
+    unit_price = Column(Numeric(15, 6), nullable=False, default=0, comment="库存单价")
+    ending_balance = Column(Numeric(15, 2), nullable=False, default=0, comment="期末余额")
     batch_no = Column(String(50), nullable=True, comment="批次号")
     data_source = Column(String(32))
     created_at = Column(DateTime, server_default=func.now(), nullable=False)

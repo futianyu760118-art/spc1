@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 import {
-  Table, Button, Modal, Form, Input, Select, message,
+  Table, Button, Modal, Form, Input, Select, InputNumber, message,
   Space, Tag, Popconfirm, Row, Col,
 } from 'antd'
 import {
@@ -16,6 +16,9 @@ interface Supplier {
   supplier_type?: string
   contact_person?: string
   contact_phone?: string
+  fax?: string
+  address?: string
+  erp_supply_id?: number
   payment_terms?: string
   status: number
   create_time: string
@@ -41,6 +44,15 @@ const SupplierForm = ({ form }: { form: any }) => (
     </Form.Item>
     <Form.Item name="contact_phone" label="联系电话">
       <Input placeholder="请输入联系电话" />
+    </Form.Item>
+    <Form.Item name="fax" label="传真">
+      <Input placeholder="请输入传真" />
+    </Form.Item>
+    <Form.Item name="address" label="地址">
+      <Input placeholder="请输入地址" />
+    </Form.Item>
+    <Form.Item name="erp_supply_id" label="ERP供应商ID">
+      <InputNumber style={{ width: '100%' }} placeholder="请输入ERP内部ID" />
     </Form.Item>
     <Form.Item name="payment_terms" label="付款条款">
       <Input placeholder="请输入付款条款" />
@@ -120,14 +132,19 @@ export default function Suppliers() {
   }
 
   const columns = [
-    { title: '供应商编码', dataIndex: 'supplier_code', key: 'supplier_code' },
-    { title: '供应商名称', dataIndex: 'supplier_name', key: 'supplier_name' },
-    { title: '供应商类型', dataIndex: 'supplier_type', key: 'supplier_type' },
-    { title: '联系人', dataIndex: 'contact_person', key: 'contact_person' },
+    { title: '供应商编码', dataIndex: 'supplier_code', key: 'supplier_code', width: 140 },
+    { title: '供应商名称', dataIndex: 'supplier_name', key: 'supplier_name', width: 200, ellipsis: true },
+    { title: '简称', dataIndex: 'supplier_short', key: 'supplier_short', width: 120, ellipsis: true },
+    { title: '类型', dataIndex: 'supplier_type', key: 'supplier_type', width: 100 },
+    { title: '联系人', dataIndex: 'contact_person', key: 'contact_person', width: 100 },
+    { title: '电话', dataIndex: 'contact_phone', key: 'contact_phone', width: 130 },
+    { title: '传真', dataIndex: 'fax', key: 'fax', width: 130 },
+    { title: '地址', dataIndex: 'address', key: 'address', width: 200, ellipsis: true },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
+      width: 80,
       render: (status: number) => (
         <Tag color={status === 1 ? 'green' : 'red'}>{status === 1 ? '启用' : '禁用'}</Tag>
       ),
@@ -136,6 +153,7 @@ export default function Suppliers() {
       title: '操作',
       key: 'action',
       width: 100,
+      fixed: 'right' as const,
       render: (_: any, record: Supplier) => (
         <Space size="small">
           <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
@@ -167,7 +185,7 @@ export default function Suppliers() {
           columns={columns}
           dataSource={data}
           loading={loading}
-          scroll={{ x: 800 }}
+          scroll={{ x: 1200 }}
           size="small"
           pagination={{
             ...pagination,
@@ -183,7 +201,7 @@ export default function Suppliers() {
         open={modalVisible}
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
-        width={600}
+        width={640}
       >
         <SupplierForm form={form} />
       </Modal>

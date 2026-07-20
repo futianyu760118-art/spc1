@@ -118,6 +118,45 @@ async def sync_permissions_to_db(db: AsyncSession) -> int:
     return synced
 
 
+# 已废弃的权限 code —— 这些权限已迁移到 materials.stock_check，
+# 运行期代码（API PermissionChecker / 前端菜单）不再引用，需在每次启动时清理。
+DEPRECATED_PERMISSION_CODES = ("orders.stock_check", "orders.inventory_check")
+
+
+async def cleanup_deprecated_permissions(db: AsyncSession) -> int:
+    """清理已废弃的权限：从 sys_role.permissions JSONB 移除 key，并删除 sys_permission 行。
+
+    与 sync_permissions_to_db 不同，本函数在每次应用启动（lifespan）时执行，
+    因此不依赖 init_database.py 是否被运行。幂等。
+    """
+    from sqlalchemy import text
+
+    removed = 0
+    for code in DEPRECATED_PERMISSION_CODES:
+        # 1) sys_role.permissions: 移除 JSONB 中的 key
+        await db.execute(
+            text(
+                "UPDATE sys_role "
+                "SET permissions = permissions - CAST(:code AS text) "
+                "WHERE permissions ? CAST(:code AS text)"
+            ),
+            {"code": code},
+        )
+        # 2) sys_permission: 删除行
+        result = await db.execute(
+            text("DELETE FROM sys_permission WHERE code = CAST(:code AS text)"),
+            {"code": code},
+        )
+        removed += result.rowcount or 0
+    await db.commit()
+    if removed:
+        logger.info(
+            f"[权限注册] 清理 {removed} 个废弃权限定义 "
+            f"(codes={list(DEPRECATED_PERMISSION_CODES)})"
+        )
+    return removed
+
+
 def sa_func_now():
     """延迟导入避免循环依赖"""
     from sqlalchemy.sql import func
@@ -143,7 +182,6 @@ declare_permission("orders", "订单交付中心", module="orders", sort_order=3
 declare_permission("orders.list", "订单总控台", module="orders", parent_code="orders", route_path="/orders", sort_order=1)
 declare_permission("orders.run_orders", "跑单管理", module="orders", parent_code="orders", route_path="/run-orders", sort_order=2)
 declare_permission("orders.risk_pool", "订单风险池", module="orders", parent_code="orders", route_path="/order-risk-pool", sort_order=3)
-declare_permission("orders.inventory_check", "订单物料盘点", module="orders", parent_code="orders", route_path="/inventory-check", sort_order=4)
 
 # 物料齐套中心
 declare_permission("materials", "物料齐套中心", module="materials", sort_order=4)
@@ -153,6 +191,7 @@ declare_permission("materials.long_lead", "长交期物料池", module="material
 declare_permission("materials.kit_analysis", "齐套分析", module="materials", parent_code="materials", route_path="/kit-analysis", sort_order=4)
 declare_permission("materials.supplier_risk", "供应商风险分析", module="materials", parent_code="materials", route_path="/supplier-risk", sort_order=5)
 declare_permission("materials.supplier_payment", "供应商付款排程", module="materials", parent_code="materials", route_path="/supplier-payment", sort_order=6)
+declare_permission("materials.stock_check", "物料盘点", module="materials", parent_code="materials", route_path="/stock-check", sort_order=7)
 
 # 生产协同中心
 declare_permission("production", "生产协同中心", module="production", sort_order=5)
@@ -211,7 +250,15 @@ declare_permission("basicdata.feedback", "问题反馈", module="basicdata", par
 declare_permission("basicdata.files", "文件管理", module="basicdata", parent_code="basicdata", route_path="/basicdata/files", sort_order=4)
 declare_permission("basicdata.data_supply", "数据供给", module="basicdata", parent_code="basicdata", route_path="/basicdata/data-supply", sort_order=10)
 declare_permission("announcements", "公告管理", module="basicdata", parent_code="basicdata", route_path="/announcements", sort_order=5)
-declare_permission("users", "用户管理", module="basicdata", parent_code="basicdata", route_path="/users", sort_order=6)
+declare_permission(
+    code="users",
+    name="用户管理",
+    module="basicdata",
+    parent_code="basicdata",
+    actions=["create", "read", "update", "delete", "reset_password"],
+    route_path="/users",
+    sort_order=6,
+)
 declare_permission("roles", "角色管理", module="basicdata", parent_code="basicdata", route_path="/roles", sort_order=7)
 declare_permission("audit", "审计日志", module="basicdata", parent_code="basicdata", actions=["read"], route_path="/audit", sort_order=8)
 declare_permission("settings", "同步SQL配置", module="basicdata", parent_code="basicdata", route_path="/sync-config", sort_order=9)

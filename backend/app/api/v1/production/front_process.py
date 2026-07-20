@@ -1,119 +1,203 @@
-"""生产协同中心 — 前道管理 API"""
+"""生产协同中心 — 前道管理 API
 
-import tempfile
-import os
-from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
-from sqlalchemy import select, func
+数据主体为喷塑车间/压铸车间未关闭的生产任务单(OA 同步)。
+壳体/框/手杆/支架圆盘/备注 等手工字段存于 front_process_record 表，
+通过 task_id 与任务单关联；任务单基础信息及 sale_order 关联字段在
+查询时 JOIN 带出。OA 同步只更新 production_task_order 的映射字段，
+不会触及 front_process_record。
+"""
+
+from fastapi import APIRouter, Depends, Query, HTTPException
+from sqlalchemy import select, func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
-from app.models.production.process_progress import ProcessProgress
+from app.models.production.production_task_order import ProductionTaskOrder
+from app.models.production.front_process_record import FrontProcessRecord
+from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.schemas.common import ResponseModel, PageResult
-from app.schemas.production.schemas import ProcessProgressOut, ProcessProgressCreate, ProcessProgressUpdate
-from app.services.production.import_production_csv import import_front_process_csv
+from app.schemas.production.schemas import FrontProcessTaskOut, FrontProcessRecordUpdate
 
 router = APIRouter()
 
+# 前道管理覆盖的车间
+FRONT_WORKSHOPS = ["喷塑车间", "压铸车间"]
 
-@router.get("", response_model=ResponseModel[PageResult[ProcessProgressOut]])
+# production_task_order.sale_order_id 存的是 ERP FOrderInterID（外部 ID），
+# 与 sale_order.id 不在同一 ID 空间，OA 同步也不填该列；故一律按订单号字符串关联。
+#
+# 两层关联：
+#  1) _sale_order_header —— 取 sale_order 每个订单号的首行(line_no 最小)，提供
+#     订单头属性 customer/customer_code/order_date（同行一致，取首行即可）。
+#  2) _sale_order_product —— 取 sale_order_line 每个 (order_no, product_code) 的首行，
+#     提供行级属性 product_name/product_model/promised_date。任务单无 line_no，
+#     用 material_code ↔ product_code 命中订单下的具体产品行。
+_sale_order_header = (
+    select(
+        SaleOrder.order_no.label("so_order_no"),
+        SaleOrder.customer_code.label("customer_code"),
+        SaleOrder.customer.label("customer"),
+        SaleOrder.order_date.label("order_date"),
+    )
+    .distinct(SaleOrder.order_no)
+    .order_by(SaleOrder.order_no, SaleOrder.line_no)
+    .subquery()
+)
+
+_sale_order_product = (
+    select(
+        SaleOrderLine.order_no.label("sol_order_no"),
+        SaleOrderLine.product_code.label("sol_product_code"),
+        SaleOrderLine.product_name.label("product_name"),
+        SaleOrderLine.product_model.label("product_model"),
+        SaleOrderLine.promised_date.label("promised_date"),
+    )
+    .distinct(SaleOrderLine.order_no, SaleOrderLine.product_code)
+    .order_by(SaleOrderLine.order_no, SaleOrderLine.product_code, SaleOrderLine.line_no)
+    .subquery()
+)
+
+
+def _base_filters():
+    return [
+        ProductionTaskOrder.workshop.in_(FRONT_WORKSHOPS),
+        or_(ProductionTaskOrder.is_closed == 0, ProductionTaskOrder.is_closed.is_(None)),
+        ProductionTaskOrder.task_id.isnot(None),
+    ]
+
+
+@router.get("", response_model=ResponseModel[PageResult[FrontProcessTaskOut]])
 async def list_front_process(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
-    order_no: Optional[str] = Query(None),
-    model_code: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
+    workshop: Optional[str] = Query(None, description="车间筛选"),
     keyword: Optional[str] = Query(None),
     current_user: dict = Depends(PermissionChecker("production.front_process", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    base = [ProcessProgress.process_type == 'front_process']
-    if order_no:
-        base.append(ProcessProgress.order_no.ilike(f'%{order_no}%'))
-    if model_code:
-        base.append(ProcessProgress.model_code.ilike(f'%{model_code}%'))
-    if status:
-        base.append(ProcessProgress.status == status)
+    filters = _base_filters()
+    if workshop:
+        filters.append(ProductionTaskOrder.workshop == workshop)
     if keyword:
-        like = f'%{keyword}%'
-        base.append(
-            ProcessProgress.model_code.ilike(like)
-            | ProcessProgress.sale_order_no.ilike(like)
-            | ProcessProgress.product_name.ilike(like)
+        like = f"%{keyword}%"
+        filters.append(
+            or_(
+                ProductionTaskOrder.task_no.ilike(like),
+                ProductionTaskOrder.material_code.ilike(like),
+                ProductionTaskOrder.material_name.ilike(like),
+                ProductionTaskOrder.sale_order_no.ilike(like),
+                _sale_order_header.c.customer.ilike(like),
+                _sale_order_header.c.customer_code.ilike(like),
+                _sale_order_product.c.product_model.ilike(like),
+                _sale_order_product.c.product_name.ilike(like),
+            )
         )
 
-    total_result = await db.execute(select(func.count(ProcessProgress.id)).where(*base))
-    total = total_result.scalar()
+    count_stmt = (
+        select(func.count())
+        .select_from(ProductionTaskOrder)
+        .outerjoin(FrontProcessRecord, FrontProcessRecord.task_id == ProductionTaskOrder.task_id)
+        .outerjoin(_sale_order_header, _sale_order_header.c.so_order_no == ProductionTaskOrder.sale_order_no)
+        .outerjoin(
+            _sale_order_product,
+            and_(
+                _sale_order_product.c.sol_order_no == ProductionTaskOrder.sale_order_no,
+                _sale_order_product.c.sol_product_code == ProductionTaskOrder.material_code,
+            ),
+        )
+        .where(*filters)
+    )
+    total = (await db.execute(count_stmt)).scalar()
 
     query = (
-        select(ProcessProgress)
-        .where(*base)
-        .order_by(ProcessProgress.delivery_date.asc().nullslast(), ProcessProgress.id.desc())
+        select(
+            ProductionTaskOrder.task_id.label("task_id"),
+            ProductionTaskOrder.task_no.label("task_no"),
+            ProductionTaskOrder.workshop.label("workshop"),
+            ProductionTaskOrder.material_code.label("material_code"),
+            ProductionTaskOrder.material_name.label("material_name"),
+            ProductionTaskOrder.sale_order_no.label("sale_order_no"),
+            ProductionTaskOrder.task_qty.label("task_qty"),
+            ProductionTaskOrder.planned_start_date.label("planned_start_date"),
+            ProductionTaskOrder.planned_end_date.label("planned_end_date"),
+            ProductionTaskOrder.actual_start_date.label("actual_start_date"),
+            ProductionTaskOrder.actual_end_date.label("actual_end_date"),
+            ProductionTaskOrder.is_closed.label("is_closed"),
+            _sale_order_header.c.customer_code.label("customer_code"),
+            _sale_order_header.c.customer.label("customer"),
+            _sale_order_header.c.order_date.label("order_date"),
+            _sale_order_product.c.product_name.label("product_name"),
+            _sale_order_product.c.product_model.label("product_model"),
+            _sale_order_product.c.promised_date.label("promised_date"),
+            FrontProcessRecord.shell_status.label("shell_status"),
+            FrontProcessRecord.frame_status.label("frame_status"),
+            FrontProcessRecord.handle_status.label("handle_status"),
+            FrontProcessRecord.bracket_status.label("bracket_status"),
+            FrontProcessRecord.remark.label("remark"),
+            func.coalesce(FrontProcessRecord.status, "pending").label("status"),
+        )
+        .select_from(ProductionTaskOrder)
+        .outerjoin(FrontProcessRecord, FrontProcessRecord.task_id == ProductionTaskOrder.task_id)
+        .outerjoin(_sale_order_header, _sale_order_header.c.so_order_no == ProductionTaskOrder.sale_order_no)
+        .outerjoin(
+            _sale_order_product,
+            and_(
+                _sale_order_product.c.sol_order_no == ProductionTaskOrder.sale_order_no,
+                _sale_order_product.c.sol_product_code == ProductionTaskOrder.material_code,
+            ),
+        )
+        .where(*filters)
+        .order_by(ProductionTaskOrder.planned_start_date.asc().nullslast(), ProductionTaskOrder.task_id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
     result = await db.execute(query)
-    items = [ProcessProgressOut.model_validate(r) for r in result.scalars().all()]
+    items = [FrontProcessTaskOut.model_validate(dict(row)) for row in result.mappings().all()]
 
-    return ResponseModel(data=PageResult(total=total, page=page, page_size=page_size, items=items))
-
-
-@router.post("", response_model=ResponseModel[ProcessProgressOut])
-async def create_front_process(
-    data: ProcessProgressCreate,
-    current_user: dict = Depends(PermissionChecker("production.front_process", "create")),
-    db: AsyncSession = Depends(get_db),
-):
-    data.process_type = 'front_process'
-    rec = ProcessProgress(**data.model_dump(), data_source='manual')
-    db.add(rec)
-    await db.flush()
-    await log_audit(db, "process_progress", rec.id, "create", field_name="front_process", operator=current_user["username"])
-    await db.commit()
-    await db.refresh(rec)
-    return ResponseModel(data=ProcessProgressOut.model_validate(rec))
+    return ResponseModel(data=PageResult(total=total or 0, page=page, page_size=page_size, items=items))
 
 
-@router.put("/{record_id}", response_model=ResponseModel[ProcessProgressOut])
+@router.put("/{task_id}", response_model=ResponseModel[dict])
 async def update_front_process(
-    record_id: int,
-    data: ProcessProgressUpdate,
+    task_id: int,
+    data: FrontProcessRecordUpdate,
     current_user: dict = Depends(PermissionChecker("production.front_process", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(ProcessProgress).where(ProcessProgress.id == record_id))
-    rec = result.scalar_one_or_none()
-    if not rec:
-        raise HTTPException(status_code=404, detail="记录不存在")
+    # 确认任务单存在且属于前道车间
+    task = (
+        await db.execute(
+            select(ProductionTaskOrder.task_no, ProductionTaskOrder.workshop).where(
+                ProductionTaskOrder.task_id == task_id
+            )
+        )
+    ).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务单不存在")
 
     update_data = data.model_dump(exclude_unset=True)
-    await log_audit(db, "process_progress", rec.id, "update", old_obj=rec, update_data=update_data, operator=current_user["username"])
-    for field, value in update_data.items():
-        setattr(rec, field, value)
+
+    result = await db.execute(select(FrontProcessRecord).where(FrontProcessRecord.task_id == task_id))
+    rec = result.scalar_one_or_none()
+    if rec is None:
+        rec = FrontProcessRecord(task_id=task_id, task_no=task.task_no, **update_data)
+        db.add(rec)
+        await db.flush()
+        await log_audit(
+            db, "front_process_record", rec.id, "create",
+            field_name="front_process", new_value=task.task_no, operator=current_user["username"],
+        )
+    else:
+        await log_audit(
+            db, "front_process_record", rec.id, "update",
+            old_obj=rec, update_data=update_data, operator=current_user["username"],
+        )
+        for field, value in update_data.items():
+            setattr(rec, field, value)
+
     await db.commit()
     await db.refresh(rec)
-    return ResponseModel(data=ProcessProgressOut.model_validate(rec))
-
-
-@router.post("/import", response_model=ResponseModel[dict])
-async def import_front_process(
-    file: UploadFile = File(...),
-    current_user: dict = Depends(PermissionChecker("production.front_process", "import")),
-    db: AsyncSession = Depends(get_db),
-):
-    suffix = os.path.splitext(file.filename or '')[1] or '.csv'
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read()
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        result = await import_front_process_csv(tmp_path, db)
-    finally:
-        os.unlink(tmp_path)
-
-    await log_audit(db, "process_progress", 0, "import", field_name="front_process_csv", new_value=file.filename, operator=current_user["username"])
-    await db.commit()
-    return ResponseModel(data=result)
+    return ResponseModel(data={"task_id": task_id, "id": rec.id, "status": rec.status})

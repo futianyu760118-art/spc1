@@ -62,7 +62,7 @@ async def boms_list(ctx: ExternalCallContext) -> dict:
         need_join_material = True
 
     if need_join_material:
-        query = query.join(Material, Bom.material_id == Material.material_id)
+        query = query.join(Material, Bom.material_id == Material.erp_material_id)
 
     count_query = select(func.count()).select_from(query.subquery())
 

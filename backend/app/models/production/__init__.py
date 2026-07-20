@@ -6,3 +6,4 @@ from app.models.production.sale_order_line_change_log import SaleOrderLineChange
 from app.models.production.product_process_capacity import ProductProcessCapacity  # noqa: F401
 from app.models.production.upph_formula_config import UpphFormulaConfig  # noqa: F401
 from app.models.production.production_task_order import ProductionTaskOrder  # noqa: F401
+from app.models.production.front_process_record import FrontProcessRecord  # noqa: F401

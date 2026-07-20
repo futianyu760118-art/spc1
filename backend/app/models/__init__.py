@@ -11,6 +11,8 @@ from app.models.material.material_issue import MaterialIssue
 from app.models.material.long_lead_material import LongLeadMaterial
 from app.models.material.purchase_invoice import PurchaseInvoice
 from app.models.material.payment_apply import PaymentApply
+from app.models.material.subcontract_order import SubcontractOrder
+from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.material.supplier_message import SupplierMessage
 
 # 生产协同中心
@@ -61,6 +63,8 @@ __all__ = [
     "LongLeadMaterial",
     "PurchaseInvoice",
     "PaymentApply",
+    "SubcontractOrder",
+    "SubcontractOrderDetail",
     "SupplierMessage",
     # 生产协同中心
     "ProcessProgress",

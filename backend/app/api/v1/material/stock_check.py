@@ -12,15 +12,21 @@ from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.material.stock_check import (
     StockCheckCreate,
+    StockCheckFromMaterialsCreate,
     StockCheckOut,
     StockCheckListOut,
     StockCheckItemOut,
     StockCheckItemUpdate,
     StockCheckItemBatchUpdate,
+    MaterialHistoryItem,
+    MaterialOrderUsageOut,
+    MaterialCandidateOut,
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.material.stock_check_service import (
     create_stock_check_from_order,
+    create_stock_check_from_materials,
+    list_material_candidates,
     update_stock_check_item,
     batch_update_items,
     complete_stock_check,
@@ -28,6 +34,8 @@ from app.services.material.stock_check_service import (
     get_stock_check_with_items,
     list_recent_stock_checks,
     list_stock_checks_by_order,
+    get_material_history,
+    list_orders_using_material,
 )
 
 router = APIRouter()
@@ -37,7 +45,7 @@ router = APIRouter()
 async def create_from_order(
     order_no: str,
     body: Optional[StockCheckCreate] = None,
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "update")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     body = body or StockCheckCreate(order_no=order_no)
@@ -56,17 +64,98 @@ async def create_from_order(
     return ResponseModel(data=StockCheckOut.model_validate(head))
 
 
+@router.post("/stock-check/from-materials", response_model=ResponseModel[StockCheckOut])
+async def create_from_materials(
+    body: StockCheckFromMaterialsCreate,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    if not body.material_ids or len(body.material_ids) > 500:
+        raise HTTPException(status_code=400, detail="请选择 1~500 个物料")
+    try:
+        head = await create_stock_check_from_materials(
+            db,
+            material_ids=body.material_ids,
+            current_user=current_user,
+            title=body.title,
+            check_date=body.check_date,
+            remark=body.remark,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    head = await get_stock_check_with_items(db, head.id)
+    return ResponseModel(data=StockCheckOut.model_validate(head))
+
+
+@router.get("/stock-check/material-candidates", response_model=ResponseModel[PageResult[MaterialCandidateOut]])
+async def list_material_candidates_view(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="搜索物料编码/名称/规格"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    total, items = await list_material_candidates(
+        db, page=page, page_size=page_size, keyword=keyword
+    )
+    return ResponseModel(data=PageResult(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=[MaterialCandidateOut(**it) for it in items],
+    ))
+
+
+@router.get("/stock-check/material-history", response_model=ResponseModel[list[MaterialHistoryItem]])
+async def get_material_history_view(
+    material_id: int = Query(..., description="物料ID"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = await get_material_history(db, material_id=material_id)
+    return ResponseModel(data=[MaterialHistoryItem(**r) for r in rows])
+
+
+@router.get("/stock-check/material-orders", response_model=ResponseModel[PageResult[MaterialOrderUsageOut]])
+async def list_material_orders(
+    material_id: int = Query(..., description="物料ID"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="模糊搜索订单号/客户"),
+    sort_by: Optional[str] = Query("req_qty", description="排序字段:req_qty/promised_date/order_qty"),
+    sort_order: Optional[str] = Query("desc", description="asc/desc"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    total, items = await list_orders_using_material(
+        db,
+        material_id=material_id,
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    return ResponseModel(data=PageResult(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=[MaterialOrderUsageOut(**it) for it in items],
+    ))
+
+
 @router.get("/stock-check/recent", response_model=ResponseModel[PageResult[StockCheckListOut]])
 async def recent(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = Query(None, description="搜索盘点单号/订单号/标题"),
     status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed/cancelled)"),
+    check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
     date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
     date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
     sort_by: Optional[str] = Query(None, description="排序字段:check_no/order_no/check_date/total_materials/checked_materials/total_diff_qty/created_at"),
     sort_order: Optional[str] = Query(None, description="asc/desc,默认 desc"),
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "read")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     statuses = [s.strip() for s in (status or "").split(",") if s.strip()] or None
@@ -76,6 +165,7 @@ async def recent(
         page_size=page_size,
         keyword=keyword,
         status=statuses,
+        check_type=check_type,
         date_from=date_from,
         date_to=date_to,
         sort_by=sort_by,
@@ -91,6 +181,8 @@ async def recent(
         ))
     if statuses:
         filter_query = filter_query.where(StockCheck.status.in_(statuses))
+    if check_type:
+        filter_query = filter_query.where(StockCheck.check_type == check_type)
     if date_from:
         filter_query = filter_query.where(StockCheck.check_date >= date_from)
     if date_to:
@@ -109,7 +201,7 @@ async def recent(
 @router.get("/stock-check/by-order/{order_no}", response_model=ResponseModel[List[StockCheckListOut]])
 async def list_by_order(
     order_no: str,
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "read")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     rows = await list_stock_checks_by_order(db, order_no)
@@ -119,7 +211,7 @@ async def list_by_order(
 @router.get("/stock-check/{check_id}", response_model=ResponseModel[StockCheckOut])
 async def get_detail(
     check_id: int,
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "read")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     head = await get_stock_check_with_items(db, check_id)
@@ -133,7 +225,7 @@ async def list_items(
     check_id: int,
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "read")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     base = select(StockCheckItem).where(StockCheckItem.check_id == check_id).order_by(StockCheckItem.id)
@@ -153,7 +245,7 @@ async def list_items(
 async def update_item(
     item_id: int,
     body: StockCheckItemUpdate,
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "update")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -174,7 +266,7 @@ async def update_item(
 @router.post("/stock-check/items/batch", response_model=ResponseModel[dict])
 async def batch_update(
     body: StockCheckItemBatchUpdate,
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "update")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -187,7 +279,7 @@ async def batch_update(
 @router.post("/stock-check/{check_id}/complete", response_model=ResponseModel[StockCheckOut])
 async def complete(
     check_id: int,
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "update")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -201,7 +293,7 @@ async def complete(
 @router.post("/stock-check/{check_id}/cancel", response_model=ResponseModel[StockCheckOut])
 async def cancel(
     check_id: int,
-    current_user: dict = Depends(PermissionChecker("orders.stock_check", "update")),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     try:

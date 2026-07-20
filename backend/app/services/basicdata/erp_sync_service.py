@@ -21,6 +21,8 @@ from app.models.material.material_demand import MaterialDemand
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.material.purchase_invoice import PurchaseInvoice
 from app.models.material.payment_apply import PaymentApply
+from app.models.material.subcontract_order import SubcontractOrder
+from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.basicdata.sync_sql_config import SyncSqlConfig
 from app.models.basicdata.customer import Customer
 from app.models.basicdata.supplier import Supplier
@@ -271,7 +273,7 @@ class ERPSyncService:
         根据 ORM 模型列类型强制转换值类型
         防止 asyncpg 严格类型检查报错（如 int 传给 VARCHAR 列）
         """
-        from sqlalchemy import String, Numeric, Date, Integer, Float, Boolean
+        from sqlalchemy import String, Numeric, Date, DateTime, Integer, Float, Boolean
         col_map = {col.name: col for col in model_class.__table__.columns}
         coerced = {}
         for k, v in row_dict.items():
@@ -304,6 +306,34 @@ class ERPSyncService:
                         coerced[k] = v.date()
                     elif isinstance(v, date):
                         coerced[k] = v
+                    else:
+                        coerced[k] = None
+                elif col_type is DateTime:
+                    # DateTime 列必须收到 datetime 实例，否则 asyncpg 会拒绝。
+                    # 处理三种源数据：
+                    #   1. datetime / date 实例 — 直接用 / 提升为 datetime
+                    #   2. str — 尝试解析常见格式，失败则置 None
+                    #   3. SQL Server rowversion/timestamp 二进制（被 clean_value
+                    #      按 latin-1 解码成含 \x00 控制字符的 str）— 无法解析，
+                    #      置 None，避免污染列
+                    if isinstance(v, datetime):
+                        coerced[k] = v
+                    elif isinstance(v, date):
+                        coerced[k] = datetime(v.year, v.month, v.day)
+                    elif isinstance(v, str):
+                        parsed: Optional[datetime] = None
+                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+                            try:
+                                parsed = datetime.strptime(v, fmt)
+                                break
+                            except ValueError:
+                                continue
+                        if parsed is None:
+                            try:
+                                parsed = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                            except (ValueError, AttributeError):
+                                parsed = None
+                        coerced[k] = parsed
                     else:
                         coerced[k] = None
                 elif col_type is Boolean and not isinstance(v, bool):
@@ -341,6 +371,7 @@ class ERPSyncService:
         key_fields: list[str],
         label: str,
         defaults: Optional[dict] = None,
+        field_overrides: Optional[dict] = None,
     ) -> dict:
         """
         批量同步 ERP 行到目标模型。
@@ -358,6 +389,10 @@ class ERPSyncService:
             key_fields: 业务主键字段列表，如 ["bom_id"] 或 ["bom_id", "line_no"]
             label: 日志标识
             defaults: 当某字段为空时的取值来源，如 {"bom_no": "bom_id"}
+            field_overrides: 字段覆盖回调 {列名: callable(row_dict)->value}，
+                用于修正不能直接信任源数据的字段（如外键列必须指向 SPC 内部
+                主键，不能直接采用 ERP/OA 给出的标识）。在映射+类型转换之后、
+                去重/upsert 决策之前应用。
         """
         stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
         total = len(raw_rows)
@@ -405,6 +440,12 @@ class ERPSyncService:
                         row_dict[tgt] = row_dict.get(src)
             row_dict = self._filter_model_fields(row_dict, valid_cols)
             row_dict = self._coerce_row_types(row_dict, model_class)
+            # 字段覆盖：修正不能直接信任源数据的字段（如外键列必须指向 SPC
+            # 内部主键，不能直接采用 ERP/OA 给出的标识）。
+            if field_overrides:
+                for fld, resolver in field_overrides.items():
+                    if fld in valid_cols:
+                        row_dict[fld] = resolver(row_dict)
             # 剔除 NOT NULL 列的 None 值，让 ORM/DB 默认值生效
             # 否则显式 None 会覆盖 client_default(如 default=0)，
             # flush 时 INSERT NULL → integrity error → 整批失败
@@ -499,6 +540,10 @@ class ERPSyncService:
             return "created"
 
         # 4) 分批 flush+commit；批次失败则回退逐行处理以隔离错误
+        #    savepoint 必须用 `async with begin_nested()` 上下文管理器管理，
+        #    否则异常时 savepoint 句柄丢失，再 session.rollback() 会让 async 事务栈/
+        #    greenlet 损坏，后续所有操作都抛 "greenlet_spawn has not been called"
+        #    （这是此前生产任务单同步逐行全部失败的根因）。
         batch_size = max(1, int(self.batch_size or 500))
         progress_step = max(1000, batch_size * 2)
 
@@ -510,15 +555,21 @@ class ERPSyncService:
         while idx < n:
             batch = prepared[idx:idx + batch_size]
             try:
-                await self.spc_db.begin_nested()
                 batch_results = []
-                for row_dict in batch:
-                    batch_results.append(_process_row(row_dict))
-                await self.spc_db.flush()
+                async with self.spc_db.begin_nested():
+                    for row_dict in batch:
+                        batch_results.append(_process_row(row_dict))
+                    await self.spc_db.flush()
                 await self.spc_db.commit()
                 for status in batch_results:
                     _bump(status)
             except Exception as e:
+                # 此前批次真因被静默吞掉，只能看到逐行重跑的 secondary greenlet 错误，
+                # 这里必须记录，才能定位真正的数据/约束错误。
+                logger.error(
+                    f"{label} 批次写入失败，回退逐行处理。批次真因: {e}",
+                    exc_info=True,
+                )
                 try:
                     await self.spc_db.rollback()
                 except Exception:
@@ -527,17 +578,45 @@ class ERPSyncService:
                 # 需从缓存移除以便逐行重跑时重新插入
                 for row_dict in batch:
                     key = tuple(
-                None if row_dict.get(f) is None else str(row_dict.get(f, "")).strip()
-                for f in key_fields
-            )
+                        None if row_dict.get(f) is None else str(row_dict.get(f, "")).strip()
+                        for f in key_fields
+                    )
                     if key in created_keys:
                         existing_map.pop(key, None)
                         created_keys.discard(key)
-                # 逐行重跑，成功才计数
+                # 逐行重跑，成功才计数。
+                # 关键：rollback 会把 session 内对象置为 expired；逐行重跑在同步
+                # 函数 _process_row 中访问这些对象属性，会触发 async 同步懒加载，
+                # 抛 "greenlet_spawn has not been called"（此前 100/100 全部失败的
+                # 真因）。即便在循环前统一刷新过，任意一行失败后的 rollback 又会把
+                # 其余对象重新置为 expired。因此在每次迭代内部按业务键重新拉取该行
+                # 已有对象，确保属性访问不再触发懒加载。
                 for row_dict in batch:
                     try:
-                        await self.spc_db.begin_nested()
-                        status = _process_row(row_dict)
+                        async with self.spc_db.begin_nested():
+                            fkey = tuple(
+                                None if row_dict.get(f) is None
+                                else str(row_dict.get(f, "")).strip()
+                                for f in key_fields
+                            )
+                            if fkey not in created_keys:
+                                fv = _coerce_in_value(str(row_dict.get(key_fields[0])).strip())
+                                r = await self.spc_db.execute(
+                                    select(model_class).where(in_col == fv)
+                                )
+                                matched = None
+                                for cand in r.scalars():
+                                    ck = tuple(
+                                        None if getattr(cand, f, None) is None
+                                        else str(getattr(cand, f, "")).strip()
+                                        for f in key_fields
+                                    )
+                                    if ck == fkey:
+                                        matched = cand
+                                        break
+                                existing_map[fkey] = matched
+                            status = _process_row(row_dict)
+                            await self.spc_db.flush()
                         await self.spc_db.commit()
                         _bump(status)
                     except Exception as e2:
@@ -2723,6 +2802,8 @@ class ERPSyncService:
             rows = await self._execute_erp_sql(sql_text, params)
             logger.info(f"从 OA/ERP 获取到 {len(rows)} 条生产任务单记录")
 
+            # sale_order_id 直接采用 ERP 同步数据里给出的值（按 field_mapping_json
+            # 映射后的结果），不做二次覆盖。
             stats = await self._bulk_upsert(
                 ProductionTaskOrder,
                 rows,
@@ -2815,6 +2896,94 @@ class ERPSyncService:
         return stats
 
     # ------------------------------------------------------------------
+    # 委外订单同步
+    # ------------------------------------------------------------------
+    async def sync_subcontract_orders(
+        self, since: Optional[datetime] = None, custom_params: Optional[dict] = None
+    ) -> dict:
+        """同步委外订单数据。幂等依据: bill_no。"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("subcontract_orders")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条委外订单记录")
+
+            stats = await self._bulk_upsert(
+                SubcontractOrder,
+                rows,
+                mapping,
+                key_fields=["bill_no"],
+                label="委外订单",
+            )
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"委外订单同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"委外订单同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
+    # 委外订单明细同步
+    # ------------------------------------------------------------------
+    async def sync_subcontract_order_details(
+        self, since: Optional[datetime] = None, custom_params: Optional[dict] = None
+    ) -> dict:
+        """同步委外订单明细数据。幂等依据: (erp_order_id, detail_id)。"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("subcontract_order_details")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条委外订单明细记录")
+
+            stats = await self._bulk_upsert(
+                SubcontractOrderDetail,
+                rows,
+                mapping,
+                key_fields=["erp_order_id", "detail_id"],
+                label="委外订单明细",
+            )
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"委外订单明细同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"委外订单明细同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
     # 全量同步
     # ------------------------------------------------------------------
     async def sync_all(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
@@ -2846,6 +3015,8 @@ class ERPSyncService:
             results["mrp_plan_orders"] = await self.sync_mrp_plan_orders(since, custom_params)
             results["production_task_orders"] = await self.sync_production_task_orders(since, custom_params)
             results["inventory"] = await self.sync_inventory(since, custom_params)
+            results["subcontract_orders"] = await self.sync_subcontract_orders(since, custom_params)
+            results["subcontract_order_details"] = await self.sync_subcontract_order_details(since, custom_params)
             return results
         finally:
             self._close_erp()

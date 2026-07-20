@@ -1,7 +1,7 @@
 """基础数据与集成中心 — Schema定义"""
 
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from pydantic import BaseModel
 
@@ -91,6 +91,9 @@ class SupplierBase(BaseModel):
     supplier_type: Optional[str] = None
     contact_person: Optional[str] = None
     contact_phone: Optional[str] = None
+    fax: Optional[str] = None
+    address: Optional[str] = None
+    erp_supply_id: Optional[int] = None
     payment_terms: Optional[str] = None
     status: int = 1
 
@@ -105,6 +108,9 @@ class SupplierUpdate(BaseModel):
     supplier_type: Optional[str] = None
     contact_person: Optional[str] = None
     contact_phone: Optional[str] = None
+    fax: Optional[str] = None
+    address: Optional[str] = None
+    erp_supply_id: Optional[int] = None
     payment_terms: Optional[str] = None
     status: Optional[int] = None
 
@@ -119,8 +125,8 @@ class SupplierOut(SupplierBase):
 
 # ── Material ──
 class MaterialBase(BaseModel):
-    material_id: str
-    parent_id: Optional[str] = None
+    erp_material_id: int
+    parent_id: Optional[int] = None
     material_code: str
     material_name: str
     spec_model: Optional[str] = None
@@ -132,6 +138,9 @@ class MaterialBase(BaseModel):
     status: int = 1
     erp_sync_flag: int = 0
     is_deleted: int = 0
+    supplier_id: Optional[int] = None
+    order_unit_price: Optional[Decimal] = None
+    last_outbound_date: Optional[date] = None
 
 
 class MaterialCreate(MaterialBase):
@@ -139,8 +148,7 @@ class MaterialCreate(MaterialBase):
 
 
 class MaterialUpdate(BaseModel):
-    material_id: Optional[str] = None
-    parent_id: Optional[str] = None
+    parent_id: Optional[int] = None
     material_name: Optional[str] = None
     spec_model: Optional[str] = None
     material_type: Optional[str] = None
@@ -151,6 +159,9 @@ class MaterialUpdate(BaseModel):
     status: Optional[int] = None
     erp_sync_flag: Optional[int] = None
     is_deleted: Optional[int] = None
+    supplier_id: Optional[int] = None
+    order_unit_price: Optional[Decimal] = None
+    last_outbound_date: Optional[date] = None
 
 
 class MaterialOut(MaterialBase):
@@ -161,8 +172,8 @@ class MaterialOut(MaterialBase):
 
 class MaterialTreeNode(BaseModel):
     id: int
-    material_id: str
-    parent_id: Optional[str] = None
+    erp_material_id: int
+    parent_id: Optional[int] = None
     material_code: str
     material_name: str
     spec_model: Optional[str] = None
@@ -172,6 +183,9 @@ class MaterialTreeNode(BaseModel):
     is_purchase: int = 0
     is_produce: int = 0
     status: int = 1
+    supplier_id: Optional[int] = None
+    order_unit_price: Optional[Decimal] = None
+    last_outbound_date: Optional[date] = None
     children: List["MaterialTreeNode"] = []
 
     model_config = {"from_attributes": True}

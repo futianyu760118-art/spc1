@@ -300,7 +300,7 @@ register_data_type(DataTypeDefinition(
         "planned_start_date", "planned_end_date",
         "actual_start_date", "actual_end_date",
         "task_qty", "repair_qty", "actual_qty",
-        "task_type", "sale_order_no",
+        "task_type", "sale_order_no", "sale_order_id",
         "start_flag", "is_closed", "audit_status", "mrp_flag",
         "audit_user_id", "request_user_id", "supplier_id",
         "erp_updated_at", "updated_at",

@@ -17,6 +17,8 @@ interface InventoryItem {
   locked_qty: number
   balance_qty: number
   qty_in_transit: number
+  unit_price: number
+  ending_balance: number
   batch_no: string
   created_at: string
   updated_at: string
@@ -26,7 +28,7 @@ export default function Inventory() {
   const [data, setData] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
-  const [totals, setTotals] = useState({ onHand: 0, locked: 0, balance: 0, inTransit: 0 })
+  const [totals, setTotals] = useState({ onHand: 0, locked: 0, balance: 0, inTransit: 0, endingBalance: 0 })
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
 
   const fetchData = useCallback(async (page = 1, pageSize = 20) => {
@@ -43,16 +45,14 @@ export default function Inventory() {
         total: res.data?.total || 0,
       })
 
-      const sum = items.reduce(
-        (acc: any, item: InventoryItem) => ({
-          onHand: acc.onHand + (item.qty_on_hand || 0),
-          locked: acc.locked + (item.locked_qty || 0),
-          balance: acc.balance + (item.balance_qty || 0),
-          inTransit: acc.inTransit + (item.qty_in_transit || 0),
-        }),
-        { onHand: 0, locked: 0, balance: 0, inTransit: 0 },
-      )
-      setTotals(sum)
+      const sums = res.data?.sums || {}
+      setTotals({
+        onHand: sums.qty_on_hand ?? 0,
+        locked: sums.locked_qty ?? 0,
+        balance: sums.balance_qty ?? 0,
+        inTransit: sums.qty_in_transit ?? 0,
+        endingBalance: sums.ending_balance ?? 0,
+      })
     } catch (error) {
       message.error('加载库存数据失败')
     } finally {
@@ -102,6 +102,22 @@ export default function Inventory() {
       align: 'right' as const,
       render: (v: number) => (v != null ? v.toLocaleString() : '-'),
     },
+    {
+      title: '库存单价',
+      dataIndex: 'unit_price',
+      key: 'unit_price',
+      width: 110,
+      align: 'right' as const,
+      render: (v: number) => (v != null ? v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 }) : '-'),
+    },
+    {
+      title: '期末余额',
+      dataIndex: 'ending_balance',
+      key: 'ending_balance',
+      width: 120,
+      align: 'right' as const,
+      render: (v: number) => (v != null ? v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'),
+    },
     { title: '批次号', dataIndex: 'batch_no', key: 'batch_no', width: 100 },
     {
       title: '更新时间',
@@ -146,6 +162,9 @@ export default function Inventory() {
           <Col>
             <Statistic title="在途库存合计" value={totals.inTransit} precision={2} />
           </Col>
+          <Col>
+            <Statistic title="期末余额合计" value={totals.endingBalance} precision={2} />
+          </Col>
         </Row>
       </div>
 
@@ -155,7 +174,7 @@ export default function Inventory() {
           columns={columns}
           dataSource={data}
           loading={loading}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1700 }}
           size="small"
           pagination={{
             ...pagination,

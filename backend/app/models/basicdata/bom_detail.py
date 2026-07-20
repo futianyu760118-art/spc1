@@ -10,12 +10,13 @@ class BomDetail(Base):
     __tablename__ = "scm_bom_detail"
     __table_args__ = (
         Index("ix_scm_bom_detail_bom_id_line_no", "bom_id", "line_no"),
+        Index("ix_scm_bom_detail_material_id", "material_id"),
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     bom_id = Column(String(64), nullable=False, comment="BOM ID(外部系统)")
     line_no = Column(String(32), nullable=False, comment="行号")
-    material_id = Column(String(50), nullable=True, comment="物料ID")
+    material_id = Column(Integer, nullable=True, comment="物料ID(引用scm_material.erp_material_id)")
     standard_qty = Column(Numeric(18, 6), nullable=True, default=0, comment="标准用量")
     aux_qty = Column(Numeric(18, 6), nullable=True, default=0, comment="辅助数量")
     material_type = Column(String(32), nullable=True, comment="物料类型")

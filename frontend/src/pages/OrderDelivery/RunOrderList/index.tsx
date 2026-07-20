@@ -399,11 +399,11 @@ export default function RunOrderList() {
       render: editableDate('delivery_date'),
     },
     { title: '跑单日期', dataIndex: 'run_date', key: 'run_date', width: 100, sorter: true,
-      render: editableDate('run_date'),
+      render: (v: string | null) => v ? dayjs(v).format('YYYY-MM-DD') : <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     {
       title: '跑单时间(天)', dataIndex: 'run_days', key: 'run_days', width: 95, align: 'right' as const, sorter: true,
-      render: editableNumber('run_days'),
+      render: (v: number | null | undefined) => (v === null || v === undefined ? <span style={{ color: '#cbd5e1' }}>-</span> : v),
     },
     {
       title: '订单金额', dataIndex: 'order_amount', key: 'order_amount', width: 100, align: 'right' as const, sorter: true,
@@ -586,13 +586,13 @@ export default function RunOrderList() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="run_date" label="跑单日期">
-                <DatePicker style={{ width: '100%' }} />
+              <Form.Item name="run_date" label="跑单日期" tooltip="自动取自 MRP 运算时间，无需手动填写">
+                <DatePicker style={{ width: '100%' }} disabled />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="run_days" label="跑单时间(天)">
-                <InputNumber min={0} style={{ width: '100%' }} placeholder="选填" />
+              <Form.Item name="run_days" label="跑单时间(天)" tooltip="自动计算自 MRP 运算时间 − 下单时间">
+                <InputNumber min={0} style={{ width: '100%' }} placeholder="选填" disabled />
               </Form.Item>
             </Col>
             <Col span={12}>
@@ -705,13 +705,13 @@ export default function RunOrderList() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="run_date" label="跑单日期">
-                <DatePicker style={{ width: '100%' }} />
+              <Form.Item name="run_date" label="跑单日期" tooltip="自动取自 MRP 运算时间，无需手动填写">
+                <DatePicker style={{ width: '100%' }} disabled />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="run_days" label="跑单时间(天)">
-                <InputNumber min={0} style={{ width: '100%' }} />
+              <Form.Item name="run_days" label="跑单时间(天)" tooltip="自动计算自 MRP 运算时间 − 下单时间">
+                <InputNumber min={0} style={{ width: '100%' }} disabled />
               </Form.Item>
             </Col>
             <Col span={12}>

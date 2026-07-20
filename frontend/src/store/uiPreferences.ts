@@ -6,6 +6,8 @@ interface UiPreferencesState {
   getColumnVisibility: (pageKey: string, defaultColumns: string[]) => string[]
   setColumnVisibility: (pageKey: string, visibleColumns: string[]) => void
   loadFromUser: (user: any) => void
+  getFlag: (key: string, defaultValue?: any) => any
+  setFlag: (key: string, value: any) => void
 }
 
 const UI_PREFS_KEY = 'spc_ui_preferences'
@@ -44,6 +46,20 @@ export const useUiPreferencesStore = create<UiPreferencesState>((set, get) => {
 
       authApi.updatePreferences({ ui_preferences: next }).catch((err: Error) => {
         console.error('Failed to save column visibility preference:', err)
+      })
+    },
+
+    getFlag: (key, defaultValue = false) => {
+      const v = get().preferences[key]
+      return v === undefined ? defaultValue : v
+    },
+
+    setFlag: (key, value) => {
+      const next = { ...get().preferences, [key]: value }
+      set({ preferences: next })
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify(next))
+      authApi.updatePreferences({ ui_preferences: next }).catch((err: Error) => {
+        console.error(`Failed to save UI flag [${key}]:`, err)
       })
     },
 

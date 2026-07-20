@@ -12,7 +12,7 @@ class Bom(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     bom_id = Column(String(64), nullable=False, unique=True, comment="BOM ID(外部系统)")
     bom_no = Column(String(64), nullable=False, comment="BOM编号")
-    material_id = Column(String(50), nullable=True, comment="物料ID")
+    material_id = Column(Integer, nullable=True, comment="物料ID(引用scm_material.erp_material_id)")
     parent_material_id = Column(String(50), nullable=True, comment="上级物料ID")
     bom_version = Column(String(20), nullable=True, comment="BOM版本号")
     bom_type = Column(String(32), nullable=True, comment="BOM类型")

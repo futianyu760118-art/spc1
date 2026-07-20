@@ -132,6 +132,7 @@ async def production_task_orders_list(ctx: ExternalCallContext) -> dict:
         "actual_qty": float(r.actual_qty) if r.actual_qty is not None else None,
         "task_type": r.task_type,
         "sale_order_no": r.sale_order_no,
+        "sale_order_id": r.sale_order_id,
         "start_flag": r.start_flag,
         "is_closed": r.is_closed,
         "audit_status": r.audit_status,

@@ -106,6 +106,8 @@ async def inventory_list(ctx: ExternalCallContext) -> dict:
         "locked_qty": float(r.locked_qty) if r.locked_qty is not None else None,
         "balance_qty": float(r.balance_qty) if r.balance_qty is not None else None,
         "qty_in_transit": float(r.qty_in_transit) if r.qty_in_transit is not None else None,
+        "unit_price": float(r.unit_price) if r.unit_price is not None else None,
+        "ending_balance": float(r.ending_balance) if r.ending_balance is not None else None,
         "batch_no": r.batch_no,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     } for r in rows]

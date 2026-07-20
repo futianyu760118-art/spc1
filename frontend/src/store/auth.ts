@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { useThemeStore } from './theme'
 import { usePermissionStore } from './permission'
 import { useUiPreferencesStore } from './uiPreferences'
+import { useStockCheckPoolStore } from './stockCheckPool'
 
 interface UserInfo {
   id: number
@@ -160,6 +161,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
         localStorage.setItem('user', JSON.stringify(user))
         useThemeStore.getState().loadFontSizeFromUser(user)
         useUiPreferencesStore.getState().loadFromUser(user)
+        useStockCheckPoolStore.getState().loadForUser(user.id)
       }
       // 如果当前不在分享模式，更新当前认证
       const state = get()
@@ -205,6 +207,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
       localStorage.removeItem('user')
       localStorage.removeItem('shareToken')
       localStorage.removeItem('shareUser')
+      useStockCheckPoolStore.getState().loadForUser(null)
       set({
         originalToken: null,
         originalUser: null,

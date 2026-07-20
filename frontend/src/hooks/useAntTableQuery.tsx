@@ -23,6 +23,7 @@ export interface UseAntTableQueryOptions<TFilters extends Record<string, unknown
   filterToQuery?: (filters: Record<string, FilterValue | null>) => TFilters
   debounceMs?: number
   initialKeyword?: string
+  initialFilters?: Record<string, FilterValue | null>
   extraDeps?: ReadonlyArray<unknown>
 }
 
@@ -31,6 +32,7 @@ export interface UseAntTableQueryResult {
   loading: boolean
   total: number
   keyword: string
+  filters: Record<string, FilterValue | null>
   searchInput: React.ReactNode
   tableProps: {
     dataSource: any[]
@@ -57,7 +59,7 @@ export interface UseAntTableQueryResult {
 export function useAntTableQuery<TFilters extends Record<string, unknown> = Record<string, unknown>>(
   options: UseAntTableQueryOptions<TFilters>,
 ): UseAntTableQueryResult {
-  const { fetchData, defaultPageSize = 20, filterToQuery, debounceMs = 300, initialKeyword = '', extraDeps = [] } = options
+  const { fetchData, defaultPageSize = 20, filterToQuery, debounceMs = 300, initialKeyword = '', initialFilters, extraDeps = [] } = options
 
   const [keyword, setKeyword] = useState<string>(initialKeyword)
   const [debouncedKeyword, setDebouncedKeyword] = useState<string>(initialKeyword)
@@ -65,7 +67,7 @@ export function useAntTableQuery<TFilters extends Record<string, unknown> = Reco
   const [pageSize, setPageSize] = useState<number>(defaultPageSize)
   const [sortBy, setSortBy] = useState<string | undefined>(undefined)
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | undefined>(undefined)
-  const [filters, setFilters] = useState<Record<string, FilterValue | null>>({})
+  const [filters, setFilters] = useState<Record<string, FilterValue | null>>(initialFilters ?? {})
   const [data, setData] = useState<any[]>([])
   const [total, setTotal] = useState<number>(0)
   const [loading, setLoading] = useState<boolean>(false)
@@ -181,5 +183,5 @@ export function useAntTableQuery<TFilters extends Record<string, unknown> = Reco
     onChange,
   }
 
-  return { data, loading, total, keyword, searchInput, tableProps, reload }
+  return { data, loading, total, keyword, filters, searchInput, tableProps, reload }
 }

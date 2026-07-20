@@ -90,10 +90,15 @@ async def lifespan(app: FastAPI):
     _check_erp_connection()
     # 启动时：同步权限定义到数据库
     try:
-        from app.core.permission_registry import sync_permissions_to_db
+        from app.core.permission_registry import sync_permissions_to_db, cleanup_deprecated_permissions
         from app.core.database import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
             await sync_permissions_to_db(db)
+            # 清理已废弃的权限（如 orders.stock_check -> materials.stock_check 迁移后的残留）
+            try:
+                await cleanup_deprecated_permissions(db)
+            except Exception as e:
+                logger.warning(f"[权限注册] 清理废弃权限失败: {e}")
             # 清理上次未完成的同步任务（服务重启导致的僵尸 running/pending 任务）
             try:
                 from sqlalchemy import update, select

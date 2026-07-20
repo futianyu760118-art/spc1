@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 VALID_SYNC_TYPES = [
     "orders", "order_details", "materials", "purchase_orders", "customers", "suppliers",
     "materials_masterdata", "skus", "products", "boms", "bom_details", "warehouses", "locations", "processes",
-    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "payment_applies", "quality_issues", "mrp_plan_orders", "production_task_orders", "inventory", "all",
+    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "payment_applies", "quality_issues", "mrp_plan_orders", "production_task_orders", "inventory", "subcontract_orders", "subcontract_order_details", "all",
 ]
 
 
@@ -95,6 +95,8 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
                 "mrp_plan_orders": lambda: service.sync_mrp_plan_orders(sync_params.get("since"), custom_params),
                 "production_task_orders": lambda: service.sync_production_task_orders(sync_params.get("since"), custom_params),
                 "inventory": lambda: service.sync_inventory(sync_params.get("since"), custom_params),
+                "subcontract_orders": lambda: service.sync_subcontract_orders(sync_params.get("since"), custom_params),
+                "subcontract_order_details": lambda: service.sync_subcontract_order_details(sync_params.get("since"), custom_params),
                 "all": lambda: service.sync_all(sync_params.get("since"), custom_params),
             }
 
