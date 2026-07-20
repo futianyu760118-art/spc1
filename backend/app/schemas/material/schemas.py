@@ -413,3 +413,99 @@ class MrpPlanOrderOut(BaseModel):
     updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+# ============ 委外订单 ============
+
+class SubcontractOrderDetailOut(BaseModel):
+    id: int
+    erp_order_id: Optional[int] = None
+    detail_id: Optional[int] = None
+    line_no: Optional[int] = None
+    material_id: Optional[int] = None
+    qty: Optional[float] = None
+    delivery_qty: Optional[float] = None
+    received_qty: Optional[float] = None
+    returned_qty: Optional[float] = None
+    amount: Optional[float] = None
+    mrp_closed_flag: Optional[int] = None
+    sale_order_line_no: Optional[int] = None
+    sale_order_id: Optional[int] = None
+    sale_order_no: Optional[str] = None
+    data_source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    model_config = {"from_attributes": True}
+
+
+class SubcontractOrderOut(BaseModel):
+    id: int
+    erp_order_id: Optional[int] = None
+    bill_no: str
+    bill_date: Optional[date] = None
+    bill_type: Optional[str] = None
+    settlement_method: Optional[str] = None
+    settle_date: Optional[date] = None
+    supplier_id: Optional[int] = None
+    department_id: Optional[int] = None
+    salesman_id: Optional[int] = None
+    manager_id: Optional[int] = None
+    auditor_id: Optional[int] = None
+    audit_date: Optional[date] = None
+    creator_id: Optional[int] = None
+    remark: Optional[str] = None
+    voided_flag: Optional[int] = None
+    closed_flag: Optional[int] = None
+    status: Optional[str] = None
+    bill_type_id: Optional[int] = None
+    rejected_flag: Optional[int] = None
+    close_date: Optional[date] = None
+    plan_category: Optional[int] = None
+    closer_id: Optional[int] = None
+    data_source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    detail_count: int = 0
+    total_qty: Optional[float] = None
+    details: Optional[List[SubcontractOrderDetailOut]] = None
+    model_config = {"from_attributes": True}
+
+
+class SubcontractOrderDetailCreate(BaseModel):
+    material_id: Optional[int] = None
+    qty: Optional[float] = None
+    delivery_qty: Optional[float] = None
+    sale_order_no: Optional[str] = None
+    sale_order_id: Optional[int] = None
+
+
+class SubcontractOrderCreate(BaseModel):
+    bill_no: str
+    bill_date: Optional[date] = None
+    bill_type: Optional[str] = None
+    supplier_id: Optional[int] = None
+    status: Optional[str] = None
+    remark: Optional[str] = None
+    details: List[SubcontractOrderDetailCreate] = []
+
+
+class SubcontractOrderUpdate(BaseModel):
+    bill_date: Optional[date] = None
+    bill_type: Optional[str] = None
+    supplier_id: Optional[int] = None
+    status: Optional[str] = None
+    remark: Optional[str] = None
+
+
+class SubcontractOrderBatchUpdate(BaseModel):
+    ids: List[int]
+    status: Optional[str] = None
+    remark: Optional[str] = None
+
+
+class SubcontractOrderDetailUpdate(BaseModel):
+    material_id: Optional[int] = None
+    qty: Optional[float] = None
+    delivery_qty: Optional[float] = None
+    sale_order_no: Optional[str] = None
+    sale_order_id: Optional[int] = None
