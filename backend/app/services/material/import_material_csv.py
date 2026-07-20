@@ -12,6 +12,8 @@ from sqlalchemy import select, func
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.material.material_issue import MaterialIssue
 from app.models.material.long_lead_material import LongLeadMaterial
+from app.models.material.subcontract_order import SubcontractOrder
+from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 
 
 def _parse_date(val: str) -> Optional[date]:
@@ -351,3 +353,106 @@ async def import_long_lead_csv(filepath: str, db: AsyncSession) -> dict:
 
     await db.flush()
     return {'created': created, 'updated': updated, 'skipped': skipped}
+
+
+async def import_subcontract_order_csv(filepath: str, db: AsyncSession) -> dict:
+    """导入委外订单 CSV。
+    CSV 列头（第1行）：bill_no, bill_date, bill_type, supplier_id, status, remark,
+                       material_id, qty, sale_order_no
+    同 bill_no 多行 → 头只建一次，后续行作为明细累加。
+    幂等：
+      - 存在且 data_source='erp' → 跳过整行
+      - 存在且 data_source in (manual/excel) → 更新头非空字段 + 追加新明细
+      - 不存在 → 新建（data_source='excel'）
+    """
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"文件不存在: {filepath}")
+
+    with open(path, 'r', encoding='utf-8-sig') as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    if len(rows) < 2:
+        return {"created": 0, "updated": 0, "skipped": 0, "details_added": 0}
+
+    created = updated = skipped = details_added = 0
+    head_cache: dict[str, SubcontractOrder] = {}
+
+    for row_idx, row in enumerate(rows[1:], start=2):
+        if len(row) < 1:
+            skipped += 1
+            continue
+        bill_no = (row[0] or '').strip()
+        if not bill_no:
+            skipped += 1
+            continue
+
+        bill_date = _parse_date(row[1] if len(row) > 1 else '')
+        bill_type = (row[2] or '').strip() if len(row) > 2 else None
+        supplier_id = _parse_int(row[3] if len(row) > 3 else '')
+        status = (row[4] or '').strip() if len(row) > 4 else None
+        remark = (row[5] or '').strip() if len(row) > 5 else None
+        material_id = _parse_int(row[6] if len(row) > 6 else '')
+        qty = _parse_float(row[7] if len(row) > 7 else '')
+        sale_order_no = (row[8] or '').strip() if len(row) > 8 else None
+
+        head = head_cache.get(bill_no)
+        if head is None:
+            result = await db.execute(
+                select(SubcontractOrder).where(SubcontractOrder.bill_no == bill_no)
+            )
+            head = result.scalar_one_or_none()
+            if head is not None:
+                if head.data_source == "erp":
+                    skipped += 1
+                    head_cache[bill_no] = head
+                    continue
+
+        if head is None:
+            head = SubcontractOrder(
+                bill_no=bill_no,
+                bill_date=bill_date,
+                bill_type=bill_type,
+                supplier_id=supplier_id,
+                status=status or "open",
+                remark=remark,
+                data_source="excel",
+            )
+            db.add(head)
+            await db.flush()
+            head.erp_order_id = head.id
+            created += 1
+        else:
+            if bill_type and not head.bill_type:
+                head.bill_type = bill_type
+            if supplier_id is not None and head.supplier_id is None:
+                head.supplier_id = supplier_id
+            if status and not head.status:
+                head.status = status
+            if remark and not head.remark:
+                head.remark = remark
+            if bill_date and not head.bill_date:
+                head.bill_date = bill_date
+            updated += 1
+
+        head_cache[bill_no] = head
+
+        if material_id is not None or qty is not None or sale_order_no:
+            max_detail = (await db.execute(
+                select(func.max(SubcontractOrderDetail.detail_id))
+                .where(SubcontractOrderDetail.erp_order_id == head.erp_order_id)
+            )).scalar() or 0
+            det = SubcontractOrderDetail(
+                erp_order_id=head.erp_order_id,
+                detail_id=max_detail + 1,
+                line_no=max_detail + 1,
+                material_id=material_id,
+                qty=qty,
+                sale_order_no=sale_order_no or None,
+                data_source="excel",
+            )
+            db.add(det)
+            details_added += 1
+
+    await db.commit()
+    return {"created": created, "updated": updated, "skipped": skipped, "details_added": details_added}
