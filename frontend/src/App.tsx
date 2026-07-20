@@ -16,6 +16,7 @@ import SupplierRisk from './pages/MaterialCenter/SupplierRisk/index'
 import SupplierPayment from './pages/MaterialCenter/SupplierPayment/index'
 import OrderDetail from './pages/OrderDelivery/OrderDetail/index'
 import StockCheck from './pages/MaterialCenter/StockCheck/index'
+import SubcontractOrders from './pages/MaterialCenter/SubcontractOrders/index'
 import IssueLedger from './pages/ExceptionCenter/IssueLedger/index'
 import ExceptionPool from './pages/ExceptionCenter/ExceptionPool/index'
 import IssueLogView from './pages/ExceptionCenter/IssueLogView/index'
@@ -177,6 +178,7 @@ export default function App() {
                             <Route path="material-issues" element={<MaterialIssues/>}/>
                             <Route path="long-lead-materials" element={<LongLeadMaterials/>}/>
                             <Route path="stock-check" element={<StockCheck />} />
+                            <Route path="subcontract-orders" element={<SubcontractOrders/>}/>
                             <Route path="kit-analysis" element={<KitAnalysis/>}/>
                             <Route path="supplier-risk" element={<SupplierRisk/>}/>
                             <Route path="supplier-payment" element={<SupplierPayment/>}/>
