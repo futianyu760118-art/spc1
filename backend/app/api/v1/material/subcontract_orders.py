@@ -38,12 +38,20 @@ def _head_to_out(head, details=None) -> SubcontractOrderOut:
     return out
 
 
+SORTABLE_COLUMNS = {
+    "bill_date": SubcontractOrder.bill_date,
+    "created_at": SubcontractOrder.created_at,
+}
+
+
 @router.get("", response_model=ResponseModel[PageResult[SubcontractOrderOut]])
 async def list_subcontract_orders(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     keyword: Optional[str] = Query(None, description="模糊匹配 bill_no"),
     include_voided: bool = Query(False, description="是否包含 voided_flag=1 的单"),
+    sort_by: Optional[str] = Query(None, description="bill_date / detail_count / total_qty / created_at"),
+    sort_order: Optional[str] = Query(None, description="asc / desc"),
     current_user: dict = Depends(PermissionChecker("materials.subcontract_orders", "read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -55,6 +63,29 @@ async def list_subcontract_orders(
 
     total = (await db.execute(select(func.count(SubcontractOrder.id)).where(*base))).scalar() or 0
 
+    stats_base = []
+    if keyword:
+        stats_base.append(SubcontractOrder.bill_no.ilike(f"%{keyword}%"))
+    audited = (await db.execute(
+        select(func.count(SubcontractOrder.id)).where(SubcontractOrder.status == "1", *stats_base)
+    )).scalar() or 0
+    pending = (await db.execute(
+        select(func.count(SubcontractOrder.id)).where(
+            SubcontractOrder.status.in_(["0", None, ""]), *stats_base
+        )
+    )).scalar() or 0
+    closed = (await db.execute(
+        select(func.count(SubcontractOrder.id)).where(
+            SubcontractOrder.closed_flag == 1, *stats_base
+        )
+    )).scalar() or 0
+    voided = (await db.execute(
+        select(func.count(SubcontractOrder.id)).where(
+            SubcontractOrder.voided_flag == 1, *stats_base
+        )
+    )).scalar() or 0
+    stats = {"total": total, "audited": audited, "pending": pending, "closed": closed, "voided": voided}
+
     detail_subq = (
         select(
             SubcontractOrderDetail.erp_order_id.label("oid"),
@@ -65,11 +96,25 @@ async def list_subcontract_orders(
         .subquery()
     )
 
+    direction = "desc" if (sort_order or "desc").lower() == "desc" else "asc"
+    order_clauses = []
+    if sort_by == "detail_count":
+        col = func.coalesce(detail_subq.c.cnt, 0)
+        order_clauses.append(col.desc().nullslast() if direction == "desc" else col.asc().nullslast())
+    elif sort_by == "total_qty":
+        col = func.coalesce(detail_subq.c.qty, 0)
+        order_clauses.append(col.desc().nullslast() if direction == "desc" else col.asc().nullslast())
+    elif sort_by in SORTABLE_COLUMNS:
+        col = SORTABLE_COLUMNS[sort_by]
+        order_clauses.append(col.desc().nullslast() if direction == "desc" else col.asc().nullslast())
+    if not order_clauses:
+        order_clauses = [SubcontractOrder.bill_date.desc().nullslast(), SubcontractOrder.id.desc()]
+
     query = (
         select(SubcontractOrder, func.coalesce(detail_subq.c.cnt, 0), func.coalesce(detail_subq.c.qty, 0))
         .outerjoin(detail_subq, detail_subq.c.oid == SubcontractOrder.erp_order_id)
         .where(*base)
-        .order_by(SubcontractOrder.bill_date.desc().nullslast(), SubcontractOrder.id.desc())
+        .order_by(*order_clauses)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
@@ -80,7 +125,7 @@ async def list_subcontract_orders(
         out.detail_count = int(cnt or 0)
         out.total_qty = float(qty) if qty is not None else None
         items.append(out)
-    return ResponseModel(data=PageResult(total=total, page=page, page_size=page_size, items=items))
+    return ResponseModel(data=PageResult(total=total, page=page, page_size=page_size, items=items, stats=stats))
 
 
 @router.post("", response_model=ResponseModel[SubcontractOrderOut])
