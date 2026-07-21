@@ -737,7 +737,7 @@ class DatabaseInitializer:
                             "materials.kit_analysis": ["read", "update"],
                             "materials.supplier_risk": ["read", "update"],
                             "materials.supplier_payment": ["read", "update"],
-                            "materials.subcontract_orders": ["read", "update"],
+                            "materials.subcontract_orders": ["read"],
                             "production.overview": ["read", "update"],
                             "production.front_process": ["read", "update"],
                             "production.smt": ["read", "update"],

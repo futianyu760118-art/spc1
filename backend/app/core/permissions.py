@@ -23,6 +23,13 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "rules.work_instructions": ["read", "update"],
         "users": ["read", "update", "reset_password"],
         "roles": ["read", "update"],
+        "materials.subcontract_orders": ["read"],
+    },
+    "warehouse_Keeper": {
+        "materials.subcontract_orders": ["read"],
+    },
+    "quality": {
+        "materials.subcontract_orders": ["read"],
     },
 }
 
