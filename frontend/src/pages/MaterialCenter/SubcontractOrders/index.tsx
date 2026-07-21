@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Table, Tag, Input, Button, Space, message, Modal, Form, DatePicker, InputNumber,
-  Upload, Tooltip, Popconfirm, Card, Row, Col, Statistic,
+  Upload, Popconfirm, Card, Row, Col, Statistic,
 } from 'antd'
 import {
   SearchOutlined, ReloadOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
@@ -54,6 +54,9 @@ export default function SubcontractOrders() {
   const [keyword, setKeyword] = useState('')
   const [includeVoided, setIncludeVoided] = useState(false)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchLoading, setBatchLoading] = useState(false)
+  const [batchForm] = Form.useForm()
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState<HeadRow | null>(null)
   const [detailOpen, setDetailOpen] = useState<HeadRow | null>(null)
@@ -137,6 +140,27 @@ export default function SubcontractOrders() {
       fetchData()
     } catch (e: any) {
       message.error(e?.response?.data?.detail || e?.message || '删除失败')
+    }
+  }
+
+  const submitBatch = async () => {
+    const v = await batchForm.validateFields()
+    setBatchLoading(true)
+    try {
+      const res: any = await materialApi.batchUpdateSubcontractOrders({
+        ids: selectedIds,
+        status: v.status || undefined,
+        remark: v.remark || undefined,
+      })
+      message.success(`已更新 ${res?.data?.updated ?? 0} 条`)
+      setBatchOpen(false)
+      batchForm.resetFields()
+      setSelectedIds([])
+      fetchData()
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e?.message || '批量更新失败')
+    } finally {
+      setBatchLoading(false)
     }
   }
 
@@ -271,6 +295,12 @@ export default function SubcontractOrders() {
           <Button icon={<UploadOutlined />}>导入 CSV</Button>
         </Upload>
         <Button icon={<DownloadOutlined />} onClick={onExport}>导出</Button>
+        <Button
+          disabled={selectedIds.length === 0}
+          onClick={() => setBatchOpen(true)}
+        >
+          批量改状态/备注 {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
+        </Button>
       </Space>
 
       <Table<HeadRow>
@@ -295,6 +325,24 @@ export default function SubcontractOrders() {
           expandedRowRender: (r) => <SubcontractDetailInline headId={r.id} />,
         }}
       />
+
+      <Modal
+        title={`批量更新 ${selectedIds.length} 条`}
+        open={batchOpen}
+        onCancel={() => setBatchOpen(false)}
+        onOk={submitBatch}
+        confirmLoading={batchLoading}
+        destroyOnClose
+      >
+        <Form form={batchForm} layout="vertical">
+          <Form.Item name="status" label="状态">
+            <Input placeholder="如 open / closed / voided（留空不改）" />
+          </Form.Item>
+          <Form.Item name="remark" label="备注">
+            <Input.TextArea rows={2} placeholder="留空不改" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title={editing ? `编辑 ${editing.bill_no}` : '新建委外订单'}
