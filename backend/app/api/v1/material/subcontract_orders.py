@@ -325,6 +325,8 @@ async def add_subcontract_order_detail(
     head = (await db.execute(select(SubcontractOrder).where(SubcontractOrder.id == order_id))).scalar_one_or_none()
     if not head:
         raise HTTPException(status_code=404, detail="委外订单不存在")
+    if head.data_source == ERP_SOURCE:
+        raise HTTPException(status_code=400, detail="ERP 同步单据不可添加明细")
     max_detail = (await db.execute(
         select(func.max(SubcontractOrderDetail.detail_id))
         .where(SubcontractOrderDetail.erp_order_id == head.erp_order_id)
@@ -337,6 +339,7 @@ async def add_subcontract_order_detail(
         **data.model_dump(exclude_unset=True),
     )
     db.add(det)
+    await db.flush()
     await log_audit(db, "subcontract_order_detail", det.id, "create", new_value=str(data.model_dump()), operator=current_user["username"])
     await db.commit()
     await db.refresh(det)
@@ -362,7 +365,7 @@ async def update_subcontract_order_detail(
     )).scalar_one_or_none()
     if not det:
         raise HTTPException(status_code=404, detail="明细不存在")
-    if det.data_source == ERP_SOURCE:
+    if head.data_source == ERP_SOURCE or det.data_source == ERP_SOURCE:
         raise HTTPException(status_code=400, detail="ERP 同步明细不可修改")
     update_data = data.model_dump(exclude_unset=True)
     await log_audit(db, "subcontract_order_detail", det.id, "update", old_obj=det, update_data=update_data, operator=current_user["username"])
@@ -391,7 +394,7 @@ async def delete_subcontract_order_detail(
     )).scalar_one_or_none()
     if not det:
         raise HTTPException(status_code=404, detail="明细不存在")
-    if det.data_source == ERP_SOURCE:
+    if head.data_source == ERP_SOURCE or det.data_source == ERP_SOURCE:
         raise HTTPException(status_code=400, detail="ERP 同步明细不可删除")
     await log_audit(db, "subcontract_order_detail", det.id, "delete", old_obj=det, operator=current_user["username"])
     await db.delete(det)
