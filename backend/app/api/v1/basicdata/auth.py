@@ -47,6 +47,9 @@ async def login(
     if login_type not in VALID_LOGIN_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="登录类型不正确")
 
+    if form.username == "sys-api-caller":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
+
     result = await db.execute(
         select(SysUser).where(SysUser.username == form.username, SysUser.is_active == True)
     )

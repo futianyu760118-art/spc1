@@ -5,7 +5,6 @@ Initialize database tables and seed data for supply chain collaboration platform
 """
 
 import asyncio
-import hashlib
 import json
 import sys
 from datetime import datetime, date
@@ -966,11 +965,10 @@ class DatabaseInitializer:
                     select(SysUser).where(SysUser.username == "sys-api-caller")
                 )
                 if not sys_api_user_row.scalar_one_or_none():
-                    dead_hash = hashlib.sha256(b"__never_login__" + b"sys-api-caller").hexdigest()
                     session.add(SysUser(
                         username="sys-api-caller",
                         display_name="外部API调用方（系统占位）",
-                        hashed_password=dead_hash,
+                        hashed_password=get_password_hash("__never_login__"),
                         role_id=api_caller_role_id,
                         is_active=True,
                     ))
