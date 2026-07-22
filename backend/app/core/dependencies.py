@@ -207,7 +207,12 @@ async def get_current_user_or_share(
 
 @dataclass
 class AuthContext:
-    """统一鉴权上下文：JWT 与 API Key 二选一。"""
+    """统一鉴权上下文：JWT 与 API Key 二选一。
+
+    Note: 本轮实现未将 get_current_user_or_api_key 返回类型改为 AuthContext，
+    以保持现有 handler 中 current_user["user_id"] 等下标访问兼容。
+    后续如需引入按调用方分派的 handler 行为，可在此类型上扩展。
+    """
     user: Optional[dict] = None
     api_key: object = None
 
@@ -281,7 +286,7 @@ async def _authenticate_via_api_key(request: Request, db: AsyncSession):
 
 def _extract_bearer_token(request: Request) -> Optional[str]:
     """从 Authorization 头解析 Bearer token；不存在或格式错误返回 None。"""
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    auth_header = request.headers.get("authorization")
     if not auth_header:
         return None
     parts = auth_header.strip().split(" ", 1)
