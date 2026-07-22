@@ -205,6 +205,10 @@ export const materialApi = {
     api.get(`/materials/kit-analysis/${orderNo}/materials`, { params }),
   getOrderProductBreakdown: (orderNo: string) =>
     api.get(`/materials/kit-analysis/${orderNo}/product-breakdown`),
+  getOrderProductBomFlat: (orderNo: string, productCode: string) =>
+    api.get(`/materials/kit-analysis/${orderNo}/product-bom-flat`, {
+      params: { product_code: productCode },
+    }),
   // 物料盘点
   createStockCheckFromOrder: (orderNo: string, data?: {
     title?: string
