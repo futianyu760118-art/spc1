@@ -118,6 +118,12 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"[启动] 清理中断同步任务失败: {e}")
     except Exception as e:
         logger.warning(f"[权限注册] 同步权限定义失败: {e}")
+    try:
+        from app.services.basicdata.exposable_registry import build_path_index, list_exposable_endpoints
+        build_path_index(app)
+        logger.info(f"[Exposable] 已注册 {len(list_exposable_endpoints())} 个内部可暴露接口")
+    except Exception as e:
+        logger.warning(f"[Exposable] 构建内部可暴露接口索引失败: {e}")
     # 启动时：开启 ERP 定时同步
     scheduler.start()
     # 启动时：开启风险评估定时调度
