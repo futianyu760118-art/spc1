@@ -65,6 +65,17 @@ export interface BomKitMaterialItem extends MaterialItem {
   children: BomKitMaterialItem[]
 }
 
+export interface BomKitFlatItem extends Omit<BomKitMaterialItem, 'children'> {
+  parent_bom_id: string | null
+}
+
+export interface BomKitFlatResponse {
+  order_no: string
+  product_code: string
+  bom_id: string | null
+  items: BomKitFlatItem[]
+}
+
 export interface ProductKitSummary {
   line_no: string | null
   product_code: string | null
