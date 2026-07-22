@@ -1,4 +1,7 @@
-from fastapi import Depends
+from dataclasses import dataclass
+from typing import Optional
+
+from fastapi import Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -200,3 +203,122 @@ async def get_current_user_or_share(
         )
 
     return await _build_user_info(db, user, user_id, username, role, supplier_code)
+
+
+@dataclass
+class AuthContext:
+    """统一鉴权上下文：JWT 与 API Key 二选一。"""
+    user: Optional[dict] = None
+    api_key: object = None
+
+    @property
+    def is_api_key(self) -> bool:
+        return self.api_key is not None
+
+
+async def _get_or_load_sys_api_user(db: AsyncSession) -> dict:
+    """加载 sys-api-caller 占位用户；未初始化则抛 500。"""
+    result = await db.execute(
+        select(SysUser).where(SysUser.username == "sys-api-caller")
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        from fastapi import HTTPException, status
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="sys-api-caller 占位用户未初始化，请运行 init_database.py",
+        )
+
+    return await _build_user_info(
+        db, user,
+        user_id=str(user.id),
+        username="sys-api-caller",
+        role="api_caller",
+        supplier_code=None,
+    )
+
+
+def _resolve_endpoint_code_from_request(request: Request) -> Optional[str]:
+    """根据 request.scope["route"] 反查 endpoint_code；未注册返回 None。"""
+    from app.services.basicdata.exposable_registry import resolve_endpoint_code
+    route = request.scope.get("route")
+    if route is None:
+        return None
+    return resolve_endpoint_code(request.method, route.path)
+
+
+async def _authenticate_via_api_key(request: Request, db: AsyncSession):
+    """返回 (api_key_obj, sys_api_user_dict)；任一环节失败返回 None。"""
+    from app.services.basicdata.data_supply_service import (
+        validate_signature_for_exposable,
+        check_ip_whitelist,
+    )
+
+    app_key = request.headers.get("x-app-key")
+    timestamp = request.headers.get("x-timestamp")
+    signature = request.headers.get("x-signature")
+    if not (app_key and timestamp and signature):
+        return None
+
+    endpoint_code = _resolve_endpoint_code_from_request(request)
+    if not endpoint_code:
+        return None
+
+    key_obj, reason = await validate_signature_for_exposable(
+        db, app_key, signature, timestamp, endpoint_code,
+        request_query_string=str(request.url.query),
+    )
+    if not key_obj:
+        return None
+
+    client_ip = request.client.host if request.client else None
+    if client_ip and not check_ip_whitelist(key_obj, client_ip):
+        return None
+
+    sys_user = await _get_or_load_sys_api_user(db)
+    return key_obj, sys_user
+
+
+def _extract_bearer_token(request: Request) -> Optional[str]:
+    """从 Authorization 头解析 Bearer token；不存在或格式错误返回 None。"""
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth_header:
+        return None
+    parts = auth_header.strip().split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+    return parts[1].strip() or None
+
+
+async def get_current_user_or_api_key(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """JWT 与 HMAC 二选一。
+
+    优先级：
+      1) 请求头存在 X-App-Key -> HMAC（外部调用不容忍身份冒充）；
+      2) 否则 -> JWT。
+
+    HMAC 命中时把 request.state.current_user 设为 sys-api-caller（拥有全部权限），
+    使现有 PermissionChecker 无需修改即可放行。
+    """
+    if request.headers.get("x-app-key"):
+        result = await _authenticate_via_api_key(request, db)
+        if result is None:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="API Key 签名认证失败或该路径未对外开放",
+            )
+        key_obj, sys_user = result
+        request.state.current_user = sys_user
+        request.state.auth_source = "api_key"
+        request.state.api_key = key_obj
+        return sys_user
+
+    token = _extract_bearer_token(request)
+    user = await get_current_user(token=token, db=db)
+    request.state.current_user = user
+    request.state.auth_source = "jwt"
+    return user
