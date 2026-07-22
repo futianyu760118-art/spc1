@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
 from app.schemas.material.schemas import (
+    BomKitFlatResponse,
     KitAnalysisItem,
     KitAnalysisMaterialItem,
     OrderProductKitBreakdownOut,
@@ -15,6 +16,7 @@ from app.schemas.material.schemas import (
 from app.services.material.kit_analysis_service import (
     get_kit_analysis,
     get_order_materials,
+    get_order_product_bom_flat,
     get_order_product_breakdown,
 )
 
@@ -100,4 +102,20 @@ async def order_product_breakdown(
     db: AsyncSession = Depends(get_db),
 ):
     result = await get_order_product_breakdown(db, order_no=order_no)
+    return ResponseModel(data=result)
+
+
+@router.get(
+    "/{order_no}/product-bom-flat",
+    response_model=ResponseModel[BomKitFlatResponse],
+)
+async def order_product_bom_flat(
+    order_no: str,
+    product_code: str = Query(..., description="产品代码,精确匹配"),
+    current_user: dict = Depends(PermissionChecker("materials.kit_analysis", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await get_order_product_bom_flat(
+        db, order_no=order_no, product_code=product_code
+    )
     return ResponseModel(data=result)
