@@ -43,6 +43,7 @@ interface BomDetailItem {
   spec_model: string | null
   unit: string | null
   material_type: string | null
+  material_property: number | null
   line_no: string | null
   standard_qty: number | null
   aux_qty: number | null
@@ -57,6 +58,11 @@ interface BomDetailItem {
   invalid_date: string | null
   kit_flag: number | null
   req_qty: number | null
+  level?: number
+  bom_id?: string | null
+  parent_material_id?: number | null
+  has_sub_bom?: boolean
+  children?: BomDetailItem[]
 }
 
 interface ProductMaterialGroup {
@@ -71,7 +77,7 @@ interface ProductMaterialGroup {
 }
 
 const BOM_COLUMN_KEYS = [
-  'line_no', 'material_code', 'material_name', 'spec_model', 'material_type',
+  'line_no', 'material_code', 'material_name', 'spec_model', 'material_property', 'material_type',
   'unit', 'standard_qty', 'req_qty', 'aux_qty', 'scrap_rate',
   'config_type', 'lead_offset_days', 'back_flush', 'oper_sn', 'kit_flag',
   'valid_date', 'invalid_date',
@@ -82,7 +88,8 @@ const BOM_COLUMN_LABELS: Record<string, string> = {
   material_code: '物料编码',
   material_name: '物料名称',
   spec_model: '规格型号',
-  material_type: '物料类型',
+  material_property: '物料属性',
+  material_type: '物料分类',
   unit: '单位',
   standard_qty: '标准用量',
   req_qty: '需求量',
@@ -401,10 +408,25 @@ export default function OrderDetail() {
 
   const getBomDetailColumns = useCallback(() => [
     { title: 'BOM行号', dataIndex: 'line_no', key: 'line_no', width: 90 },
-    { title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 130, render: (v: string | null) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v || '-'}</span> },
+    { title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 150,
+      render: (v: string | null, r: BomDetailItem) => (
+        <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
+          {v || '-'}
+          {r.has_sub_bom && (
+            <Tag color="blue" style={{ marginLeft: 6, fontSize: 11 }}>组件</Tag>
+          )}
+        </span>
+      )
+    },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 180, ellipsis: true },
     { title: '规格型号', dataIndex: 'spec_model', key: 'spec_model', width: 140, ellipsis: true },
-    { title: '物料类型', dataIndex: 'material_type', key: 'material_type', width: 100 },
+    { title: '物料属性', dataIndex: 'material_property', key: 'material_property', width: 90,
+      render: (v: number | null) => {
+        if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
+        return <Tag color={MATERIAL_PROPERTY_COLOR[v] || 'default'}>{MATERIAL_PROPERTY_MAP[v] || v}</Tag>
+      }
+    },
+    { title: '物料分类', dataIndex: 'material_type', key: 'material_type', width: 100 },
     { title: '单位', dataIndex: 'unit', key: 'unit', width: 70 },
     { title: '标准用量', dataIndex: 'standard_qty', key: 'standard_qty', width: 100, render: (v: number | null) => v ?? '-' },
     { title: '需求量', dataIndex: 'req_qty', key: 'req_qty', width: 100, render: (v: number | null, r: BomDetailItem) => v != null ? `${v}${r.unit || ''}` : '-' },
@@ -735,11 +757,17 @@ export default function OrderDetail() {
                           <Table
                             columns={getBomDetailColumns()}
                             dataSource={row.materials || []}
-                            rowKey={(_item, idx) => String(idx)}
+                            rowKey={(r: BomDetailItem) =>
+                              `${r.bom_id || ''}|${r.line_no || ''}|${r.material_id || ''}|${r.level || 1}`
+                            }
                             size="small"
                             pagination={false}
                             scroll={{ x: 1700 }}
                             locale={{ emptyText: '暂无BOM明细' }}
+                            expandable={{
+                              childrenColumnName: 'children',
+                              defaultExpandAllRows: false,
+                            }}
                           />
                         </div>
                       ),

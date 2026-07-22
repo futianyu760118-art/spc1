@@ -18,6 +18,7 @@ from app.schemas.material.stock_check import (
     StockCheckItemOut,
     StockCheckItemUpdate,
     StockCheckItemBatchUpdate,
+    CoCheckersUpdate,
     MaterialHistoryItem,
     MaterialOrderUsageOut,
     MaterialCandidateOut,
@@ -31,14 +32,29 @@ from app.services.material.stock_check_service import (
     batch_update_items,
     complete_stock_check,
     cancel_stock_check,
+    set_co_checkers,
     get_stock_check_with_items,
     list_recent_stock_checks,
     list_stock_checks_by_order,
     get_material_history,
     list_orders_using_material,
+    list_co_checker_candidates,
+    _user_can_edit,
+    _resolve_user_names,
+    StockCheckPermissionError,
 )
 
 router = APIRouter()
+
+
+async def _to_check_out(db: AsyncSession, head: StockCheck, current_user: dict) -> StockCheckOut:
+    """构造 StockCheckOut，附带共同盘点人姓名 + can_edit。"""
+    out = StockCheckOut.model_validate(head)
+    ids = list(head.co_checker_user_ids or [])
+    name_map = await _resolve_user_names(db, ids + ([head.created_by_user_id] if head.created_by_user_id else []))
+    out.co_checkers = [{"user_id": int(i), "name": name_map.get(int(i), f"user#{i}")} for i in ids]
+    out.can_edit = _user_can_edit(head, current_user)
+    return out
 
 
 @router.post("/stock-check/from-order/{order_no}", response_model=ResponseModel[StockCheckOut])
@@ -57,11 +73,16 @@ async def create_from_order(
             title=body.title,
             check_date=body.check_date,
             remark=body.remark,
+            selected_products=(
+                [s.model_dump() for s in body.selected_products]
+                if body.selected_products else None
+            ),
+            co_checker_user_ids=body.co_checker_user_ids,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     head = await get_stock_check_with_items(db, head.id)
-    return ResponseModel(data=StockCheckOut.model_validate(head))
+    return ResponseModel(data=await _to_check_out(db, head, current_user))
 
 
 @router.post("/stock-check/from-materials", response_model=ResponseModel[StockCheckOut])
@@ -80,11 +101,12 @@ async def create_from_materials(
             title=body.title,
             check_date=body.check_date,
             remark=body.remark,
+            co_checker_user_ids=body.co_checker_user_ids,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     head = await get_stock_check_with_items(db, head.id)
-    return ResponseModel(data=StockCheckOut.model_validate(head))
+    return ResponseModel(data=await _to_check_out(db, head, current_user))
 
 
 @router.get("/stock-check/material-candidates", response_model=ResponseModel[PageResult[MaterialCandidateOut]])
@@ -217,7 +239,7 @@ async def get_detail(
     head = await get_stock_check_with_items(db, check_id)
     if not head:
         raise HTTPException(status_code=404, detail="盘点单不存在")
-    return ResponseModel(data=StockCheckOut.model_validate(head))
+    return ResponseModel(data=await _to_check_out(db, head, current_user))
 
 
 @router.get("/stock-check/{check_id}/items", response_model=ResponseModel[PageResult[StockCheckItemOut]])
@@ -257,6 +279,8 @@ async def update_item(
             remark=body.remark,
             current_user=current_user,
         )
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id))).scalar_one()
@@ -271,6 +295,8 @@ async def batch_update(
 ):
     try:
         n = await batch_update_items(db, body.check_id, [it.model_dump() for it in body.items], current_user)
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return ResponseModel(data={"updated": n})
@@ -284,10 +310,12 @@ async def complete(
 ):
     try:
         await complete_stock_check(db, check_id, current_user)
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     head = await get_stock_check_with_items(db, check_id)
-    return ResponseModel(data=StockCheckOut.model_validate(head))
+    return ResponseModel(data=await _to_check_out(db, head, current_user))
 
 
 @router.post("/stock-check/{check_id}/cancel", response_model=ResponseModel[StockCheckOut])
@@ -298,7 +326,34 @@ async def cancel(
 ):
     try:
         await cancel_stock_check(db, check_id, current_user)
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     head = await get_stock_check_with_items(db, check_id)
-    return ResponseModel(data=StockCheckOut.model_validate(head))
+    return ResponseModel(data=await _to_check_out(db, head, current_user))
+
+
+@router.put("/stock-check/{check_id}/co-checkers", response_model=ResponseModel[StockCheckOut])
+async def update_co_checkers(
+    check_id: int,
+    body: CoCheckersUpdate,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        await set_co_checkers(db, check_id, body.co_checker_user_ids, current_user)
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    head = await get_stock_check_with_items(db, check_id)
+    return ResponseModel(data=await _to_check_out(db, head, current_user))
+
+
+@router.get("/stock-check/co-checker-candidates", response_model=ResponseModel[list])
+async def co_checker_candidates(
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    return ResponseModel(data=await list_co_checker_candidates(db))

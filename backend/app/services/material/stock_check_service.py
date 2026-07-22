@@ -18,6 +18,89 @@ from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.services.order.order_materials_service import get_order_product_materials
 
 
+class StockCheckPermissionError(Exception):
+    """盘点单修改权限不足"""
+    pass
+
+
+def _user_can_edit(head: Optional[StockCheck], user: Optional[dict]) -> bool:
+    """创建人 / 共同盘点人 / admin 可改
+
+    旧盘点单(无 created_by_user_id 且无共同盘点人)回退到"有权限即可改"，保持向后兼容。
+    """
+    if head is None:
+        return False
+    if not user:
+        return True  # 内部调用无 user 上下文，放行（兼容）
+    if user.get("role") == "admin":
+        return True
+    has_owner = head.created_by_user_id is not None or bool(head.co_checker_user_ids)
+    if not has_owner:
+        return True
+    uid = user.get("user_id")
+    if uid is None:
+        return False
+    uid = int(uid)
+    if head.created_by_user_id is not None and int(head.created_by_user_id) == uid:
+        return True
+    co = head.co_checker_user_ids or []
+    if any(x is not None and int(x) == uid for x in co):
+        return True
+    return False
+
+
+async def _assert_can_edit(db: AsyncSession, check_id: int, user: Optional[dict]) -> None:
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
+    if head is None:
+        raise ValueError(f"盘点单 {check_id} 不存在")
+    if not _user_can_edit(head, user):
+        raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
+
+
+async def _resolve_user_names(db: AsyncSession, user_ids: List[int]) -> Dict[int, str]:
+    """sys_user.id -> 展示名(优先 emp_name，其次 username)"""
+    ids = [int(x) for x in (user_ids or []) if x is not None]
+    if not ids:
+        return {}
+    from app.models.basicdata.user import SysUser
+    from app.models.basicdata.employee import Employee
+    res = await db.execute(
+        select(SysUser.id, SysUser.username, Employee.emp_name)
+        .outerjoin(Employee, Employee.emp_code == SysUser.emp_code)
+        .where(SysUser.id.in_(ids))
+    )
+    return {int(r.id): (r.emp_name or r.username) for r in res.all()}
+
+
+async def list_co_checker_candidates(db: AsyncSession) -> List[Dict]:
+    """共同盘点人候选：全部在职系统用户（含员工姓名/组织/岗位），用于按组织架构选人。"""
+    from app.models.basicdata.user import SysUser
+    from app.models.basicdata.employee import Employee
+    from app.models.basicdata.organization import Organization
+    from app.models.basicdata.position import Position
+    from sqlalchemy import cast, String as SAString
+    res = await db.execute(
+        select(
+            SysUser.id, SysUser.username,
+            Employee.emp_name, Organization.org_name, Position.position_name,
+        )
+        .outerjoin(Employee, Employee.emp_code == SysUser.emp_code)
+        .outerjoin(Organization, cast(Employee.org_id, SAString) == Organization.oa_org_id)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .where(SysUser.is_active.is_(True))
+        .order_by(Organization.org_name.nulls_last(), Employee.emp_code)
+    )
+    out: List[Dict] = []
+    for r in res.all():
+        out.append({
+            "user_id": int(r.id),
+            "name": r.emp_name or r.username,
+            "org_name": r.org_name or "未分组",
+            "position_name": r.position_name,
+        })
+    return out
+
+
 def _gen_check_no(seq: int) -> str:
     return f"PD{datetime.now().strftime('%Y%m%d')}-{seq:03d}"
 
@@ -83,34 +166,64 @@ async def create_stock_check_from_order(
     title: Optional[str] = None,
     check_date: Optional[date] = None,
     remark: Optional[str] = None,
+    selected_products: Optional[List[Dict[str, Optional[str]]]] = None,
+    co_checker_user_ids: Optional[List[int]] = None,
 ) -> StockCheck:
-    """从订单创建盘点单: BOM 展开 + 聚合 system_qty + 写头/行"""
+    """从订单创建盘点单: BOM 多层展开 + 每节点一行 + 写头/行
+
+    selected_products: 每项 {"product_code": str|None, "bom_no": str|None};
+        None 表示全部产品行;非空则只展开匹配的产品行。
+    co_checker_user_ids: 共同盘点人(sys_user.id)列表，可与创建人共同修改盘点单。
+    """
     order = (await db.execute(select(SaleOrder.id).where(SaleOrder.order_no == order_no))).scalar_one_or_none()
     if not order:
         raise ValueError(f"订单 {order_no} 不存在")
 
     line_materials = await get_order_product_materials(db, order_no=order_no)
-    agg: Dict[int, Dict] = {}
-    for lm in line_materials:
-        for it in (lm.materials or []):
-            if not it.material_id:
-                continue
-            mid = int(it.material_id)
-            entry = agg.setdefault(mid, {
-                "line_no": lm.line_no,
-                "material_id": mid,
-                "material_code": it.material_code,
-                "material_name": it.material_name,
-                "spec_model": it.spec_model,
-                "unit": it.unit,
-                "req_qty": Decimal("0"),
-            })
-            entry["req_qty"] += Decimal(str(it.req_qty or 0))
+    if selected_products:
+        sel = {(s.get("product_code"), s.get("bom_no")) for s in selected_products}
+        line_materials = [
+            lm for lm in line_materials
+            if (lm.product_code, lm.bom_no) in sel
+        ]
+        if not line_materials:
+            raise ValueError("所选产品未匹配到任何产品行,无法创建盘点单")
+    # 递归展开整棵 BOM，收集所有带 material_id 的节点(含父件/子件各层级)。
+    # 每个 BOM 节点写一行盘点明细(不再按 material_id 聚合)，level 标识层级。
+    def _walk(nodes, level):
+        for n in (nodes or []):
+            yield n, level
+            yield from _walk(getattr(n, "children", None) or [], level + 1)
 
-    if not agg:
+    nodes: List = []  # (line_materials_row, bom_node, level)
+    for lm in line_materials:
+        for n, lvl in _walk(lm.materials or [], 1):
+            if n.material_id:
+                nodes.append((lm, n, lvl))
+
+    if not nodes:
         raise ValueError(f"订单 {order_no} 未展开出任何物料,无法创建盘点单")
 
-    stock_map = await _get_stock_by_material_id(db, list(agg.keys()))
+    unique_mids: List[int] = []
+    seen: set = set()
+    for _, n, _ in nodes:
+        mid = int(n.material_id)
+        if mid not in seen:
+            seen.add(mid)
+            unique_mids.append(mid)
+    stock_map = await _get_stock_by_material_id(db, unique_mids)
+
+    # 记录本次盘点覆盖的产品行(用于"该订单哪些产品已盘点"的可追溯性)
+    covered_products = [
+        {
+            "product_code": lm.product_code,
+            "bom_no": lm.bom_no,
+            "line_no": lm.line_no,
+            "product_name": lm.product_name,
+            "order_qty": lm.order_qty,
+        }
+        for lm in line_materials
+    ]
 
     seq = await _next_seq_for_today(db)
     check_no = _gen_check_no(seq)
@@ -123,23 +236,28 @@ async def create_stock_check_from_order(
         status="in_progress",
         check_date=check_date or date.today(),
         created_by=current_user.get("username", ""),
+        created_by_user_id=current_user.get("user_id"),
         remark=remark,
+        covered_products=covered_products,
+        co_checker_user_ids=co_checker_user_ids,
     )
     db.add(head)
     await db.flush()
 
     item_rows: List[StockCheckItem] = []
-    for mid, e in agg.items():
+    for lm, n, lvl in nodes:
+        mid = int(n.material_id)
         sys_q = stock_map.get(mid, Decimal("0"))
         item_rows.append(StockCheckItem(
             check_id=head.id,
-            line_no=None,
+            line_no=n.line_no,
+            level=lvl,
             material_id=mid,
-            material_code=e["material_code"],
-            material_name=e["material_name"],
-            spec_model=e["spec_model"],
-            unit=e["unit"],
-            req_qty=e["req_qty"],
+            material_code=n.material_code,
+            material_name=n.material_name,
+            spec_model=n.spec_model,
+            unit=n.unit,
+            req_qty=Decimal(str(n.req_qty or 0)),
             system_qty=sys_q,
             actual_qty=None,
             diff_qty=Decimal("0"),
@@ -161,6 +279,7 @@ async def create_stock_check_from_materials(
     title: Optional[str] = None,
     check_date: Optional[date] = None,
     remark: Optional[str] = None,
+    co_checker_user_ids: Optional[List[int]] = None,
 ) -> StockCheck:
     """从选定的物料清单创建手动盘点单 (check_type='manual', order_no=NULL)。"""
     if not material_ids:
@@ -202,7 +321,9 @@ async def create_stock_check_from_materials(
         status="in_progress",
         check_date=check_date or date.today(),
         created_by=current_user.get("username", ""),
+        created_by_user_id=current_user.get("user_id"),
         remark=remark,
+        co_checker_user_ids=co_checker_user_ids,
     )
     db.add(head)
     await db.flush()
@@ -282,6 +403,7 @@ async def update_stock_check_item(
     item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id))).scalar_one_or_none()
     if not item:
         raise ValueError(f"盘点行 {item_id} 不存在")
+    await _assert_can_edit(db, item.check_id, current_user)
     if actual_qty is not None:
         item.actual_qty = Decimal(str(actual_qty))
     if remark is not None:
@@ -328,6 +450,8 @@ async def complete_stock_check(db: AsyncSession, check_id: int, current_user: di
     head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
     if not head:
         raise ValueError(f"盘点单 {check_id} 不存在")
+    if not _user_can_edit(head, current_user):
+        raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
     if head.status == "cancelled":
         raise ValueError("已取消的盘点单不能完结")
     if head.status == "completed":
@@ -364,9 +488,40 @@ async def cancel_stock_check(db: AsyncSession, check_id: int, current_user: dict
     head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
     if not head:
         raise ValueError(f"盘点单 {check_id} 不存在")
+    if not _user_can_edit(head, current_user):
+        raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
     if head.status == "completed":
         raise ValueError("已完结的盘点单不能取消")
     head.status = "cancelled"
+    await db.flush()
+    return head
+
+
+async def set_co_checkers(
+    db: AsyncSession, check_id: int, user_ids: List[int], current_user: dict,
+) -> StockCheck:
+    """设置共同盘点人名单（仅创建人/admin 可改名单）。"""
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
+    if not head:
+        raise ValueError(f"盘点单 {check_id} 不存在")
+    is_creator = (
+        head.created_by_user_id is not None
+        and current_user.get("user_id") is not None
+        and int(head.created_by_user_id) == int(current_user["user_id"])
+    )
+    if not (current_user.get("role") == "admin" or is_creator):
+        raise StockCheckPermissionError("仅创建人或管理员可修改共同盘点人名单")
+    cleaned: List[int] = []
+    seen: set = set()
+    for x in (user_ids or []):
+        try:
+            v = int(x)
+        except (TypeError, ValueError):
+            continue
+        if v > 0 and v not in seen:
+            seen.add(v)
+            cleaned.append(v)
+    head.co_checker_user_ids = cleaned
     await db.flush()
     return head
 

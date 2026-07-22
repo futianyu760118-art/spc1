@@ -155,24 +155,57 @@ _SHARE_PATH_TO_RESOURCE: dict[str, str] = {
 class PermissionChecker:
     """权限校验依赖，用法: Depends(PermissionChecker("orders", "update"))
     admin角色自动通过所有权限检查
-    实时从数据库查询角色权限，不依赖JWT中的旧permissions"""
+    实时从数据库查询角色权限，不依赖JWT中的旧permissions
 
-    def __init__(self, resource: str, action: str):
+    多权限 OR：传入 any_of=[(resource, action), ...] 可让接口接受多个权限中的任意一个，
+    例如 PermissionChecker("users", "read", any_of=[("materials.purchase_plan", "update")])
+    表示持有 users.read 或 materials.purchase_plan.update 任一权限即放行。"""
+
+    def __init__(self, resource: str, action: str, any_of: Optional[list[tuple[str, str]]] = None):
         self.resource = resource
         self.action = action
+        # 主检查项 + 备选检查项（OR 关系）。错误提示仍以主权限为准。
+        self.checks: list[tuple[str, str]] = [(resource, action)] + list(any_of or [])
 
-    def _resource_candidates(self) -> list[str]:
-        aliases = {
-            "basicdata.import": ["masterdata.import"],
-            "basicdata.data": ["masterdata.data"],
-            "basicdata.feedback": ["masterdata.feedback"],
-            "basicdata.files": ["masterdata.files"],
-            "masterdata.import": ["basicdata.import"],
-            "masterdata.data": ["basicdata.data"],
-            "masterdata.feedback": ["basicdata.feedback"],
-            "masterdata.files": ["basicdata.files"],
-        }
-        return [self.resource, *aliases.get(self.resource, [])]
+    _ALIASES = {
+        "basicdata.import": ["masterdata.import"],
+        "basicdata.data": ["masterdata.data"],
+        "basicdata.feedback": ["masterdata.feedback"],
+        "basicdata.files": ["masterdata.files"],
+        "masterdata.import": ["basicdata.import"],
+        "masterdata.data": ["basicdata.data"],
+        "masterdata.feedback": ["basicdata.feedback"],
+        "masterdata.files": ["basicdata.files"],
+    }
+
+    def _resource_candidates(self, resource: Optional[str] = None) -> list[str]:
+        if resource is None:
+            resource = self.resource
+        return [resource, *self._ALIASES.get(resource, [])]
+
+    def _check_one(self, permissions: dict, resource: str, action: str) -> bool:
+        """检查单个 (resource, action) 是否通过，含别名和父级 fallback"""
+        for r in self._resource_candidates(resource):
+            if action in permissions.get(r, []):
+                return True
+        for r in self._resource_candidates(resource):
+            if "." not in r:
+                continue
+            parent = r.split(".")[0]
+            if action in permissions.get(parent, []):
+                return True
+        return False
+
+    def _has_any_permission(self, permissions: dict) -> bool:
+        """检查 self.checks 中任意一项是否通过"""
+        return any(self._check_one(permissions, r, a) for r, a in self.checks)
+
+    def _forbidden_detail(self) -> str:
+        """生成 403 错误提示：单权限时保持原格式，多权限时用 ' 或 ' 连接"""
+        if len(self.checks) <= 1:
+            return f"缺少 {self.resource}.{self.action} 权限"
+        perms = " 或 ".join(f"{r}.{a}" for r, a in self.checks)
+        return f"缺少以下任一权限：{perms}"
 
     def _role_permission_additions(self, role_code: str, permissions: dict) -> dict:
         from app.core.permissions import merge_role_permission_additions
@@ -249,20 +282,11 @@ class PermissionChecker:
                 if not isinstance(permissions, dict):
                     permissions = {}
                 permissions = self._role_permission_additions(role, permissions)
-                for resource in self._resource_candidates():
-                    allowed_actions = permissions.get(resource, [])
-                    if self.action in allowed_actions:
-                        return payload
-                for resource in self._resource_candidates():
-                    if "." not in resource:
-                        continue
-                    parent = resource.split(".")[0]
-                    parent_actions = permissions.get(parent, [])
-                    if self.action in parent_actions:
-                        return payload
+                if self._has_any_permission(permissions):
+                    return payload
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"缺少 {self.resource}.{self.action} 权限",
+                    detail=self._forbidden_detail(),
                 )
 
         if not is_share:
@@ -372,20 +396,11 @@ class PermissionChecker:
         if not isinstance(permissions, dict):
             permissions = {}
         permissions = self._role_permission_additions(role, permissions)
-        for resource in self._resource_candidates():
-            allowed_actions = permissions.get(resource, [])
-            if self.action in allowed_actions:
-                return await self._enrich_payload(payload, db, user_id)
-        for resource in self._resource_candidates():
-            if "." not in resource:
-                continue
-            parent = resource.split(".")[0]
-            parent_actions = permissions.get(parent, [])
-            if self.action in parent_actions:
-                return await self._enrich_payload(payload, db, user_id)
+        if self._has_any_permission(permissions):
+            return await self._enrich_payload(payload, db, user_id)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"缺少 {self.resource}.{self.action} 权限",
+            detail=self._forbidden_detail(),
         )
 
 

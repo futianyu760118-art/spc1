@@ -4,6 +4,7 @@ from sqlalchemy import (
     Column, BigInteger, Integer, String, Numeric, DateTime, Date, Text,
     UniqueConstraint, Index, ForeignKey,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -28,6 +29,9 @@ class StockCheck(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
     completed_at = Column(DateTime, nullable=True)
     remark = Column(Text, nullable=True)
+    covered_products = Column(JSONB, nullable=True, comment="本次盘点覆盖的产品行 [{product_code,bom_no,line_no,product_name,order_qty}]")
+    co_checker_user_ids = Column(JSONB, nullable=True, comment="共同盘点人 sys_user.id 列表")
+    created_by_user_id = Column(BigInteger, nullable=True, comment="创建人 sys_user.id（用于修改权限判定）")
 
     __table_args__ = (
         Index("ix_scm_inventory_check_order_date", "order_no", "check_date"),
@@ -40,6 +44,7 @@ class StockCheckItem(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     check_id = Column(BigInteger, ForeignKey("scm_inventory_check.id", ondelete="CASCADE"), nullable=False, index=True)
     line_no = Column(String(32), nullable=True, comment="关联 SaleOrderLine 行号(跨行聚合行时为空)")
+    level = Column(Integer, nullable=True, comment="BOM 层级(1=最外层)；手动盘点为空")
     material_id = Column(BigInteger, nullable=True, index=True, comment="物料ID")
     material_code = Column(String(50), nullable=True)
     material_name = Column(String(200), nullable=True)
@@ -55,7 +60,3 @@ class StockCheckItem(Base):
     remark = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint("check_id", "material_id", "line_no", name="uq_stock_check_item"),
-    )

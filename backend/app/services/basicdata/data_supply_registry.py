@@ -114,7 +114,7 @@ register_data_type(DataTypeDefinition(
     description="BOM物料清单",
     model_name="Bom",
     exposed_fields=[
-        "id", "bom_id", "bom_no", "material_id", "parent_material_id",
+        "id", "bom_id", "bom_no", "material_id", "parent_bom_id",
         "bom_version", "bom_type", "bill_type_id", "base_qty", "aux_attr_qty",
         "unit_id", "aux_attr_id", "supply_mode", "customer_material_id",
         "audit_status", "use_status", "disabled_status", "void_flag",

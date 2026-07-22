@@ -23,6 +23,7 @@ class Material(Base):
     status = Column(Integer, nullable=False, default=1, comment="状态")
     erp_sync_flag = Column(Integer, nullable=False, default=0, comment="ERP同步标识")
     is_deleted = Column(Integer, nullable=False, default=0, comment="是否删除 0否1是")
+    material_property = Column(Integer, nullable=True, comment="物料属性 1-外购 2-自制 3-委外加工 5-虚拟件 6-特征类 7-配置类 8-规划类 9-组装件")
     data_source = Column(String(32))
     supplier_id = Column(Integer, nullable=True, comment="供应商ID")
     order_unit_price = Column(Numeric(15, 4), nullable=True, comment="订货单价")

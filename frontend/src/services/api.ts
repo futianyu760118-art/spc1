@@ -203,8 +203,15 @@ export const materialApi = {
     api.get('/materials/kit-analysis', { params }),
   getOrderMaterials: (orderNo: string, params: Record<string, any>) =>
     api.get(`/materials/kit-analysis/${orderNo}/materials`, { params }),
+  getOrderProductBreakdown: (orderNo: string) =>
+    api.get(`/materials/kit-analysis/${orderNo}/product-breakdown`),
   // 物料盘点
-  createStockCheckFromOrder: (orderNo: string, data?: { title?: string; check_date?: string; remark?: string }) =>
+  createStockCheckFromOrder: (orderNo: string, data?: {
+    title?: string
+    check_date?: string
+    remark?: string
+    selected_products?: Array<{ product_code?: string | null; bom_no?: string | null }>
+  }) =>
     api.post(`/materials/stock-check/from-order/${orderNo}`, data || {}),
   getRecentStockChecks: (params: Record<string, any> = {}) =>
     api.get('/materials/stock-check/recent', { params }),
@@ -239,7 +246,12 @@ export const materialApi = {
     title?: string
     check_date?: string
     remark?: string
+    co_checker_user_ids?: number[]
   }) => api.post('/materials/stock-check/from-materials', data),
+  updateStockCheckCoCheckers: (checkId: number, co_checker_user_ids: number[]) =>
+    api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids }),
+  getCoCheckerCandidates: () =>
+    api.get('/materials/stock-check/co-checker-candidates'),
   // 供应商风险
   getSupplierRisk: (params: Record<string, any>) =>
     api.get('/materials/supplier-risk', { params }),

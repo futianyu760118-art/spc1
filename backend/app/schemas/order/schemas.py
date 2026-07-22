@@ -345,6 +345,7 @@ class BomDetailItemOut(BaseModel):
     spec_model: Optional[str] = None
     unit: Optional[str] = None
     material_type: Optional[str] = None
+    material_property: Optional[int] = None
     line_no: Optional[str] = None
     standard_qty: Optional[float] = None
     aux_qty: Optional[float] = None
@@ -359,6 +360,11 @@ class BomDetailItemOut(BaseModel):
     invalid_date: Optional[date] = None
     kit_flag: Optional[int] = None
     req_qty: Optional[float] = None
+    level: int = 1
+    bom_id: Optional[str] = None
+    parent_material_id: Optional[int] = None
+    has_sub_bom: bool = False
+    children: List["BomDetailItemOut"] = []
 
 
 class OrderProductMaterialsOut(BaseModel):

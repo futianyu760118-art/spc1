@@ -40,6 +40,35 @@ STATUS_LABELS = {
     "in_stock": "有库存",
 }
 
+MAX_BOM_LEVEL = 20
+
+
+def _line_no_sort_key(line_no: Optional[str]) -> tuple:
+    """BOM 行号排序键:数值优先,非数值次之,空值最后。
+
+    用 3 元组确保跨类型不冲突:
+      - (0, int, "")    数值行号,如 "1" "2" "10"
+      - (1, 0,   str)   非数值行号,如 "1.2" "A1"
+      - (2, 0,   "")    空值/None
+    """
+    if not line_no:
+        return (2, 0, "")
+    s = str(line_no).strip()
+    if not s:
+        return (2, 0, "")
+    try:
+        return (0, int(s), "")
+    except ValueError:
+        return (1, 0, s)
+
+
+def _sort_bom_tree(nodes: list[BomDetailItemOut]) -> None:
+    """递归按 line_no 升序排序 BOM 树(原地修改)。"""
+    nodes.sort(key=lambda n: _line_no_sort_key(n.line_no))
+    for n in nodes:
+        if n.children:
+            _sort_bom_tree(n.children)
+
 
 @dataclass
 class MaterialPoSummary:
@@ -176,84 +205,205 @@ async def get_order_product_materials(
                 )
             ]
 
-    # 直接通过 sale_order_line.bom_id 关联 scm_bom_detail.bom_id（bom_id 转字符串匹配）
-    line_bom_ids = sorted({str(line.bom_id) for line in lines if getattr(line, "bom_id", None)})
-    bom_details_by_id: dict[str, list[BomDetail]] = {}
-    if line_bom_ids:
-        detail_result = await db.execute(
-            select(BomDetail).where(BomDetail.bom_id.in_(line_bom_ids)).order_by(BomDetail.bom_id, BomDetail.line_no)
-        )
-        for detail in detail_result.scalars().all():
-            bom_details_by_id.setdefault(detail.bom_id, []).append(detail)
-
-    # 物料主数据：按 BOM 明细的 material_id 取
-    bom_detail_material_ids = sorted({
-        d.material_id for details in bom_details_by_id.values() for d in details if d.material_id
-    })
-    master_by_mid: dict[int, Material] = {}
-    if bom_detail_material_ids:
-        mid_result = await db.execute(select(Material).where(Material.erp_material_id.in_(bom_detail_material_ids)))
-        for m in mid_result.scalars().all():
-            master_by_mid[m.erp_material_id] = m
-
-    result: list[OrderProductMaterialsOut] = []
+    # 按 (product_code, bom_id) 合并重复产品行:
+    #   - order_qty 求和,BOM 树只展开一次,需求量按合并后总量计算(数学上正确)
+    #   - line_no 以逗号聚合,保留所有原始行号供追溯
+    #   - promised_date 取最早(保守)
+    #   - 同产品不同 BOM 仍保持多行(展开内容不同,合并会误导)
+    groups: dict[tuple[str, str], list] = {}
     for line in lines:
         line_bom_id = str(line.bom_id) if getattr(line, "bom_id", None) else None
-        line_bom_details = bom_details_by_id.get(line_bom_id, []) if line_bom_id else []
-        result.append(_build_line_materials(line, line_bom_details, master_by_mid))
+        key = (line.product_code or "", line_bom_id or "")
+        groups.setdefault(key, []).append(line)
 
+    result: list[OrderProductMaterialsOut] = []
+    for (product_code_key, bom_id_key), group_lines in groups.items():
+        first = group_lines[0]
+        total_qty = Decimal("0")
+        line_nos: list[str] = []
+        promised: Optional[date] = None
+        for ln in group_lines:
+            qty = ln.order_qty if ln.order_qty is not None else 0
+            total_qty += Decimal(str(qty))
+            if ln.line_no is not None:
+                line_nos.append(str(ln.line_no))
+            pd = ln.promised_date
+            if pd is not None and (promised is None or pd < promised):
+                promised = pd
+        merged_bom_id = bom_id_key or None
+        tree = await _expand_bom_tree(db, merged_bom_id, total_qty)
+        result.append(OrderProductMaterialsOut(
+            line_no=",".join(line_nos) if line_nos else None,
+            product_code=first.product_code,
+            product_name=first.product_name,
+            product_model=getattr(first, "product_model", None),
+            bom_no=getattr(first, "bom_no", None),
+            order_qty=_to_float(total_qty),
+            promised_date=promised,
+            total_materials=len(tree),
+            materials=tree,
+        ))
     return result
 
 
-def _build_line_materials(
-    line: SaleOrderLine,
-    bom_details: list[BomDetail],
-    master_by_mid: dict[int, Material],
-) -> OrderProductMaterialsOut:
-    order_qty = line.order_qty
+async def _expand_bom_tree(
+    db: AsyncSession,
+    root_bom_id: Optional[str],
+    root_demand_factor: Decimal,
+) -> list[BomDetailItemOut]:
+    """BFS 展开多层 BOM，返回顶层节点列表（children 已递归挂载）。
 
-    items: list[BomDetailItemOut] = []
-    for detail in bom_details:
-        master = master_by_mid.get(detail.material_id) if detail.material_id else None
-        # 需求量 = BOM 明细标准用量 × 订单数量
-        if detail.standard_qty is not None and order_qty is not None:
-            req_qty = _to_float(detail.standard_qty * order_qty)
-        else:
-            req_qty = _to_float(detail.standard_qty)
+    每层三步查询：
+      1) BomDetail WHERE bom_id IN (本层)
+      2) Material  WHERE erp_material_id IN (新子件)  [增量缓存]
+      3) Bom       WHERE material_id IN (本层子件)    [回查主表，判断是否继续展开]
 
-        items.append(BomDetailItemOut(
-            material_id=str(detail.material_id) if detail.material_id is not None else None,
-            material_code=master.material_code if master else None,
-            material_name=master.material_name if master else None,
-            spec_model=master.spec_model if master else None,
-            unit=master.unit_of_measure if master else None,
-            material_type=detail.material_type or (master.material_type if master else None),
-            line_no=detail.line_no,
-            standard_qty=_to_float(detail.standard_qty),
-            aux_qty=_to_float(detail.aux_qty),
-            config_type=detail.config_type,
-            lead_offset_days=detail.lead_offset_days,
-            back_flush=detail.back_flush,
-            scrap_rate=_to_float(detail.scrap_rate),
-            oper_sn=detail.oper_sn,
-            process_id=detail.process_id,
-            warehouse_id=detail.warehouse_id,
-            valid_date=detail.valid_date,
-            invalid_date=detail.invalid_date,
-            kit_flag=detail.kit_flag,
-            req_qty=req_qty,
-        ))
+    算法对齐 kit_analysis_service._get_bom_demand_map：
+      - visited 防环；MAX_BOM_LEVEL 深度上限
+      - 子级 factor = 父级 factor × standard_qty / parent_bom.base_qty
+      - base_qty 缺省取 1
+      - 父子挂载延迟到 BFS 结束后统一执行（子节点此时已全部创建）
+    """
+    if not root_bom_id:
+        return []
 
-    total = len(items)
+    master_by_mid: dict[int, Material] = {}
+    node_by_key: dict[tuple[str, str], BomDetailItemOut] = {}
+    parent_links: list[tuple[tuple[str, str], tuple[str, str]]] = []
+    top_keys: list[tuple[str, str]] = []
+    visited: set[str] = set()
 
-    return OrderProductMaterialsOut(
-        line_no=line.line_no,
-        product_code=line.product_code,
-        product_name=line.product_name,
-        product_model=getattr(line, "product_model", None),
-        bom_no=getattr(line, "bom_no", None),
-        order_qty=_to_float(line.order_qty),
-        promised_date=line.promised_date,
-        total_materials=total,
-        materials=items,
-    )
+    queue: list[tuple[str, Decimal, Optional[int], Optional[tuple[str, str]], int]] = [
+        (root_bom_id, root_demand_factor, None, None, 1)
+    ]
+
+    while queue:
+        level_bom_ids = {
+            item[0] for item in queue
+            if item[0] not in visited and item[4] <= MAX_BOM_LEVEL
+        }
+        if not level_bom_ids:
+            break
+        visited.update(level_bom_ids)
+
+        detail_result = await db.execute(
+            select(BomDetail)
+            .where(BomDetail.bom_id.in_(level_bom_ids))
+            .order_by(BomDetail.bom_id, BomDetail.line_no)
+        )
+        details_by_bom: dict[str, list[BomDetail]] = {}
+        for d in detail_result.scalars().all():
+            details_by_bom.setdefault(d.bom_id, []).append(d)
+
+        new_mids = {
+            d.material_id for details in details_by_bom.values()
+            for d in details if d.material_id
+        } - master_by_mid.keys()
+        if new_mids:
+            mat_result = await db.execute(
+                select(Material).where(Material.erp_material_id.in_(new_mids))
+            )
+            for m in mat_result.scalars().all():
+                master_by_mid[m.erp_material_id] = m
+
+        child_mids = {
+            d.material_id for details in details_by_bom.values()
+            for d in details if d.material_id
+        }
+        # 收集每个子件物料的所有候选 BOM（同一物料可能有多个版本/类型）
+        sub_bom_candidates: dict[int, list[Bom]] = {}
+        if child_mids:
+            bom_result = await db.execute(
+                select(Bom).where(Bom.material_id.in_(child_mids))
+            )
+            for b in bom_result.scalars().all():
+                sub_bom_candidates.setdefault(b.material_id, []).append(b)
+
+        # 查询哪些候选 bom_id 真正有明细行（可展开）
+        candidate_bom_ids = [b.bom_id for boms in sub_bom_candidates.values() for b in boms]
+        detail_bom_ids: set[str] = set()
+        if candidate_bom_ids:
+            det_id_result = await db.execute(
+                select(BomDetail.bom_id).where(BomDetail.bom_id.in_(candidate_bom_ids)).distinct()
+            )
+            detail_bom_ids = {row[0] for row in det_id_result.fetchall()}
+
+        # 每个物料挑一个"可展开"的 BOM：优先有明细且未作废/未禁用，其次有明细的任意一条
+        # 没有任何带明细的 BOM → 不入 sub_bom_by_mid → 视为叶子（has_sub_bom=False）
+        sub_bom_by_mid: dict[int, Bom] = {}
+        for mid, boms in sub_bom_candidates.items():
+            with_details = [b for b in boms if b.bom_id in detail_bom_ids]
+            if not with_details:
+                continue
+            clean = [b for b in with_details if not b.void_flag and not b.disabled_status]
+            pool = clean if clean else with_details
+            pool.sort(key=lambda b: (-(b.is_audited or 0), b.bom_id))
+            sub_bom_by_mid[mid] = pool[0]
+
+        next_queue: list[tuple[str, Decimal, Optional[int], Optional[tuple[str, str]], int]] = []
+        for bom_id, factor, parent_mid, parent_key, level in queue:
+            if bom_id not in level_bom_ids:
+                continue
+            for d in details_by_bom.get(bom_id, []):
+                master = master_by_mid.get(d.material_id) if d.material_id else None
+                if d.standard_qty is not None and factor is not None:
+                    req_qty_decimal: Optional[Decimal] = d.standard_qty * factor
+                else:
+                    req_qty_decimal = d.standard_qty
+
+                sub_bom = sub_bom_by_mid.get(d.material_id) if d.material_id else None
+                key = (bom_id, d.line_no or "")
+                node_by_key[key] = BomDetailItemOut(
+                    material_id=str(d.material_id) if d.material_id is not None else None,
+                    material_code=master.material_code if master else None,
+                    material_name=master.material_name if master else None,
+                    spec_model=master.spec_model if master else None,
+                    unit=master.unit_of_measure if master else None,
+                    material_type=d.material_type or (master.material_type if master else None),
+                    material_property=master.material_property if master else None,
+                    line_no=d.line_no,
+                    standard_qty=_to_float(d.standard_qty),
+                    aux_qty=_to_float(d.aux_qty),
+                    config_type=d.config_type,
+                    lead_offset_days=d.lead_offset_days,
+                    back_flush=d.back_flush,
+                    scrap_rate=_to_float(d.scrap_rate),
+                    oper_sn=d.oper_sn,
+                    process_id=d.process_id,
+                    warehouse_id=d.warehouse_id,
+                    valid_date=d.valid_date,
+                    invalid_date=d.invalid_date,
+                    kit_flag=d.kit_flag,
+                    req_qty=_to_float(req_qty_decimal),
+                    level=level,
+                    bom_id=d.bom_id,
+                    parent_material_id=parent_mid,
+                    has_sub_bom=sub_bom is not None,
+                    children=[],
+                )
+                if parent_key is None:
+                    top_keys.append(key)
+                else:
+                    parent_links.append((parent_key, key))
+
+                if sub_bom and sub_bom.bom_id not in visited:
+                    base_qty = sub_bom.base_qty if sub_bom.base_qty else Decimal("1")
+                    next_factor = (req_qty_decimal or Decimal("0")) / base_qty
+                    next_queue.append((
+                        sub_bom.bom_id,
+                        next_factor,
+                        d.material_id,
+                        key,
+                        level + 1,
+                    ))
+
+        queue = next_queue
+
+    for parent_key, child_key in parent_links:
+        parent_node = node_by_key.get(parent_key)
+        if parent_node is not None and child_key in node_by_key:
+            parent_node.children.append(node_by_key[child_key])
+
+    top_nodes = [node_by_key[k] for k in top_keys]
+    _sort_bom_tree(top_nodes)
+    return top_nodes

@@ -198,6 +198,7 @@ class DatabaseInitializer:
                 "supplier_id": "INTEGER",
                 "order_unit_price": "NUMERIC(15,4)",
                 "last_outbound_date": "DATE",
+                "material_property": "INTEGER",
             },
             "scm_sku": {
                 "data_source": "VARCHAR(32)",
@@ -281,6 +282,14 @@ class DatabaseInitializer:
                 "unit_price": "NUMERIC(15,6) NOT NULL DEFAULT 0",
                 "ending_balance": "NUMERIC(15,2) NOT NULL DEFAULT 0",
             },
+            "scm_inventory_check": {
+                "covered_products": "JSONB",
+                "co_checker_user_ids": "JSONB",
+                "created_by_user_id": "BIGINT",
+            },
+            "scm_inventory_check_item": {
+                "level": "INTEGER",
+            },
         }
         # 删除已废弃的列
         drop_columns = {
@@ -327,9 +336,23 @@ class DatabaseInitializer:
         except Exception as e:
             print(f"  ALTER scm_inventory_check.order_no DROP NOT NULL skipped: {e}")
 
+        # 物料盘点单明细：移除唯一约束 uq_stock_check_item
+        # 订单盘点改为按 BOM 每条明细一行后，同一物料可能在多行出现，旧约束(check_id,material_id,line_no)会冲突。
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE scm_inventory_check_item DROP CONSTRAINT IF EXISTS uq_stock_check_item"
+                ))
+            print("  scm_inventory_check_item: dropped uq_stock_check_item (if existed)")
+        except Exception as e:
+            print(f"  DROP uq_stock_check_item skipped: {e}")
+
         # scm_material: material_id -> erp_material_id (int), parent_id -> int
         # scm_bom / scm_bom_detail: material_id -> int
         await self.migrate_scm_material_erp_id()
+
+        # scm_bom: parent_material_id -> parent_bom_id (上级bomid)
+        await self.migrate_scm_bom_parent_bom_id()
 
         # 确保 is_closed 列存在且类型为 integer（独立事务，避免被其他语句回滚）
         for table in ("sale_order", "purchase_order"):
@@ -473,6 +496,35 @@ class DatabaseInitializer:
                 print(f"  scm_bom_detail.material_id type change skipped: {e}")
 
         print("scm_material erp_material_id migration done")
+
+    async def migrate_scm_bom_parent_bom_id(self):
+        """将 scm_bom.parent_material_id 改名为 parent_bom_id (语义为上级bomid).
+        幂等: 通过 information_schema 检查目标列是否已存在。"""
+        print("Migrating scm_bom.parent_material_id -> parent_bom_id...")
+        async with self.engine.begin() as conn:
+            target_exists = (await conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='scm_bom' AND column_name='parent_bom_id'"
+            ))).scalar()
+            if target_exists:
+                print("  scm_bom.parent_bom_id already exists, skip rename")
+                return
+            source_exists = (await conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='scm_bom' AND column_name='parent_material_id'"
+            ))).scalar()
+            if not source_exists:
+                print("  scm_bom.parent_material_id not found and parent_bom_id absent; "
+                      "create_all should have added parent_bom_id — skip rename")
+                return
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE scm_bom RENAME COLUMN parent_material_id TO parent_bom_id"
+                ))
+                print("  scm_bom: parent_material_id -> parent_bom_id")
+            except Exception as e:
+                print(f"  scm_bom rename skipped: {e}")
+        print("scm_bom parent_bom_id migration done")
 
     async def migrate_stock_check_permission(self):
         """将权限 orders.stock_check 重命名为 materials.stock_check，
@@ -1551,7 +1603,7 @@ ORDER BY FModifyDate DESC
                     SyncSqlConfig(
                         sync_type="materials_masterdata",
                         description="物料 — 从ERP物料主表拉取",
-                        sql_text="SELECT material_code, material_name, spec_model, material_type, unit_of_measure, brand, is_purchase, is_produce, status FROM T_BD_MATERIAL WHERE FModifyDate >= :since ORDER BY material_code",
+                        sql_text="SELECT material_code, material_name, spec_model, material_type, unit_of_measure, brand, is_purchase, is_produce, status, CAST(FErpClsID AS INT) AS material_property FROM T_BD_MATERIAL WHERE FModifyDate >= :since ORDER BY material_code",
                         field_mapping_json=None,
                         is_active=False,
                         sync_enabled=False,

@@ -514,7 +514,13 @@ async def sync_user_roles(
 @router.get("/employee-options", response_model=ResponseModel[list])
 async def list_employee_options(
     keyword: Optional[str] = Query(None),
-    current_user: dict = Depends(PermissionChecker("users", "read")),
+    current_user: dict = Depends(PermissionChecker(
+        "users", "read",
+        any_of=[
+            ("materials.purchase_plan", "update"),
+            ("materials.purchase_plan", "create"),
+        ],
+    )),
     db: AsyncSession = Depends(get_db),
 ):
     query = (

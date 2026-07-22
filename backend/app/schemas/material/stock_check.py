@@ -1,9 +1,15 @@
 """物料盘点 (scm_inventory_check) Schemas"""
 
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from datetime import date, datetime
 from decimal import Decimal
 from pydantic import BaseModel
+
+
+class StockCheckProductSelection(BaseModel):
+    """订单盘点时选中的产品行标识(对应 get_order_product_materials 的一个分组)"""
+    product_code: Optional[str] = None
+    bom_no: Optional[str] = None
 
 
 class StockCheckCreate(BaseModel):
@@ -12,6 +18,9 @@ class StockCheckCreate(BaseModel):
     title: Optional[str] = None
     check_date: Optional[date] = None
     remark: Optional[str] = None
+    # 指定要盘点哪些产品行;省略/为 None = 全部产品行(向后兼容),为空列表 = 未选(报错)
+    selected_products: Optional[List[StockCheckProductSelection]] = None
+    co_checker_user_ids: Optional[List[int]] = None
 
 
 class StockCheckFromMaterialsCreate(BaseModel):
@@ -20,6 +29,11 @@ class StockCheckFromMaterialsCreate(BaseModel):
     title: Optional[str] = None
     check_date: Optional[date] = None
     remark: Optional[str] = None
+    co_checker_user_ids: Optional[List[int]] = None
+
+
+class CoCheckersUpdate(BaseModel):
+    co_checker_user_ids: List[int] = []
 
 
 class MaterialCandidateOut(BaseModel):
@@ -51,6 +65,7 @@ class StockCheckItemOut(BaseModel):
     id: int
     check_id: int
     line_no: Optional[str] = None
+    level: Optional[int] = None
     material_id: Optional[int] = None
     material_code: Optional[str] = None
     material_name: Optional[str] = None
@@ -85,6 +100,12 @@ class StockCheckOut(BaseModel):
     updated_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     remark: Optional[str] = None
+    covered_products: Optional[List[Dict[str, Any]]] = None
+    co_checker_user_ids: Optional[List[int]] = None
+    created_by_user_id: Optional[int] = None
+    # 以下为运行时计算字段
+    co_checkers: Optional[List[Dict[str, Any]]] = None  # [{user_id, name}]
+    can_edit: Optional[bool] = None
     items: List[StockCheckItemOut] = []
 
     model_config = {"from_attributes": True}
@@ -104,6 +125,8 @@ class StockCheckListOut(BaseModel):
     created_by: Optional[str] = None
     checked_by: Optional[str] = None
     created_at: Optional[datetime] = None
+    covered_products: Optional[List[Dict[str, Any]]] = None
+    co_checker_user_ids: Optional[List[int]] = None
 
     model_config = {"from_attributes": True}
 

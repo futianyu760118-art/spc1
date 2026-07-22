@@ -5,8 +5,9 @@ import { SearchOutlined, ShoppingOutlined, PieChartOutlined, WarningOutlined, Ex
 import dayjs from 'dayjs'
 import { materialApi } from '@/services/api'
 import { useUiPreferencesStore } from '@/store/uiPreferences'
+import OrderProductKitPanel from './components/OrderProductKitPanel'
 
-interface MaterialItem {
+export interface MaterialItem {
   material_code: string
   material_name: string | null
   product_code: string | null
@@ -38,6 +39,7 @@ interface MaterialItem {
   bill_type: number | null
   bill_type_label: string | null
   bom_demand_qty: number | null
+  transit_qty: number | null
 }
 
 interface KitItem {
@@ -52,6 +54,42 @@ interface KitItem {
   risk_level: string
   promised_date: string | null
   materials?: MaterialItem[]
+}
+
+export interface BomKitMaterialItem extends MaterialItem {
+  level: number
+  bom_id: string | null
+  standard_qty: number | null
+  req_qty: number | null
+  has_sub_bom: boolean
+  children: BomKitMaterialItem[]
+}
+
+export interface ProductKitSummary {
+  line_no: string | null
+  product_code: string | null
+  product_name: string | null
+  product_model: string | null
+  bom_no: string | null
+  bom_id: string | null
+  order_qty: number | null
+  promised_date: string | null
+  leaf_total: number
+  leaf_received: number
+  leaf_partial: number
+  leaf_not_ordered: number
+  leaf_overdue: number
+  leaf_stagnant: number
+  has_bom: boolean
+  kit_rate: number
+  risk_level: string
+}
+
+export interface OrderProductKitBreakdown {
+  order_no: string
+  products: ProductKitSummary[]
+  orphan_materials: MaterialItem[]
+  bom_trees: Record<string, BomKitMaterialItem[]>
 }
 
 const RISK_COLOR: Record<string, string> = { red: '#e11d48', yellow: '#f59e0b', green: '#16a34a' }
@@ -140,6 +178,7 @@ export default function KitAnalysis() {
   const [sortOrder, setSortOrder] = useState<string>('')
   const [materialsLoading, setMaterialsLoading] = useState<Record<string, boolean>>({})
   const [materialFilters, setMaterialFilters] = useState<Record<string, Record<string, any>>>({})
+  const [breakdownCache, setBreakdownCache] = useState<Record<string, OrderProductKitBreakdown | null>>({})
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
   const paginationRef = useRef(pagination)
   paginationRef.current = pagination
@@ -235,11 +274,8 @@ export default function KitAnalysis() {
   }, [])
 
   const handleExpand = useCallback(async (expanded: boolean, record: KitItem) => {
-    if (expanded && !record.materials) {
-      const filters = materialFilters[record.order_no] || DEFAULT_MATERIAL_FILTERS
-      await loadMaterials(record.order_no, filters)
-    }
-  }, [loadMaterials, materialFilters])
+    // 展开时由 OrderProductKitPanel 懒加载,这里无需操作
+  }, [])
 
   const handleMaterialFilterChange = useCallback((orderNo: string, filters: Record<string, any>) => {
     setMaterialFilters(prev => ({
@@ -695,76 +731,11 @@ export default function KitAnalysis() {
             },
             onExpand: handleExpand,
             expandedRowRender: (row: KitItem) => (
-              <div style={{ padding: '8px 0' }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4, paddingRight: 8 }}>
-                  <Popover
-                    trigger="click"
-                    placement="bottomRight"
-                    title="选择显示列"
-                    content={
-                      <Checkbox.Group
-                        value={materialColumnKeys}
-                        onChange={(checked) => {
-                          const next = checked as string[]
-                          if (next.length === 0) return
-                          setMaterialColumnKeys(next)
-                          setColumnVisibility(KIT_ANALYSIS_PAGE_KEY, next)
-                        }}
-                      >
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, auto)', gap: '4px 16px', maxWidth: 420 }}>
-                          {MATERIAL_COLUMN_KEYS.map(key => (
-                            <Checkbox key={key} value={key}>{MATERIAL_COLUMN_LABELS[key]}</Checkbox>
-                          ))}
-                        </div>
-                      </Checkbox.Group>
-                    }
-                  >
-                    <Button size="small" icon={<SettingOutlined />}>列设置</Button>
-                  </Popover>
-                </div>
-                <Table
-                  rowKey="material_code"
-                  dataSource={row.materials || []}
-                  columns={getMaterialColumns(row.order_no)}
-                  pagination={false}
-                  size="small"
-                  virtual
-                  sticky
-                  scroll={{ x: 1700, y: 360 }}
-                  loading={materialsLoading[row.order_no]}
-                  onChange={(_pagination, tableFilters: any, sorter: any) => {
-                    const sortField = sorter.field as string | undefined
-                    const sortDir = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : ''
-                    const nextFilters: Record<string, any> = {
-                      material_code: tableFilters.material_code?.[0],
-                      material_name: tableFilters.material_name?.[0],
-                      material_property: tableFilters.material_property?.length ? tableFilters.material_property.join(',') : undefined,
-                      material_type: tableFilters.material_type?.[0],
-                      supplier: tableFilters.supplier_name?.[0],
-                      po_qty_min: tableFilters.po_qty?.[0],
-                      po_qty_max: tableFilters.po_qty?.[1],
-                      received_qty_min: tableFilters.received_qty?.[0],
-                      received_qty_max: tableFilters.received_qty?.[1],
-                      eta_start: tableFilters.eta?.[0],
-                      eta_end: tableFilters.eta?.[1],
-                      actual_arrival_date_start: tableFilters.actual_arrival_date?.[0],
-                      actual_arrival_date_end: tableFilters.actual_arrival_date?.[1],
-                      inspection_date_start: tableFilters.inspection_date?.[0],
-                      inspection_date_end: tableFilters.inspection_date?.[1],
-                      status: tableFilters.status?.length ? tableFilters.status.join(',') : undefined,
-                      is_stagnant: tableFilters.is_stagnant?.[0],
-                      bill_type: tableFilters.bill_type?.length ? tableFilters.bill_type.join(',') : undefined,
-                      sortBy: sortField || '',
-                      sortOrder: sortDir,
-                    }
-                    Object.keys(nextFilters).forEach(key => {
-                      if (nextFilters[key] === undefined || nextFilters[key] === null || nextFilters[key] === '') delete nextFilters[key]
-                    })
-                    handleMaterialFilterChange(row.order_no, nextFilters)
-                    loadMaterials(row.order_no, nextFilters)
-                  }}
-                />
-              </div>
+              <OrderProductKitPanel
+                orderNo={row.order_no}
+                breakdown={breakdownCache[row.order_no] ?? null}
+                onLoaded={(data) => setBreakdownCache(prev => ({ ...prev, [row.order_no]: data }))}
+              />
             ),
           }}
           pagination={{

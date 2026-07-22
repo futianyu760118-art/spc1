@@ -24,7 +24,33 @@ interface Material {
   status: number
   erp_sync_flag: number
   is_deleted: number
+  material_property?: number | null
   children?: Material[]
+}
+
+const MATERIAL_PROPERTY_OPTIONS: Array<{ value: number; label: string; color: string }> = [
+  { value: 1, label: '外购', color: 'blue' },
+  { value: 2, label: '自制', color: 'green' },
+  { value: 3, label: '委外加工', color: 'orange' },
+  { value: 5, label: '虚拟件', color: 'default' },
+  { value: 6, label: '特征类', color: 'purple' },
+  { value: 7, label: '配置类', color: 'cyan' },
+  { value: 8, label: '规划类', color: 'gold' },
+  { value: 9, label: '组装件', color: 'magenta' },
+]
+
+const MATERIAL_PROPERTY_LABEL: Record<number, string> = MATERIAL_PROPERTY_OPTIONS.reduce(
+  (acc, item) => {
+    acc[item.value] = item.label
+    return acc
+  },
+  {} as Record<number, string>,
+)
+
+const renderMaterialProperty = (v?: number | null) => {
+  if (v === undefined || v === null) return <Tag>—</Tag>
+  const opt = MATERIAL_PROPERTY_OPTIONS.find(o => o.value === v)
+  return <Tag color={opt?.color || 'default'}>{MATERIAL_PROPERTY_LABEL[v] ?? String(v)}</Tag>
 }
 
 interface TreeNode {
@@ -101,6 +127,13 @@ const MaterialForm = ({ form, treeData }: MaterialFormProps) => (
     </Form.Item>
     <Form.Item name="material_type" label="物料分类" rules={[{ required: true }]}>
       <Input placeholder="请输入物料分类" />
+    </Form.Item>
+    <Form.Item name="material_property" label="物料属性">
+      <Select allowClear placeholder="请选择物料属性">
+        {MATERIAL_PROPERTY_OPTIONS.map(opt => (
+          <Select.Option key={opt.value} value={opt.value}>{opt.label}</Select.Option>
+        ))}
+      </Select>
     </Form.Item>
     <Form.Item name="unit_of_measure" label="计量单位" rules={[{ required: true }]}>
       <Input placeholder="请输入计量单位" />
@@ -240,6 +273,13 @@ export default function Materials() {
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 180 },
     { title: '规格型号', dataIndex: 'spec_model', key: 'spec_model', width: 140 },
     { title: '物料分类', dataIndex: 'material_type', key: 'material_type', width: 100 },
+    {
+      title: '物料属性',
+      dataIndex: 'material_property',
+      key: 'material_property',
+      width: 100,
+      render: (v: number | null | undefined) => renderMaterialProperty(v),
+    },
     { title: '计量单位', dataIndex: 'unit_of_measure', key: 'unit_of_measure', width: 80 },
     { title: '品牌/厂商', dataIndex: 'brand', key: 'brand', width: 100 },
     {
@@ -310,7 +350,7 @@ export default function Materials() {
             columns={columns}
             dataSource={treeData}
             loading={loading}
-            scroll={{ x: 1100 }}
+            scroll={{ x: 1200 }}
             size="small"
             pagination={false}
             expandable={{ defaultExpandAllRows: true }}
@@ -321,7 +361,7 @@ export default function Materials() {
             columns={columns}
             dataSource={data}
             loading={loading}
-            scroll={{ x: 1100 }}
+            scroll={{ x: 1200 }}
             size="small"
             pagination={{
               ...pagination,

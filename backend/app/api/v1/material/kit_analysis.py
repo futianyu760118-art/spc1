@@ -7,8 +7,16 @@ from typing import Optional
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
-from app.schemas.material.schemas import KitAnalysisItem, KitAnalysisMaterialItem
-from app.services.material.kit_analysis_service import get_kit_analysis, get_order_materials
+from app.schemas.material.schemas import (
+    KitAnalysisItem,
+    KitAnalysisMaterialItem,
+    OrderProductKitBreakdownOut,
+)
+from app.services.material.kit_analysis_service import (
+    get_kit_analysis,
+    get_order_materials,
+    get_order_product_breakdown,
+)
 
 router = APIRouter()
 
@@ -83,3 +91,13 @@ async def order_materials(
         sort_order=sort_order,
     )
     return ResponseModel(data=items)
+
+
+@router.get("/{order_no}/product-breakdown", response_model=ResponseModel[OrderProductKitBreakdownOut])
+async def order_product_breakdown(
+    order_no: str,
+    current_user: dict = Depends(PermissionChecker("materials.kit_analysis", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await get_order_product_breakdown(db, order_no=order_no)
+    return ResponseModel(data=result)

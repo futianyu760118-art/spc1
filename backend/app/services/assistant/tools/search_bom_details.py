@@ -210,7 +210,7 @@ async def search_bom_details(db: AsyncSession, params: Dict[str, Any]) -> Dict[s
             "material_id": b.material_id,
             "material_code": master.material_code,
             "material_name": master.material_name,
-            "parent_material_id": b.parent_material_id,
+            "parent_bom_id": b.parent_bom_id,
             "bom_version": b.bom_version,
             "bom_type": b.bom_type,
             "bill_type_id": b.bill_type_id,

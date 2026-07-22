@@ -19,7 +19,13 @@ from app.models.basicdata.bom_detail import BomDetail
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
-from app.schemas.material.schemas import KitAnalysisItem, KitAnalysisMaterialItem
+from app.schemas.material.schemas import (
+    KitAnalysisItem,
+    KitAnalysisMaterialItem,
+    BomKitMaterialItem,
+    ProductKitSummary,
+    OrderProductKitBreakdownOut,
+)
 from app.services.common.sync_filter import get_purchase_order_sync_filters
 # 复用订单物料服务中的状态推断与 PO 汇总逻辑，保证齐套口径一致
 from app.services.order.order_materials_service import (
@@ -29,6 +35,7 @@ from app.services.order.order_materials_service import (
     _status,
     _summarize_pos,
     _to_float,
+    _expand_bom_tree,
 )
 
 
@@ -966,3 +973,169 @@ async def get_order_materials(
         items.sort(key=sort_key, reverse=reverse)
 
     return items
+
+
+async def get_order_product_breakdown(
+    db: AsyncSession,
+    order_no: str,
+) -> dict:
+    """按订单下产品 + BOM 多级树返回齐套明细。
+
+    一次返回:
+      - products: 产品列表(每产品含汇总状态)
+      - bom_trees: {product_key: BOM 树},树节点含订单级齐套数字
+      - orphan_materials: MrpPlanOrder 中存在但 BOM 未覆盖的物料
+    """
+    from decimal import Decimal as _Decimal
+    from collections import defaultdict
+
+    line_result = await db.execute(
+        select(SaleOrderLine)
+        .where(SaleOrderLine.order_no == order_no)
+        .order_by(SaleOrderLine.id)
+    )
+    lines = line_result.scalars().all()
+
+    if not lines:
+        order_q = await db.execute(select(SaleOrder).where(SaleOrder.order_no == order_no))
+        order = order_q.scalar_one_or_none()
+        if order:
+            lines = [SimpleNamespace(
+                order_no=order.order_no,
+                line_no=order.line_no,
+                product_code=order.product_code,
+                product_name=order.product_name,
+                product_model=None,
+                order_qty=order.order_qty,
+                promised_date=order.promised_date,
+                bom_id=None,
+                bom_no=None,
+            )]
+
+    # 1) 订单级齐套数字(扁平),按 material_code 索引
+    order_materials = await get_order_materials(db, order_no=order_no)
+    mat_by_code: dict[str, KitAnalysisMaterialItem] = {m.material_code: m for m in order_materials}
+
+    # 2) 按 (product_code, bom_id) 分组产品行
+    groups: dict[tuple[str, str], list] = defaultdict(list)
+    for line in lines:
+        line_bom_id = str(line.bom_id) if getattr(line, "bom_id", None) else None
+        key = (line.product_code or "", line_bom_id or "")
+        groups[key].append(line)
+
+    products: list[ProductKitSummary] = []
+    bom_trees: dict[str, list[BomKitMaterialItem]] = {}
+    covered_codes: set[str] = set()
+
+    for idx, ((product_code_key, bom_id_key), group_lines) in enumerate(groups.items()):
+        first = group_lines[0]
+        total_qty = _Decimal("0")
+        line_nos: list[str] = []
+        promised = None
+        for ln in group_lines:
+            qty = ln.order_qty if ln.order_qty is not None else 0
+            total_qty += _Decimal(str(qty))
+            if ln.line_no is not None:
+                line_nos.append(str(ln.line_no))
+            pd_ = ln.promised_date
+            if pd_ is not None and (promised is None or pd_ < promised):
+                promised = pd_
+        merged_bom_id = bom_id_key or None
+
+        product_key = f"{product_code_key}#{idx}"
+
+        if merged_bom_id:
+            tree_nodes = await _expand_bom_tree(db, merged_bom_id, total_qty)
+        else:
+            tree_nodes = []
+
+        kit_tree = _attach_kit_to_tree(tree_nodes, mat_by_code, covered_codes)
+
+        # 产品级汇总:按 material_code 去重计数
+        per_product_counts: dict[str, KitAnalysisMaterialItem] = {}
+        _collect_unique_materials(kit_tree, mat_by_code, per_product_counts)
+
+        leaf_total = len(per_product_counts)
+        leaf_received = sum(1 for m in per_product_counts.values() if m.status == "fully_received")
+        leaf_partial = sum(1 for m in per_product_counts.values() if m.status == "partial_received")
+        leaf_not_ordered = sum(1 for m in per_product_counts.values() if m.status in ("not_ordered", "self_made_unlinked"))
+        leaf_overdue = sum(1 for m in per_product_counts.values() if m.status == "overdue")
+        leaf_stagnant = sum(1 for m in per_product_counts.values() if m.is_stagnant)
+        kit_rate = (leaf_received / leaf_total) if leaf_total else 0.0
+        risk = _kit_risk_level(kit_rate)
+
+        products.append(ProductKitSummary(
+            line_no=",".join(line_nos) if line_nos else None,
+            product_code=first.product_code,
+            product_name=first.product_name,
+            product_model=getattr(first, "product_model", None),
+            bom_no=getattr(first, "bom_no", None),
+            bom_id=merged_bom_id,
+            order_qty=_to_float(total_qty),
+            promised_date=promised,
+            leaf_total=leaf_total,
+            leaf_received=leaf_received,
+            leaf_partial=leaf_partial,
+            leaf_not_ordered=leaf_not_ordered,
+            leaf_overdue=leaf_overdue,
+            leaf_stagnant=leaf_stagnant,
+            has_bom=bool(merged_bom_id),
+            kit_rate=kit_rate,
+            risk_level=risk,
+        ))
+        bom_trees[product_key] = kit_tree
+
+    # 3) 孤儿物料 = 订单级物料中,material_code 不在任何产品 BOM 树里
+    orphan_materials = [m for code, m in mat_by_code.items() if code not in covered_codes]
+
+    return OrderProductKitBreakdownOut(
+        order_no=order_no,
+        products=products,
+        orphan_materials=orphan_materials,
+        bom_trees=bom_trees,
+    ).model_dump()
+
+
+def _attach_kit_to_tree(
+    nodes: list,
+    mat_by_code: dict[str, KitAnalysisMaterialItem],
+    covered_codes: set[str],
+) -> list[BomKitMaterialItem]:
+    """把 BomDetailItemOut 节点转成 BomKitMaterialItem,并按 material_code 关联订单级齐套数字。"""
+    result: list[BomKitMaterialItem] = []
+    for node in nodes:
+        code = node.material_code
+        kit_item = mat_by_code.get(code) if code else None
+        if code:
+            covered_codes.add(code)
+        base_data = kit_item.model_dump() if kit_item else {}
+        base_data.update({
+            "level": node.level,
+            "bom_id": node.bom_id,
+            "standard_qty": node.standard_qty,
+            "req_qty": node.req_qty,
+            "has_sub_bom": node.has_sub_bom,
+            "children": _attach_kit_to_tree(node.children, mat_by_code, covered_codes),
+        })
+        if not kit_item:
+            # BOM 有但 MrpPlanOrder 没记录 → 清掉必填字段的占位
+            base_data["material_code"] = code or ""
+            base_data["status"] = "not_in_plan"
+            base_data.setdefault("status_label", None)
+        result.append(BomKitMaterialItem(**base_data))
+    return result
+
+
+def _collect_unique_materials(
+    nodes: list,
+    mat_by_code: dict[str, KitAnalysisMaterialItem],
+    out: dict[str, KitAnalysisMaterialItem],
+) -> None:
+    """DFS 收集树中所有出现在 mat_by_code 的 material_code(去重)。"""
+    for node in nodes:
+        code = getattr(node, "material_code", None)
+        if code and code in mat_by_code and code not in out:
+            out[code] = mat_by_code[code]
+        children = getattr(node, "children", []) or []
+        if children:
+            _collect_unique_materials(children, mat_by_code, out)

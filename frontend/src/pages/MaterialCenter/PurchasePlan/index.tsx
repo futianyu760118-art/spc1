@@ -67,8 +67,10 @@ const MATERIAL_PROPERTY_OPTIONS = [
 const MATERIAL_PROPERTY_MAP = Object.fromEntries(MATERIAL_PROPERTY_OPTIONS.map(item => [item.value, item.label]))
 
 export default function PurchasePlan() {
-  const isSupplierUser = useAuthStore((s) => s.isSupplierUser)
-  const supplierReadOnly = isSupplierUser()
+  const hasPermission = useAuthStore((s) => s.hasPermission)
+  const canCreate = hasPermission('materials.purchase_plan', 'create')
+  const canUpdate = hasPermission('materials.purchase_plan', 'update')
+  const canImport = hasPermission('materials.purchase_plan', 'import')
   const [data, setData] = useState<PlanRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -311,7 +313,7 @@ export default function PurchasePlan() {
   }
 
   const editableText = (field: keyof PlanRow) => (value: string | null, row: PlanRow) => {
-    if (supplierReadOnly) {
+    if (!canUpdate) {
       return <div style={{ padding: '4px 8px', minHeight: '24px' }}>{value || <span style={{ color: '#cbd5e1' }}>-</span>}</div>
     }
     const cellKey = `${row.id}-${String(field)}`
@@ -342,7 +344,7 @@ export default function PurchasePlan() {
   }
 
   const editableNumber = (field: keyof PlanRow, min = 0) => (value: number | null, row: PlanRow) => {
-    if (supplierReadOnly) {
+    if (!canUpdate) {
       return <div style={{ padding: '4px 8px', textAlign: 'right' }}>{value != null ? value : <span style={{ color: '#cbd5e1' }}>-</span>}</div>
     }
     const cellKey = `${row.id}-${String(field)}`
@@ -376,7 +378,7 @@ export default function PurchasePlan() {
   }
 
   const editableDate = (field: keyof PlanRow) => (value: string | null, row: PlanRow) => {
-    if (supplierReadOnly) {
+    if (!canUpdate) {
       return <div style={{ padding: '4px 8px' }}>{value ? dayjs(value).format('YYYY-MM-DD') : <span style={{ color: '#cbd5e1' }}>-</span>}</div>
     }
     const cellKey = `${row.id}-${String(field)}`
@@ -727,7 +729,7 @@ export default function PurchasePlan() {
           <Tooltip title="和供应商沟通">
             <Button size="small" icon={<MessageOutlined />} onClick={() => openContact(row)} />
           </Tooltip>
-          {!supplierReadOnly && (
+          {canUpdate && (
             <Tooltip title="编辑">
               <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
             </Tooltip>
@@ -801,7 +803,7 @@ export default function PurchasePlan() {
               >
                 {showCharts ? '隐藏图表' : '分析图表'}
               </Button>
-              {!supplierReadOnly && selectedRowKeys.length > 0 && (
+              {canUpdate && selectedRowKeys.length > 0 && (
                 <Button type="primary" icon={<EditOutlined />} onClick={() => setBatchEditModal(true)}>
                   批量编辑 ({selectedRowKeys.length})
                 </Button>
@@ -818,12 +820,12 @@ export default function PurchasePlan() {
               >
                 <Button icon={<DownloadOutlined />} loading={exporting}>导出 <DownOutlined /></Button>
               </Dropdown>
-              {!supplierReadOnly && (
+              {canImport && (
                 <Upload beforeUpload={(f) => { handleImport(f); return false }} showUploadList={false} accept=".csv">
                   <Button icon={<UploadOutlined />}>导入CSV</Button>
                 </Upload>
               )}
-              {!supplierReadOnly && <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModal(true)}>新增</Button>}
+              {canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddModal(true)}>新增</Button>}
             </Space>
           </Col>
         </Row>
@@ -836,10 +838,10 @@ export default function PurchasePlan() {
           dataSource={data}
           columns={columns}
           loading={loading}
-          rowSelection={supplierReadOnly ? undefined : {
+          rowSelection={canUpdate ? {
             selectedRowKeys,
             onChange: (keys) => setSelectedRowKeys(keys as number[]),
-          }}
+          } : undefined}
           scroll={{ x: 'max-content', y: 'calc(100vh - 380px)' }}
           size="small"
           tableLayout="fixed"

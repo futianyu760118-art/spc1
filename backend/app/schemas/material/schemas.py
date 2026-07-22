@@ -1,6 +1,6 @@
 """物料齐套中心 — Schema定义"""
 
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import date, datetime
 from pydantic import BaseModel
 
@@ -288,6 +288,48 @@ class KitAnalysisItem(BaseModel):
     kit_rate: float
     risk_level: str
     promised_date: Optional[date] = None
+
+
+class BomKitMaterialItem(KitAnalysisMaterialItem):
+    """BOM 树节点 + 订单级齐套数字。继承 KitAnalysisMaterialItem 全部字段。"""
+    level: int = 1
+    bom_id: Optional[str] = None
+    standard_qty: Optional[float] = None
+    req_qty: Optional[float] = None
+    has_sub_bom: bool = False
+    children: List["BomKitMaterialItem"] = []
+
+
+class ProductKitSummary(BaseModel):
+    """左栏产品卡片数据。"""
+    line_no: Optional[str] = None
+    product_code: Optional[str] = None
+    product_name: Optional[str] = None
+    product_model: Optional[str] = None
+    bom_no: Optional[str] = None
+    bom_id: Optional[str] = None
+    order_qty: Optional[float] = None
+    promised_date: Optional[date] = None
+    leaf_total: int = 0
+    leaf_received: int = 0
+    leaf_partial: int = 0
+    leaf_not_ordered: int = 0
+    leaf_overdue: int = 0
+    leaf_stagnant: int = 0
+    has_bom: bool = True
+    kit_rate: float = 0.0
+    risk_level: str = "green"
+
+
+class OrderProductKitBreakdownOut(BaseModel):
+    """新端点的响应体。"""
+    order_no: str
+    products: List[ProductKitSummary] = []
+    orphan_materials: List[KitAnalysisMaterialItem] = []
+    bom_trees: Dict[str, List[BomKitMaterialItem]] = {}
+
+
+BomKitMaterialItem.model_rebuild()
 
 
 # ============ 供应商风险分析 ============

@@ -4,19 +4,22 @@ import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
   InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge,
 } from 'antd'
-import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, UnorderedListOutlined, PlusOutlined } from '@ant-design/icons'
+import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, UnorderedListOutlined, PlusOutlined, RightOutlined, DownOutlined } from '@ant-design/icons'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
-import { materialApi } from '@/services/api'
+import { materialApi, orderApi } from '@/services/api'
 import { formatDateTime } from '@/utils'
 import { useUiPreferencesStore } from '@/store/uiPreferences'
 import { useStockCheckPoolStore } from '@/store/stockCheckPool'
 import { stockCheckIntroSteps, stockCheckDetailSteps, stockCheckManualDetailSteps, STOCK_CHECK_INTRO_TOUR_ID, STOCK_CHECK_DETAIL_TOUR_ID, STOCK_CHECK_MANUAL_DETAIL_TOUR_ID } from './StockCheckTour'
 import MaterialPickerModal from './MaterialPickerModal'
+import OrderProductPickerModal, { OrderProductSelection, OrderProductLine } from './OrderProductPickerModal'
+import CoCheckerPickerModal from './CoCheckerPickerModal'
 
 interface StockCheckItem {
   id: number
   check_id: number
   line_no?: string | null
+  level?: number | null
   material_id?: number | null
   material_code?: string | null
   material_name?: string | null
@@ -30,6 +33,19 @@ interface StockCheckItem {
   checked_at?: string | null
   checked_by?: string | null
   remark?: string | null
+}
+
+interface CoveredProduct {
+  product_code?: string | null
+  bom_no?: string | null
+  line_no?: string | null
+  product_name?: string | null
+  order_qty?: number | null
+}
+
+interface CoChecker {
+  user_id: number
+  name: string
 }
 
 interface StockCheck {
@@ -48,6 +64,10 @@ interface StockCheck {
   created_at?: string | null
   completed_at?: string | null
   remark?: string | null
+  covered_products?: CoveredProduct[] | null
+  co_checker_user_ids?: number[] | null
+  co_checkers?: CoChecker[] | null
+  can_edit?: boolean | null
   items?: StockCheckItem[]
 }
 
@@ -114,6 +134,14 @@ export default function StockCheckPage() {
   const [checkTypeFilter, setCheckTypeFilter] = useState<string>('all')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [orderPickerOpen, setOrderPickerOpen] = useState(false)
+  const [coPickerOpen, setCoPickerOpen] = useState(false)
+  const [coPickerIds, setCoPickerIds] = useState<number[]>([])
+  const [coSaving, setCoSaving] = useState(false)
+  const [orderProducts, setOrderProducts] = useState<OrderProductLine[]>([])
+  const [orderChecks, setOrderChecks] = useState<StockCheck[]>([])
+  const [overviewLoading, setOverviewLoading] = useState(false)
+  const [progressCollapsed, setProgressCollapsed] = useState(true)
 
   const [orderUsageCache, setOrderUsageCache] = useState<Record<number, { total: number; items: MaterialOrderUsage[]; loading: boolean }>>({})
   const [orderUsagePage, setOrderUsagePage] = useState<Record<number, { page: number; page_size: number; keyword: string }>>({})
@@ -171,10 +199,27 @@ export default function StockCheckPage() {
     extraDeps: [dateRange, checkTypeFilter],
   })
 
-  const handleCreate = useCallback(async (no: string) => {
+  const loadOrderOverview = useCallback(async (no: string) => {
+    setOverviewLoading(true)
+    try {
+      const [prodRes, checkRes] = await Promise.all([
+        orderApi.getProductMaterials(no).catch(() => null),
+        materialApi.getStockChecksByOrder(no).catch(() => null),
+      ])
+      setOrderProducts((prodRes as any)?.data || [])
+      setOrderChecks((checkRes as any)?.data || [])
+    } finally {
+      setOverviewLoading(false)
+    }
+  }, [])
+
+  const handleCreate = useCallback(async (no: string, selected?: OrderProductSelection[]) => {
     setLoading(true)
     try {
-      const res: any = await materialApi.createStockCheckFromOrder(no, {})
+      const res: any = await materialApi.createStockCheckFromOrder(
+        no,
+        selected && selected.length ? { selected_products: selected } : {},
+      )
       const c: StockCheck = res.data
       message.success(`已创建盘点单 ${c.check_no}`)
       setActiveCheck(c)
@@ -182,13 +227,15 @@ export default function StockCheckPage() {
       setOrderNo(no)
       setCheckIdParam(null)
       setParams({ orderNo: no })
+      setOrderPickerOpen(false)
       reloadRecentList()
+      loadOrderOverview(no)
     } catch (e: any) {
       message.error(e?.response?.data?.detail || e.message || '创建盘点单失败')
     } finally {
       setLoading(false)
     }
-  }, [reloadRecentList, setParams])
+  }, [reloadRecentList, setParams, loadOrderOverview])
 
   const handleCreateFromMaterials = useCallback(async (selected: MaterialCandidate[], source: 'search' | 'pool') => {
     setCreating(true)
@@ -228,6 +275,15 @@ export default function StockCheckPage() {
   }, [searchText, setParams])
 
   useEffect(() => {
+    if (!orderNo) {
+      setOrderProducts([])
+      setOrderChecks([])
+      return
+    }
+    loadOrderOverview(orderNo)
+  }, [orderNo, loadOrderOverview])
+
+  useEffect(() => {
     if (checkIdParam) {
       if (!activeCheck || activeCheck.id !== checkIdParam) {
         loadCheck(checkIdParam)
@@ -244,6 +300,24 @@ export default function StockCheckPage() {
       }).catch(() => { /* silent */ })
     }
   }, [orderNo, checkIdParam, activeCheck, loadCheck])
+
+  const productKey = (p: { product_code?: string | null; bom_no?: string | null }) =>
+    `${p.product_code ?? ''}__${p.bom_no ?? ''}`
+
+  // 已盘点产品 → 覆盖它的(非取消)盘点单信息
+  const productCoverage = useMemo(() => {
+    const map = new Map<string, { check_no: string; status: string; check_date?: string | null }>()
+    for (const c of orderChecks) {
+      if (!c.covered_products || c.status === 'cancelled') continue
+      for (const p of c.covered_products) {
+        const k = productKey(p)
+        if (!map.has(k)) map.set(k, { check_no: c.check_no, status: c.status || 'open', check_date: c.check_date })
+      }
+    }
+    return map
+  }, [orderChecks])
+
+  const coveredKeySet = useMemo(() => new Set(productCoverage.keys()), [productCoverage])
 
   const newbieMode = useUiPreferencesStore(s => s.preferences?.newbie_mode !== false)
   const isManualDetail = activeCheck?.check_type === 'manual'
@@ -401,12 +475,13 @@ export default function StockCheckPage() {
           setActiveCheck(res.data)
           setItems(res.data.items || [])
           message.success('已完结')
+          if (orderNo) loadOrderOverview(orderNo)
         } catch (e: any) {
           message.error(e?.response?.data?.detail || e.message || '完结失败')
         }
       },
     })
-  }, [activeCheck, items])
+  }, [activeCheck, items, orderNo, loadOrderOverview])
 
   const handleCancel = useCallback(async () => {
     if (!activeCheck) return
@@ -419,12 +494,13 @@ export default function StockCheckPage() {
           const res: any = await materialApi.cancelStockCheck(activeCheck.id)
           setActiveCheck(res.data)
           message.success('已取消')
+          if (orderNo) loadOrderOverview(orderNo)
         } catch (e: any) {
           message.error(e?.response?.data?.detail || e.message || '取消失败')
         }
       },
     })
-  }, [activeCheck])
+  }, [activeCheck, orderNo, loadOrderOverview])
 
   const goBack = useCallback(() => {
     setActiveCheck(null)
@@ -433,11 +509,31 @@ export default function StockCheckPage() {
     setParams({})
   }, [setParams])
 
+  const openCoPicker = useCallback(() => {
+    setCoPickerIds(activeCheck?.co_checker_user_ids || [])
+    setCoPickerOpen(true)
+  }, [activeCheck])
+
+  const handleSaveCoCheckers = useCallback(async (ids: number[]) => {
+    if (!activeCheck) return
+    setCoSaving(true)
+    try {
+      await materialApi.updateStockCheckCoCheckers(activeCheck.id, ids)
+      setCoPickerOpen(false)
+      await loadCheck(activeCheck.id)
+      message.success('已更新共同盘点人')
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e.message || '更新失败')
+    } finally {
+      setCoSaving(false)
+    }
+  }, [activeCheck, loadCheck])
+
   const updateItem = useCallback((id: number, patch: Partial<StockCheckItem>) => {
     setItems(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p))
   }, [])
 
-  const readonly = activeCheck?.status === 'completed' || activeCheck?.status === 'cancelled'
+  const readonly = activeCheck?.status === 'completed' || activeCheck?.status === 'cancelled' || activeCheck?.can_edit === false
 
   const columns = useMemo(() => {
     const makeStringFilters = (key: keyof StockCheckItem) => {
@@ -464,6 +560,11 @@ export default function StockCheckPage() {
     })
 
     return [
+      {
+        title: '层级', dataIndex: 'level', width: 70, fixed: 'left' as const, align: 'center' as const,
+        sorter: (a: any, b: any) => (Number(a.level) || 0) - (Number(b.level) || 0),
+        render: (v: any) => v != null ? `L${v}` : '—',
+      },
       { title: '物料编码', dataIndex: 'material_code', width: 140, fixed: 'left' as const, ...stringCol('material_code', 140) },
       { title: '物料名称', dataIndex: 'material_name', width: 200, ellipsis: true, ...stringCol('material_name', 200) },
       { title: '规格', dataIndex: 'spec_model', width: 140, ellipsis: true, ...stringCol('spec_model', 140) },
@@ -586,7 +687,7 @@ export default function StockCheckPage() {
         }}>清空</Button>
         {orderNo && !activeCheck && (
           <span data-tour="stock-check-create">
-            <Button type="primary" ghost onClick={() => handleCreate(orderNo)} loading={loading}>
+            <Button type="primary" ghost onClick={() => setOrderPickerOpen(true)}>
               为 {orderNo} 创建盘点单
             </Button>
           </span>
@@ -623,9 +724,65 @@ export default function StockCheckPage() {
     </div>
   )
 
+  const renderProductProgress = () => {
+    if (!orderNo || orderProducts.length === 0) return null
+    const checkedCount = orderProducts.filter((p) => productCoverage.has(productKey(p))).length
+    return (
+      <div className="card-modern" style={{ padding: 16, marginBottom: 16 }}>
+        <div
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, cursor: 'pointer', userSelect: 'none' }}
+          onClick={() => setProgressCollapsed((v) => !v)}
+        >
+          <Space>
+            {progressCollapsed ? <RightOutlined style={{ fontSize: 12, color: '#64748b' }} /> : <DownOutlined style={{ fontSize: 12, color: '#64748b' }} />}
+            <h3 style={{ margin: 0 }}>产品盘点进度</h3>
+            <span style={{ color: '#64748b' }}>已盘点 {checkedCount}/{orderProducts.length} 个产品</span>
+          </Space>
+        </div>
+        {!progressCollapsed && (
+          <Table
+            rowKey={(r) => productKey(r)}
+            dataSource={orderProducts}
+            loading={overviewLoading}
+            pagination={false}
+            size="small"
+            scroll={{ y: 260 }}
+            style={{ marginTop: 12 }}
+            columns={[
+              { title: '行号', dataIndex: 'line_no', width: 80, render: (v: any) => v || '—' },
+              { title: '产品编码', dataIndex: 'product_code', width: 150 },
+              { title: '产品名称', dataIndex: 'product_name', ellipsis: true },
+              { title: 'BOM号', dataIndex: 'bom_no', width: 130, render: (v: any) => v || '—' },
+              { title: '订单数量', dataIndex: 'order_qty', width: 100, align: 'right' as const, render: (v: any) => (v != null ? v : '—') },
+              {
+                title: '盘点状态', width: 110,
+                render: (_: any, r: OrderProductLine) => {
+                  const cov = productCoverage.get(productKey(r))
+                  if (!cov) return <Tag>未盘点</Tag>
+                  const color = cov.status === 'completed' ? 'success' : 'processing'
+                  const label = cov.status === 'completed' ? '已盘点' : '盘点中'
+                  return (
+                    <Tooltip title={`盘点单 ${cov.check_no}${cov.check_date ? ` · ${cov.check_date}` : ''}`}>
+                      <Tag color={color}>{label}</Tag>
+                    </Tooltip>
+                  )
+                },
+              },
+              {
+                title: '盘点单号', width: 170,
+                render: (_: any, r: OrderProductLine) => productCoverage.get(productKey(r))?.check_no || '—',
+              },
+            ]}
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div>
       {renderSearch()}
+      {renderProductProgress()}
       {!activeCheck ? (
         <div className="card-modern" style={{ padding: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
@@ -719,7 +876,17 @@ export default function StockCheckPage() {
                 ? <span style={{ color: '#64748b' }}>订单: {activeCheck.order_no}</span>
                 : <span style={{ color: '#94a3b8' }}>订单: —</span>}
               <span style={{ color: '#64748b' }}>创建: {activeCheck.created_by} / {formatDateTime(activeCheck.created_at)}</span>
+              {activeCheck.can_edit === false && <Tag color="orange">只读（无修改权限）</Tag>}
             </Space>
+            <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+              <span style={{ color: '#64748b' }}>共同盘点人:</span>
+              {(activeCheck.co_checkers && activeCheck.co_checkers.length > 0)
+                ? activeCheck.co_checkers.map((c) => <Tag key={c.user_id} color="blue">{c.name}</Tag>)
+                : <span style={{ color: '#94a3b8' }}>未设置（仅创建人与管理员可改）</span>}
+              {readonly ? null : (
+                <Button type="link" size="small" onClick={openCoPicker}>管理</Button>
+              )}
+            </div>
             <Row gutter={12}>
               <Col span={4}><Card size="small" className="card-modern">
                 <div style={{ color: '#64748b', fontSize: 12 }}>应盘</div>
@@ -908,6 +1075,21 @@ export default function StockCheckPage() {
         onCancel={() => setPickerOpen(false)}
         onConfirm={handleCreateFromMaterials}
         confirmLoading={creating}
+      />
+      <OrderProductPickerModal
+        open={orderPickerOpen}
+        orderNo={orderNo}
+        coveredKeys={coveredKeySet}
+        onCancel={() => setOrderPickerOpen(false)}
+        onCreate={(selected) => handleCreate(orderNo, selected)}
+        confirmLoading={loading}
+      />
+      <CoCheckerPickerModal
+        open={coPickerOpen}
+        initialIds={coPickerIds}
+        onCancel={() => setCoPickerOpen(false)}
+        onSave={handleSaveCoCheckers}
+        saveLoading={coSaving}
       />
     </div>
   )

@@ -138,6 +138,7 @@ class MaterialBase(BaseModel):
     status: int = 1
     erp_sync_flag: int = 0
     is_deleted: int = 0
+    material_property: Optional[int] = None
     supplier_id: Optional[int] = None
     order_unit_price: Optional[Decimal] = None
     last_outbound_date: Optional[date] = None
@@ -159,6 +160,7 @@ class MaterialUpdate(BaseModel):
     status: Optional[int] = None
     erp_sync_flag: Optional[int] = None
     is_deleted: Optional[int] = None
+    material_property: Optional[int] = None
     supplier_id: Optional[int] = None
     order_unit_price: Optional[Decimal] = None
     last_outbound_date: Optional[date] = None
@@ -183,6 +185,7 @@ class MaterialTreeNode(BaseModel):
     is_purchase: int = 0
     is_produce: int = 0
     status: int = 1
+    material_property: Optional[int] = None
     supplier_id: Optional[int] = None
     order_unit_price: Optional[Decimal] = None
     last_outbound_date: Optional[date] = None

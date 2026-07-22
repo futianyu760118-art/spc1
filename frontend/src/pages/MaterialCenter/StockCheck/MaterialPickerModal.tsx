@@ -50,8 +50,15 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       .then((res: any) => {
         if (cancelled) return
         const data = res?.data || {}
-        setItems((data.items || []) as MaterialCandidate[])
+        const list = (data.items || []) as MaterialCandidate[]
+        setItems(list)
         setTotal(Number(data.total || 0))
+        // 搜索结果只有 1 条时自动勾选（累积，不覆盖已选），用户仍需手动点「确定」
+        if (list.length === 1) {
+          const only = list[0]
+          setSelectedIds((prev) => prev.has(only.erp_material_id) ? prev : new Set(prev).add(only.erp_material_id))
+          setSelectedMap((prev) => prev[only.erp_material_id] ? prev : { ...prev, [only.erp_material_id]: only })
+        }
       })
       .catch((err: any) => {
         if (!cancelled) message.error(err?.message || '加载物料候选失败')

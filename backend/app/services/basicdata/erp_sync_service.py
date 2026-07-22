@@ -285,6 +285,13 @@ class ERPSyncService:
                 coerced[k] = v
                 continue
             col_type = type(col.type)
+            # 非字符串列收到空串时统一转 None：
+            # ERP 经常用 '' 表示缺失,asyncpg 会对 INTEGER/NUMERIC/DATE 列
+            # 报 "str' object cannot be interpreted as an integer" 等错误。
+            # 转成 None 后可由 _bulk_upsert 的 NOT NULL 默认值清理走 DB/ORM 默认值。
+            if isinstance(v, str) and v.strip() == "" and col_type is not String:
+                coerced[k] = None
+                continue
             try:
                 if col_type is String and not isinstance(v, str):
                     coerced[k] = str(v)
@@ -446,14 +453,16 @@ class ERPSyncService:
                 for fld, resolver in field_overrides.items():
                     if fld in valid_cols:
                         row_dict[fld] = resolver(row_dict)
-            # 剔除 NOT NULL 列的 None 值，让 ORM/DB 默认值生效
-            # 否则显式 None 会覆盖 client_default(如 default=0)，
-            # flush 时 INSERT NULL → integrity error → 整批失败
+            # 剔除 NOT NULL 列的 None / 空串值，让 ORM/DB 默认值生效
+            # 否则显式 None 或 '' 会覆盖 client_default(如 default=0)，
+            # flush 时 INSERT NULL → integrity error → 整批失败；
+            # 或对 Integer 列传 '' → asyncpg 编码失败。
             for col in model_class.__table__.columns:
                 if col.nullable:
                     continue
                 if col.default is not None or col.server_default is not None:
-                    if row_dict.get(col.name) is None:
+                    val = row_dict.get(col.name)
+                    if val is None or (isinstance(val, str) and val.strip() == ""):
                         row_dict.pop(col.name, None)
             key = tuple(
                 None if row_dict.get(f) is None else str(row_dict.get(f, "")).strip()

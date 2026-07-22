@@ -332,6 +332,7 @@ async def list_materials(
         'material_type': Material.material_type,
         'unit_of_measure': Material.unit_of_measure,
         'status': Material.status,
+        'material_property': Material.material_property,
     }
     query = select(Material).filter(Material.is_deleted == 0)
     if parent_id is not None:
