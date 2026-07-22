@@ -9,15 +9,17 @@ interface Props {
   products: ProductKitSummary[]
   selectedKey: string | null
   onSelect: (key: string) => void
-  productKeys: string[]
+  productKeys?: string[]
 }
 
 const ProductList: React.FC<Props> = ({ products, selectedKey, onSelect, productKeys }) => {
+  const derivedKeys = products.map((p, idx) => `${p.product_code || ''}#${idx}`)
+  const keys = productKeys ?? derivedKeys
   return (
     <div style={{ width: 240, flexShrink: 0, borderRight: '1px solid #f0f0f0', paddingRight: 8, overflowY: 'auto' }}>
       <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>产品 ({products.length})</div>
       {products.map((p, idx) => {
-        const key = productKeys[idx] ?? `${p.product_code}#${idx}`
+        const key = keys[idx] ?? `${p.product_code}#${idx}`
         const selected = key === selectedKey
         return (
           <div
