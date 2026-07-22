@@ -98,7 +98,12 @@ def build_path_index(app) -> None:
         for m in (route.methods or []):
             if m.upper() in {"HEAD", "OPTIONS"}:
                 continue
-            _BY_PATH[(m.upper(), route.path)] = meta.endpoint_code
+            key = (m.upper(), route.path)
+            if key in _BY_PATH:
+                raise RuntimeError(
+                    f"Duplicate exposable endpoint: {m.upper()} {route.path}"
+                )
+            _BY_PATH[key] = meta.endpoint_code
             updated = ExposableEndpoint(
                 endpoint_code=meta.endpoint_code,
                 method=m.upper(),
