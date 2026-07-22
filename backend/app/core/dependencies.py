@@ -254,9 +254,11 @@ def _resolve_endpoint_code_from_request(request: Request) -> Optional[str]:
 
 async def _authenticate_via_api_key(request: Request, db: AsyncSession):
     """返回 (api_key_obj, sys_api_user_dict)；任一环节失败返回 None。"""
+    import time
     from app.services.basicdata.data_supply_service import (
         validate_signature_for_exposable,
         check_ip_whitelist,
+        log_call,
     )
 
     app_key = request.headers.get("x-app-key")
@@ -269,6 +271,7 @@ async def _authenticate_via_api_key(request: Request, db: AsyncSession):
     if not endpoint_code:
         return None
 
+    auth_start = time.time()
     key_obj, reason = await validate_signature_for_exposable(
         db, app_key, signature, timestamp, endpoint_code,
         request_query_string=str(request.url.query),
@@ -281,6 +284,24 @@ async def _authenticate_via_api_key(request: Request, db: AsyncSession):
         return None
 
     sys_user = await _get_or_load_sys_api_user(db)
+
+    duration_ms = (time.time() - auth_start) * 1000
+    try:
+        await log_call(
+            db=db,
+            api_key_id=key_obj.id,
+            api_key_name=key_obj.key_name,
+            data_type=endpoint_code,
+            request_params={"path": request.url.path, "query": str(request.url.query)},
+            response_status=200,
+            response_count=0,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent"),
+            duration_ms=duration_ms,
+        )
+    except Exception:
+        pass
+
     return key_obj, sys_user
 
 
