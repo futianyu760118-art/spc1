@@ -300,6 +300,24 @@ class BomKitMaterialItem(KitAnalysisMaterialItem):
     children: List["BomKitMaterialItem"] = []
 
 
+class BomKitFlatItem(KitAnalysisMaterialItem):
+    """BOM 节点扁平结构。继承 KitAnalysisMaterialItem 全部字段,新增层级与父引用。"""
+    level: int = 1
+    bom_id: Optional[str] = None
+    standard_qty: Optional[float] = None
+    req_qty: Optional[float] = None
+    has_sub_bom: bool = False
+    parent_bom_id: Optional[str] = None
+
+
+class BomKitFlatResponse(BaseModel):
+    """product-bom-flat 端点的响应体。"""
+    order_no: str
+    product_code: str
+    bom_id: Optional[str] = None
+    items: List[BomKitFlatItem] = []
+
+
 class ProductKitSummary(BaseModel):
     """左栏产品卡片数据。"""
     line_no: Optional[str] = None
