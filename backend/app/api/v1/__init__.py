@@ -77,4 +77,5 @@ api_router.include_router(external.external_router, prefix="/external", tags=["�
 
 # Common files and assistant
 api_router.include_router(common.files_router, prefix="/files", tags=["文件"])
+api_router.include_router(common.health.router, prefix="/common", tags=["common"])
 api_router.include_router(assistant.assistant_router, prefix="/assistant", tags=["智能助手"])
