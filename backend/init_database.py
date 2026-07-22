@@ -5,6 +5,7 @@ Initialize database tables and seed data for supply chain collaboration platform
 """
 
 import asyncio
+import hashlib
 import json
 import sys
 from datetime import datetime, date
@@ -941,6 +942,38 @@ class DatabaseInitializer:
                         user.role_id = user_data["role_id"]
                     else:
                         session.add(SysUser(**user_data))
+
+                api_caller_role = await session.execute(
+                    text("SELECT id FROM sys_role WHERE role_code = 'api_caller'")
+                )
+                api_caller_role_id = api_caller_role.scalar()
+                if not api_caller_role_id:
+                    admin_role_row = await session.execute(
+                        select(SysRole).where(SysRole.role_code == "admin")
+                    )
+                    admin_role_obj = admin_role_row.scalar_one_or_none()
+                    api_caller_perms = dict(admin_role_obj.permissions) if admin_role_obj and admin_role_obj.permissions else {}
+                    new_role = SysRole(
+                        role_code="api_caller",
+                        role_name="外部API调用方（系统占位）",
+                        permissions=api_caller_perms,
+                    )
+                    session.add(new_role)
+                    await session.flush()
+                    api_caller_role_id = new_role.id
+
+                sys_api_user_row = await session.execute(
+                    select(SysUser).where(SysUser.username == "sys-api-caller")
+                )
+                if not sys_api_user_row.scalar_one_or_none():
+                    dead_hash = hashlib.sha256(b"__never_login__" + b"sys-api-caller").hexdigest()
+                    session.add(SysUser(
+                        username="sys-api-caller",
+                        display_name="外部API调用方（系统占位）",
+                        hashed_password=dead_hash,
+                        role_id=api_caller_role_id,
+                        is_active=True,
+                    ))
 
                 await session.commit()
                 print("System users seeded/updated successfully")
