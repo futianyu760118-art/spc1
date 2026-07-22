@@ -504,3 +504,60 @@ def generate_app_key() -> str:
 
 def generate_app_secret() -> str:
     return uuid.uuid4().hex + uuid.uuid4().hex
+
+
+async def validate_signature_for_exposable(
+    db: AsyncSession,
+    app_key: str,
+    signature: str,
+    timestamp: str,
+    endpoint_code: str,
+    request_query_string: str = "",
+) -> tuple[Optional[DataSupplyApiKey], str]:
+    """验证 HMAC-SHA256 签名是否可调用指定 @exposable 内部接口。
+
+    与 validate_signature_for_endpoint 区别：
+      - 不检查 DataSupplyConfig（内部接口不走 config）
+      - 检查 allowed_endpoints_json 是否包含 endpoint_code（必须以 'int:' 前缀）
+      - 其余 (TTL / 失效 / IP 由调用方处理) 与现有规则一致
+    """
+    try:
+        ts = int(timestamp)
+    except (ValueError, TypeError):
+        return None, "时间戳格式无效（应为整数秒）"
+
+    now = int(time.time())
+    if abs(now - ts) > SIGNATURE_TTL:
+        return None, f"时间戳超出有效期（服务器时间戳 {now}，允许偏差 ±{SIGNATURE_TTL}s）"
+
+    if not endpoint_code.startswith("int:"):
+        return None, f"endpoint_code 必须是 'int:' 前缀: {endpoint_code}"
+
+    result = await db.execute(
+        select(DataSupplyApiKey).where(DataSupplyApiKey.app_key == app_key)
+    )
+    key_obj = result.scalar_one_or_none()
+    if not key_obj:
+        return None, "AppKey 不存在"
+    if not key_obj.is_active:
+        return None, "API Key 已禁用"
+    if not key_obj.app_secret:
+        return None, "该 API Key 未配置 AppSecret"
+    if key_obj.expires_at and key_obj.expires_at < datetime.now():
+        return None, "API Key 已过期"
+
+    if not _key_has_endpoint_access(key_obj, endpoint_code):
+        return None, f"API Key 未授权调用接口 {endpoint_code}"
+
+    string_to_sign = f"{timestamp}{app_key}{endpoint_code}{request_query_string}"
+    expected_sig = hmac.new(
+        key_obj.app_secret.encode("utf-8"),
+        string_to_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected_sig):
+        return None, (
+            f"签名不匹配。待签名串 = timestamp+app_key+endpoint_code+query_string "
+            f"= '{timestamp}{app_key}{endpoint_code}{request_query_string}'"
+        )
+    return key_obj, ""
