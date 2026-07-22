@@ -272,6 +272,8 @@ export default function DataSupply() {
     [endpointOptions]
   )
 
+  const [internalEndpointOptions, setInternalEndpointOptions] = useState<EndpointOption[]>([])
+
   // ── 配置 ──
   const [availableTypes, setAvailableTypes] = useState<AvailableType[]>([])
   const [configs, setConfigs] = useState<ConfigItem[]>([])
@@ -399,6 +401,16 @@ export default function DataSupply() {
     }
   }, [activeTab, fetchConfigs, fetchApiKeys, fetchCallLogs, fetchAvailableTypes, fetchStatistics, fetchDataTypeOptions, fetchEndpoints])
 
+  useEffect(() => {
+    if (!apiKeyModalOpen) return
+    dataSupplyApi.listExposableInternalEndpoints()
+      .then((res: any) => {
+        const list = res?.data?.data || res?.data || []
+        setInternalEndpointOptions(list)
+      })
+      .catch(() => setInternalEndpointOptions([]))
+  }, [apiKeyModalOpen])
+
   // ═══════════════════════════════════════════
   // 配置操作
   // ═══════════════════════════════════════════
@@ -488,11 +500,15 @@ export default function DataSupply() {
 
   const handleEditApiKey = (key: ApiKeyItem) => {
     setEditingApiKey(key)
+    const allAllowed = key.allowed_endpoints_json ? JSON.parse(key.allowed_endpoints_json) : []
+    const externalAllowed = allAllowed.filter((s: string) => !s.startsWith('int:'))
+    const internalAllowed = allAllowed.filter((s: string) => s.startsWith('int:'))
     apiKeyForm.setFieldsValue({
       key_name: key.key_name,
       description: key.description,
       allowed_data_types: key.allowed_data_types_json ? JSON.parse(key.allowed_data_types_json) : [],
-      allowed_endpoints: key.allowed_endpoints_json ? JSON.parse(key.allowed_endpoints_json) : [],
+      allowed_endpoints: externalAllowed,
+      allowed_internal_endpoints: internalAllowed,
       rate_limit: key.rate_limit,
       expires_at: key.expires_at ? dayjs(key.expires_at) : undefined,
       ip_whitelist: key.ip_whitelist_json ? JSON.parse(key.ip_whitelist_json).join('\n') : '',
@@ -515,7 +531,10 @@ export default function DataSupply() {
           key_name: values.key_name,
           description: values.description,
           allowed_data_types_json: JSON.stringify(values.allowed_data_types || []),
-          allowed_endpoints_json: JSON.stringify(values.allowed_endpoints || []),
+          allowed_endpoints_json: JSON.stringify([
+            ...(values.allowed_endpoints || []),
+            ...(values.allowed_internal_endpoints || []),
+          ]),
           rate_limit: values.rate_limit,
           ip_whitelist_json: JSON.stringify(ipList),
         }
@@ -529,7 +548,10 @@ export default function DataSupply() {
           key_name: values.key_name,
           description: values.description,
           allowed_data_types_json: JSON.stringify(values.allowed_data_types || []),
-          allowed_endpoints_json: JSON.stringify(values.allowed_endpoints || []),
+          allowed_endpoints_json: JSON.stringify([
+            ...(values.allowed_endpoints || []),
+            ...(values.allowed_internal_endpoints || []),
+          ]),
           rate_limit: values.rate_limit,
           ip_whitelist_json: JSON.stringify(ipList),
         }
@@ -1104,6 +1126,36 @@ export default function DataSupply() {
                   <Space direction="vertical" size={0}>
                     <Space size={6}>
                       <Tag color="blue" style={{ margin: 0 }}>{ep.method}</Tag>
+                      <Text strong>{ep.name}</Text>
+                      {ep.tags?.map(t => <Tag key={t} style={{ margin: 0 }}>{t}</Tag>)}
+                    </Space>
+                    <Text type="secondary" style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{ep.path}</Text>
+                  </Space>
+                )
+              }}
+            />
+          </Form.Item>
+          <Form.Item
+            name="allowed_internal_endpoints"
+            label="允许调用的内部接口"
+            tooltip="控制 @exposable 标记的内部接口的调用权限，使用 int: 前缀；与对外接口在同一字段"
+          >
+            <Select
+              mode="multiple"
+              placeholder="选择允许调用的内部接口"
+              optionLabelProp="label"
+              options={internalEndpointOptions.map(e => ({
+                value: e.endpoint_code,
+                label: e.name,
+                title: `${e.method} ${e.path} — ${e.description}`,
+              }))}
+              optionRender={(option) => {
+                const ep = internalEndpointOptions.find(e => e.endpoint_code === option.value)
+                if (!ep) return option.label
+                return (
+                  <Space direction="vertical" size={0}>
+                    <Space size={6}>
+                      <Tag color="green" style={{ margin: 0 }}>{ep.method}</Tag>
                       <Text strong>{ep.name}</Text>
                       {ep.tags?.map(t => <Tag key={t} style={{ margin: 0 }}>{t}</Tag>)}
                     </Space>

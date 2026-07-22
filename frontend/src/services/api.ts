@@ -446,6 +446,8 @@ export const dataSupplyApi = {
     api.put(`/basicdata/data-supply/api-keys/${keyId}`, data),
   deleteApiKey: (keyId: number) => api.delete(`/basicdata/data-supply/api-keys/${keyId}`),
   listEndpoints: () => api.get('/basicdata/data-supply/endpoints'),
+  listExposableInternalEndpoints: () =>
+    api.get('/basicdata/data-supply/exposable-internal-endpoints'),
   listCallLogs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/call-logs', { params }),
   getStatistics: (params?: Record<string, any>) => api.get('/basicdata/data-supply/statistics', { params }),
 }
