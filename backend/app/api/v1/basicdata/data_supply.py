@@ -444,3 +444,16 @@ async def supply_single_data(
     )
 
     return ResponseModel(data=result)
+
+
+@router.get("/exposable-internal-endpoints", response_model=ResponseModel)
+async def list_exposable_internal_endpoints(
+    current_user: dict = Depends(PermissionChecker("basicdata.data_supply", "read")),
+):
+    """列出所有 @exposable 标记的内部接口，给 API Key 表单勾选用。"""
+    from app.services.basicdata.exposable_registry import list_exposable_endpoints
+    return ResponseModel(
+        code=0,
+        message="ok",
+        data=list_exposable_endpoints(),
+    )
