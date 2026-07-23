@@ -468,6 +468,47 @@ async def _get_plan_order_material_items(
         for po in po_result.scalars().all():
             po_map.setdefault(po.material_code, []).append(po)
 
+    # 委外订单明细（仅用于 bill_type=11012 物料的齐套状态推导）
+    sub_map: dict[str, MaterialSubSummary] = {}
+    if material_codes:
+        sub_result = await db.execute(
+            select(
+                SubcontractOrderDetail.qty,
+                SubcontractOrderDetail.received_qty,
+                SubcontractOrder.bill_no,
+                Material.material_code.label("material_code"),
+                SubcontractOrder.closed_flag,
+            )
+            .join(
+                Material,
+                Material.erp_material_id == SubcontractOrderDetail.material_id,
+            )
+            .join(
+                SubcontractOrder,
+                SubcontractOrder.erp_order_id == SubcontractOrderDetail.erp_order_id,
+            )
+            .where(
+                SubcontractOrderDetail.sale_order_no == order_no,
+                Material.material_code.in_(material_codes),
+                SubcontractOrder.voided_flag != 1,
+            )
+        )
+        grouped: dict[str, list] = {}
+        for row in sub_result.all():
+            grouped.setdefault(row.material_code, []).append(row)
+        for mc, rows in grouped.items():
+            sub_map[mc] = _summarize_subs(
+                [
+                    SimpleNamespace(
+                        qty=r.qty,
+                        received_qty=r.received_qty,
+                        bill_no=r.bill_no,
+                        closed_flag=r.closed_flag,
+                    )
+                    for r in rows
+                ]
+            )
+
     # 跨订单库存分配：扣减其他订单（按合同交期优先）占用后的可用库存
     available_stock_map = await _compute_available_stock_for_order(db, order_no, material_codes)
 
@@ -482,18 +523,46 @@ async def _get_plan_order_material_items(
         # MRP数量为0的物料不展开
         if base_qty == 0:
             continue
-        pos = po_map.get(plan.material_code, [])
-        po_summary = _summarize_pos(pos)
         bill_type = plan.bill_type
         master = master_map.get(plan.material_code)
-        # 物料属性优先取计划订单自身的字段（来源 K3 FErpClsID），缺失时回退推导
-        material_property = plan.material_property
-        if material_property is None:
-            material_property = _resolve_material_property(bill_type, po_summary, master)
-        status = _status_for_plan(bill_type, po_summary)
+        if bill_type == 11012:
+            # 委外：忽略 PO 路径，读委外汇总
+            sub_summary = sub_map.get(plan.material_code)
+            po_summary = None
+            pos = []
+            po_count = sub_summary.po_count if sub_summary else 0
+            status = _status_for_plan(bill_type, po_summary=None, sub_summary=sub_summary)
+            received_qty = sub_summary.received_qty if sub_summary else None
+            po_qty = sub_summary.po_qty if sub_summary else None
+            po_no_val = sub_summary.po_no if sub_summary else None
+            supplier_name_val = sub_summary.supplier_name if sub_summary else None
+            first_eta = sub_summary.first_eta if sub_summary else None
+            latest_eta = sub_summary.latest_eta if sub_summary else None
+            actual_arrival_date = sub_summary.actual_arrival_date if sub_summary else None
+            inspection_date = sub_summary.inspection_date if sub_summary else None
+            is_closed_val = sub_summary.is_closed if sub_summary else 0
+            eta_val = latest_eta  # 委外用 latest_eta 兼容 UI 列
+            material_property = plan.material_property if plan.material_property is not None else 3
+        else:
+            pos = po_map.get(plan.material_code, [])
+            po_summary = _summarize_pos(pos)
+            po_count = po_summary.po_count if po_summary else 0
+            # 物料属性优先取计划订单自身的字段（来源 K3 FErpClsID），缺失时回退推导
+            material_property = plan.material_property
+            if material_property is None:
+                material_property = _resolve_material_property(bill_type, po_summary, master)
+            status = _status_for_plan(bill_type, po_summary)
+            received_qty = po_summary.received_qty if po_summary else None
+            po_qty = po_summary.po_qty if po_summary else None
+            po_no_val = po_summary.po_no if po_summary else None
+            supplier_name_val = po_summary.supplier_name if po_summary else None
+            first_eta = po_summary.first_eta if po_summary else None
+            latest_eta = po_summary.latest_eta if po_summary else None
+            actual_arrival_date = po_summary.actual_arrival_date if po_summary else None
+            inspection_date = po_summary.inspection_date if po_summary else None
+            is_closed_val = po_summary.is_closed if po_summary else 0
+            eta_val = po_summary.eta if po_summary else None
 
-        received_qty = po_summary.received_qty if po_summary else None
-        po_qty = po_summary.po_qty if po_summary else None
         stagnant_qty = (
             received_qty - po_qty
             if received_qty is not None and po_qty is not None and received_qty > po_qty
@@ -516,12 +585,12 @@ async def _get_plan_order_material_items(
             status = "fully_received"
         # 库存 >= MRP数量 且无对应订单时，状态显示"有库存"并记入齐套
         stock_qty_val = inv_stock_map.get(plan.material_code) or plan.stock_qty or Decimal("0")
-        if stock_qty_val >= base_qty and not pos:
+        if stock_qty_val >= base_qty and not pos and bill_type != 11012:
             status = "in_stock"
         material_type = plan.material_type
         material_name = (
             plan.material_name
-            or (po_summary.material_name if po_summary else None)
+            or (None if po_summary is None else getattr(po_summary, "material_name", None))
             or (master.material_name if master else None)
         )
 
@@ -534,7 +603,7 @@ async def _get_plan_order_material_items(
             material_property_label=_material_property_label(material_property),
             material_type=material_type,
             unit_name=plan.unit_name,
-            supplier_name=po_summary.supplier_name if po_summary else None,
+            supplier_name=supplier_name_val,
             order_qty=_to_float(plan.base_plan_qty),
             mrp_qty=_to_float(plan.base_plan_qty),
             po_qty=_to_float(po_qty),
@@ -546,19 +615,19 @@ async def _get_plan_order_material_items(
                 else None
             ),
             req_date=plan.need_date,
-            po_no=po_summary.po_no if po_summary else None,
-            po_count=po_summary.po_count if po_summary else 0,
+            po_no=po_no_val,
+            po_count=po_count,
             received_qty=_to_float(received_qty),
-            eta=po_summary.eta if po_summary else None,
-            first_eta=po_summary.first_eta if po_summary else None,
-            latest_eta=po_summary.latest_eta if po_summary else None,
-            actual_arrival_date=po_summary.actual_arrival_date if po_summary else None,
-            inspection_date=po_summary.inspection_date if po_summary else None,
+            eta=eta_val,
+            first_eta=first_eta,
+            latest_eta=latest_eta,
+            actual_arrival_date=actual_arrival_date,
+            inspection_date=inspection_date,
             status=status,
             status_label=STATUS_LABELS.get(status, status),
             is_stagnant=stagnant_qty is not None,
             stagnant_qty=_to_float(stagnant_qty),
-            is_closed=po_summary.is_closed if po_summary else 0,
+            is_closed=is_closed_val,
             bill_type=bill_type,
             bill_type_label=BILL_TYPE_LABELS.get(bill_type),
             bom_demand_qty=_to_float(bom_demand_map.get(plan.material_code)),
