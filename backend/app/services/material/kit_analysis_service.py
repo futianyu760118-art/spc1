@@ -480,9 +480,6 @@ async def _get_plan_order_material_items(
                 SubcontractOrder.audit_date.label("eta"),
                 Material.material_code.label("material_code"),
                 SubcontractOrder.closed_flag,
-                SubcontractOrderDetail.sale_order_line_no,
-                SaleOrderLine.line_no.label("linked_line_no"),
-                SaleOrderLine.product_code.label("linked_product_code"),
             )
             .join(
                 Material,
@@ -492,9 +489,15 @@ async def _get_plan_order_material_items(
                 SubcontractOrder,
                 SubcontractOrder.erp_order_id == SubcontractOrderDetail.erp_order_id,
             )
+            # OUTER JOIN SaleOrderLine via (order_no, line_no) — line_no is String(32) on sol
+            # side and Integer on sod side. Regex `^[0-9]+$` guards the int cast so non-numeric
+            # K3 line_no values (e.g. "1.5", "abc") don't raise invalid input syntax and 500
+            # the endpoint. Legacy HJ2018-HJ2020 orders lack SaleOrderLine rows; the outer
+            # join preserves those rows so kit status isn't lost.
             .outerjoin(
                 SaleOrderLine,
                 (SaleOrderLine.order_no == SubcontractOrderDetail.sale_order_no)
+                & (SaleOrderLine.line_no.op("~")("^[0-9]+$"))
                 & (SaleOrderLine.line_no.cast(Integer) == SubcontractOrderDetail.sale_order_line_no),
             )
             .where(
@@ -841,9 +844,6 @@ async def get_kit_analysis(
                 SubcontractOrder.bill_no,
                 SubcontractOrder.audit_date.label("eta"),
                 SubcontractOrder.closed_flag,
-                SubcontractOrderDetail.sale_order_line_no,
-                SaleOrderLine.line_no.label("linked_line_no"),
-                SaleOrderLine.product_code.label("linked_product_code"),
             )
             .join(
                 Material,
@@ -853,9 +853,15 @@ async def get_kit_analysis(
                 SubcontractOrder,
                 SubcontractOrder.erp_order_id == SubcontractOrderDetail.erp_order_id,
             )
+            # OUTER JOIN SaleOrderLine via (order_no, line_no) — line_no is String(32) on sol
+            # side and Integer on sod side. Regex `^[0-9]+$` guards the int cast so non-numeric
+            # K3 line_no values (e.g. "1.5", "abc") don't raise invalid input syntax and 500
+            # the endpoint. Legacy HJ2018-HJ2020 orders lack SaleOrderLine rows; the outer
+            # join preserves those rows so kit status isn't lost.
             .outerjoin(
                 SaleOrderLine,
                 (SaleOrderLine.order_no == SubcontractOrderDetail.sale_order_no)
+                & (SaleOrderLine.line_no.op("~")("^[0-9]+$"))
                 & (SaleOrderLine.line_no.cast(Integer) == SubcontractOrderDetail.sale_order_line_no),
             )
             .where(
