@@ -27,7 +27,7 @@ const OrderProductKitPanel: React.FC<Props> = ({ orderNo, breakdown, onLoaded })
     try {
       const res: any = await materialApi.getOrderProductBreakdown(orderNo)
       onLoaded(res.data)
-      const firstKey = res.data?.products?.length ? `${res.data.products[0].product_code}#0` : null
+      const firstKey = res.data?.products?.length ? `${res.data.products[0].product_code || ''}#0` : null
       setSelectedKey(firstKey)
     } catch (e: any) {
       message.error(e.message || '加载产品齐套失败')
