@@ -95,13 +95,10 @@ class MaterialPoSummary:
 class MaterialSubSummary:
     """按 (sale_order_no, material_code) 聚合的委外订单汇总。平行于 MaterialPoSummary。"""
     po_no: Optional[str] = None
-    supplier_name: Optional[str] = None
     po_qty: Optional[Decimal] = None
     received_qty: Optional[Decimal] = None
     first_eta: Optional[date] = None
     latest_eta: Optional[date] = None
-    actual_arrival_date: Optional[date] = None
-    inspection_date: Optional[date] = None
     po_count: int = 0
     is_closed: int = 0
 
@@ -158,13 +155,10 @@ def _summarize_subs(subs: list) -> Optional[MaterialSubSummary]:
         return None
     return MaterialSubSummary(
         po_no=", ".join(dict.fromkeys([s.bill_no for s in subs if getattr(s, "bill_no", None)])) or None,
-        supplier_name=_pick_first([getattr(s, "supplier_name", None) for s in subs]),
         po_qty=_sum_qty([getattr(s, "qty", None) for s in subs]),
         received_qty=_sum_qty([getattr(s, "received_qty", None) for s in subs]),
         first_eta=min([s.eta for s in subs if getattr(s, "eta", None)], default=None) if subs else None,
         latest_eta=max([s.eta for s in subs if getattr(s, "eta", None)], default=None) if subs else None,
-        actual_arrival_date=max([s.actual_arrival_date for s in subs if getattr(s, "actual_arrival_date", None)], default=None) if subs else None,
-        inspection_date=max([s.inspection_date for s in subs if getattr(s, "inspection_date", None)], default=None) if subs else None,
         po_count=len(subs),
         is_closed=1 if any(getattr(s, "closed_flag", 0) for s in subs) else 0,
     )

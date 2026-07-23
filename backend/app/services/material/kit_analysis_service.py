@@ -34,6 +34,7 @@ from app.services.common.sync_filter import get_purchase_order_sync_filters
 # 复用订单物料服务中的状态推断与 PO 汇总逻辑，保证齐套口径一致
 from app.services.order.order_materials_service import (
     STATUS_LABELS,
+    MaterialSubSummary,
     _kit_met,
     _material_property_label,
     _status,
@@ -476,6 +477,7 @@ async def _get_plan_order_material_items(
                 SubcontractOrderDetail.qty,
                 SubcontractOrderDetail.received_qty,
                 SubcontractOrder.bill_no,
+                SubcontractOrder.audit_date.label("eta"),
                 Material.material_code.label("material_code"),
                 SubcontractOrder.closed_flag,
             )
@@ -503,6 +505,7 @@ async def _get_plan_order_material_items(
                         qty=r.qty,
                         received_qty=r.received_qty,
                         bill_no=r.bill_no,
+                        eta=r.eta,
                         closed_flag=r.closed_flag,
                     )
                     for r in rows
@@ -535,11 +538,11 @@ async def _get_plan_order_material_items(
             received_qty = sub_summary.received_qty if sub_summary else None
             po_qty = sub_summary.po_qty if sub_summary else None
             po_no_val = sub_summary.po_no if sub_summary else None
-            supplier_name_val = sub_summary.supplier_name if sub_summary else None
+            supplier_name_val = None
             first_eta = sub_summary.first_eta if sub_summary else None
             latest_eta = sub_summary.latest_eta if sub_summary else None
-            actual_arrival_date = sub_summary.actual_arrival_date if sub_summary else None
-            inspection_date = sub_summary.inspection_date if sub_summary else None
+            actual_arrival_date = None
+            inspection_date = None
             is_closed_val = sub_summary.is_closed if sub_summary else 0
             eta_val = latest_eta  # 委外用 latest_eta 兼容 UI 列
             material_property = plan.material_property if plan.material_property is not None else 3
@@ -818,6 +821,48 @@ async def get_kit_analysis(
             if row.is_closed and row.is_closed == 1:
                 group["is_closed"] = 1
 
+    # 3b. 从委外订单获取 bill_type=11012 物料的收料数据，用于订单级齐套指标推导
+    sub_groups: dict[tuple[str, str], dict] = {}
+    if order_nos and material_codes:
+        sub_query = (
+            select(
+                SubcontractOrderDetail.sale_order_no,
+                Material.material_code.label("material_code"),
+                SubcontractOrderDetail.qty,
+                SubcontractOrderDetail.received_qty,
+                SubcontractOrder.bill_no,
+                SubcontractOrder.audit_date.label("eta"),
+                SubcontractOrder.closed_flag,
+            )
+            .join(
+                Material,
+                Material.erp_material_id == SubcontractOrderDetail.material_id,
+            )
+            .join(
+                SubcontractOrder,
+                SubcontractOrder.erp_order_id == SubcontractOrderDetail.erp_order_id,
+            )
+            .where(
+                SubcontractOrderDetail.sale_order_no.in_(order_nos),
+                Material.material_code.in_(material_codes),
+                SubcontractOrder.voided_flag != 1,
+            )
+        )
+        for row in await db.execute(sub_query):
+            if not row.sale_order_no or not row.material_code:
+                continue
+            key = (row.sale_order_no, row.material_code)
+            entry = sub_groups.setdefault(key, {})
+            entry["qty"] = (entry.get("qty") or Decimal("0")) + (row.qty or Decimal("0"))
+            entry["received_qty"] = (entry.get("received_qty") or Decimal("0")) + (row.received_qty or Decimal("0"))
+            if "po_no" not in entry:
+                entry["po_no"] = row.bill_no
+            if "eta" not in entry or (entry["eta"] is not None and row.eta and row.eta < entry["eta"]):
+                entry["eta"] = row.eta
+            if row.closed_flag == 1:
+                entry["is_closed"] = 1
+            entry.setdefault("is_closed", 0)
+
     # 4. 按合同交期计算订单优先级，分配物料级库存得到每个 (order,material) 的可用库存
     order_priority = sorted(
         order_nos,
@@ -862,6 +907,26 @@ async def get_kit_analysis(
                 )
 
             status = _status_for_plan(bill_type, po_summary)
+
+            # 委外(bill_type=11012):用委外订单汇总覆盖 PO 推导;PO 入口归零避免误算
+            sub_info: dict = {}
+            if bill_type == 11012:
+                sub_info = sub_groups.get((current_order_no, material_code), {})
+                sub_summary = MaterialSubSummary(
+                    po_no=sub_info.get("po_no"),
+                    po_qty=sub_info.get("qty"),
+                    received_qty=sub_info.get("received_qty"),
+                    po_count=1 if sub_info.get("qty") is not None else 0,
+                    first_eta=sub_info.get("eta"),
+                    latest_eta=sub_info.get("eta"),
+                    is_closed=sub_info.get("is_closed", 0),
+                )
+                status = _status_for_plan(bill_type, None, sub_summary)
+                po_info = {}
+                received_qty_val = sub_info.get("received_qty")
+            else:
+                received_qty_val = po_info.get("received_qty") if po_info else None
+
             kit_met = _kit_met_for_plan(status, bill_type)
 
             has_po = po_info and po_info["has_po_qty"] and po_info["po_qty"] > 0
@@ -871,7 +936,7 @@ async def get_kit_analysis(
 
             # 库存满足：可用库存 ≥ 净需求(需求 - 已收料)，且净需求 > 0
             base_qty = plan_info.get("base_plan_qty") or Decimal("0")
-            received_for_net = po_info["received_qty"] if (po_info and po_info.get("has_received_qty")) else Decimal("0")
+            received_for_net = received_qty_val if received_qty_val is not None else Decimal("0")
             net_demand = base_qty - received_for_net
             if net_demand < 0:
                 net_demand = Decimal("0")
@@ -894,8 +959,9 @@ async def get_kit_analysis(
             elif not has_po and status in ("not_ordered", "not_scheduled"):
                 not_ordered_count += 1
 
-            # 逾期：有 PO 且 ETA 早于今天但未到齐、库存也不满足
-            if po_info and po_info.get("eta") and po_info["eta"] < date.today():
+            # 逾期：ETA 早于今天但未到齐、库存也不满足（委外用 sub_info["eta"]）
+            eta_to_check = (po_info or {}).get("eta") or sub_info.get("eta")
+            if eta_to_check and eta_to_check < date.today():
                 if not fully_received and not kit_met and not stock_met and not in_stock:
                     overdue_count += 1
 
