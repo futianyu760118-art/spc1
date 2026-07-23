@@ -20,11 +20,13 @@ from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.schemas.material.schemas import (
+    BomKitFlatItem,
+    BomKitFlatResponse,
+    BomKitMaterialItem,
     KitAnalysisItem,
     KitAnalysisMaterialItem,
-    BomKitMaterialItem,
-    ProductKitSummary,
     OrderProductKitBreakdownOut,
+    ProductKitSummary,
 )
 from app.services.common.sync_filter import get_purchase_order_sync_filters
 # 复用订单物料服务中的状态推断与 PO 汇总逻辑，保证齐套口径一致
@@ -1139,3 +1141,55 @@ def _collect_unique_materials(
         children = getattr(node, "children", []) or []
         if children:
             _collect_unique_materials(children, mat_by_code, out)
+
+
+def _flatten_kit_tree(
+    nodes: list[dict],
+    parent_bom_id: Optional[str],
+) -> list[BomKitFlatItem]:
+    """DFS 拍平 BOM 树(节点为 dict),每行 BomKitFlatItem.parent_bom_id = 父节点 bom_id。"""
+    result: list[BomKitFlatItem] = []
+    for node in nodes:
+        flat = BomKitFlatItem(
+            **{k: v for k, v in node.items() if k != "children"},
+            parent_bom_id=parent_bom_id,
+        )
+        result.append(flat)
+        children = node.get("children") or []
+        if children:
+            result.extend(_flatten_kit_tree(children, node.get("bom_id")))
+    return result
+
+
+async def get_order_product_bom_flat(
+    db: AsyncSession,
+    order_no: str,
+    product_code: str,
+) -> dict:
+    """返回指定产品在指定订单下的 BOM 全节点扁平数组。
+
+    实现:复用 get_order_product_breakdown 的 mat_by_code 关联与 _attach_kit_to_tree 树构建,
+    然后对该产品的 bom_tree 做 DFS 拍平。
+    """
+    breakdown = await get_order_product_breakdown(db, order_no=order_no)
+    target_product = next(
+        (p for p in breakdown["products"] if p["product_code"] == product_code),
+        None,
+    )
+    if not target_product:
+        return BomKitFlatResponse(
+            order_no=order_no, product_code=product_code, bom_id=None, items=[]
+        ).model_dump()
+
+    product_idx = breakdown["products"].index(target_product)
+    product_key = f"{target_product['product_code'] or ''}#{product_idx}"
+    bom_id = target_product.get("bom_id")
+    tree_nodes = breakdown["bom_trees"].get(product_key, [])
+    flat_items = _flatten_kit_tree(tree_nodes, parent_bom_id=None)
+
+    return BomKitFlatResponse(
+        order_no=order_no,
+        product_code=product_code,
+        bom_id=bom_id,
+        items=flat_items,
+    ).model_dump()
