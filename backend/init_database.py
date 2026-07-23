@@ -48,6 +48,9 @@ from app.models.basicdata.field_mapping import FieldMapping
 from app.models.basicdata.sync_sql_config import SyncSqlConfig
 from app.models.basicdata.sync_log import SyncLog
 from app.models.basicdata.position import Position
+from app.models.basicdata.bom import Bom
+from app.models.basicdata.bom_detail import BomDetail
+from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.file_asset import FileAsset
 from app.models.basicdata.feedback import Feedback
 
@@ -149,6 +152,7 @@ class DatabaseInitializer:
                 "order_qty": "NUMERIC(15,2)",
                 "order_amount": "NUMERIC(15,2)",
                 "promised_date": "DATE",
+                "shipping_plan": "DATE",
                 "planned_start_date": "DATE",
                 "batch_no": "VARCHAR(128)",
                 "status": "VARCHAR(32) NOT NULL DEFAULT 'open'",
@@ -192,7 +196,15 @@ class DatabaseInitializer:
                 "data_source": "VARCHAR(32)",
             },
             "scm_warehouse": {
+                "wh_id": "INTEGER",
+                "parent_wh_id": "INTEGER",
+                "wh_attribute": "VARCHAR(10)",
+                "plan_area": "VARCHAR(50)",
+                "phone": "VARCHAR(30)",
+                "is_workshop": "INTEGER DEFAULT 0",
+                "is_deleted": "INTEGER DEFAULT 0",
                 "data_source": "VARCHAR(32)",
+                "updated_at": "TIMESTAMP NOT NULL DEFAULT now()",
             },
             "scm_process": {
                 "data_source": "VARCHAR(32)",
@@ -244,12 +256,20 @@ class DatabaseInitializer:
                 "frozen_locked_by": "VARCHAR(64)",
                 "frozen_locked_at": "TIMESTAMP",
                 "planned_qty": "NUMERIC(15,2)",
+                "manpower": "INTEGER",
             },
             "production_schedule_operation_log": {
                 "is_frozen_break": "BOOLEAN NOT NULL DEFAULT FALSE",
             },
             "approval_config": {
                 "biz_name": "VARCHAR(128)",
+            },
+            "purchase_price_change": {
+                "erp_price_snapshot": "JSONB",
+            },
+            "mrp_plan_order": {
+                "stock_qty": "NUMERIC(15,2)",
+                "audit_date": "DATE",
             },
         }
         # 删除已废弃的列
@@ -457,6 +477,7 @@ class DatabaseInitializer:
                             "orders.list": ["read", "update"],
                             "orders.run_orders": ["read", "update"],
                             "orders.risk_pool": ["read", "update"],
+                            "orders.inventory_check": ["read", "update"],
                             "materials.purchase_plan": ["read"],
                             "materials.issues": ["read"],
                             "materials.long_lead": ["read"],
@@ -499,6 +520,7 @@ class DatabaseInitializer:
                             "orders.list": ["read"],
                             "orders.run_orders": ["read"],
                             "orders.risk_pool": ["read"],
+                            "orders.inventory_check": ["read"],
                             "materials.purchase_plan": ["create", "read", "update", "import"],
                             "materials.issues": ["create", "read", "update", "import"],
                             "materials.long_lead": ["create", "read", "update", "import"],
@@ -534,6 +556,7 @@ class DatabaseInitializer:
                             "orders.list": ["read", "update"],
                             "orders.run_orders": ["read", "update"],
                             "orders.risk_pool": ["read", "update"],
+                            "orders.inventory_check": ["read", "update"],
                             "materials.purchase_plan": ["read", "update"],
                             "materials.issues": ["read", "update"],
                             "materials.long_lead": ["read", "update"],
@@ -574,6 +597,7 @@ class DatabaseInitializer:
                             "orders.list": ["read"],
                             "orders.run_orders": ["read"],
                             "orders.risk_pool": ["read"],
+                            "orders.inventory_check": ["read"],
                             "materials.purchase_plan": ["create", "read", "update", "delete", "import"],
                             "materials.issues": ["create", "read", "update", "delete", "import"],
                             "materials.long_lead": ["create", "read", "update", "delete", "import"],
@@ -1419,6 +1443,30 @@ ORDER BY so.FID, mat.FItemID
                         sync_interval="1d",
                         sync_strategy="incremental",
                         sync_priority=20,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="payment_applies",
+                        description="付款申请 — 从ERP付款申请表拉取（幂等键: payment_apply_no）",
+                        sql_text="-- TODO: 配置 ERP 付款申请查询 SQL，返回字段需包含: payment_apply_no, doc_no, doc_date, subsystem_id, paid_amount\nSELECT NULL AS payment_apply_no, NULL AS doc_no, NULL AS doc_date, NULL AS subsystem_id, NULL AS paid_amount WHERE 1 = 0 AND :since IS NOT NULL",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="incremental",
+                        sync_priority=21,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="inventory",
+                        description="即时库存 — 从ERP库存表拉取（全量快照）",
+                        sql_text="-- TODO: 配置 ERP 即时库存查询 SQL，返回字段需包含: material_id, material_code, material_name, wh_id, wh_code, wh_name, location_id, location_name, qty_on_hand, locked_qty, balance_qty, qty_in_transit, batch_no\nSELECT NULL AS material_id, NULL AS material_code, NULL AS material_name, NULL AS wh_id, NULL AS wh_code, NULL AS wh_name, NULL AS location_id, NULL AS location_name, NULL AS qty_on_hand, NULL AS locked_qty, NULL AS balance_qty, NULL AS qty_in_transit, NULL AS batch_no WHERE 1 = 0",
+                        field_mapping_json=None,
+                        is_active=True,
+                        sync_enabled=True,
+                        sync_interval="6h",
+                        sync_strategy="full",
+                        sync_priority=8,
                         created_by="admin",
                     ),
                 ]

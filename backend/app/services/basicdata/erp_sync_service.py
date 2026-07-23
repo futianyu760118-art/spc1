@@ -469,6 +469,9 @@ class ERPSyncService:
                         stats["skipped"] += 1
                         continue
                     row_dict["sale_order_id"] = sale_order.id
+                    # 冗余存订单头的 shipping_plan 到明细行, 排产以此为准
+                    if sale_order.shipping_plan is not None:
+                        row_dict["shipping_plan"] = sale_order.shipping_plan
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
                     row_dict = self._coerce_row_types(row_dict, SaleOrderLine)
