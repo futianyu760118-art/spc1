@@ -91,6 +91,21 @@ class MaterialPoSummary:
         return self.first_eta
 
 
+@dataclass
+class MaterialSubSummary:
+    """按 (sale_order_no, material_code) 聚合的委外订单汇总。平行于 MaterialPoSummary。"""
+    po_no: Optional[str] = None
+    supplier_name: Optional[str] = None
+    po_qty: Optional[Decimal] = None
+    received_qty: Optional[Decimal] = None
+    first_eta: Optional[date] = None
+    latest_eta: Optional[date] = None
+    actual_arrival_date: Optional[date] = None
+    inspection_date: Optional[date] = None
+    po_count: int = 0
+    is_closed: int = 0
+
+
 def _to_float(value) -> Optional[float]:
     if value is None:
         return None
@@ -132,6 +147,40 @@ def _summarize_pos(pos: list[PurchaseOrder]) -> Optional[MaterialPoSummary]:
         po_count=len(pos),
         is_closed=1 if any(po.is_closed for po in pos) else 0,
     )
+
+
+def _summarize_subs(subs: list) -> Optional[MaterialSubSummary]:
+    """聚合多条委外订单明细行。同 (sale_order_no, material_code) 已在外层做好分组,这里只是聚合。
+
+    subs 每条可以是 ORM 实例或 SimpleNamespace;为兼容仅使用 getattr 读取。
+    """
+    if not subs:
+        return None
+    return MaterialSubSummary(
+        po_no=", ".join(dict.fromkeys([s.bill_no for s in subs if getattr(s, "bill_no", None)])) or None,
+        supplier_name=_pick_first([getattr(s, "supplier_name", None) for s in subs]),
+        po_qty=_sum_qty([getattr(s, "qty", None) for s in subs]),
+        received_qty=_sum_qty([getattr(s, "received_qty", None) for s in subs]),
+        first_eta=min([s.eta for s in subs if getattr(s, "eta", None)], default=None) if subs else None,
+        latest_eta=max([s.eta for s in subs if getattr(s, "eta", None)], default=None) if subs else None,
+        actual_arrival_date=max([s.actual_arrival_date for s in subs if getattr(s, "actual_arrival_date", None)], default=None) if subs else None,
+        inspection_date=max([s.inspection_date for s in subs if getattr(s, "inspection_date", None)], default=None) if subs else None,
+        po_count=len(subs),
+        is_closed=1 if any(getattr(s, "closed_flag", 0) for s in subs) else 0,
+    )
+
+
+def _subcontract_status(sub_summary: Optional[MaterialSubSummary]) -> str:
+    """委外物料齐套状态。4 出口,与 _status 对齐:已到齐/部分到/待到料/未下单。"""
+    if not sub_summary or sub_summary.po_count == 0:
+        return "not_ordered"
+    received = sub_summary.received_qty
+    qty = sub_summary.po_qty
+    if received is not None and received > 0:
+        if qty is not None and received >= qty:
+            return "fully_received"
+        return "partial_received"
+    return "pending"
 
 
 def _infer_material_property(demand: MaterialDemand, po_summary: Optional[MaterialPoSummary], master: Optional[Material]) -> Optional[int]:
