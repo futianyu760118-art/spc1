@@ -18,6 +18,8 @@ from app.models.basicdata.bom import Bom
 from app.models.basicdata.bom_detail import BomDetail
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.material.purchase_order import PurchaseOrder
+from app.models.material.subcontract_order import SubcontractOrder
+from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.schemas.material.schemas import (
     BomKitFlatItem,
@@ -35,7 +37,9 @@ from app.services.order.order_materials_service import (
     _kit_met,
     _material_property_label,
     _status,
+    _subcontract_status,
     _summarize_pos,
+    _summarize_subs,
     _to_float,
     _expand_bom_tree,
 )
@@ -97,12 +101,18 @@ BILL_TYPE_LABELS = {
 }
 
 
-def _status_for_plan(bill_type: Optional[int], po_summary) -> str:
+def _status_for_plan(
+    bill_type: Optional[int],
+    po_summary,
+    sub_summary=None,
+) -> str:
     """根据计划订单单据类型推导物料状态。
 
-    11010/11012：需要采购/委外订单，无 PO 视为未下单；
-    11011：自制，无 PO 视为自制未排产/未关联。
+    11012(委外):不走 PO 路径,改用委外订单 received/qty。
+    11010(采购) / 11011(自制) / 其他:走 PO 路径。
     """
+    if bill_type == 11012:
+        return _subcontract_status(sub_summary)
     material_property = BILL_TYPE_TO_MATERIAL_PROPERTY.get(bill_type, 1)
     return _status(material_property, po_summary)
 
