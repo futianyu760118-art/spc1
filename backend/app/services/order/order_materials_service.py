@@ -103,6 +103,20 @@ class MaterialSubSummary:
     is_closed: int = 0
 
 
+@dataclass
+class MaterialTaskSummary:
+    """按 (sale_order_id, material_code) 聚合的生产任务单汇总。平行于 MaterialPoSummary / MaterialSubSummary。"""
+    po_no: Optional[str] = None                       # 任务单号 task_no(多张以 ", " 拼接)
+    po_qty: Optional[Decimal] = None                  # 任务数量(等同 task_qty 总和)
+    received_qty: Optional[Decimal] = None            # 实做数量(等同 actual_qty 总和)
+    first_eta: Optional[date] = None
+    latest_eta: Optional[date] = None
+    actual_arrival_date: Optional[date] = None
+    inspection_date: Optional[date] = None
+    po_count: int = 0
+    is_closed: int = 0
+
+
 def _to_float(value) -> Optional[float]:
     if value is None:
         return None
@@ -174,6 +188,57 @@ def _subcontract_status(sub_summary: Optional[MaterialSubSummary]) -> str:
         if qty is not None and received >= qty:
             return "fully_received"
         return "partial_received"
+    return "pending"
+
+
+def _summarize_tasks(tasks: list) -> Optional[MaterialTaskSummary]:
+    """聚合多条 ProductionTaskOrder 行。同 (sale_order_id, material_code) 已在外层做好分组,这里只是聚合。
+
+    tasks 每条可以是 ORM 实例或 SimpleNamespace;为兼容仅使用 getattr 读取。
+
+    映射规则:
+      - po_qty = sum(task_qty)
+      - received_qty = sum(actual_qty)
+      - first_eta / latest_eta = planned_start_date / planned_end_date
+      - actual_arrival_date = max(actual_end_date)
+      - is_closed = 1 if any is_closed=1
+    """
+    if not tasks:
+        return None
+    return MaterialTaskSummary(
+        po_no=", ".join(dict.fromkeys([getattr(t, "task_no", None) for t in tasks if getattr(t, "task_no", None)])) or None,
+        po_qty=_sum_qty([getattr(t, "task_qty", None) for t in tasks]),
+        received_qty=_sum_qty([getattr(t, "actual_qty", None) for t in tasks]),
+        first_eta=min([getattr(t, "planned_start_date", None) for t in tasks if getattr(t, "planned_start_date", None)], default=None),
+        latest_eta=max([getattr(t, "planned_end_date", None) for t in tasks if getattr(t, "planned_end_date", None)], default=None),
+        actual_arrival_date=max([getattr(t, "actual_end_date", None) for t in tasks if getattr(t, "actual_end_date", None)], default=None),
+        inspection_date=None,
+        po_count=len(tasks),
+        is_closed=1 if any(getattr(t, "is_closed", 0) for t in tasks) else 0,
+    )
+
+
+def _task_status(task_summary: Optional[MaterialTaskSummary]) -> str:
+    """自制物料齐套状态。5 出口,与 _status 对齐:已到齐/部分到/待到料/未下单/逾期。
+    
+    推导规则(对齐 _status):
+      - 无 task_summary → not_ordered
+      - actual_qty >= task_qty (或 is_closed=1) → fully_received
+      - actual_qty > 0 (部分做) → partial_received
+      - actual_qty 缺失或 0,但 planned_end_date 已过 → overdue
+      - 否则 → pending
+    """
+    if not task_summary or task_summary.po_count == 0:
+        return "not_ordered"
+    received = task_summary.received_qty
+    qty = task_summary.po_qty
+    if received is not None and received > 0:
+        if qty is not None and received >= qty:
+            return "fully_received"
+        return "partial_received"
+    # 已开工但未产出,planned_end_date 已过则逾期
+    if task_summary.latest_eta and task_summary.latest_eta < date.today():
+        return "overdue"
     return "pending"
 
 
