@@ -9,7 +9,7 @@ from typing import Optional, List
 from decimal import Decimal
 from types import SimpleNamespace
 
-from sqlalchemy import select, func, or_
+from sqlalchemy import Integer, select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.basicdata.material import Material
@@ -480,6 +480,9 @@ async def _get_plan_order_material_items(
                 SubcontractOrder.audit_date.label("eta"),
                 Material.material_code.label("material_code"),
                 SubcontractOrder.closed_flag,
+                SubcontractOrderDetail.sale_order_line_no,
+                SaleOrderLine.line_no.label("linked_line_no"),
+                SaleOrderLine.product_code.label("linked_product_code"),
             )
             .join(
                 Material,
@@ -488,6 +491,11 @@ async def _get_plan_order_material_items(
             .join(
                 SubcontractOrder,
                 SubcontractOrder.erp_order_id == SubcontractOrderDetail.erp_order_id,
+            )
+            .outerjoin(
+                SaleOrderLine,
+                (SaleOrderLine.order_no == SubcontractOrderDetail.sale_order_no)
+                & (SaleOrderLine.line_no.cast(Integer) == SubcontractOrderDetail.sale_order_line_no),
             )
             .where(
                 SubcontractOrderDetail.sale_order_no == order_no,
@@ -833,6 +841,9 @@ async def get_kit_analysis(
                 SubcontractOrder.bill_no,
                 SubcontractOrder.audit_date.label("eta"),
                 SubcontractOrder.closed_flag,
+                SubcontractOrderDetail.sale_order_line_no,
+                SaleOrderLine.line_no.label("linked_line_no"),
+                SaleOrderLine.product_code.label("linked_product_code"),
             )
             .join(
                 Material,
@@ -841,6 +852,11 @@ async def get_kit_analysis(
             .join(
                 SubcontractOrder,
                 SubcontractOrder.erp_order_id == SubcontractOrderDetail.erp_order_id,
+            )
+            .outerjoin(
+                SaleOrderLine,
+                (SaleOrderLine.order_no == SubcontractOrderDetail.sale_order_no)
+                & (SaleOrderLine.line_no.cast(Integer) == SubcontractOrderDetail.sale_order_line_no),
             )
             .where(
                 SubcontractOrderDetail.sale_order_no.in_(order_nos),
