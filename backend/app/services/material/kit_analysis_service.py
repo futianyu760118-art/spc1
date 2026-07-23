@@ -21,6 +21,7 @@ from app.models.material.purchase_order import PurchaseOrder
 from app.models.material.subcontract_order import SubcontractOrder
 from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.production.production_task_order import ProductionTaskOrder
 from app.schemas.material.schemas import (
     BomKitFlatItem,
     BomKitFlatResponse,
@@ -35,12 +36,15 @@ from app.services.common.sync_filter import get_purchase_order_sync_filters
 from app.services.order.order_materials_service import (
     STATUS_LABELS,
     MaterialSubSummary,
+    MaterialTaskSummary,
     _kit_met,
     _material_property_label,
     _status,
     _subcontract_status,
     _summarize_pos,
     _summarize_subs,
+    _summarize_tasks,
+    _task_status,
     _to_float,
     _expand_bom_tree,
 )
@@ -106,14 +110,18 @@ def _status_for_plan(
     bill_type: Optional[int],
     po_summary,
     sub_summary=None,
+    task_summary=None,
 ) -> str:
     """根据计划订单单据类型推导物料状态。
 
-    11012(委外):不走 PO 路径,改用委外订单 received/qty。
-    11010(采购) / 11011(自制) / 其他:走 PO 路径。
+    11012(委外):走 SubcontractOrderDetail 路径。
+    11011(自制):走 ProductionTaskOrder 路径(actual_qty/task_qty)。
+    11010(采购)/ 其他:走 PO 路径。
     """
     if bill_type == 11012:
         return _subcontract_status(sub_summary)
+    if bill_type == 11011:
+        return _task_status(task_summary)
     material_property = BILL_TYPE_TO_MATERIAL_PROPERTY.get(bill_type, 1)
     return _status(material_property, po_summary)
 
@@ -523,6 +531,56 @@ async def _get_plan_order_material_items(
                 ]
             )
 
+    # 自制任务单（bill_type=11011 物料的齐套状态推导）
+    task_map: dict[str, MaterialTaskSummary] = {}
+    if material_codes:
+        sale_order_id_for_plan = plans[0].sale_order_id if plans else None
+        task_query = (
+            select(
+                ProductionTaskOrder.material_code,
+                ProductionTaskOrder.task_qty,
+                ProductionTaskOrder.actual_qty,
+                ProductionTaskOrder.task_no,
+                ProductionTaskOrder.planned_start_date,
+                ProductionTaskOrder.planned_end_date,
+                ProductionTaskOrder.actual_end_date,
+                ProductionTaskOrder.is_closed,
+            )
+            .where(
+                ProductionTaskOrder.sale_order_id.isnot(None),
+                # 【兼容性】 ProductionTaskOrder.sale_order_no 在所有 74k 行上为 NULL,
+                # 直接 `== order_no` 会清空查询。退化为 OR 形式:NULL 视为无害走主键 sid;
+                # sale_order_no 真有错位时本条件仍可兜底。
+                or_(
+                    ProductionTaskOrder.sale_order_no.is_(None),
+                    ProductionTaskOrder.sale_order_no == order_no,
+                ),
+                ProductionTaskOrder.material_code.in_(material_codes),
+            )
+        )
+        if sale_order_id_for_plan is not None:
+            task_query = task_query.where(
+                ProductionTaskOrder.sale_order_id == sale_order_id_for_plan
+            )
+        grouped_tasks: dict[str, list] = {}
+        for row in (await db.execute(task_query)).all():
+            grouped_tasks.setdefault(row.material_code, []).append(row)
+        for mc, rows in grouped_tasks.items():
+            task_map[mc] = _summarize_tasks(
+                [
+                    SimpleNamespace(
+                        task_qty=r.task_qty,
+                        actual_qty=r.actual_qty,
+                        task_no=r.task_no,
+                        planned_start_date=r.planned_start_date,
+                        planned_end_date=r.planned_end_date,
+                        actual_end_date=r.actual_end_date,
+                        is_closed=r.is_closed,
+                    )
+                    for r in rows
+                ]
+            )
+
     # 跨订单库存分配：扣减其他订单（按合同交期优先）占用后的可用库存
     available_stock_map = await _compute_available_stock_for_order(db, order_no, material_codes)
 
@@ -557,6 +615,24 @@ async def _get_plan_order_material_items(
             is_closed_val = sub_summary.is_closed if sub_summary else 0
             eta_val = latest_eta  # 委外用 latest_eta 兼容 UI 列
             material_property = plan.material_property if plan.material_property is not None else 3
+        elif bill_type == 11011:
+            # 自制：忽略 PO 与委外，读生产任务单
+            task_summary = task_map.get(plan.material_code)
+            po_summary = None
+            pos = []
+            po_count = task_summary.po_count if task_summary else 0
+            status = _status_for_plan(bill_type, po_summary=None, sub_summary=None, task_summary=task_summary)
+            received_qty = task_summary.received_qty if task_summary else None
+            po_qty = task_summary.po_qty if task_summary else None
+            po_no_val = task_summary.po_no if task_summary else None
+            supplier_name_val = None  # 自制无供应商
+            first_eta = task_summary.first_eta if task_summary else None
+            latest_eta = task_summary.latest_eta if task_summary else None
+            actual_arrival_date = task_summary.actual_arrival_date if task_summary else None
+            inspection_date = task_summary.inspection_date if task_summary else None
+            is_closed_val = task_summary.is_closed if task_summary else 0
+            eta_val = latest_eta  # 用计划完工日期作为 ETA
+            material_property = plan.material_property if plan.material_property is not None else 2  # 自制
         else:
             pos = po_map.get(plan.material_code, [])
             po_summary = _summarize_pos(pos)
@@ -599,7 +675,7 @@ async def _get_plan_order_material_items(
             status = "fully_received"
         # 库存 >= MRP数量 且无对应订单时，状态显示"有库存"并记入齐套
         stock_qty_val = inv_stock_map.get(plan.material_code) or plan.stock_qty or Decimal("0")
-        if stock_qty_val >= base_qty and not pos and bill_type != 11012:
+        if stock_qty_val >= base_qty and not pos and bill_type not in (11011, 11012):
             status = "in_stock"
         material_type = plan.material_type
         material_name = (
@@ -714,6 +790,8 @@ async def get_kit_analysis(
 
     # 2. 从 MRP 计划订单获取对应订单的物料清单
     plan_materials: dict[tuple[str, str], dict] = {}
+    # sale_order_id → sale_order_no,用于 ProductionTaskOrder 跨订单查询(ProductionTaskOrder.sale_order_no 普遍为 NULL)
+    plan_sid_to_order_no: dict[int, str] = {}
     stock_by_material: dict[str, Decimal] = {}
     # 「有库存」判定库存（与明细口径一致：Inventory 可用量为 0/缺失时回退 MRP 快照库存）
     in_stock_qty_by_material: dict[str, Decimal] = {}
@@ -721,6 +799,7 @@ async def get_kit_analysis(
     if order_nos:
         plan_query = select(
             MrpPlanOrder.sale_order_no,
+            MrpPlanOrder.sale_order_id,
             MrpPlanOrder.material_code,
             MrpPlanOrder.base_plan_qty,
             MrpPlanOrder.bill_type,
@@ -736,6 +815,9 @@ async def get_kit_analysis(
                 continue
             if row.base_plan_qty is None or row.base_plan_qty == 0:
                 continue
+            # 收集 (sale_order_id → sale_order_no),用于下面 ProductionTaskOrder 跨订单查询
+            if row.sale_order_id is not None:
+                plan_sid_to_order_no.setdefault(row.sale_order_id, row.sale_order_no)
             key = (row.sale_order_no, row.material_code)
             if key not in plan_materials:
                 plan_materials[key] = {
@@ -885,6 +967,52 @@ async def get_kit_analysis(
                 entry["is_closed"] = 1
             entry.setdefault("is_closed", 0)
 
+    # 3c. 从生产任务单获取 bill_type=11011 物料的实做数据，用于订单级齐套指标推导
+    task_groups: dict[tuple[str, str], dict] = {}
+    if material_codes and (order_nos or plan_sid_to_order_no):
+        relevant_sale_order_ids = list(plan_sid_to_order_no.keys())
+        task_query = (
+            select(
+                ProductionTaskOrder.sale_order_no,
+                ProductionTaskOrder.material_code,
+                ProductionTaskOrder.sale_order_id,
+                ProductionTaskOrder.task_qty,
+                ProductionTaskOrder.actual_qty,
+                ProductionTaskOrder.task_no,
+                ProductionTaskOrder.planned_start_date,
+                ProductionTaskOrder.planned_end_date,
+                ProductionTaskOrder.actual_end_date,
+                ProductionTaskOrder.is_closed,
+            )
+            .where(
+                ProductionTaskOrder.material_code.in_(material_codes),
+                # 【兼容性】 ProductionTaskOrder.sale_order_no 普遍 NULL,直接 `in_` 会清空;
+                # 主键改为 sale_order_id(由 MrpPlanOrder 关联),sale_order_no 在被填充时仍参与兜底防错位。
+                or_(
+                    ProductionTaskOrder.sale_order_no.in_(order_nos) if order_nos else False,
+                    ProductionTaskOrder.sale_order_id.in_(relevant_sale_order_ids) if relevant_sale_order_ids else False,
+                ),
+            )
+        )
+        for row in (await db.execute(task_query)).all():
+            # sale_order_no 普遍 NULL → 退化为按 sale_order_id 反查 order_no
+            order_no_for_row = row.sale_order_no or plan_sid_to_order_no.get(row.sale_order_id)
+            if not order_no_for_row or not row.material_code:
+                continue
+            key = (order_no_for_row, row.material_code)
+            entry = task_groups.setdefault(key, {})
+            entry["qty"] = (entry.get("qty") or Decimal("0")) + (row.task_qty or Decimal("0"))
+            entry["received_qty"] = (entry.get("received_qty") or Decimal("0")) + (row.actual_qty or Decimal("0"))
+            if "po_no" not in entry:
+                entry["po_no"] = row.task_no
+            if "eta" not in entry or (entry["eta"] is not None and row.planned_end_date and row.planned_end_date < entry["eta"]):
+                entry["eta"] = row.planned_end_date
+            if entry.get("actual_arrival_date") is None or (row.actual_end_date and row.actual_end_date > entry["actual_arrival_date"]):
+                entry["actual_arrival_date"] = row.actual_end_date
+            if row.is_closed == 1:
+                entry["is_closed"] = 1
+            entry.setdefault("is_closed", 0)
+
     # 4. 按合同交期计算订单优先级，分配物料级库存得到每个 (order,material) 的可用库存
     order_priority = sorted(
         order_nos,
@@ -932,6 +1060,7 @@ async def get_kit_analysis(
 
             # 委外(bill_type=11012):用委外订单汇总覆盖 PO 推导;PO 入口归零避免误算
             sub_info: dict = {}
+            task_info: dict = {}
             if bill_type == 11012:
                 sub_info = sub_groups.get((current_order_no, material_code), {})
                 sub_summary = MaterialSubSummary(
@@ -943,9 +1072,28 @@ async def get_kit_analysis(
                     latest_eta=sub_info.get("eta"),
                     is_closed=sub_info.get("is_closed", 0),
                 )
-                status = _status_for_plan(bill_type, None, sub_summary)
+                status = _status_for_plan(bill_type, None, sub_summary=sub_summary)
                 po_info = {}
                 received_qty_val = sub_info.get("received_qty")
+            elif bill_type == 11011:
+                # 自制(bill_type=11011):用生产任务单汇总覆盖 PO 推导;PO 入口归零避免误算
+                task_info = task_groups.get((current_order_no, material_code), {})
+                if task_info:
+                    task_summary = MaterialTaskSummary(
+                        po_no=task_info.get("po_no"),
+                        po_qty=task_info.get("qty"),
+                        received_qty=task_info.get("received_qty"),
+                        first_eta=task_info.get("first_eta"),
+                        latest_eta=task_info.get("eta"),
+                        actual_arrival_date=task_info.get("actual_arrival_date"),
+                        po_count=1 if task_info.get("qty") is not None else 0,
+                        is_closed=task_info.get("is_closed", 0),
+                    )
+                else:
+                    task_summary = None
+                status = _status_for_plan(bill_type, None, sub_summary=None, task_summary=task_summary)
+                po_info = {}
+                received_qty_val = task_info.get("received_qty") if task_info else Decimal("0")
             else:
                 received_qty_val = po_info.get("received_qty") if po_info else None
 
@@ -981,8 +1129,8 @@ async def get_kit_analysis(
             elif not has_po and status in ("not_ordered", "not_scheduled"):
                 not_ordered_count += 1
 
-            # 逾期：ETA 早于今天但未到齐、库存也不满足（委外用 sub_info["eta"]）
-            eta_to_check = (po_info or {}).get("eta") or sub_info.get("eta")
+            # 逾期：ETA 早于今天但未到齐、库存也不满足（委外用 sub_info["eta"]，自制用 task_info["eta"]）
+            eta_to_check = (po_info or {}).get("eta") or sub_info.get("eta") or task_info.get("eta")
             if eta_to_check and eta_to_check < date.today():
                 if not fully_received and not kit_met and not stock_met and not in_stock:
                     overdue_count += 1
