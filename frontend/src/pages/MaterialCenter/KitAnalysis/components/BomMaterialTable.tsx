@@ -188,7 +188,6 @@ const BomMaterialTable: React.FC<Props> = ({ items, loading }) => {
       sorter: (a, b) =>
         String((a as any)[dataIndex] ?? '').localeCompare(String((b as any)[dataIndex] ?? '')),
       filters: textFilterOptions[optsKey],
-      filteredValue: filters[String(dataIndex)] as any,
       filterSearch: true,
       onFilter: (value, record) => String((record as any)[dataIndex] ?? '') === String(value),
       render: (v: any) => (v == null || v === '' ? <span style={{ color: '#ccc' }}>-</span> : v),
@@ -255,7 +254,6 @@ const BomMaterialTable: React.FC<Props> = ({ items, loading }) => {
         width: 100,
         sorter: (a, b) => String(a.status ?? '').localeCompare(String(b.status ?? '')),
         filters: textFilterOptions.status,
-        filteredValue: filters['status'] as any,
         filterSearch: true,
         onFilter: (value, record) => record.status === String(value),
         render: (s: string, row: BomKitFlatItem) => {
@@ -269,16 +267,17 @@ const BomMaterialTable: React.FC<Props> = ({ items, loading }) => {
 
   const dataSource = useMemo(() => {
     let arr = items
+    const NUMERIC_KEYS = new Set([
+      'standard_qty',
+      'req_qty',
+      'stock_qty',
+      'transit_qty',
+      'received_qty',
+      'shortage_qty',
+    ])
     Object.entries(filters).forEach(([key, vals]) => {
       if (vals == null) return
-      if (
-        key === 'standard_qty' ||
-        key === 'req_qty' ||
-        key === 'stock_qty' ||
-        key === 'transit_qty' ||
-        key === 'received_qty' ||
-        key === 'shortage_qty'
-      ) {
+      if (NUMERIC_KEYS.has(key)) {
         const [min, max] = vals as (number | null)[]
         arr = arr.filter((it) => {
           const v = (it as any)[key]
@@ -297,11 +296,6 @@ const BomMaterialTable: React.FC<Props> = ({ items, loading }) => {
           if (end && it.eta > end) return false
           return true
         })
-        return
-      }
-      if (Array.isArray(vals) && vals.length > 0) {
-        const set = new Set(vals.map(String))
-        arr = arr.filter((it) => set.has(String((it as any)[key] ?? '')))
       }
     })
     if (sortInfo.columnKey && sortInfo.order) {

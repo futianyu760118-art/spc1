@@ -15,7 +15,9 @@ interface Props {
 const OrderProductKitPanel: React.FC<Props> = ({ orderNo, breakdown, onLoaded }) => {
   const [loading, setLoading] = useState(!breakdown)
   const [selectedKey, setSelectedKey] = useState<string | null>(
-    breakdown && breakdown.products.length > 0 ? `${breakdown.products[0].product_code}#0` : null,
+    breakdown && breakdown.products.length > 0
+      ? `${breakdown.products[0].product_code || ''}#0`
+      : null,
   )
   const [bomFlat, setBomFlat] = useState<BomKitFlatItem[]>([])
   const [bomFlatLoading, setBomFlatLoading] = useState(false)
@@ -50,6 +52,7 @@ const OrderProductKitPanel: React.FC<Props> = ({ orderNo, breakdown, onLoaded })
   useEffect(() => {
     if (!breakdown || !selectedProduct || !selectedProduct.has_bom) {
       setBomFlat([])
+      setBomFlatLoading(false)
       return
     }
     let cancelled = false
