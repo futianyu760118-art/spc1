@@ -1424,6 +1424,10 @@ export default function DataSupply() {
       `| ${e.endpoint_code} | ${e.name} | \`${e.method} ${e.path}\` | ${e.description} |`
     ).join('\n')
 
+    const internalEndpointRows = internalEndpointOptions.map(e =>
+      `| ${e.endpoint_code} | ${e.name} | \`${e.method} ${e.path}\` | ${e.description} |`
+    ).join('\n')
+
     // ── 各对外接口的请求参数 / 响应字段明细（来自后端 endpoints/*.py 的实现） ──
     // 若字段变动，需同步更新此处
     const ENDPOINT_DETAILS: Record<string, {
@@ -1824,18 +1828,20 @@ ${fieldRows}
 ## 1. 接入流程
 
 1. 在 **数据范围配置** 中启用需要的数据类型
-2. 在 **API Key 管理** 中创建一个 API Key，勾选允许访问的数据类型与对外接口
-3. 妥善保存生成的 AppKey + AppSecret（仅显示一次），将其配置到外部系统中
-4. 外部系统调用 API 时，使用 HMAC-SHA256 签名认证
+2. 若需把某个内部接口（已有路由）也对外开放，请在该 handler 上加 \`@exposable("int:<domain>.<verb>", ...)\` 装饰器并重新启动后端（该端点会出现在 API Key 表单的「可调用内部接口」中）
+3. 在 **API Key 管理** 中创建一个 API Key，勾选允许访问的数据类型、对外接口、**以及新增的内部接口（以 int: 为前缀）**
+4. 妥善保存生成的 AppKey + AppSecret（仅显示一次），将其配置到外部系统中
+5. 外部系统调用 API 时，使用 HMAC-SHA256 签名认证
 
-## 2. 两类接口
+## 2. 三类接口
 
 | 接口类别 | 路径前缀 | 权限字段 | 说明 |
 |----------|----------|----------|------|
 | 通用数据供给 | \`${baseUrl}/data/{data_type}\` | allowed_data_types | 按数据类型查询，字段由配置决定 |
 | 对外业务接口 | \`${externalBase}/...\` | allowed_endpoints | 按业务场景封装，字段固定精简 |
+| 内部可暴露接口（@exposable）| **保持原 URL 不变**（不重新挂载）| allowed_endpoints（含 \`int:\` 前缀）| 在已有内部 handler 上加 \`@exposable\` 装饰器即可，外部系统用同一 URL + HMAC 签名调用 |
 
-> 两类接口共用同一套 API Key / 签名算法，但**权限分别控制**：allowed_data_types 控制 /data/* ，allowed_endpoints 控制 /external/*。
+> 三类接口共用同一套 AppKey / 签名算法。\`allowed_endpoints\` 同时控制「对外业务接口」与「内部可暴露接口」两者（后者用 \`int:\` 前缀区分）。
 
 ## 3. 认证方式
 
@@ -1875,6 +1881,14 @@ ${endpointRows}
 > 通用查询参数：page / page_size 分页、keyword 关键字、updated_after 增量同步（部分接口不支持）。
 
 ${endpointDetails}
+
+## 4.5 内部可暴露接口清单（@exposable）
+
+| endpoint_code | 名称 | 方法 / 路径 | 说明 |
+|---------------|------|--------------|------|
+${internalEndpointRows}
+
+> 说明：这些端点不需要在 URL 中加 \`/external\` 前缀 — 调用方发送请求到原始 URL（如 \`/api/v1/common/ping\`），按 7.4 / 7.5 节示例签名即可。endpoint_code 仍以 \`int:\` 前缀与其他接口区分。
 
 ## 5. 通用数据供给接口
 
@@ -1986,6 +2000,85 @@ curl "${externalBase}/orders/list?page=1&page_size=20" \\
   -H "X-App-Key: \$APP_KEY" -H "X-Timestamp: \$TIMESTAMP" -H "X-Signature: \$SIG"
 \`\`\`
 
+### 7.4 内部接口 — Node.js / TypeScript
+
+\`\`\`typescript
+import crypto from "crypto";
+
+const appKey = process.env.SPC_APP_KEY ?? "ak_xxxxxxxx";
+const appSecret = process.env.SPC_APP_SECRET ?? "your_app_secret";
+const endpointCode = "int:health.ping";
+const queryString = "";
+
+const timestamp = Math.floor(Date.now() / 1000).toString();
+const stringToSign = \`\${timestamp}\${appKey}\${endpointCode}\${queryString}\`;
+const signature = crypto
+  .createHmac("sha256", appSecret)
+  .update(stringToSign)
+  .digest("hex");
+
+const resp = await fetch(
+  \`\${process.env.SPC_BASE ?? "http://localhost:8000"}/api/v1/common/ping\`,
+  {
+    method: "GET",
+    headers: {
+      "X-App-Key": appKey,
+      "X-Timestamp": timestamp,
+      "X-Signature": signature,
+    },
+  }
+);
+console.log(await resp.json());
+\`\`\`
+
+### 7.5 内部接口 — Go
+
+\`\`\`go
+package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
+)
+
+func main() {
+	appKey := getenv("SPC_APP_KEY", "ak_xxxxxxxx")
+	appSecret := getenv("SPC_APP_SECRET", "your_app_secret")
+	endpointCode := "int:health.ping"
+
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(appSecret))
+	mac.Write([]byte(timestamp + appKey + endpointCode))
+	sig := hex.EncodeToString(mac.Sum(nil))
+
+	base := getenv("SPC_BASE", "http://localhost:8000")
+	req, _ := http.NewRequest("GET", base+"/api/v1/common/ping", nil)
+	req.Header.Set("X-App-Key", appKey)
+	req.Header.Set("X-Timestamp", timestamp)
+	req.Header.Set("X-Signature", sig)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil { panic(err) }
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Println(string(body))
+}
+
+func getenv(k, def string) string {
+	if v := os.Getenv(k); v != "" { return v }
+	return def
+}
+\`\`\`
+
+> 注意：内部接口（@exposable）的待签名串同样以 \`endpoint_code\` 参与拼接（不是 URL 路径），格式与对外业务接口一致。
+
 ## 8. 安全机制
 
 | 机制 | 说明 |
@@ -2000,10 +2093,10 @@ curl "${externalBase}/orders/list?page=1&page_size=20" \\
 
 | HTTP 状态码 | 含义 | 排查建议 |
 |-------------|------|----------|
-| 401 | 缺少认证信息 | 检查是否携带了 X-App-Key/X-Timestamp/X-Signature |
-| 403 | 认证失败或无权限 | 签名不匹配、Key 已过期、IP 不在白名单、或未授权该接口/数据类型 |
-| 404 | 数据类型未启用或记录不存在 | 在数据范围配置中启用该数据类型 |
-| 500 | 服务器内部错误 | 联系管理员排查 |
+| 401 | 缺少认证信息 | 检查是否携带了 X-App-Key/X-Timestamp/X-Signature（含内部接口路径） |
+| 403 | 签名错/过期/无权限/IP不在白名单 | 签名不匹配、Key 已过期、IP 不在白名单、未授权该接口/数据类型，或该内部接口未在 allowed_endpoints（含 int: 前缀）授权 |
+| 404 | 接口/数据/记录不存在 | 数据类型未启用、URL 路径未注册为 @exposable、或单条记录 ID 不存在 |
+| 500 | sys-api-caller 占位用户缺失 | 容器启动后未执行 init_database.py，缺少 api_caller 角色与 sys-api-caller 系统用户。补跑一次 init_database.py 即可恢复 |
 `
   }
 
@@ -2129,9 +2222,10 @@ System.out.println(resp.body());`
             direction="vertical"
             items={[
               { title: '启用数据类型', description: '在「数据范围配置」中启用需要的数据类型（控制 /data/* 通用接口）' },
-              { title: '创建 API Key', description: '在「API Key 管理」中创建 Key，勾选允许访问的数据类型与对外接口' },
+              { title: '标记内部接口（如需）', description: '对需要对外开放的已有内部 handler 加 @exposable("int:<code>", ...)，重启后端。该端点会出现在 API Key 表单的「可调用内部接口」中' },
+              { title: '创建 API Key', description: '在「API Key 管理」中创建 Key，勾选允许访问的数据类型、对外接口、以及新增的内部接口' },
               { title: '保存凭据', description: '妥善保存 AppKey + AppSecret（仅显示一次），配置到外部系统' },
-              { title: '签名调用', description: '外部系统每次请求用 HMAC-SHA256 生成签名，携带三个请求头' },
+              { title: '签名调用', description: '外部系统每次请求用 HMAC-SHA256 生成签名，携带三个请求头，访问原 URL 即可' },
             ]}
           />
         </Card>
@@ -2188,10 +2282,12 @@ System.out.println(resp.body());`
               <Text>① 构造待签名串（三段拼接，无分隔符）：</Text>
               <CodeBlock
                 lang="text"
-                code={`通用接口:  timestamp + app_key + data_type    + query_string
-对外接口:  timestamp + app_key + endpoint_code + query_string
+                code={`通用接口:    timestamp + app_key + data_type    + query_string
+对外接口:    timestamp + app_key + endpoint_code + query_string
+内部接口:    timestamp + app_key + endpoint_code + query_string   (endpoint_code 以 int: 开头)
 
-示例:  1719000000ak_xxxorders.listpage=1&page_size=20`}
+示例:  1719000000ak_xxxorders.listpage=1&page_size=20
+       1719000000ak_xxxint:health.ping`}
               />
               <Text>② 用 <Text code>AppSecret</Text> 对待签名串做 HMAC-SHA256，结果转十六进制小写，放入 <Text code>X-Signature</Text></Text>
             </div>
@@ -2256,6 +2352,60 @@ System.out.println(resp.body());`
           />
         </Card>
 
+        {/* 3b. 内部可暴露接口清单 */}
+        <Card
+          style={{ marginBottom: 16, borderRadius: 12, boxShadow: '0 2px 10px rgba(0,0,0,0.04)', transition: 'all 0.2s ease' }}
+          size="small"
+          bordered={false}
+          hoverable
+          title={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 10,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'linear-gradient(135deg, #13c2c225 0%, #13c2c20d 100%)',
+                boxShadow: '0 2px 6px rgba(19, 194, 194, 0.1)',
+              }}>
+                <ApiOutlined style={{ fontSize: 'calc(1rem * var(--font-size-scale))', color: '#13c2c2' }} />
+              </div>
+              <span style={{ fontSize: 'calc(0.9375rem * var(--font-size-scale))', fontWeight: 600, color: '#1f2937' }}>内部可暴露接口清单（@exposable）</span>
+            </div>
+          }
+        >
+          <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            这些内部接口可被外部系统通过 API Key + HMAC 签名调用，URL <Text strong>无需</Text> 加 <Text code>/external</Text> 前缀。权限由 API Key 的「允许调用的内部接口」字段（<Text code>int:</Text> 前缀条目）控制。
+          </Text>
+          <Table
+            size="small"
+            pagination={false}
+            rowKey="endpoint_code"
+            dataSource={internalEndpointOptions}
+            scroll={{ x: 700 }}
+            columns={[
+              {
+                title: '接口代码', dataIndex: 'endpoint_code', width: 200,
+                render: (v: string) => <Text code style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{v}</Text>,
+              },
+              { title: '名称', dataIndex: 'name', width: 200 },
+              {
+                title: '方法 / 路径', key: 'route', width: 280,
+                render: (_: any, r: any) => (
+                  <Space size={6}>
+                    <Tag color="green" style={{ margin: 0 }}>{r.method}</Tag>
+                    <Text code style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{r.path}</Text>
+                  </Space>
+                ),
+              },
+              { title: '说明', dataIndex: 'description' },
+            ]}
+          />
+          <Alert
+            style={{ marginTop: 12 }}
+            type="info" showIcon
+            message={<>开发者要在新接口上加 <Text code>@exposable("int:&lt;domain&gt;.&lt;verb&gt;", name, description, tags)</Text>，并把对应 handler 的 <Text code>Depends(get_current_user)</Text> 替换为 <Text code>Depends(get_current_user_or_api_key)</Text>。</>}
+          />
+        </Card>
+
         {/* 4. 调用示例 */}
         <Card
           style={{ marginBottom: 16, borderRadius: 12, boxShadow: '0 2px 10px rgba(0,0,0,0.04)', transition: 'all 0.2s ease' }}
@@ -2282,6 +2432,115 @@ System.out.println(resp.body());`
               { key: 'python', label: 'Python（requests）', children: <CodeBlock code={pythonExample} lang="python" /> },
               { key: 'curl', label: 'cURL（openssl）', children: <CodeBlock code={curlExample} lang="bash" /> },
               { key: 'java', label: 'Java（HttpClient）', children: <CodeBlock code={javaExample} lang="java" /> },
+            ]}
+          />
+        </Card>
+
+        {/* 4b. 内部接口签名示例 */}
+        <Card
+          style={{ marginBottom: 16, borderRadius: 12, boxShadow: '0 2px 10px rgba(0,0,0,0.04)', transition: 'all 0.2s ease' }}
+          size="small"
+          bordered={false}
+          hoverable
+          title={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 10,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'linear-gradient(135deg, #eb2f9625 0%, #eb2f960d 100%)',
+                boxShadow: '0 2px 6px rgba(235, 47, 150, 0.1)',
+              }}>
+                <CodeOutlined style={{ fontSize: 'calc(1rem * var(--font-size-scale))', color: '#eb2f96' }} />
+              </div>
+              <span style={{ fontSize: 'calc(0.9375rem * var(--font-size-scale))', fontWeight: 600, color: '#1f2937' }}>内部接口调用示例（Node.js / TypeScript / Go）</span>
+            </div>
+          }
+        >
+          <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            以冒烟端点 <Text code>int:health.ping → GET /api/v1/common/ping</Text> 为例。待签名串格式与对外业务接口完全一致，<Text strong>用 endpoint_code（int:health.ping）而非 URL 路径参与签名</Text>。
+          </Text>
+          <Collapse
+            defaultActiveKey={['node']}
+            items={[
+              {
+                key: 'node', label: 'Node.js / TypeScript (built-in fetch)',
+                children: <CodeBlock
+                  lang="typescript"
+                  code={`import crypto from "crypto";
+
+const appKey = process.env.SPC_APP_KEY ?? "ak_xxxxxxxx";
+const appSecret = process.env.SPC_APP_SECRET ?? "your_app_secret";
+const endpointCode = "int:health.ping";
+const queryString = "";
+
+const timestamp = Math.floor(Date.now() / 1000).toString();
+const stringToSign = \`\${timestamp}\${appKey}\${endpointCode}\${queryString}\`;
+const signature = crypto
+  .createHmac("sha256", appSecret)
+  .update(stringToSign)
+  .digest("hex");
+
+const resp = await fetch(
+  \`\${process.env.SPC_BASE ?? "http://localhost:8000"}/api/v1/common/ping\`,
+  {
+    method: "GET",
+    headers: {
+      "X-App-Key": appKey,
+      "X-Timestamp": timestamp,
+      "X-Signature": signature,
+    },
+  }
+);
+console.log(await resp.json());`}
+                />,
+              },
+              {
+                key: 'go', label: 'Go (net/http + crypto/hmac)',
+                children: <CodeBlock
+                  lang="go"
+                  code={`package main
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
+)
+
+func main() {
+	appKey := getenv("SPC_APP_KEY", "ak_xxxxxxxx")
+	appSecret := getenv("SPC_APP_SECRET", "your_app_secret")
+	endpointCode := "int:health.ping"
+
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(appSecret))
+	mac.Write([]byte(timestamp + appKey + endpointCode))
+	sig := hex.EncodeToString(mac.Sum(nil))
+
+	base := getenv("SPC_BASE", "http://localhost:8000")
+	req, _ := http.NewRequest("GET", base+"/api/v1/common/ping", nil)
+	req.Header.Set("X-App-Key", appKey)
+	req.Header.Set("X-Timestamp", timestamp)
+	req.Header.Set("X-Signature", sig)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil { panic(err) }
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Println(string(body))
+}
+
+func getenv(k, def string) string {
+	if v := os.Getenv(k); v != "" { return v }
+	return def
+}`}
+                />,
+              },
             ]}
           />
         </Card>
@@ -2347,10 +2606,10 @@ System.out.println(resp.body());`
                 rowKey="code"
                 showHeader={false}
                 dataSource={[
-                  { code: '401', desc: '缺少认证头' },
-                  { code: '403', desc: '签名错/过期/无权限/IP不在白名单' },
-                  { code: '404', desc: '数据类型未启用或记录不存在' },
-                  { code: '500', desc: '服务器内部错误' },
+                  { code: '401', desc: '缺少认证头（JWT 或 X-App-Key 三件套）' },
+                  { code: '403', desc: '签名错/过期/无权限/IP 不在白名单，或内部接口未在 allowed_endpoints 勾选' },
+                  { code: '404', desc: 'URL 未注册为 @exposable，或单条记录 ID 不存在' },
+                  { code: '500', desc: 'sys-api-caller 占位用户缺失（未跑 init_database.py），或服务端内部错误' },
                 ]}
                 columns={[
                   { dataIndex: 'code', width: 56, render: (v: string) => <Tag color={v === '403' || v === '500' ? 'red' : v === '404' ? 'orange' : 'default'}>{v}</Tag> },
