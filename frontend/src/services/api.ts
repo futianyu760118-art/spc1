@@ -205,9 +205,9 @@ export const materialApi = {
     api.get(`/materials/kit-analysis/${orderNo}/materials`, { params }),
   getOrderProductBreakdown: (orderNo: string) =>
     api.get(`/materials/kit-analysis/${orderNo}/product-breakdown`),
-  getOrderProductBomFlat: (orderNo: string, productCode: string) =>
+  getOrderProductBomFlat: (orderNo: string, productCode: string, bomId?: string | null) =>
     api.get(`/materials/kit-analysis/${orderNo}/product-bom-flat`, {
-      params: { product_code: productCode },
+      params: { product_code: productCode, ...(bomId ? { bom_id: bomId } : {}) },
     }),
   // 物料盘点
   createStockCheckFromOrder: (orderNo: string, data?: {
@@ -254,6 +254,8 @@ export const materialApi = {
   }) => api.post('/materials/stock-check/from-materials', data),
   updateStockCheckCoCheckers: (checkId: number, co_checker_user_ids: number[]) =>
     api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids }),
+  refreshStockCheckBom: (checkId: number) =>
+    api.post(`/materials/stock-check/${checkId}/refresh-bom`),
   getCoCheckerCandidates: () =>
     api.get('/materials/stock-check/co-checker-candidates'),
   // 供应商风险

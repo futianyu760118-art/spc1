@@ -112,10 +112,11 @@ async def order_product_breakdown(
 async def order_product_bom_flat(
     order_no: str,
     product_code: str = Query(..., description="产品代码,精确匹配"),
+    bom_id: Optional[str] = Query(None, description="BOM 编号,同一产品代码存在多个 BOM 时必传以精确定位"),
     current_user: dict = Depends(PermissionChecker("materials.kit_analysis", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await get_order_product_bom_flat(
-        db, order_no=order_no, product_code=product_code
+        db, order_no=order_no, product_code=product_code, bom_id=bom_id
     )
     return ResponseModel(data=result)

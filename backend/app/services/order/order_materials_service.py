@@ -279,8 +279,8 @@ def _status(material_property: Optional[int], po_summary: Optional[MaterialPoSum
 
 
 def _kit_met(status: str, material_property: Optional[int]) -> bool:
-    # 仅「已到齐」视为齐套；部分到（缺量）不计入
-    return status == "fully_received"
+    # 「已到齐」或「有库存」均视为齐套；部分到（缺量）不计入
+    return status in ("fully_received", "in_stock")
 
 
 async def get_order_product_materials(

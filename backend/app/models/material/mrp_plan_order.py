@@ -23,7 +23,7 @@ class MrpPlanOrder(Base):
     mrp_run_time = Column(DateTime, nullable=True, comment='MRP运算时间')
     need_date = Column(Date, nullable=True, comment='需求日期')
     is_closed = Column(Integer, nullable=False, server_default='0', default=0, comment='业务关闭状态 1-已关闭 0-未关闭')
-    close_type = Column(Integer, nullable=True, comment='关闭类型 0-投放关闭')
+    close_type = Column(Integer, nullable=True, comment='关闭类型 0-投放关闭 1-手工关闭 2-强制关闭 3-反关闭')
     bill_type = Column(Integer, nullable=True, comment='单据类型 11010-采购申请 11011-自制生产任务单 11012-委外申请')
     stock_qty = Column(Numeric(15, 2), nullable=True, comment='库存数量')
     audit_date = Column(Date, nullable=True, comment='审核日期')

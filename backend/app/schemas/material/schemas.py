@@ -275,6 +275,8 @@ class KitAnalysisMaterialItem(BaseModel):
     bill_type_label: Optional[str] = None
     bom_demand_qty: Optional[float] = None
     transit_qty: Optional[float] = None
+    mrp_is_closed: int = 0
+    mrp_close_type: Optional[int] = None
 
 
 class KitAnalysisItem(BaseModel):
@@ -483,6 +485,8 @@ class SubcontractOrderDetailOut(BaseModel):
     detail_id: Optional[int] = None
     line_no: Optional[int] = None
     material_id: Optional[int] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
     qty: Optional[float] = None
     delivery_qty: Optional[float] = None
     received_qty: Optional[float] = None
@@ -507,6 +511,8 @@ class SubcontractOrderOut(BaseModel):
     settlement_method: Optional[str] = None
     settle_date: Optional[date] = None
     supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = None
+    supplier_code: Optional[str] = None
     department_id: Optional[int] = None
     salesman_id: Optional[int] = None
     manager_id: Optional[int] = None

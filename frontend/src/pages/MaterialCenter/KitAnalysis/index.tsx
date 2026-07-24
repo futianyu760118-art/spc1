@@ -40,6 +40,8 @@ export interface MaterialItem {
   bill_type_label: string | null
   bom_demand_qty: number | null
   transit_qty: number | null
+  mrp_is_closed: number
+  mrp_close_type: number | null
 }
 
 interface KitItem {
@@ -141,7 +143,7 @@ const BILL_TYPE_OPTIONS = [
 const BILL_TYPE_MAP: Record<number, string> = Object.fromEntries(BILL_TYPE_OPTIONS.map(item => [item.value, item.label]))
 const BILL_TYPE_COLOR: Record<number, string> = { 11010: 'geekblue', 11011: 'purple', 11012: 'cyan' }
 
-const DEFAULT_MATERIAL_FILTERS = { status: 'not_ordered,self_made_unlinked,pending,overdue,partial_received' }
+const DEFAULT_MATERIAL_FILTERS = { status: 'not_in_plan,not_ordered,self_made_unlinked,pending,overdue,partial_received' }
 
 const MATERIAL_COLUMN_KEYS = [
   'product_code', 'product_name', 'material_code', 'material_name', 'status', 'is_closed', 'material_property',
@@ -381,6 +383,7 @@ export default function KitAnalysis() {
     {
       title: '状态', dataIndex: 'status', width: 90, sorter: true,
       filters: [
+        { text: 'BOM 有 / 计划无', value: 'not_in_plan' },
         { text: '未下单', value: 'not_ordered' },
         { text: '自制未排产/未关联', value: 'self_made_unlinked' },
         { text: '已到齐', value: 'fully_received' },

@@ -24,6 +24,7 @@ class ProductionTaskOrder(Base):
     task_type = Column(String(64), nullable=True, comment="类型")
     sale_order_no = Column(String(64), nullable=True, comment="销售订单号")
     sale_order_id = Column(Integer, nullable=True, comment="销售订单ID (ERP FOrderInterID)")
+    bom_id = Column(Integer, nullable=True, comment="BOM ID")
     start_flag = Column(Integer, nullable=True, comment="开工标志 0/1")
     is_closed = Column(Integer, nullable=True, comment="是否关闭 0-未关闭 1-已关闭")
     audit_status = Column(Integer, nullable=True, comment="审核状态 0-未审核 1-已审核")

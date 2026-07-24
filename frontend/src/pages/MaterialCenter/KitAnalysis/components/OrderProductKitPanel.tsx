@@ -58,7 +58,7 @@ const OrderProductKitPanel: React.FC<Props> = ({ orderNo, breakdown, onLoaded })
     let cancelled = false
     setBomFlatLoading(true)
     materialApi
-      .getOrderProductBomFlat(orderNo, selectedProduct.product_code || '')
+      .getOrderProductBomFlat(orderNo, selectedProduct.product_code || '', selectedProduct.bom_id)
       .then((res: any) => {
         if (!cancelled) {
           setBomFlat(res.data?.items || [])

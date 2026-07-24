@@ -727,6 +727,8 @@ async def _get_plan_order_material_items(
                 if po_qty is not None and received_qty is not None and po_qty > received_qty
                 else (po_qty if po_qty is not None and po_qty > 0 else None)
             ),
+            mrp_is_closed=plan.is_closed or 0,
+            mrp_close_type=plan.close_type,
         ))
 
     return items
@@ -1399,7 +1401,7 @@ async def get_order_product_breakdown(
         _collect_unique_materials(kit_tree, mat_by_code, per_product_counts)
 
         leaf_total = len(per_product_counts)
-        leaf_received = sum(1 for m in per_product_counts.values() if m.status == "fully_received")
+        leaf_received = sum(1 for m in per_product_counts.values() if m.status in ("fully_received", "in_stock"))
         leaf_partial = sum(1 for m in per_product_counts.values() if m.status == "partial_received")
         leaf_not_ordered = sum(1 for m in per_product_counts.values() if m.status in ("not_ordered", "self_made_unlinked"))
         leaf_overdue = sum(1 for m in per_product_counts.values() if m.status == "overdue")
@@ -1506,31 +1508,48 @@ async def get_order_product_bom_flat(
     db: AsyncSession,
     order_no: str,
     product_code: str,
+    bom_id: Optional[str] = None,
 ) -> dict:
     """返回指定产品在指定订单下的 BOM 全节点扁平数组。
 
     实现:复用 get_order_product_breakdown 的 mat_by_code 关联与 _attach_kit_to_tree 树构建,
     然后对该产品的 bom_tree 做 DFS 拍平。
+
+    匹配规则:同一 product_code 可能对应多个不同 BOM(分组键为 product_code+bom_id),
+    因此传入 bom_id 时按 (product_code, bom_id) 精确匹配;未传 bom_id 时回退为
+    product_code 首个匹配(保留旧行为)。
     """
     breakdown = await get_order_product_breakdown(db, order_no=order_no)
-    target_product = next(
-        (p for p in breakdown["products"] if p["product_code"] == product_code),
-        None,
-    )
+    products = breakdown["products"]
+    target_product = None
+    if bom_id is not None:
+        bom_id_str = str(bom_id)
+        target_product = next(
+            (
+                p for p in products
+                if p["product_code"] == product_code and str(p.get("bom_id") or "") == bom_id_str
+            ),
+            None,
+        )
+    if target_product is None:
+        target_product = next(
+            (p for p in products if p["product_code"] == product_code),
+            None,
+        )
     if not target_product:
         return BomKitFlatResponse(
             order_no=order_no, product_code=product_code, bom_id=None, items=[]
         ).model_dump()
 
-    product_idx = breakdown["products"].index(target_product)
+    product_idx = products.index(target_product)
     product_key = f"{target_product['product_code'] or ''}#{product_idx}"
-    bom_id = target_product.get("bom_id")
+    resolved_bom_id = target_product.get("bom_id")
     tree_nodes = breakdown["bom_trees"].get(product_key, [])
     flat_items = _flatten_kit_tree(tree_nodes, parent_bom_id=None)
 
     return BomKitFlatResponse(
         order_no=order_no,
         product_code=product_code,
-        bom_id=bom_id,
+        bom_id=resolved_bom_id,
         items=flat_items,
     ).model_dump()
