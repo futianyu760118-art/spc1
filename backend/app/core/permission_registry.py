@@ -205,6 +205,7 @@ declare_permission("production.lean", "精益管理", module="production", paren
 declare_permission("production.assembly", "组装管理", module="production", parent_code="production", route_path="/assembly", sort_order=7)
 declare_permission("production.packaging", "包装管理", module="production", parent_code="production", route_path="/packaging", sort_order=8)
 declare_permission("production.exceptions", "工序异常池", module="production", parent_code="production", route_path="/process-exceptions", sort_order=9)
+declare_permission("production.daily_report", "生产日报表", module="production", parent_code="production", route_path="/daily-reports", sort_order=10)
 
 # 异常与质量中心
 declare_permission("exceptions", "异常与质量中心", module="exceptions", sort_order=6)

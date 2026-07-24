@@ -191,6 +191,30 @@ class FrontProcessRecordUpdate(BaseModel):
     status: Optional[str] = None
 
 
+# ============ 生产日报表（ERP/OA 同步，只读） ============
+
+class ProductionDailyReportOut(BaseModel):
+    """生产日报表列表行"""
+    id: Optional[int] = None
+    oa_id: Optional[str] = None
+    report_date: Optional[date] = None
+    sale_order_no: Optional[str] = None
+    production_order_no: Optional[str] = None
+    specification: Optional[str] = None
+    bom_no: Optional[str] = None
+    material_code: Optional[str] = None
+    process: Optional[str] = None
+    color: Optional[str] = None
+    completed_qty: Optional[float] = None
+    workshop: Optional[str] = None
+    work_hours: Optional[float] = None
+    total_wages: Optional[float] = None
+    data_source: Optional[str] = None
+    erp_updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
 # ============ Production schedule plans ============
 
 class ProductionSchedulePlanOut(BaseModel):

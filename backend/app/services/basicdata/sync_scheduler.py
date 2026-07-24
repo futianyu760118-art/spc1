@@ -52,6 +52,7 @@ class SyncScheduler:
             "quality_issues": "sync_quality_issues",
             "mrp_plan_orders": "sync_mrp_plan_orders",
             "production_task_orders": "sync_production_task_orders",
+            "production_daily_reports": "sync_production_daily_reports",
             "inventory": "sync_inventory",
             "subcontract_orders": "sync_subcontract_orders",
             "subcontract_order_details": "sync_subcontract_order_details",

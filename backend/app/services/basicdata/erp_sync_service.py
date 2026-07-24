@@ -42,6 +42,7 @@ from app.models.basicdata.position import Position
 from app.models.exception.quality_issue import QualityIssue
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.production.production_task_order import ProductionTaskOrder
+from app.models.production.production_daily_report import ProductionDailyReport
 
 
 logger = logging.getLogger(__name__)
@@ -2828,6 +2829,50 @@ class ERPSyncService:
         except Exception as e:
             stats["errors"].append(str(e))
             logger.exception(f"生产任务单同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
+    # 生产日报表同步
+    # ------------------------------------------------------------------
+    async def sync_production_daily_reports(
+        self, since: Optional[datetime] = None, custom_params: Optional[dict] = None
+    ) -> dict:
+        """同步生产日报表数据。幂等依据: oa_id 唯一。"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("production_daily_reports")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 OA/ERP 获取到 {len(rows)} 条生产日报表记录")
+
+            stats = await self._bulk_upsert(
+                ProductionDailyReport,
+                rows,
+                mapping,
+                key_fields=["oa_id"],
+                label="生产日报表",
+            )
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"生产日报表同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"生产日报表同步异常: {e}")
         finally:
             self._close_erp(keep_alive=True)
 

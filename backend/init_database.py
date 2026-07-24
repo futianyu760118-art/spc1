@@ -169,6 +169,7 @@ class DatabaseInitializer:
             },
             "production_task_order": {
                 "sale_order_id": "INTEGER",
+                "bom_id": "INTEGER",
             },
             "process_progress": {
                 "product_code": "VARCHAR(64)",
@@ -1552,7 +1553,7 @@ SELECT
     CAST(mr.FDate AS DATETIME)            AS mrp_run_time,
     CAST(mr.FNeedDate AS DATE)            AS need_date,
     CASE WHEN mr.FStatus IN (2,3) THEN 1 ELSE 0 END AS is_closed,
-    CASE WHEN mr.FStatus IN (2,3) THEN 0 ELSE NULL END AS close_type,
+    CAST(mr.FCloseType AS INT)            AS close_type,
     CAST(mr.FOrderType AS INT)            AS bill_type,
     mr.FModifyDate                        AS erp_updated_at
 FROM ICMrpResult mr
@@ -1598,6 +1599,18 @@ FROM oa_production_task
 WHERE FModifyDate >= :since
 ORDER BY FModifyDate DESC
                         """.strip(),
+                        field_mapping_json=None,
+                        sync_interval="1h",
+                        sync_strategy="incremental",
+                        sync_priority=5,
+                        is_active=True,
+                        sync_enabled=True,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="production_daily_reports",
+                        description="生产日报表 — 从ERP/OA数据库拉取（SQL待配置：部署后在「同步SQL配置」中填写真实表名/字段。字段：日期/销售订单号/生产订单号/规格型号/BOM编号/物料代码/生产工序/颜色/完工数量/车间/当日工时/总工资）",
+                        sql_text="",
                         field_mapping_json=None,
                         sync_interval="1h",
                         sync_strategy="incremental",

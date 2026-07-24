@@ -7,3 +7,4 @@ from app.models.production.product_process_capacity import ProductProcessCapacit
 from app.models.production.upph_formula_config import UpphFormulaConfig  # noqa: F401
 from app.models.production.production_task_order import ProductionTaskOrder  # noqa: F401
 from app.models.production.front_process_record import FrontProcessRecord  # noqa: F401
+from app.models.production.production_daily_report import ProductionDailyReport  # noqa: F401
