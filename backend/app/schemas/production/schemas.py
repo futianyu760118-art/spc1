@@ -234,6 +234,7 @@ class ProductionSchedulePlanOut(BaseModel):
     priority: str
     status: str
     upph: Optional[float] = None
+    manpower: Optional[int] = None
     daily_work_hours: Optional[float] = None
     remark: Optional[str] = None
     bom_no: Optional[str] = None
@@ -257,6 +258,7 @@ class ProductionSchedulePlanOut(BaseModel):
     delay_days: Optional[int] = None
     delivery_status: Optional[str] = None
     latest_reschedule_at: Optional[datetime] = None
+    daily_breakdown: Optional[list] = None  # [{"date": "2026-07-23", "hours": 7.57, "qty": 1548}, ...]
     
     plan_version: int = 1
     is_active: bool = True
@@ -297,9 +299,10 @@ class ProductionSchedulePlanCreate(BaseModel):
     priority: str = "normal"
     status: str = "planned"
     upph: Optional[float] = None
+    manpower: Optional[int] = None
     daily_work_hours: Optional[float] = None
     remark: Optional[str] = None
-    
+
     plan_version: int = 1
     is_active: bool = True
     source_promised_date: Optional[date] = None
@@ -328,6 +331,7 @@ class ProductionSchedulePlanUpdate(BaseModel):
     priority: Optional[str] = None
     status: Optional[str] = None
     upph: Optional[float] = None
+    manpower: Optional[int] = None
     daily_work_hours: Optional[float] = None
     remark: Optional[str] = None
     
@@ -466,6 +470,7 @@ class AutoScheduleRequest(BaseModel):
     department: str = "生产"
     plan_date: Optional[date] = None
     upph: Optional[float] = None
+    manpower: Optional[int] = None  # 班组人数(默认走配置, 可手动覆盖)
     daily_work_hours: Optional[float] = None
     owner: Optional[str] = None
     confirm_risky: bool = False  # v2 阶段 4：周日生产/前挪需人工确认，前端二次提交时传 true
@@ -516,6 +521,7 @@ class BatchAutoScheduleItemIn(BaseModel):
     order_no: str
     line_no: str
     upph: Optional[float] = None
+    manpower: Optional[int] = None  # 班组人数(可空, 默认走配置)
 
 
 class BatchAutoScheduleRequest(BaseModel):
@@ -523,6 +529,7 @@ class BatchAutoScheduleRequest(BaseModel):
     plan_date: Optional[date] = None
     daily_work_hours: Optional[float] = None
     owner: Optional[str] = None
+    manpower: Optional[int] = None  # 批量统一人数(可被 item.manpower 覆盖)
     items: List[BatchAutoScheduleItemIn]
 
 
