@@ -23,5 +23,8 @@ class PurchaseInvoice(Base):
     settlement_method = Column(String(64), comment="结算方式")
     invoice_amount = Column(Numeric(15, 2), comment="开票金额")
     remain_payable = Column(Numeric(15, 2), comment="剩余应付金额")
+    payment_apply_amount = Column(Numeric(15, 2), comment="付款申请金额")
+    paid_amount = Column(Numeric(15, 2), comment="已付款金额")
+    payment_order_id = Column(Integer, nullable=True, comment="付款单ID")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

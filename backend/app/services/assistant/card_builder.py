@@ -18,6 +18,8 @@ TOOL_TYPE_LABELS = {
     "search_eta_updates": "交期变更记录",
     "search_users": "用户搜索结果",
     "suggest_actions": "行动建议",
+    "search_kit_analysis": "订单齐套结果",
+    "search_bom_details": "产品BOM明细",
 }
 
 
@@ -88,5 +90,15 @@ def build_cards_from_tool_results(tool_results: List[Dict[str, Any]]) -> List[As
             total = data.get("total", 0)
             if items:
                 cards.append(build_search_result_card(tool_name, items, total))
+
+            # 订单齐套查询：当存在展开后的物料明细时，追加一张明细卡片
+            if tool_name == "search_kit_analysis":
+                materials = data.get("materials", [])
+                if materials:
+                    cards.append(AssistantCard(
+                        type="search_result_list",
+                        title=f"订单物料明细（共{data.get('materials_total', len(materials))}条）",
+                        payload={"items": materials, "total": data.get("materials_total", len(materials))},
+                    ))
 
     return cards

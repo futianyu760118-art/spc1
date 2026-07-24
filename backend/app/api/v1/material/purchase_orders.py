@@ -26,6 +26,7 @@ async def list_purchase_orders(
     po_status: Optional[str] = Query(None),
     supplier_code: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
+    owner_id: Optional[int] = Query(None),
     keyword: Optional[str] = Query(None),
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "read")),
     db: AsyncSession = Depends(get_db),
@@ -47,6 +48,9 @@ async def list_purchase_orders(
     if owner:
         query = query.where(PurchaseOrder.owner == owner)
         count_query = count_query.where(PurchaseOrder.owner == owner)
+    if owner_id is not None:
+        query = query.where(PurchaseOrder.owner_id == owner_id)
+        count_query = count_query.where(PurchaseOrder.owner_id == owner_id)
     if keyword:
         like_expr = f"%{keyword}%"
         kw_filter = (

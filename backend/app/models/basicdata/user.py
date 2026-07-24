@@ -35,6 +35,7 @@ class SysUser(Base):
     last_token_jti = Column(String(64), nullable=True, comment="上一次登录的token jti，用于立即失效")
     last_login_time = Column(DateTime, nullable=True, comment="最后一次登录时间")
     font_size_scale = Column(String(10), nullable=True, default='1.0', comment="字体大小缩放比例")
+    ui_preferences = Column(JSONB, nullable=True, comment="UI偏好设置（如各页面列可见性等）")
     is_default_password = Column(Boolean, nullable=False, default=True, comment="是否默认密码，首次登录强制修改")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

@@ -12,9 +12,11 @@ from app.core.security import PermissionChecker
 from app.core.audit import log_audit
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.material.material_demand import MaterialDemand
+from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.material.binding import OrderMaterialPoBinding
 from app.models.basicdata.customer import Customer
+from app.models.basicdata.audit_log import AuditLog
 from app.schemas.common import ResponseModel, PageResult
 from app.models.exception.risk_issue import RiskIssue
 from app.schemas.order.schemas import SaleOrderOut, SaleOrderUpdate, OrderCreate, OrderDetailOut, MaterialDemandOut, BindingOut, PODetail, RiskIssueOut, SaleOrderListOut, SaleOrderLineOut, OrderProductMaterialsOut
@@ -44,6 +46,12 @@ SORTABLE_COLUMNS = {
     'assembly_complete_date': SaleOrder.assembly_complete_date,
     'risk_score': SaleOrder.risk_score,
 }
+
+MATERIAL_KEYS = [
+    '电子料', 'SMT上线', '光源', '感应器/电源/控制板',
+    '结构', '结构2', '支架', '电缆线', '塑料件', '手杆',
+    '彩盒', '说明书', '灯珠', '光源板', '电源板', '包材',
+]
 
 
 def _customer_grade_expr():
@@ -156,6 +164,44 @@ async def _get_order_kit_map(db: AsyncSession, order_nos: list[str]) -> dict[str
             "kit_received_materials": received,
         }
     return kit_map
+
+
+async def _get_order_material_dates_map(db: AsyncSession, order_nos: list[str]) -> dict[str, dict[str, str]]:
+    """从齐套分析（MRP计划订单+采购订单）计算各订单的物料分类到料日期。
+    
+    对每个物料分类，取该分类下所有物料的实际到料日期的最大值。
+    """
+    if not order_nos:
+        return {}
+
+    result = await db.execute(
+        select(
+            MrpPlanOrder.sale_order_no,
+            MrpPlanOrder.material_type,
+            func.max(PurchaseOrder.actual_arrival_date).label("max_arrival_date"),
+        )
+        .join(
+            PurchaseOrder,
+            (PurchaseOrder.order_no == MrpPlanOrder.sale_order_no)
+            & (PurchaseOrder.material_code == MrpPlanOrder.material_code),
+        )
+        .where(
+            MrpPlanOrder.sale_order_no.in_(order_nos),
+            MrpPlanOrder.material_type.in_(MATERIAL_KEYS),
+            PurchaseOrder.actual_arrival_date.isnot(None),
+        )
+        .group_by(MrpPlanOrder.sale_order_no, MrpPlanOrder.material_type)
+    )
+
+    material_dates_map: dict[str, dict[str, str]] = {}
+    for row in result.all():
+        ono = row.sale_order_no
+        mtype = row.material_type
+        max_date = row.max_arrival_date
+        if ono and mtype and max_date:
+            material_dates_map.setdefault(ono, {})[mtype] = max_date.isoformat()
+
+    return material_dates_map
 
 
 @router.get("", response_model=ResponseModel[PageResult[SaleOrderListOut]])
@@ -570,6 +616,7 @@ async def list_orders(
         )
         shortage_map = {row.order_no: row.cnt for row in shortage_result.all()}
         kit_map = await _get_order_kit_map(db, order_nos)
+        material_dates_map = await _get_order_material_dates_map(db, order_nos)
 
     items = []
     for order in orders:
@@ -577,6 +624,9 @@ async def list_orders(
         planned_dates = [line.planned_start_date for line in order.lines if line.planned_start_date]
         order_dict = SaleOrderOut.model_validate(order).model_dump()
         customer_master = customer_map.get(order.customer_code or "")
+        computed_dates = material_dates_map.get(order.order_no, {})
+        manual_dates = order.material_dates or {}
+        merged_material_dates = {**computed_dates, **manual_dates} if computed_dates or manual_dates else None
         order_dict.update(
             customer=order.customer or (customer_master.customer_short or customer_master.customer_name if customer_master else None),
             customer_grade=_effective_customer_grade(order, customer_master),
@@ -586,6 +636,7 @@ async def list_orders(
             **kit_map.get(order.order_no, {}),
             promised_date=order.promised_date or (min(promised_dates) if promised_dates else None),
             planned_start_date=order.planned_start_date or (min(planned_dates) if planned_dates else None),
+            material_dates=merged_material_dates,
         )
         items.append(SaleOrderListOut(**order_dict))
 
@@ -1108,6 +1159,107 @@ async def list_risk_pool(
     }
 
     return ResponseModel(data=page_result)
+
+
+# ── 出货分析图表 ──
+@router.get("/shipping-analytics", response_model=ResponseModel[dict])
+async def get_shipping_analytics(
+    current_user: dict = Depends(PermissionChecker("orders.list", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    change_result = await db.execute(
+        select(AuditLog.record_id, func.count().label("cnt"))
+        .where(AuditLog.table_name == "sale_order", AuditLog.field_name == "shipping_plan", AuditLog.action == "update")
+        .group_by(AuditLog.record_id)
+    )
+    order_change_map: dict[int, int] = {}
+    for row in change_result.all():
+        order_change_map[row.record_id] = row.cnt
+
+    all_orders_result = await db.execute(
+        select(SaleOrder.id, SaleOrder.department, SaleOrder.customer, SaleOrder.shipping_plan, SaleOrder.delivery_completed_date)
+    )
+    all_orders = all_orders_result.all()
+
+    buckets = {"0次": 0, "1次": 0, "2次": 0, "3次+": 0}
+    for o in all_orders:
+        cnt = order_change_map.get(o.id, 0)
+        if cnt >= 3:
+            buckets["3次+"] += 1
+        elif cnt == 2:
+            buckets["2次"] += 1
+        elif cnt == 1:
+            buckets["1次"] += 1
+        else:
+            buckets["0次"] += 1
+    change_distribution = [{"name": k, "value": v} for k, v in buckets.items()]
+
+    dept_changes: dict[str, list[int]] = {}
+    for o in all_orders:
+        dept = o.department or "未知部门"
+        cnt = order_change_map.get(o.id, 0)
+        dept_changes.setdefault(dept, []).append(cnt)
+    change_by_dept = [
+        {"name": dept, "value": round(sum(counts) / len(counts), 2)}
+        for dept, counts in dept_changes.items()
+    ]
+    change_by_dept.sort(key=lambda x: x["value"], reverse=True)
+
+    customer_changes: dict[str, list[int]] = {}
+    for o in all_orders:
+        cust = o.customer or "未知客户"
+        cnt = order_change_map.get(o.id, 0)
+        customer_changes.setdefault(cust, []).append(cnt)
+    change_by_customer = [
+        {"name": cust, "value": round(sum(counts) / len(counts), 2)}
+        for cust, counts in customer_changes.items()
+    ]
+    change_by_customer.sort(key=lambda x: x["value"], reverse=True)
+
+    completed_orders = [o for o in all_orders if o.delivery_completed_date and o.shipping_plan]
+    early = sum(1 for o in completed_orders if o.delivery_completed_date < o.shipping_plan)
+    ontime = sum(1 for o in completed_orders if o.delivery_completed_date == o.shipping_plan)
+    late = sum(1 for o in completed_orders if o.delivery_completed_date > o.shipping_plan)
+    delivery_stats = [
+        {"name": "提前完成", "value": early, "color": "#16a34a"},
+        {"name": "准时完成", "value": ontime, "color": "#6366f1"},
+        {"name": "延期完成", "value": late, "color": "#e11d48"},
+    ]
+
+    dept_delivery: dict[str, dict] = {}
+    for o in completed_orders:
+        dept = o.department or "未知部门"
+        d = dept_delivery.setdefault(dept, {"total": 0, "ok": 0})
+        d["total"] += 1
+        if o.delivery_completed_date <= o.shipping_plan:
+            d["ok"] += 1
+    delivery_by_dept = [
+        {"name": dept, "value": round(d["ok"] / d["total"], 2) if d["total"] else 0}
+        for dept, d in dept_delivery.items()
+    ]
+    delivery_by_dept.sort(key=lambda x: x["value"], reverse=True)
+
+    cust_delivery: dict[str, dict] = {}
+    for o in completed_orders:
+        cust = o.customer or "未知客户"
+        d = cust_delivery.setdefault(cust, {"total": 0, "ok": 0})
+        d["total"] += 1
+        if o.delivery_completed_date <= o.shipping_plan:
+            d["ok"] += 1
+    delivery_by_customer = [
+        {"name": cust, "value": round(d["ok"] / d["total"], 2) if d["total"] else 0}
+        for cust, d in cust_delivery.items()
+    ]
+    delivery_by_customer.sort(key=lambda x: x["value"], reverse=True)
+
+    return ResponseModel(data={
+        "change_distribution": change_distribution,
+        "change_by_dept": change_by_dept,
+        "change_by_customer": change_by_customer,
+        "delivery_stats": delivery_stats,
+        "delivery_by_dept": delivery_by_dept,
+        "delivery_by_customer": delivery_by_customer,
+    })
 
 
 @router.get("/{order_no}/product-materials", response_model=ResponseModel[list[OrderProductMaterialsOut]])

@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,6 +19,7 @@ from app.core.audit import log_audit
 from app.schemas.common import ResponseModel
 from app.models.basicdata.sync_sql_config import SyncSqlConfig
 from app.core.database import Base
+from app.services.ai import ai_service, ChatMessage, ChatOptions
 import app.models  # 确保所有模型已注册到 Base
 
 router = APIRouter()
@@ -228,6 +230,17 @@ def _run_erp_parse_fields(sql_text: str) -> list:
 
 class ParseErpFieldsBody(BaseModel):
     sql_text: str
+
+
+class AiAutoMatchRequest(BaseModel):
+    sql_text: str
+    sync_type: str
+    erp_fields: List[str]
+    spc_fields: List[dict]
+
+
+class AiAutoMatchResponse(BaseModel):
+    mappings: dict  # {erp_field: {spc_field: str, remark: str}}
 
 
 class TestSqlBody(BaseModel):
@@ -497,6 +510,106 @@ async def parse_erp_fields(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SQL 字段解析失败: {e}")
+
+
+@router.get("/field-remarks/{sync_type}", response_model=ResponseModel[dict])
+async def get_field_remarks(
+    sync_type: str,
+    current_user: dict = Depends(PermissionChecker("settings", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    result_db = await db.execute(
+        select(SyncSqlConfig).where(SyncSqlConfig.sync_type == sync_type)
+    )
+    config = result_db.scalar_one_or_none()
+    if not config or not config.field_mapping_json:
+        return ResponseModel(data={})
+
+    try:
+        mapping = json.loads(config.field_mapping_json)
+    except json.JSONDecodeError:
+        return ResponseModel(data={})
+
+    remarks = {}
+    for erp_field, val in mapping.items():
+        if isinstance(val, dict):
+            target = val.get("target")
+            remark = val.get("remark")
+            if target and remark:
+                remarks[target] = remark
+        elif isinstance(val, str):
+            pass  # 简单格式无备注，跳过
+
+    return ResponseModel(data=remarks)
+
+
+@router.post("/ai-auto-match", response_model=ResponseModel[dict])
+async def ai_auto_match(
+    body: AiAutoMatchRequest,
+    current_user: dict = Depends(PermissionChecker("settings", "read")),
+):
+    try:
+        if ai_service.current_provider() == "rule_based":
+            raise HTTPException(status_code=400, detail="AI 服务未配置，请在 .env 中设置 AI_OPENAI_API_KEY / AI_OPENAI_BASE_URL")
+
+        spc_fields_desc = "\n".join([
+            f"  - {f['name']} (类型: {f.get('type', 'unknown')})"
+            for f in body.spc_fields
+        ])
+        erp_fields_list = "\n".join([f"  - {f}" for f in body.erp_fields])
+
+        prompt = (
+            f"你是一个数据库字段映射专家。请分析以下 SQL 查询，将 ERP 字段匹配到 SPC 系统的目标字段。\n\n"
+            f"## SQL 查询\n```sql\n{body.sql_text}\n```\n\n"
+            f"## ERP 字段列表（从 SQL SELECT 中提取）\n{erp_fields_list}\n\n"
+            f"## SPC 目标字段列表（{body.sync_type} 模型）\n{spc_fields_desc}\n\n"
+            f"## 任务\n"
+            f"1. 分析 SQL 查询中涉及的表和列，理解每个 ERP 字段的语义和来源\n"
+            f"2. 将每个 ERP 字段语义匹配到最合适的 SPC 目标字段\n"
+            f"3. 为每个匹配生成中文备注\n\n"
+            f"## 备注格式要求（重要）\n"
+            f"备注必须使用自然的中文业务语言，格式为：**[中文表名]表的[中文字段含义]字段**\n"
+            f"- 表名必须翻译为中文（如 SEOrder → 销售订单，t_Customer → 客户，t_Item → 物料）\n"
+            f"- 字段名必须翻译为中文业务含义（如 FBillNo → 单据编号，FItemName → 物料名称，FQty → 数量）\n"
+            f"- 不要保留英文代号，不要使用方括号包裹表名和字段名\n"
+            f"- 正确示例：销售订单表的单据编号字段、客户表的客户名称字段\n"
+            f"- 错误示例：SEOrder表的FBillNo字段、来自ERP[SEOrder]表的[FBillNo]字段\n\n"
+            f"请严格输出 JSON，格式如下：\n"
+            f"{{\n"
+            f'  "mappings": {{\n'
+            f'    "ERP字段1": {{"spc_field": "匹配的SPC字段名或null", "remark": "中文说明"}},\n'
+            f'    "ERP字段2": {{"spc_field": "匹配的SPC字段名或null", "remark": "中文说明"}}\n'
+            f"  }}\n"
+            f"}}\n\n"
+            f"注意：\n"
+            f"- 如果 ERP 字段没有合适的 SPC 目标字段匹配，spc_field 设为 null\n"
+            f"- remark 必须用中文描述业务含义，不要出现英文代号\n"
+            f"- 只输出 JSON，不要包含任何其他文字"
+        )
+
+        messages = [
+            ChatMessage(role="system", content="你是一个专业的数据库字段映射助手，擅长分析 SQL 语义并匹配字段映射关系。"),
+            ChatMessage(role="user", content=prompt),
+        ]
+
+        options = ChatOptions(temperature=0.1, max_tokens=4096, timeout=120)
+        raw = await ai_service.chat(messages, options)
+
+        # 尝试提取 JSON
+        text = raw.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
+        result = json.loads(text)
+        mappings = result.get("mappings", {})
+
+        return ResponseModel(data={"mappings": mappings})
+    except HTTPException:
+        raise
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="AI 返回的内容无法解析为 JSON，请重试")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI 自动匹配失败: {e}")
 
 
 @router.post("/{config_id}/test", response_model=ResponseModel[dict])

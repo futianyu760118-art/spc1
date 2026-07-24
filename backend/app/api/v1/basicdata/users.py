@@ -208,13 +208,14 @@ async def list_users(
     if not order_clauses:
         order_clauses = [SysUser.id.asc()]
 
-    result = await db.execute(query.order_by(*order_clauses))
-    all_rows = result.all()
-    total = len(all_rows)
+    # 计算总数
+    count_q = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_q)).scalar()
 
     # 分页
     offset = (page - 1) * page_size
-    rows = all_rows[offset:offset + page_size]
+    result = await db.execute(query.order_by(*order_clauses).offset(offset).limit(page_size))
+    rows = result.all()
 
     # 通过校验数据库密码哈希判断是否为默认密码
     settings = get_settings()
@@ -382,6 +383,7 @@ async def list_roles(
     role_code: Optional[str] = None,
     org_name: Optional[str] = None,
     position_name: Optional[str] = None,
+    keyword: Optional[str] = Query(None),
     current_user: dict = Depends(PermissionChecker("roles", "read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -413,6 +415,13 @@ async def list_roles(
                 select(cast(Position.id, String)).where(Position.position_name.in_(names))
             ))
 
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.where(
+            (SysRole.role_code.ilike(like))
+            | (SysRole.role_name.ilike(like))
+        )
+
     # 排序
     SORTABLE = {
         'role_code': SysRole.role_code,
@@ -429,11 +438,11 @@ async def list_roles(
     if not order_clauses:
         order_clauses = [SysRole.id.asc()]
 
-    result = await db.execute(query.order_by(*order_clauses))
-    rows = result.all()
-    total = len(rows)
+    count_q = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_q)).scalar()
     offset = (page - 1) * page_size
-    paged = rows[offset:offset + page_size]
+    result = await db.execute(query.order_by(*order_clauses).offset(offset).limit(page_size))
+    paged = result.all()
 
     # 批量查询关联的部门和岗位
     org_ids = [role.org_id for role, _ in paged if role.org_id]
@@ -1024,23 +1033,29 @@ async def list_unprovisioned_employees(
                 )
             )
 
-    result = await db.execute(query.order_by(Employee.emp_code.asc()))
-    rows = result.all()
-    total = len(rows)
-
-    # 分页
+    count_q = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_q)).scalar()
     offset = (page - 1) * page_size
-    paged_rows = rows[offset:offset + page_size]
+    result = await db.execute(query.order_by(Employee.emp_code.asc()).offset(offset).limit(page_size))
+    paged_rows = result.all()
 
-    # 统计所有岗位和部门供前端筛选
+    # 统计所有岗位和部门供前端筛选（独立查询）
+    options_query = (
+        select(Position.position_name, Employee.position, Organization.org_name)
+        .select_from(Employee)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
+        .where(Employee.emp_code.not_in(provisioned_sub))
+    )
+    options_result = await db.execute(options_query)
     all_position_names = set()
     all_org_names = set()
-    for emp, pos, org in rows:
-        pos_name = pos.position_name if pos else (emp.position or None)
-        if pos_name:
-            all_position_names.add(pos_name)
-        if org and org.org_name:
-            all_org_names.add(org.org_name)
+    for pos_name, emp_pos, org_name_val in options_result.all():
+        name = pos_name or emp_pos
+        if name:
+            all_position_names.add(name)
+        if org_name_val:
+            all_org_names.add(org_name_val)
 
     return ResponseModel(data={
         "items": [

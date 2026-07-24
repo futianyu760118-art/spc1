@@ -263,7 +263,7 @@ class DatabaseInitializer:
             },
             "approval_config": {
                 "biz_name": "VARCHAR(128)",
-            },
+            }
             "purchase_price_change": {
                 "erp_price_snapshot": "JSONB",
             },

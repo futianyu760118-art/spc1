@@ -24,6 +24,9 @@ services:
       AI_DASHSCOPE_API_KEY: ${AI_DASHSCOPE_API_KEY}
       AI_DASHSCOPE_MODEL: ${AI_DASHSCOPE_MODEL}
       AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-30}
+      UPPH_MATCH_MODE: ${UPPH_MATCH_MODE}
+
+
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
     command: >

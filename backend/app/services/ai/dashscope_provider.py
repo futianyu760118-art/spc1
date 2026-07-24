@@ -5,7 +5,7 @@ from typing import AsyncIterator, List, Optional, Type
 
 from pydantic import BaseModel
 
-from app.services.ai.base import LLMProvider, ChatMessage, ChatOptions, ChatWithToolsResult, ToolCall
+from app.services.ai.base import LLMProvider, ChatMessage, ChatOptions, ChatWithToolsResult, ToolCall, TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,8 @@ class DashscopeProvider(LLMProvider):
             raise RuntimeError(f"Dashscope error: {response.code} - {response.message}")
 
         choice_msg = response.output.choices[0].message
-        logger.info(f"[Dashscope tools] model={self._model} tokens={response.usage.get('total_tokens', '?')}")
+        usage = response.usage or {}
+        logger.info(f"[Dashscope tools] model={self._model} tokens={usage.get('total_tokens', '?')}")
 
         result = ChatWithToolsResult()
         if hasattr(choice_msg, 'content') and choice_msg.content:
@@ -156,4 +157,10 @@ class DashscopeProvider(LLMProvider):
                     args = {}
                 tc_id = tc.get('id', '') if isinstance(tc, dict) else getattr(tc, 'id', '')
                 result.tool_calls.append(ToolCall(id=tc_id or f"call_{fn_name}", name=fn_name, arguments=args))
+        if isinstance(usage, dict) and usage:
+            result.usage = TokenUsage(
+                prompt_tokens=int(usage.get("input_tokens", 0) or 0),
+                completion_tokens=int(usage.get("output_tokens", 0) or 0),
+                total_tokens=int(usage.get("total_tokens", 0) or 0),
+            )
         return result

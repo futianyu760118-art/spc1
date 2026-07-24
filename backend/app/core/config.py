@@ -1,5 +1,15 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+# config.py 位于 backend/app/core/，项目根目录为其上三级
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILES = (
+    _PROJECT_ROOT / ".env.local",
+    _PROJECT_ROOT / ".env",
+    Path(".env.local"),
+    Path(".env"),
+)
 
 
 class Settings(BaseSettings):
@@ -15,8 +25,10 @@ class Settings(BaseSettings):
     ERP_DB_URL: str = ""  # e.g. "mssql+pyodbc://user:pass@host/erp_db?driver=ODBC+Driver+17+for+SQL+Server"
     ERP_DB_SCHEMA: str = "dbo"  # ERP 中间表所在 schema
     ERP_SYNC_BATCH_SIZE: int = 500  # 每批次同步条数
+    ERP_SYNC_QUERY_TIMEOUT: int = 600  # 单次 ERP 查询超时(秒)，防止无限挂起
     ERP_SYNC_ENABLED: bool = False  # 是否启用 ERP 同步
     ERP_SYNC_DEFAULT_PASSWORD: str = "admin123"  # 自动创建用户的默认密码
+    UPPH_MATCH_MODE: str="bom_code"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -68,7 +80,14 @@ class Settings(BaseSettings):
     AI_DASHSCOPE_MODEL: str = "qwen-plus"
     AI_REQUEST_TIMEOUT: int = 30
 
-    model_config = {"env_file": (".env.local", ".env"), "env_file_encoding": "utf-8", "extra": "ignore"}
+    # Agent 稳固性
+    AI_SUMMARY_ENABLED: bool = True
+    AI_SUMMARY_TOKEN_LIMIT: int = 80000
+    AI_RUN_LOG_DIR: str = ""
+    AI_LOG_RETENTION_DAYS: int = 30
+    AI_MAX_AGENT_DURATION_S: int = 120
+
+    model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache

@@ -6,10 +6,11 @@ Filtering logic: users select a target month; the backend calculates
 payment_month = invoice_date + payment_term_days, and only includes
 invoices whose payment_month matches the selected month, then groups by supplier_code.
 
-Aggregated results:
-  monthly_due   = SUM(remain_payable) for invoices falling in the selected month
+Aggregated results (单据有效应付由 _effective_payable 规则确定):
+  monthly_due   = SUM(有效应付) for invoices falling in the selected month
   monthly_bill  = SUM(invoice_amount) for invoices falling in the selected month
-  total_payable = SUM(remain_payable) for all invoices of the supplier
+  total_payable = SUM(remain_payable) - SUM(paid_amount)
+                  如果有在途票据，再减去 SUM(在途票据的remain_payable)
 """
 
 import re
@@ -17,12 +18,39 @@ from datetime import datetime, timedelta, date as date_type
 from decimal import Decimal
 from typing import Optional, Tuple, List, Dict, Any
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.material.purchase_invoice import PurchaseInvoice
 from app.schemas.material.schemas import SupplierPaymentSummary
 from app.services.common.export_service import GenericExportService, ExportColumn
+from app.services.common.sync_filter import get_purchase_invoice_sync_filters
+
+
+def _to_decimal(v: Any) -> Decimal:
+    if v is None:
+        return Decimal('0')
+    return Decimal(str(v))
+
+
+def _effective_payable(inv: Dict[str, Any]) -> Decimal:
+    """计算票据实际应付（剩余应付）金额。
+
+    规则：
+      - paid_amount > 0 → remain_payable - paid_amount
+      - paid_amount <= 0 或 null：
+          - payment_order_id 存在且 > 0（在途）→ 0（不计入应付）
+          - 否则（无付款单）→ remain_payable
+    """
+    remain = _to_decimal(inv.get('remain_payable'))
+    paid_raw = inv.get('paid_amount')
+    paid = _to_decimal(paid_raw)
+    order_id = inv.get('payment_order_id') or 0
+    if paid > 0:
+        return remain - paid
+    if order_id > 0:
+        return Decimal('0')
+    return remain
 
 
 def _default_month() -> str:
@@ -67,18 +95,19 @@ def _compute_overdue_not_due(invoices: List[Dict[str, Any]]) -> Tuple[Decimal, D
     not_due = Decimal('0')
     for inv in invoices:
         inv_date = inv.get('invoice_date')
+        # 到期/未到期金额均按票据实际应付（_effective_payable）统计
+        remain = _effective_payable(inv)
         if not inv_date:
-            not_due += Decimal(str(inv.get('remain_payable', 0)))
+            not_due += remain
             continue
         if isinstance(inv_date, str):
             try:
                 inv_date = datetime.strptime(inv_date, '%Y-%m-%d').date()
             except (ValueError, TypeError):
-                not_due += Decimal(str(inv.get('remain_payable', 0)))
+                not_due += remain
                 continue
         payment_term = inv.get('payment_term')
         pm = _compute_payment_month(inv_date, payment_term)
-        remain = Decimal(str(inv.get('remain_payable', 0)))
         if pm and pm < current_month:
             overdue += remain
         else:
@@ -107,6 +136,21 @@ def _month_range(month: str) -> Tuple[date_type, date_type]:
     return start, end
 
 
+def _not_paid_clause():
+    """在途付款单过滤条件：排除 (paid_amount<=0/null 且 payment_order_id 存在且非0) 的票据。
+
+    满足该条件的票据已生成付款单但未实际付款（在途），不参与统计与查询。
+    返回的是「应统计」条件（取反），用于 WHERE 子句保留待统计票据。
+    """
+    paid_c = PurchaseInvoice.paid_amount
+    order_c = PurchaseInvoice.payment_order_id
+    return ~and_(
+        (paid_c.is_(None) | (paid_c <= 0)),
+        order_c.isnot(None),
+        order_c != 0,
+    )
+
+
 async def _fetch_filtered_invoices(
     db: AsyncSession,
     target_month: str,
@@ -114,6 +158,7 @@ async def _fetch_filtered_invoices(
     exact_supplier_name: bool = False,
     invoice_date_start: Optional[str] = None,
     invoice_date_end: Optional[str] = None,
+    sync_filters: Optional[list] = None,
 ) -> List[Dict[str, Any]]:
     """查出可能落在 target_month 排款月的发票明细，Python 层精筛。"""
     month_start, month_end = _month_range(target_month)
@@ -136,10 +181,17 @@ async def _fetch_filtered_invoices(
         PurchaseInvoice.settlement_method,
         PurchaseInvoice.invoice_amount,
         PurchaseInvoice.remain_payable,
+        PurchaseInvoice.payment_apply_amount,
+        PurchaseInvoice.paid_amount,
+        PurchaseInvoice.payment_order_id,
     ).where(
         PurchaseInvoice.invoice_date >= coarse_start,
         PurchaseInvoice.invoice_date < month_end,
+        _not_paid_clause(),
     )
+
+    if sync_filters:
+        stmt = stmt.where(*sync_filters)
 
     if supplier_name:
         if exact_supplier_name:
@@ -192,7 +244,7 @@ def _aggregate_invoices(
                 'schedule_month': target_month,
                 'invoices': [],
             }
-        groups[code]['monthly_due'] += (r['remain_payable'] if r['remain_payable'] is not None else Decimal('0'))
+        groups[code]['monthly_due'] += _effective_payable(r)
         groups[code]['monthly_bill'] += (r['invoice_amount'] if r['invoice_amount'] is not None else Decimal('0'))
         # 收集发票明细
         inv_date = r['invoice_date']
@@ -204,6 +256,9 @@ def _aggregate_invoices(
             'settlement_method': r['settlement_method'] or '',
             'invoice_amount': float(r['invoice_amount'].quantize(Decimal('0.01'))) if r['invoice_amount'] is not None else 0.0,
             'remain_payable': float(r['remain_payable'].quantize(Decimal('0.01'))) if r['remain_payable'] is not None else 0.0,
+            'payment_apply_amount': float(r['payment_apply_amount'].quantize(Decimal('0.01'))) if r['payment_apply_amount'] is not None else 0.0,
+            'paid_amount': float(r['paid_amount'].quantize(Decimal('0.01'))) if r['paid_amount'] is not None else 0.0,
+            'payment_order_id': r.get('payment_order_id'),
         })
 
     return list(groups.values())
@@ -215,6 +270,7 @@ async def _get_all_suppliers_with_invoices(
     exact_supplier_name: bool = False,
     invoice_date_start: Optional[str] = None,
     invoice_date_end: Optional[str] = None,
+    sync_filters: Optional[list] = None,
 ) -> List[Dict[str, Any]]:
     """获取所有有发票记录的供应商（不限制排款月）。"""
     stmt = select(
@@ -225,6 +281,10 @@ async def _get_all_suppliers_with_invoices(
         PurchaseInvoice.supplier_code,
         PurchaseInvoice.supplier_name,
     )
+    stmt = stmt.where(_not_paid_clause())
+
+    if sync_filters:
+        stmt = stmt.where(*sync_filters)
 
     if supplier_name:
         if exact_supplier_name:
@@ -247,6 +307,7 @@ async def _get_supplier_all_invoices(
     supplier_codes: List[str],
     supplier_name: Optional[str] = None,
     exact_supplier_name: bool = False,
+    sync_filters: Optional[list] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """获取指定供应商的全部发票明细。"""
     if not supplier_codes:
@@ -261,7 +322,16 @@ async def _get_supplier_all_invoices(
         PurchaseInvoice.settlement_method,
         PurchaseInvoice.invoice_amount,
         PurchaseInvoice.remain_payable,
-    ).where(PurchaseInvoice.supplier_code.in_(supplier_codes))
+        PurchaseInvoice.payment_apply_amount,
+        PurchaseInvoice.paid_amount,
+        PurchaseInvoice.payment_order_id,
+    ).where(
+        PurchaseInvoice.supplier_code.in_(supplier_codes),
+        _not_paid_clause(),
+    )
+
+    if sync_filters:
+        stmt = stmt.where(*sync_filters)
 
     if supplier_name:
         if exact_supplier_name:
@@ -285,6 +355,9 @@ async def _get_supplier_all_invoices(
             'settlement_method': r['settlement_method'] or '',
             'invoice_amount': float(r['invoice_amount'].quantize(Decimal('0.01'))) if r['invoice_amount'] is not None else 0.0,
             'remain_payable': float(r['remain_payable'].quantize(Decimal('0.01'))) if r['remain_payable'] is not None else 0.0,
+            'payment_apply_amount': float(r['payment_apply_amount'].quantize(Decimal('0.01'))) if r['payment_apply_amount'] is not None else 0.0,
+            'paid_amount': float(r['paid_amount'].quantize(Decimal('0.01'))) if r['paid_amount'] is not None else 0.0,
+            'payment_order_id': r.get('payment_order_id'),
         })
 
     return invoice_map
@@ -295,20 +368,42 @@ async def _fill_total_payable(
     items: List[Dict[str, Any]],
     supplier_name: Optional[str],
     exact_supplier_name: bool = False,
+    sync_filters: Optional[list] = None,
 ) -> None:
-    """回填每个供应商的总应付金额（全量 remain_payable，不限月份）。"""
+    """回填每个供应商的总应付金额（按票据实际应付规则汇总，不限月份）。
+
+    计算逻辑：
+      第一步：总应付 = SUM(remain_payable) - SUM(paid_amount)
+      第二步：如果有在途票据（paid_amount<=0/null 且 payment_order_id > 0），
+              总应付 = 总应付 - SUM(在途票据的remain_payable)
+    """
     if not items:
         return
 
     codes = [it['supplier_code'] for it in items]
+    # 第一步：所有票据的 SUM(remain_payable) - SUM(paid_amount)
+    remain_sum = func.coalesce(func.sum(PurchaseInvoice.remain_payable), 0)
+    paid_sum = func.coalesce(func.sum(PurchaseInvoice.paid_amount), 0)
+    # 第二步：在途票据的 remain_payable 总和
+    in_transit_clause = and_(
+        (PurchaseInvoice.paid_amount.is_(None) | (PurchaseInvoice.paid_amount <= 0)),
+        PurchaseInvoice.payment_order_id.isnot(None),
+        PurchaseInvoice.payment_order_id != 0,
+    )
+    in_transit_remain_sum = func.coalesce(
+        func.sum(case((in_transit_clause, PurchaseInvoice.remain_payable), else_=0)),
+        0,
+    )
     stmt = (
         select(
             PurchaseInvoice.supplier_code.label('supplier_code'),
-            func.sum(PurchaseInvoice.remain_payable).label('total_payable'),
+            ((remain_sum - paid_sum) - in_transit_remain_sum).label('total_payable'),
         )
         .where(PurchaseInvoice.supplier_code.in_(codes))
         .group_by(PurchaseInvoice.supplier_code)
     )
+    if sync_filters:
+        stmt = stmt.where(*sync_filters)
     if supplier_name:
         if exact_supplier_name:
             stmt = stmt.where(PurchaseInvoice.supplier_name == supplier_name)
@@ -357,11 +452,14 @@ async def get_supplier_payment_list(
 ) -> Tuple[List[Dict[str, Any]], int]:
     target_month = _resolve_month(schedule_month, payment_month)
 
+    # 获取采购开票同步延迟过滤条件
+    sync_filters = await get_purchase_invoice_sync_filters(db)
+
     # 获取所有有发票记录的供应商（不限制排款月）
-    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
+    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end, sync_filters)
 
     # 获取当前排款月的发票数据
-    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
+    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end, sync_filters)
     monthly_items = _aggregate_invoices(filtered, target_month)
 
     # 创建月到期应付金额映射
@@ -369,7 +467,7 @@ async def get_supplier_payment_list(
 
     # 获取不在当前排款月的供应商的全部发票明细
     not_in_month_codes = [s['supplier_code'] for s in all_suppliers if s['supplier_code'] not in monthly_map]
-    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name)
+    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name, sync_filters)
 
     # 合并数据：所有供应商都要显示，月到期应付金额从映射中获取
     items = []
@@ -391,6 +489,9 @@ async def get_supplier_payment_list(
                     'settlement_method': inv['settlement_method'],
                     'invoice_amount': inv['invoice_amount'],
                     'remain_payable': inv['remain_payable'],
+                    'payment_apply_amount': inv.get('payment_apply_amount', 0),
+                    'paid_amount': inv.get('paid_amount', 0),
+                    'payment_order_id': inv.get('payment_order_id'),
                 })
 
             items.append({
@@ -407,7 +508,7 @@ async def get_supplier_payment_list(
             })
 
     # 回填总应付金额
-    await _fill_total_payable(db, items, supplier_name, exact_supplier_name)
+    await _fill_total_payable(db, items, supplier_name, exact_supplier_name, sync_filters)
 
     items = [_format_item(it) for it in items]
 
@@ -471,6 +572,9 @@ async def get_supplier_payment_summary(
                     'settlement_method': inv['settlement_method'],
                     'invoice_amount': inv['invoice_amount'],
                     'remain_payable': inv['remain_payable'],
+                    'payment_apply_amount': inv.get('payment_apply_amount', 0),
+                    'paid_amount': inv.get('paid_amount', 0),
+                    'payment_order_id': inv.get('payment_order_id'),
                 })
 
             items.append({
@@ -537,11 +641,14 @@ async def get_supplier_payment_export(
     """导出供应商付款排程（不分页），返回 (BytesIO, media_type, filename)。"""
     target_month = _resolve_month(schedule_month, payment_month)
 
+    # 获取采购开票同步延迟过滤条件
+    sync_filters = await get_purchase_invoice_sync_filters(db)
+
     # 获取所有有发票记录的供应商（不限制排款月）
-    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
+    all_suppliers = await _get_all_suppliers_with_invoices(db, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end, sync_filters)
 
     # 获取当前排款月的发票数据
-    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end)
+    filtered = await _fetch_filtered_invoices(db, target_month, supplier_name, exact_supplier_name, invoice_date_start, invoice_date_end, sync_filters)
     monthly_items = _aggregate_invoices(filtered, target_month)
 
     # 创建月到期应付金额映射
@@ -549,7 +656,7 @@ async def get_supplier_payment_export(
 
     # 获取不在当前排款月的供应商的全部发票明细
     not_in_month_codes = [s['supplier_code'] for s in all_suppliers if s['supplier_code'] not in monthly_map]
-    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name)
+    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name, sync_filters)
 
     # 合并数据：所有供应商都要显示，月到期应付金额从映射中获取
     items = []
@@ -571,6 +678,9 @@ async def get_supplier_payment_export(
                     'settlement_method': inv['settlement_method'],
                     'invoice_amount': inv['invoice_amount'],
                     'remain_payable': inv['remain_payable'],
+                    'payment_apply_amount': inv.get('payment_apply_amount', 0),
+                    'paid_amount': inv.get('paid_amount', 0),
+                    'payment_order_id': inv.get('payment_order_id'),
                 })
 
             items.append({
@@ -587,7 +697,7 @@ async def get_supplier_payment_export(
             })
 
     # 回填总应付金额
-    await _fill_total_payable(db, items, supplier_name, exact_supplier_name)
+    await _fill_total_payable(db, items, supplier_name, exact_supplier_name, sync_filters)
 
     items = [_format_item(it) for it in items]
 

@@ -95,6 +95,23 @@ async def lifespan(app: FastAPI):
         from app.core.database import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
             await sync_permissions_to_db(db)
+            # 清理上次未完成的同步任务（服务重启导致的僵尸 running/pending 任务）
+            try:
+                from sqlalchemy import update, select
+                from app.models.basicdata.sync_log import SyncLog
+                stale = await db.execute(
+                    select(SyncLog).where(SyncLog.status.in_(("pending", "running")))
+                )
+                for log in stale.scalars():
+                    log.status = "failed"
+                    log.message = (log.message or "") + " [服务重启，任务中断已自动标记为失败]"
+                    if log.finished_at is None:
+                        from datetime import datetime
+                        log.finished_at = datetime.now()
+                await db.commit()
+                logger.info("[启动] 已清理中断的同步任务")
+            except Exception as e:
+                logger.warning(f"[启动] 清理中断同步任务失败: {e}")
     except Exception as e:
         logger.warning(f"[权限注册] 同步权限定义失败: {e}")
     # 启动时：开启 ERP 定时同步

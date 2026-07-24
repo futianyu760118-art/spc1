@@ -51,6 +51,7 @@ class SaleOrderOut(BaseModel):
     risk_score: Optional[float] = None
     risk_factors: Optional[dict] = None
     risk_assessed_at: Optional[datetime] = None
+    field_synced_at: Optional[dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -337,11 +338,35 @@ class ProductMaterialItemOut(BaseModel):
     is_closed: int = 0
 
 
+class BomDetailItemOut(BaseModel):
+    material_id: Optional[str] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    spec_model: Optional[str] = None
+    unit: Optional[str] = None
+    material_type: Optional[str] = None
+    line_no: Optional[str] = None
+    standard_qty: Optional[float] = None
+    aux_qty: Optional[float] = None
+    config_type: Optional[str] = None
+    lead_offset_days: Optional[int] = None
+    back_flush: Optional[int] = None
+    scrap_rate: Optional[float] = None
+    oper_sn: Optional[str] = None
+    process_id: Optional[str] = None
+    warehouse_id: Optional[str] = None
+    valid_date: Optional[date] = None
+    invalid_date: Optional[date] = None
+    kit_flag: Optional[int] = None
+    req_qty: Optional[float] = None
+
+
 class OrderProductMaterialsOut(BaseModel):
     line_no: Optional[str] = None
     product_code: Optional[str] = None
     product_name: Optional[str] = None
     product_model: Optional[str] = None
+    bom_no: Optional[str] = None
     order_qty: Optional[float] = None
     promised_date: Optional[date] = None
     total_materials: int = 0
@@ -350,4 +375,4 @@ class OrderProductMaterialsOut(BaseModel):
     overdue_count: int = 0
     arrived_count: int = 0
     kit_rate: float = 0
-    materials: List[ProductMaterialItemOut] = []
+    materials: List[BomDetailItemOut] = []

@@ -113,7 +113,7 @@ export default function DomesticShipment() {
         const displayValue = afterDash.replace(/^0+/, '').padStart(3, '0')
         return (
           <Tooltip title={v}>
-            <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
+            <a onClick={() => navigate(`/orders/${v}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
           </Tooltip>
         )
       },
@@ -169,7 +169,7 @@ export default function DomesticShipment() {
       title: '', key: 'action', width: 60, fixed: 'right' as const,
       render: (_: any, r: OrderRow) => (
         <Button type="link" size="small" icon={<EditOutlined />}
-          onClick={() => navigate(`/orders/${r.order_no}/lines/${r.line_no || '10'}`)}
+          onClick={() => navigate(`/orders/${r.order_no}`)}
         />
       ),
     },

@@ -146,3 +146,34 @@ class ClosureAchievement(BaseModel):
     by_type: List[RiskDimensionItem] = []
     by_owner: List[RiskDimensionItem] = []
     trend: List[dict] = []
+
+
+# ===== 采购看板（大屏 - 7日备料白板） =====
+
+class BoardItem(BaseModel):
+    """白板单行记录：日期 | 单号 | 型号 | 库存 | MRP数量 | 到料 | 采购 | 责任人"""
+    id: int
+    board_date: Optional[date] = None
+    doc_no: Optional[str] = None
+    material_code: str
+    material_name: Optional[str] = None
+    spec_model: Optional[str] = None
+    qty: Optional[float] = None
+    received_qty: Optional[float] = None
+    stock_qty: Optional[float] = None
+    mrp_qty: Optional[float] = None
+    is_ready: bool = False
+    shortage_qty: Optional[float] = None
+    is_shortage: bool = False
+    is_overdue: bool = False
+    overdue_days: int = 0
+    owner: Optional[str] = None
+    responsible: Optional[str] = None
+    workstation: Optional[str] = None
+    remark: Optional[str] = None
+
+
+class ProcurementBoardData(BaseModel):
+    """7日备料看板数据"""
+    items: List[BoardItem] = []
+    last_updated: datetime

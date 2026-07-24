@@ -6,7 +6,7 @@ from typing import AsyncIterator, List, Optional, Type
 
 from pydantic import BaseModel
 
-from app.services.ai.base import LLMProvider, ChatMessage, ChatOptions, ChatWithToolsResult, ToolCall
+from app.services.ai.base import LLMProvider, ChatMessage, ChatOptions, ChatWithToolsResult, ToolCall, TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -163,4 +163,10 @@ class OpenAIProvider(LLMProvider):
                     name=tc.function.name,
                     arguments=args,
                 ))
+        if response.usage:
+            result.usage = TokenUsage(
+                prompt_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
+                total_tokens=getattr(response.usage, "total_tokens", 0) or 0,
+            )
         return result

@@ -96,31 +96,6 @@ async def get_data_type_options(db: AsyncSession) -> list[dict]:
 # 认证相关
 # ═══════════════════════════════════════════
 
-async def validate_api_key(db: AsyncSession, api_key: str, data_type: str) -> Optional[DataSupplyApiKey]:
-    """验证 API Key（兼容旧模式：X-API-Key 明文传输）"""
-    result = await db.execute(
-        select(DataSupplyApiKey).where(
-            DataSupplyApiKey.api_key == api_key,
-            DataSupplyApiKey.is_active == True,
-        )
-    )
-    key_obj = result.scalar_one_or_none()
-    if not key_obj:
-        return None
-
-    # 检查过期
-    if key_obj.expires_at and key_obj.expires_at < datetime.now():
-        return None
-
-    # 检查数据类型权限
-    if key_obj.allowed_data_types_json:
-        allowed = json.loads(key_obj.allowed_data_types_json)
-        if data_type not in allowed:
-            return None
-
-    return key_obj
-
-
 async def validate_signature(
     db: AsyncSession,
     app_key: str,
@@ -181,6 +156,75 @@ def check_ip_whitelist(key_obj: DataSupplyApiKey, client_ip: str) -> bool:
     if not whitelist:
         return True
     return client_ip in whitelist
+
+
+def _key_has_endpoint_access(key_obj: DataSupplyApiKey, endpoint_code: str) -> bool:
+    """检查 API Key 是否被授权调用指定的对外接口 endpoint_code"""
+    if not key_obj.allowed_endpoints_json:
+        return False
+    try:
+        allowed = json.loads(key_obj.allowed_endpoints_json)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return endpoint_code in allowed
+
+
+async def validate_signature_for_endpoint(
+    db: AsyncSession,
+    app_key: str,
+    signature: str,
+    timestamp: str,
+    endpoint_code: str,
+    request_query_string: str = "",
+) -> tuple[Optional[DataSupplyApiKey], str]:
+    """验证 HMAC-SHA256 签名是否可调用指定对外接口（推荐模式）
+
+    返回 (key_obj, reason)。成功时 key_obj 非空、reason 为空；
+    失败时 key_obj 为 None、reason 说明原因。
+    """
+    try:
+        ts = int(timestamp)
+    except (ValueError, TypeError):
+        return None, "时间戳格式无效（应为整数秒）"
+
+    now = int(time.time())
+    if abs(now - ts) > SIGNATURE_TTL:
+        return None, f"时间戳超出有效期（服务器时间戳 {now}，允许偏差 ±{SIGNATURE_TTL}s）"
+
+    result = await db.execute(
+        select(DataSupplyApiKey).where(
+            DataSupplyApiKey.app_key == app_key,
+        )
+    )
+    key_obj = result.scalar_one_or_none()
+    if not key_obj:
+        return None, "AppKey 不存在"
+    if not key_obj.is_active:
+        return None, "API Key 已禁用"
+    if not key_obj.app_secret:
+        return None, "该 API Key 未配置 AppSecret"
+    if key_obj.expires_at and key_obj.expires_at < datetime.now():
+        return None, "API Key 已过期"
+
+    if not _key_has_endpoint_access(key_obj, endpoint_code):
+        return None, f"API Key 未授权调用接口 {endpoint_code}（请在管理后台勾选该接口权限）"
+
+    # 签名串：timestamp + app_key + endpoint_code + query_string
+    string_to_sign = f"{timestamp}{app_key}{endpoint_code}{request_query_string}"
+    expected_sig = hmac.new(
+        key_obj.app_secret.encode("utf-8"),
+        string_to_sign.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(signature, expected_sig):
+        return None, (
+            f"签名不匹配。待签名串 = timestamp+app_key+endpoint_code+query_string "
+            f"= '{timestamp}{app_key}{endpoint_code}{request_query_string}'，"
+            f"endpoint_code 应为 '{endpoint_code}'（注意用接口代码而非 URL 路径）"
+        )
+
+    return key_obj, ""
 
 
 # ═══════════════════════════════════════════
@@ -356,6 +400,7 @@ async def log_call(
     ip_address: Optional[str],
     user_agent: Optional[str],
     duration_ms: float,
+    error_message: Optional[str] = None,
 ):
     """记录调用日志"""
     log = DataSupplyCallLog(
@@ -368,9 +413,17 @@ async def log_call(
         ip_address=ip_address,
         user_agent=user_agent,
         duration_ms=duration_ms,
+        error_message=error_message,
     )
     db.add(log)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # 日志写入失败不应掩盖业务异常；回滚后吞掉，避免污染外层事务
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 async def get_call_statistics(

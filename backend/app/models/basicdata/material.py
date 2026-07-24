@@ -1,6 +1,6 @@
 """基础数据与集成中心 — 物料模型"""
 
-from sqlalchemy import Column, BigInteger, String, Integer
+from sqlalchemy import Column, BigInteger, String, Integer, DateTime
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -24,3 +24,5 @@ class Material(Base):
     erp_sync_flag = Column(Integer, nullable=False, default=0, comment="ERP同步标识")
     is_deleted = Column(Integer, nullable=False, default=0, comment="是否删除 0否1是")
     data_source = Column(String(32))
+    create_time = Column(DateTime, server_default=func.now(), nullable=True)
+    update_time = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=True)

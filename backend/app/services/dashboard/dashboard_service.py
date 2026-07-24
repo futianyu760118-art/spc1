@@ -1,12 +1,13 @@
 """供应链驾驶舱 — 仪表盘服务"""
 
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from sqlalchemy import select, func, and_, or_, case, DateTime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order.sale_order import SaleOrder
 from app.models.material.material_demand import MaterialDemand
 from app.models.material.purchase_order import PurchaseOrder
+from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.exception.risk_issue import RiskIssue
 from app.schemas.dashboard.schemas import (
     DashboardData, RiskSummary, OrderRiskRow, RiskDistribution,
@@ -14,8 +15,10 @@ from app.schemas.dashboard.schemas import (
     RollingRiskDay, RollingRiskData,
     RiskDimensionItem, RiskFactorDistributionItem, OrderRiskDistributionData,
     ClosureAchievement,
+    BoardItem, ProcurementBoardData,
 )
 from app.services.exception.risk_engine import FACTOR_MAX, FACTOR_LABELS
+from app.services.common.sync_filter import get_purchase_order_sync_filters
 
 
 class DashboardService:
@@ -674,3 +677,198 @@ class DashboardService:
             RiskDistribution(risk_level=row[0], issue_type=row[1], count=row[2])
             for row in result.all()
         ]
+
+    # ===== 采购看板（大屏 - 7日备料白板） =====
+
+    async def get_procurement_board(self, target_date: date | None = None) -> ProcurementBoardData:
+        # 基准日始终为当天，target_date 仅用于"查看某一天的到料情况"
+        today = date.today()
+        target = target_date or today
+
+        # 查询范围：ETA == 选中日的 PO（该天应到）+ 所有 ETA < 选中日且未齐套的 PO（之前逾期未齐）
+        # 上限为选中日，下限不限（展示全部历史逾期未齐）
+        end_date = target
+
+        # 构建物料→订单→部门(车位)的映射：从MaterialDemand找到对应订单的部门
+        md_q = await self.db.execute(
+            select(
+                MaterialDemand.material_code,
+                SaleOrder.department,
+                func.max(SaleOrder.owner).label("owner"),
+            ).join(
+                SaleOrder, MaterialDemand.order_no == SaleOrder.order_no, isouter=True
+            ).where(
+                MaterialDemand.shortage_flag == True
+            ).group_by(MaterialDemand.material_code, SaleOrder.department)
+        )
+        md_map: dict[str, dict] = {}
+        for row in md_q.all():
+            mat_code = row[0]
+            md_map[mat_code] = {
+                "department": row[1],
+                "order_owner": row[2],
+            }
+
+        # 查PO数据：逾期30天 ~ 未来7天应到且未关闭，逾期排最前
+        # 同步过滤：ERP中已删除的记录在上次同步中未被更新，应排除（CSV数据不受影响）
+        sync_filters = await get_purchase_order_sync_filters(self.db)
+        po_conditions = [
+            PurchaseOrder.eta != None,
+            PurchaseOrder.is_closed == 0,
+            or_(
+                # 1) 选中日当天应到的 PO
+                PurchaseOrder.eta == target,
+                # 2) 真正逾期（ETA 早于今天）且未齐套的 PO
+                (
+                    (PurchaseOrder.eta < today)
+                    & (PurchaseOrder.po_qty.isnot(None))
+                    & (PurchaseOrder.po_qty > 0)
+                    & (PurchaseOrder.received_qty.isnot(None))
+                    & (PurchaseOrder.received_qty < PurchaseOrder.po_qty)
+                ),
+            ),
+        ]
+        if sync_filters:
+            # 只显示更新时间在上次同步-30分钟之后的记录
+            po_conditions.append(and_(*sync_filters))
+
+        # 排除已关闭的销售订单关联的PO，且未关联销售订单的PO也不显示
+        closed_order_q = await self.db.execute(
+            select(SaleOrder.order_no).where(
+                SaleOrder.order_no != None,
+                SaleOrder.is_closed == 1,
+            )
+        )
+        closed_order_nos = set(closed_order_q.scalars().all())
+        po_conditions.append(PurchaseOrder.order_no != None)
+        po_conditions.append(PurchaseOrder.order_no != "")
+        if closed_order_nos:
+            po_conditions.append(PurchaseOrder.order_no.notin_(closed_order_nos))
+
+        po_q = await self.db.execute(
+            select(PurchaseOrder).where(*po_conditions).order_by(
+                case((PurchaseOrder.eta < today, 0), else_=1),
+                PurchaseOrder.eta.asc(),
+                PurchaseOrder.po_no.asc(),
+            )
+        )
+        all_pos = po_q.scalars().all()
+
+        # 收集本次涉及的物料编码和订单号
+        material_codes = {p.material_code for p in all_pos if p.material_code}
+        order_nos = {p.order_no for p in all_pos if p.order_no}
+
+        # 1) 库存数量：按物料维度查询（stock_qty 是物料级库存，不是订单维度，不能按订单SUM累加）
+        stock_map: dict[str, float] = {}
+        if material_codes:
+            stock_q = await self.db.execute(
+                select(
+                    MrpPlanOrder.material_code,
+                    func.max(MrpPlanOrder.stock_qty),
+                ).where(
+                    MrpPlanOrder.material_code.in_(material_codes),
+                    MrpPlanOrder.stock_qty != None,
+                ).group_by(
+                    MrpPlanOrder.material_code,
+                )
+            )
+            for row in stock_q.all():
+                if row[1] is not None:
+                    stock_map[row[0]] = float(row[1])
+
+        # 2) MRP计划数量：按 销售订单+物料 维度匹配（base_plan_qty 是订单维度的需求量）
+        mrp_qty_map: dict[tuple[str, str], float] = {}
+        if order_nos:
+            mrp_q = await self.db.execute(
+                select(
+                    MrpPlanOrder.sale_order_no,
+                    MrpPlanOrder.material_code,
+                    func.sum(MrpPlanOrder.base_plan_qty),
+                ).where(
+                    MrpPlanOrder.sale_order_no.in_(order_nos),
+                ).group_by(
+                    MrpPlanOrder.sale_order_no,
+                    MrpPlanOrder.material_code,
+                )
+            )
+            for row in mrp_q.all():
+                if row[2] is not None:
+                    mrp_qty_map[(row[0], row[1])] = float(row[2])
+
+        # 3) 缺料数量：按物料维度批量查询，避免N+1
+        shortage_map: dict[str, float] = {}
+        if material_codes:
+            short_q = await self.db.execute(
+                select(
+                    MaterialDemand.material_code,
+                    func.sum(MaterialDemand.shortage_qty),
+                ).where(
+                    MaterialDemand.material_code.in_(material_codes),
+                    MaterialDemand.shortage_flag == True,
+                ).group_by(
+                    MaterialDemand.material_code,
+                )
+            )
+            for row in short_q.all():
+                if row[1] is not None and float(row[1]) > 0:
+                    shortage_map[row[0]] = float(row[1])
+
+        items: list[BoardItem] = []
+        for po in all_pos:
+            received_qty = float(po.received_qty) if po.received_qty is not None else 0
+            po_qty = float(po.po_qty) if po.po_qty is not None else 0
+
+            # is_closed/已齐套判断：覆盖所有"已完成"状态
+            is_ready = (
+                po.is_closed == 1
+                or po.po_status in ("received", "completed", "fully_received")
+                or (po_qty > 0 and received_qty >= po_qty)
+            )
+
+            is_overdue = False
+            overdue_days = 0
+            if po.eta and po.eta < today and not is_ready:
+                is_overdue = True
+                overdue_days = (today - po.eta).days
+
+            # 欠料：通过MaterialDemand判断
+            md_info = md_map.get(po.material_code, {})
+            is_shortage = po.material_code in md_map and not is_ready
+            shortage_qty_val = shortage_map.get(po.material_code) if is_shortage else None
+
+            # 车位/产线：从订单部门映射，没有则留空
+            workstation = md_info.get("department") or ""
+
+            # 单号优先显示order_no（销售订单），没有则显示po_no
+            doc_no = po.order_no or po.po_no
+
+            # 库存从物料维度map取；MRP数量从(订单,物料)维度map取
+            stock_qty_val = stock_map.get(po.material_code)
+            mrp_qty_val = mrp_qty_map.get((po.order_no, po.material_code)) if po.order_no else None
+
+            items.append(BoardItem(
+                id=po.id,
+                board_date=po.eta,
+                doc_no=doc_no,
+                material_code=po.material_code,
+                material_name=po.material_name,
+                spec_model=po.spec_model,
+                qty=po_qty if po_qty > 0 else None,
+                received_qty=received_qty if received_qty >= 0 else 0,
+                stock_qty=stock_qty_val,
+                mrp_qty=mrp_qty_val,
+                is_ready=is_ready,
+                shortage_qty=shortage_qty_val,
+                is_shortage=is_shortage,
+                is_overdue=is_overdue,
+                overdue_days=overdue_days,
+                owner=po.owner,
+                responsible=md_info.get("order_owner"),
+                workstation=workstation,
+                remark=po.arrival_hour_note or po.supplier_name,
+            ))
+
+        return ProcurementBoardData(
+            items=items,
+            last_updated=datetime.now(),
+        )

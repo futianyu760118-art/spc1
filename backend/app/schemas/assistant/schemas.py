@@ -20,6 +20,7 @@ class AssistantCard(BaseModel):
 class AssistantReply(BaseModel):
     intent: str = "unknown"
     text: str = ""
+    thinking: Optional[str] = None
     cards: List[AssistantCard] = []
     suggestions: List[str] = []
     session_id: Optional[str] = None

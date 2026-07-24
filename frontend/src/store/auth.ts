@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { useThemeStore } from './theme'
 import { usePermissionStore } from './permission'
+import { useUiPreferencesStore } from './uiPreferences'
 
 interface UserInfo {
   id: number
@@ -12,8 +13,10 @@ interface UserInfo {
   supplier_name?: string | null
   supplier_code?: string | null
   font_size_scale?: string | null
+  ui_preferences?: Record<string, any> | null
   is_default_password: boolean
   login_version: number
+  position_name?: string | null
 }
 
 interface ShareUserInfo {
@@ -156,6 +159,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
       if (user) {
         localStorage.setItem('user', JSON.stringify(user))
         useThemeStore.getState().loadFontSizeFromUser(user)
+        useUiPreferencesStore.getState().loadFromUser(user)
       }
       // 如果当前不在分享模式，更新当前认证
       const state = get()
