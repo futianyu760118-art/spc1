@@ -79,6 +79,9 @@ class StockCheckItemOut(BaseModel):
     checked_at: Optional[datetime] = None
     checked_by: Optional[str] = None
     remark: Optional[str] = None
+    material_property_label: Optional[str] = None
+    material_type: Optional[str] = None
+    warehouses: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

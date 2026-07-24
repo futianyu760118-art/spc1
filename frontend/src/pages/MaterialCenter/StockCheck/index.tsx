@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
-  InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge,
+  InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select,
 } from 'antd'
 import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, UnorderedListOutlined, PlusOutlined, RightOutlined, DownOutlined } from '@ant-design/icons'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
@@ -14,6 +14,7 @@ import { stockCheckIntroSteps, stockCheckDetailSteps, stockCheckManualDetailStep
 import MaterialPickerModal from './MaterialPickerModal'
 import OrderProductPickerModal, { OrderProductSelection, OrderProductLine } from './OrderProductPickerModal'
 import CoCheckerPickerModal from './CoCheckerPickerModal'
+import SearchableColumnFilter from './SearchableColumnFilter'
 
 interface StockCheckItem {
   id: number
@@ -25,6 +26,9 @@ interface StockCheckItem {
   material_name?: string | null
   spec_model?: string | null
   unit?: string | null
+  material_property_label?: string | null
+  material_type?: string | null
+  warehouses?: string | null
   req_qty?: number | null
   system_qty?: number | null
   actual_qty?: number | null
@@ -142,6 +146,8 @@ export default function StockCheckPage() {
   const [orderChecks, setOrderChecks] = useState<StockCheck[]>([])
   const [overviewLoading, setOverviewLoading] = useState(false)
   const [progressCollapsed, setProgressCollapsed] = useState(true)
+  const [productFilter, setProductFilter] = useState<string>('all')
+  const [colWidths, setColWidths] = useState<Record<string, number>>({})
 
   const [orderUsageCache, setOrderUsageCache] = useState<Record<number, { total: number; items: MaterialOrderUsage[]; loading: boolean }>>({})
   const [orderUsagePage, setOrderUsagePage] = useState<Record<number, { page: number; page_size: number; keyword: string }>>({})
@@ -274,14 +280,16 @@ export default function StockCheckPage() {
     }
   }, [searchText, setParams])
 
+  // 概览(BOM 树 + 该订单盘点单)的触发：搜索态用 orderNo，查看盘点单态用 activeCheck.order_no
+  const overviewOrderNo = activeCheck?.order_no || orderNo || ''
   useEffect(() => {
-    if (!orderNo) {
+    if (!overviewOrderNo) {
       setOrderProducts([])
       setOrderChecks([])
       return
     }
-    loadOrderOverview(orderNo)
-  }, [orderNo, loadOrderOverview])
+    loadOrderOverview(overviewOrderNo)
+  }, [overviewOrderNo, loadOrderOverview])
 
   useEffect(() => {
     if (checkIdParam) {
@@ -514,6 +522,25 @@ export default function StockCheckPage() {
     setCoPickerOpen(true)
   }, [activeCheck])
 
+  const handleRefreshBom = useCallback(async () => {
+    if (!activeCheck) return
+    Modal.confirm({
+      title: '补入缺失的子BOM物料',
+      content: '将按当前订单的最新BOM重新展开，把之前未纳入的子BOM物料补入此盘点单（已有明细及已录入数据保留）。是否继续？',
+      okText: '刷新',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await materialApi.refreshStockCheckBom(activeCheck.id)
+          await loadCheck(activeCheck.id)
+          message.success('已补入子BOM物料')
+        } catch (e: any) {
+          message.error(e?.response?.data?.detail || e.message || '刷新失败')
+        }
+      },
+    })
+  }, [activeCheck, loadCheck])
+
   const handleSaveCoCheckers = useCallback(async (ids: number[]) => {
     if (!activeCheck) return
     setCoSaving(true)
@@ -535,6 +562,42 @@ export default function StockCheckPage() {
 
   const readonly = activeCheck?.status === 'completed' || activeCheck?.status === 'cancelled' || activeCheck?.can_edit === false
 
+  // 表格表头支持拖动改变列宽
+  const DraggableResizableHeader = (props: any) => {
+    const { onResize, width, ...restProps } = props
+    if (!width) return <th {...restProps} />
+    return (
+      <th {...restProps} style={{ ...restProps.style, position: 'relative' }}>
+        {restProps.children}
+        <span
+          onMouseDown={(e: React.MouseEvent) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const startX = e.clientX
+            const startW = width
+            const onMove = (ev: MouseEvent) => {
+              const newW = Math.max(40, startW + (ev.clientX - startX))
+              onResize?.(null, { size: { width: newW } } as any)
+            }
+            const onUp = () => {
+              window.removeEventListener('mousemove', onMove)
+              window.removeEventListener('mouseup', onUp)
+            }
+            window.addEventListener('mousemove', onMove)
+            window.addEventListener('mouseup', onUp)
+          }}
+          style={{
+            position: 'absolute', right: 0, top: 0, bottom: 0, width: 6,
+            cursor: 'col-resize', userSelect: 'none',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        />
+      </th>
+    )
+  }
+
+  const tableComponents = { header: { cell: DraggableResizableHeader } }
+
   const columns = useMemo(() => {
     const makeStringFilters = (key: keyof StockCheckItem) => {
       const set = new Set<string>()
@@ -552,11 +615,19 @@ export default function StockCheckPage() {
       sorter: (a: any, b: any) => String(a[key] || '').localeCompare(String(b[key] || '')),
       filters: makeStringFilters(key),
       onFilter: (value: any, record: any) => record[key] === value,
-      filterSearch: true,
+      filterDropdown: (props: any) => <SearchableColumnFilter {...props} filters={makeStringFilters(key)} columnKey={String(key)} />,
       ...extra,
     })
     const numCol = (key: keyof StockCheckItem) => ({
       sorter: (a: any, b: any) => (Number(a[key]) || 0) - (Number(b[key]) || 0),
+    })
+
+    const resizeCol = (key: string, staticWidth?: number) => ({
+      onHeaderCell: () => ({
+        width: colWidths[key] ?? staticWidth,
+        onResize: (_: any, { size }: { size: { width: number } }) =>
+          setColWidths((prev) => ({ ...prev, [key]: size.width })),
+      }),
     })
 
     return [
@@ -564,16 +635,21 @@ export default function StockCheckPage() {
         title: '层级', dataIndex: 'level', width: 70, fixed: 'left' as const, align: 'center' as const,
         sorter: (a: any, b: any) => (Number(a.level) || 0) - (Number(b.level) || 0),
         render: (v: any) => v != null ? `L${v}` : '—',
+        ...resizeCol('level', 70),
       },
-      { title: '物料编码', dataIndex: 'material_code', width: 140, fixed: 'left' as const, ...stringCol('material_code', 140) },
-      { title: '物料名称', dataIndex: 'material_name', width: 200, ellipsis: true, ...stringCol('material_name', 200) },
-      { title: '规格', dataIndex: 'spec_model', width: 140, ellipsis: true, ...stringCol('spec_model', 140) },
-      { title: '单位', dataIndex: 'unit', width: 60, ...stringCol('unit', 60) },
+      { title: '物料编码', dataIndex: 'material_code', width: 140, fixed: 'left' as const, ...stringCol('material_code', 140), ...resizeCol('material_code', 140) },
+      { title: '物料名称', dataIndex: 'material_name', width: 200, ellipsis: true, ...stringCol('material_name', 200), ...resizeCol('material_name', 200) },
+      { title: '规格', dataIndex: 'spec_model', width: 140, ellipsis: true, ...stringCol('spec_model', 140), ...resizeCol('spec_model', 140) },
+      { title: '分类', dataIndex: 'material_type', width: 110, ellipsis: true, ...stringCol('material_type', 110), ...resizeCol('material_type', 110) },
+      { title: '属性', dataIndex: 'material_property_label', width: 90, ...stringCol('material_property_label', 90), ...resizeCol('material_property_label', 90) },
+      { title: '单位', dataIndex: 'unit', width: 60, ...stringCol('unit', 60), ...resizeCol('unit', 60) },
       {
         title: '即时库存', dataIndex: 'system_qty', width: 90, align: 'right' as const,
         ...numCol('system_qty'),
         render: (v: any) => v != null ? Number(v).toFixed(2) : '-',
+        ...resizeCol('system_qty', 90),
       },
+      { title: '仓库', dataIndex: 'warehouses', width: 160, ellipsis: true, ...stringCol('warehouses', 160), ...resizeCol('warehouses', 160) },
       {
         title: '盘点数', dataIndex: 'actual_qty', width: 120, align: 'right' as const,
         ...numCol('actual_qty'),
@@ -592,6 +668,7 @@ export default function StockCheckPage() {
             }}
           />
         ),
+        ...resizeCol('actual_qty', 120),
       },
       {
         title: <span data-tour="stock-check-diff">差异</span>, dataIndex: 'diff_qty', width: 90, align: 'right' as const,
@@ -602,6 +679,7 @@ export default function StockCheckPage() {
           const color = n > 0 ? '#16a34a' : n < 0 ? '#dc2626' : '#64748b'
           return <span style={{ color, fontWeight: 500 }}>{n.toFixed(2)}</span>
         },
+        ...resizeCol('diff_qty', 90),
       },
       {
         title: '已盘', dataIndex: 'is_checked', width: 70, align: 'center' as const,
@@ -618,6 +696,7 @@ export default function StockCheckPage() {
             onChange={(e) => updateItem(r.id, { is_checked: e.target.checked ? 1 : 0 })}
           />
         ),
+        ...resizeCol('is_checked', 70),
       },
       {
         title: '标记时间', dataIndex: 'checked_at', width: 160,
@@ -627,11 +706,13 @@ export default function StockCheckPage() {
           return ta - tb
         },
         render: (v: any) => v ? formatDateTime(v) : '-',
+        ...resizeCol('checked_at', 160),
       },
-      { title: '标记人', dataIndex: 'checked_by', width: 100, ...stringCol('checked_by', 100) },
-      { title: '备注', dataIndex: 'remark', width: 160, ellipsis: true, ...stringCol('remark', 160) },
+      { title: '标记人', dataIndex: 'checked_by', width: 100, ...stringCol('checked_by', 100), ...resizeCol('checked_by', 100) },
+      { title: '备注', dataIndex: 'remark', width: 160, ellipsis: true, ...stringCol('remark', 160), ...resizeCol('remark', 160) },
       {
         title: '操作', key: 'op', width: 200, fixed: 'right' as const,
+        ...resizeCol('op', 200),
         render: (_: any, r: StockCheckItem) => {
           const usageTotal = r.material_id ? orderUsageCache[r.material_id]?.total : undefined
           return (
@@ -660,7 +741,47 @@ export default function StockCheckPage() {
         },
       },
     ]
-  }, [items, readonly, saveItem, updateItem, openMaterialHistory, orderUsageCache, openUsageModal])
+  }, [items, readonly, saveItem, updateItem, openMaterialHistory, orderUsageCache, openUsageModal, colWidths])
+
+  // ===== 按产品筛选盘点明细 =====
+  // 切到不同盘点单时重置过滤器
+  useEffect(() => { setProductFilter('all') }, [activeCheck?.id])
+
+  // 从 BOM 树(orderProducts)构建 material_id -> 所属产品 key 集合
+  const productMaterialMap = useMemo(() => {
+    const map = new Map<number, Set<string>>()
+    for (const p of orderProducts) {
+      const pkey = productKey(p)
+      const walk = (nodes: any[]) => {
+        for (const n of nodes || []) {
+          if (n.material_id != null) {
+            const mid = Number(n.material_id)
+            if (!map.has(mid)) map.set(mid, new Set())
+            map.get(mid)!.add(pkey)
+          }
+          if (n.children) walk(n.children)
+        }
+      }
+      walk(p.materials || [])
+    }
+    return map
+  }, [orderProducts])
+
+  const productOptions = useMemo(() => {
+    if (activeCheck?.check_type !== 'order' || orderProducts.length === 0) return []
+    return orderProducts.map((p) => ({
+      value: productKey(p),
+      label: p.product_code || '—',
+    }))
+  }, [activeCheck, orderProducts])
+
+  const filteredItems = useMemo(() => {
+    if (activeCheck?.check_type !== 'order') return items
+    if (!productFilter || productFilter === 'all') return items
+    return items.filter(
+      (it) => it.material_id != null && productMaterialMap.get(it.material_id)?.has(productFilter),
+    )
+  }, [items, productFilter, productMaterialMap, activeCheck])
 
   const renderSearch = () => (
     <div className="card-modern" style={{ padding: 16, marginBottom: 16 }}>
@@ -886,6 +1007,9 @@ export default function StockCheckPage() {
               {readonly ? null : (
                 <Button type="link" size="small" onClick={openCoPicker}>管理</Button>
               )}
+              {!readonly && activeCheck.check_type === 'order' && (activeCheck.status === 'in_progress' || activeCheck.status === 'open') && (
+                <Button type="link" size="small" onClick={handleRefreshBom}>补入子BOM物料</Button>
+              )}
             </div>
             <Row gutter={12}>
               <Col span={4}><Card size="small" className="card-modern">
@@ -924,14 +1048,29 @@ export default function StockCheckPage() {
             </Row>
           </div>
           <div className="card-modern" style={{ padding: 4 }} data-tour="stock-check-table">
+            {activeCheck.check_type === 'order' && productOptions.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', gap: 8, borderBottom: '1px solid #f0f0f0' }}>
+                <span style={{ color: '#64748b', fontSize: 12 }}>按产品筛选:</span>
+                <Select
+                  value={productFilter}
+                  onChange={setProductFilter}
+                  style={{ minWidth: 220 }}
+                  options={[{ value: 'all', label: '全部产品' }, ...productOptions]}
+                />
+                <span style={{ color: '#94a3b8', fontSize: 12 }}>
+                  显示 {filteredItems.length} / {items.length} 行
+                </span>
+              </div>
+            )}
             <Spin spinning={loading}>
               <Table
                 rowKey="id"
-                dataSource={items}
+                dataSource={filteredItems}
                 columns={columns}
-                pagination={{ pageSize: 50, showSizeChanger: true, showTotal: t => `共 ${t} 项` }}
+                pagination={false}
                 scroll={{ x: 1600, y: 600 }}
                 size="small"
+                components={tableComponents}
               />
             </Spin>
           </div>

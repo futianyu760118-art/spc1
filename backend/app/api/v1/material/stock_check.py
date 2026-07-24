@@ -33,12 +33,14 @@ from app.services.material.stock_check_service import (
     complete_stock_check,
     cancel_stock_check,
     set_co_checkers,
+    refresh_order_bom,
     get_stock_check_with_items,
     list_recent_stock_checks,
     list_stock_checks_by_order,
     get_material_history,
     list_orders_using_material,
     list_co_checker_candidates,
+    enrich_items_assoc,
     _user_can_edit,
     _resolve_user_names,
     StockCheckPermissionError,
@@ -230,6 +232,14 @@ async def list_by_order(
     return ResponseModel(data=[StockCheckListOut.model_validate(r) for r in rows])
 
 
+@router.get("/stock-check/co-checker-candidates", response_model=ResponseModel[list])
+async def co_checker_candidates(
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    return ResponseModel(data=await list_co_checker_candidates(db))
+
+
 @router.get("/stock-check/{check_id}", response_model=ResponseModel[StockCheckOut])
 async def get_detail(
     check_id: int,
@@ -255,6 +265,7 @@ async def list_items(
         select(func.count(StockCheckItem.id)).where(StockCheckItem.check_id == check_id)
     )).scalar_one()
     rows = (await db.execute(base.offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    await enrich_items_assoc(db, list(rows))
     return ResponseModel(data=PageResult(
         total=int(total or 0),
         page=page,
@@ -284,6 +295,7 @@ async def update_item(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id))).scalar_one()
+    await enrich_items_assoc(db, [item])
     return ResponseModel(data=StockCheckItemOut.model_validate(item))
 
 
@@ -351,9 +363,20 @@ async def update_co_checkers(
     return ResponseModel(data=await _to_check_out(db, head, current_user))
 
 
-@router.get("/stock-check/co-checker-candidates", response_model=ResponseModel[list])
-async def co_checker_candidates(
-    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+@router.post("/stock-check/{check_id}/refresh-bom", response_model=ResponseModel[StockCheckOut])
+async def refresh_bom(
+    check_id: int,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    return ResponseModel(data=await list_co_checker_candidates(db))
+    """补入订单盘点单缺失的子BOM物料（仅订单类、仅 open/in_progress）。
+    已有明细及已录入数据保留；权限不足或状态不允许时返回 403/400。"""
+    try:
+        await refresh_order_bom(db, check_id, current_user)
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    head = await get_stock_check_with_items(db, check_id)
+    return ResponseModel(data=await _to_check_out(db, head, current_user))
+

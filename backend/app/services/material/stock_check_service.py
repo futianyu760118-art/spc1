@@ -15,12 +15,28 @@ from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.material import Material
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
-from app.services.order.order_materials_service import get_order_product_materials
+from app.services.order.order_materials_service import get_order_product_materials, MATERIAL_PROPERTY_LABELS
 
 
 class StockCheckPermissionError(Exception):
     """盘点单修改权限不足"""
     pass
+
+
+def _current_user_id(user: Optional[dict]) -> Optional[int]:
+    """从 current_user 取 user_id：PermissionChecker 返回的 JWT payload 用 'sub'，
+    get_current_user 用 'user_id'。统一兼容。"""
+    if not user:
+        return None
+    v = user.get("user_id")
+    if v is None:
+        v = user.get("sub")
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _user_can_edit(head: Optional[StockCheck], user: Optional[dict]) -> bool:
@@ -37,10 +53,9 @@ def _user_can_edit(head: Optional[StockCheck], user: Optional[dict]) -> bool:
     has_owner = head.created_by_user_id is not None or bool(head.co_checker_user_ids)
     if not has_owner:
         return True
-    uid = user.get("user_id")
+    uid = _current_user_id(user)
     if uid is None:
         return False
-    uid = int(uid)
     if head.created_by_user_id is not None and int(head.created_by_user_id) == uid:
         return True
     co = head.co_checker_user_ids or []
@@ -121,6 +136,44 @@ async def _get_stock_by_material_id(
         .group_by(Inventory.material_id)
     )
     return {row.material_id: Decimal(str(row.total_qty or 0)) for row in result}
+
+
+async def enrich_items_assoc(db: AsyncSession, items: List[StockCheckItem]) -> None:
+    mids = [int(it.material_id) for it in items if it.material_id is not None]
+    if not mids:
+        for it in items:
+            it.material_property_label = None
+            it.material_type = None
+            it.warehouses = None
+        return
+    mat_res = await db.execute(
+        select(
+            Material.erp_material_id,
+            Material.material_property,
+            Material.material_type,
+        ).where(Material.erp_material_id.in_(mids))
+    )
+    prop_map: Dict[int, Optional[int]] = {}
+    type_map: Dict[int, Optional[str]] = {}
+    for r in mat_res.all():
+        prop_map[int(r.erp_material_id)] = r.material_property
+        type_map[int(r.erp_material_id)] = r.material_type
+    wh_res = await db.execute(
+        select(Inventory.material_id, Inventory.wh_name)
+        .where(Inventory.material_id.in_(mids))
+        .distinct()
+    )
+    wh_map: Dict[int, List[str]] = defaultdict(list)
+    for r in wh_res.all():
+        name = r.wh_name and str(r.wh_name).strip()
+        if name:
+            wh_map[int(r.material_id)].append(name)
+    for it in items:
+        mid = int(it.material_id) if it.material_id is not None else None
+        mp = prop_map.get(mid) if mid is not None else None
+        it.material_property_label = MATERIAL_PROPERTY_LABELS.get(mp, str(mp)) if mp is not None else None
+        it.material_type = type_map.get(mid) if mid is not None else None
+        it.warehouses = ", ".join(sorted(set(wh_map.get(mid, [])))) or None
 
 
 async def _refresh_check_aggregates(db: AsyncSession, check_id: int) -> None:
@@ -236,7 +289,7 @@ async def create_stock_check_from_order(
         status="in_progress",
         check_date=check_date or date.today(),
         created_by=current_user.get("username", ""),
-        created_by_user_id=current_user.get("user_id"),
+        created_by_user_id=_current_user_id(current_user),
         remark=remark,
         covered_products=covered_products,
         co_checker_user_ids=co_checker_user_ids,
@@ -321,7 +374,7 @@ async def create_stock_check_from_materials(
         status="in_progress",
         check_date=check_date or date.today(),
         created_by=current_user.get("username", ""),
-        created_by_user_id=current_user.get("user_id"),
+        created_by_user_id=_current_user_id(current_user),
         remark=remark,
         co_checker_user_ids=co_checker_user_ids,
     )
@@ -504,10 +557,11 @@ async def set_co_checkers(
     head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
     if not head:
         raise ValueError(f"盘点单 {check_id} 不存在")
+    uid = _current_user_id(current_user)
     is_creator = (
         head.created_by_user_id is not None
-        and current_user.get("user_id") is not None
-        and int(head.created_by_user_id) == int(current_user["user_id"])
+        and uid is not None
+        and int(head.created_by_user_id) == uid
     )
     if not (current_user.get("role") == "admin" or is_creator):
         raise StockCheckPermissionError("仅创建人或管理员可修改共同盘点人名单")
@@ -526,6 +580,78 @@ async def set_co_checkers(
     return head
 
 
+async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict) -> StockCheck:
+    """对 in-progress 的订单盘点单重新展开 BOM，补入之前未纳入的子 BOM 物料。
+
+    - 仅订单盘点单、仅 open/in_progress 状态可用。
+    - 按 head.covered_products 筛选产品行（为空则全部）。
+    - 保留已有明细及已录入数据；缺失的 material_id 取首次出现位置补入一行（带 level）。
+    - 权限：创建人 / 共同盘点人 / admin（沿用 _user_can_edit）。
+    """
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
+    if not head:
+        raise ValueError(f"盘点单 {check_id} 不存在")
+    if head.check_type != "order" or not head.order_no:
+        raise ValueError("仅订单盘点单支持刷新BOM")
+    if head.status not in ("open", "in_progress"):
+        raise ValueError("仅待盘点/盘点中的单据可刷新BOM")
+    if not _user_can_edit(head, current_user):
+        raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
+
+    line_materials = await get_order_product_materials(db, order_no=head.order_no)
+    if head.covered_products:
+        sel = {(c.get("product_code"), c.get("bom_no")) for c in head.covered_products}
+        line_materials = [lm for lm in line_materials if (lm.product_code, lm.bom_no) in sel]
+    if not line_materials:
+        raise ValueError("所覆盖的产品行未展开出任何物料")
+
+    existing_res = await db.execute(
+        select(StockCheckItem.material_id).where(StockCheckItem.check_id == check_id)
+    )
+    existing_mids = {int(mid) for mid in existing_res.scalars().all() if mid is not None}
+
+    def _walk(nodes, level):
+        for n in (nodes or []):
+            if n.material_id:
+                yield n, level
+            yield from _walk(getattr(n, "children", None) or [], level + 1)
+
+    candidates = []
+    added_mids: set = set()
+    for lm in line_materials:
+        for n, lvl in _walk(lm.materials or [], 1):
+            mid = int(n.material_id)
+            if mid in existing_mids or mid in added_mids:
+                continue
+            added_mids.add(mid)
+            candidates.append((mid, n, lvl))
+    if not candidates:
+        return head
+
+    stock_map = await _get_stock_by_material_id(db, list(added_mids))
+    for mid, n, lvl in candidates:
+        sys_q = stock_map.get(mid, Decimal("0"))
+        db.add(StockCheckItem(
+            check_id=check_id,
+            line_no=n.line_no,
+            level=lvl,
+            material_id=mid,
+            material_code=n.material_code,
+            material_name=n.material_name,
+            spec_model=n.spec_model,
+            unit=n.unit,
+            req_qty=Decimal(str(n.req_qty or 0)),
+            system_qty=sys_q,
+            actual_qty=None,
+            diff_qty=Decimal("0"),
+            is_checked=0,
+        ))
+    await db.flush()
+    await _refresh_check_aggregates(db, check_id)
+    await db.flush()
+    return head
+
+
 async def get_stock_check_with_items(db: AsyncSession, check_id: int) -> Optional[StockCheck]:
     head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
     if not head:
@@ -534,6 +660,7 @@ async def get_stock_check_with_items(db: AsyncSession, check_id: int) -> Optiona
         select(StockCheckItem).where(StockCheckItem.check_id == check_id).order_by(StockCheckItem.id)
     )
     head.items = list(items_res.scalars().all())
+    await enrich_items_assoc(db, head.items)
     return head
 
 

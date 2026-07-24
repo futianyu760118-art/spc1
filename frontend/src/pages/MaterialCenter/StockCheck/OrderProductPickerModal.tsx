@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { Modal, Table, Button, Space, message, Empty, Tag } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { Modal, Table, Button, Space, message, Empty, Tag, Input } from 'antd'
+import { SearchOutlined } from '@ant-design/icons'
 import { orderApi } from '@/services/api'
 
 export interface OrderProductLine {
@@ -37,6 +38,26 @@ export default function OrderProductPickerModal({
   const [items, setItems] = useState<OrderProductLine[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
+  const [keyword, setKeyword] = useState('')
+
+  const filtered = useMemo(() => {
+    const kw = keyword.trim().toLowerCase()
+    if (!kw) return items
+    return items.filter((it) =>
+      (it.product_code || '').toLowerCase().includes(kw) ||
+      (it.product_name || '').toLowerCase().includes(kw) ||
+      (it.bom_no || '').toLowerCase().includes(kw) ||
+      (it.line_no || '').toLowerCase().includes(kw),
+    )
+  }, [items, keyword])
+
+  // 搜索结果只有 1 条时自动勾选（累积，不覆盖已有选择）；用户仍点「确定」
+  useEffect(() => {
+    if (filtered.length === 1) {
+      const only = rowKey(filtered[0])
+      setSelectedKeys((prev) => (prev.includes(only) ? prev : [...prev, only]))
+    }
+  }, [filtered])
 
   useEffect(() => {
     if (!open || !orderNo) return
@@ -48,6 +69,7 @@ export default function OrderProductPickerModal({
         if (cancelled) return
         const list: OrderProductLine[] = res?.data || []
         setItems(list)
+        setKeyword('')
         // 默认只勾选尚未盘点的产品;若全部已盘点则默认全选(允许重盘)
         const uncovered = list.filter((it) => !(coveredKeys ?? new Set()).has(rowKey(it)))
         setSelectedKeys((uncovered.length > 0 ? uncovered : list).map(rowKey))
