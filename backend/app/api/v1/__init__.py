@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import assistant, basicdata, common, dashboard, exception, masterdata, material, meeting, npi, order, production, rules
+from app.api.v1 import assistant, basicdata, common, dashboard, exception, masterdata, material, meeting, npi, order, production, purchase, rules
 
 api_router = APIRouter()
 
@@ -70,3 +70,6 @@ api_router.include_router(basicdata.data_supply_router, prefix="/basicdata/data-
 # Common files and assistant
 api_router.include_router(common.files_router, prefix="/files", tags=["文件"])
 api_router.include_router(assistant.assistant_router, prefix="/assistant", tags=["智能助手"])
+
+# Purchase center
+api_router.include_router(purchase.price_change_router, prefix="/purchase/price-change", tags=["采购中心-调价单"])

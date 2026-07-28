@@ -531,17 +531,6 @@ export default function MainLayout() {
           ? { ...item, children: [...v2ExtraItems, ...(item.children || [])] }
           : item
       )
-      // 采购中心（新模块，不在权限树里）
-      merged.push({
-        key: 'purchase-center',
-        icon: <AccountBookOutlined />,
-        label: '采购中心',
-        children: [
-          { key: '/purchase/price-change', icon: <FileTextOutlined />, label: '调价单管理' },
-          { key: '/purchase/price-change/pending', icon: <ClockCircleOutlined />, label: '待我审批' },
-          { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置' },
-        ],
-      })
       return merged
     }
     return allMenuItems
