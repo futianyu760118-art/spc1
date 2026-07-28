@@ -1,6 +1,7 @@
 """物料齐套中心 — 采购订单/采购到料计划统一模型"""
 
-from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, Text, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, Text, ForeignKey, UniqueConstraint
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -27,6 +28,7 @@ class PurchaseOrder(Base):
     original_eta = Column(Date)
     actual_arrival_date = Column(Date)
     owner = Column(String(64))
+    owner_id = Column(Integer, ForeignKey("sys_user.id"), nullable=True, index=True)
     remark = Column(Text)
     data_source = Column(String(32))
     # --- CSV采购到料计划扩展字段 ---

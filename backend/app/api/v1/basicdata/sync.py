@@ -30,8 +30,8 @@ logger = logging.getLogger(__name__)
 
 VALID_SYNC_TYPES = [
     "orders", "order_details", "materials", "purchase_orders", "customers", "suppliers",
-    "materials_masterdata", "skus", "products", "warehouses", "processes",
-    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "quality_issues", "mrp_plan_orders", "all",
+    "materials_masterdata", "skus", "products", "boms", "bom_details", "warehouses", "locations", "processes",
+    "organizations", "positions", "employees", "employee_organizations", "purchase_invoices", "payment_applies", "quality_issues", "mrp_plan_orders", "inventory", "all",
 ]
 
 
@@ -61,6 +61,7 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
 
             # 2. 执行同步
             service = ERPSyncService(db)
+            service.sync_log = sync_log  # 让同步过程实时回写进度
             type_map = {
                 "orders": lambda: service.sync_orders(
                     sync_params.get("since"), sync_params.get("order_numbers"), custom_params
@@ -79,15 +80,20 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
                 "materials_masterdata": lambda: service.sync_materials_masterdata(sync_params.get("since"), custom_params),
                 "skus": lambda: service.sync_skus(sync_params.get("since"), custom_params),
                 "products": lambda: service.sync_products(sync_params.get("since"), custom_params),
+                "boms": lambda: service.sync_boms(sync_params.get("since"), custom_params),
+                "bom_details": lambda: service.sync_bom_details(sync_params.get("since"), custom_params),
                 "warehouses": lambda: service.sync_warehouses(sync_params.get("since"), custom_params),
+                "locations": lambda: service.sync_locations(sync_params.get("since"), custom_params),
                 "processes": lambda: service.sync_processes(sync_params.get("since"), custom_params),
                 "organizations": lambda: service.sync_organizations(sync_params.get("since"), custom_params),
                 "positions": lambda: service.sync_positions(sync_params.get("since"), custom_params),
                 "employees": lambda: service.sync_employees(sync_params.get("since"), custom_params),
                 "employee_organizations": lambda: service.sync_employee_organizations(sync_params.get("since"), custom_params),
                 "purchase_invoices": lambda: service.sync_purchase_invoices(sync_params.get("since"), custom_params),
+                "payment_applies": lambda: service.sync_payment_applies(sync_params.get("since"), custom_params),
                 "quality_issues": lambda: service.sync_quality_issues(sync_params.get("since"), custom_params),
                 "mrp_plan_orders": lambda: service.sync_mrp_plan_orders(sync_params.get("since"), custom_params),
+                "inventory": lambda: service.sync_inventory(sync_params.get("since"), custom_params),
                 "all": lambda: service.sync_all(sync_params.get("since"), custom_params),
             }
 
@@ -134,6 +140,12 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
                 sync_log.message = f"同步完成: 处理{sync_log.synced_count}条, 新增{sync_log.created_count}条, 更新{sync_log.updated_count}条"
                 if sync_log.failed_count:
                     sync_log.message += f", 失败{sync_log.failed_count}条"
+
+            # 同步方法内部捕获的异常只进入了 stats["errors"]，
+            # 不会触发下方外层 except。这里把错误明细写入 error_detail，
+            # 否则前端只能看到 "失败N条" 而无法定位失败原因。
+            if sync_log.failed_count and errors_list:
+                sync_log.error_detail = "\n".join(errors_list[:50])
 
             sync_log.status = "success" if sync_log.failed_count == 0 else "failed"
             await db.commit()

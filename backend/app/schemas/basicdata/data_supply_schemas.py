@@ -48,6 +48,7 @@ class DataSupplyApiKeyCreate(BaseModel):
     key_name: str
     description: Optional[str] = None
     allowed_data_types_json: Optional[str] = None
+    allowed_endpoints_json: Optional[str] = None
     ip_whitelist_json: Optional[str] = None
     rate_limit: int = 100
     expires_at: Optional[datetime] = None
@@ -57,6 +58,7 @@ class DataSupplyApiKeyUpdate(BaseModel):
     key_name: Optional[str] = None
     description: Optional[str] = None
     allowed_data_types_json: Optional[str] = None
+    allowed_endpoints_json: Optional[str] = None
     ip_whitelist_json: Optional[str] = None
     rate_limit: Optional[int] = None
     is_active: Optional[bool] = None
@@ -66,11 +68,11 @@ class DataSupplyApiKeyUpdate(BaseModel):
 class DataSupplyApiKeyOut(BaseModel):
     id: int
     key_name: str
-    api_key: str
     app_key: Optional[str] = None
     description: Optional[str] = None
     is_active: bool = True
     allowed_data_types_json: Optional[str] = None
+    allowed_endpoints_json: Optional[str] = None
     ip_whitelist_json: Optional[str] = None
     rate_limit: int = 100
     expires_at: Optional[datetime] = None
@@ -82,15 +84,15 @@ class DataSupplyApiKeyOut(BaseModel):
 
 
 class DataSupplyApiKeyCreateResult(BaseModel):
-    """创建结果，包含完整的 api_key（仅创建时返回一次）"""
+    """创建结果，包含 AppSecret（仅创建时返回一次）"""
     id: int
     key_name: str
-    api_key: str
     app_key: str
     app_secret: str
     description: Optional[str] = None
     is_active: bool = True
     allowed_data_types_json: Optional[str] = None
+    allowed_endpoints_json: Optional[str] = None
     ip_whitelist_json: Optional[str] = None
     rate_limit: int = 100
     expires_at: Optional[datetime] = None

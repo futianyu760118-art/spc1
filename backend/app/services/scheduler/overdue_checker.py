@@ -8,7 +8,6 @@ from sqlalchemy import select, func, or_
 from app.core.database import AsyncSessionLocal
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.basicdata.announcement import Notification
-from app.models.basicdata.user import SysUser
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +27,7 @@ class OverdueCheckerScheduler:
                 today = date_type.today()
                 result = await db.execute(
                     select(
-                        PurchaseOrder.owner,
+                        PurchaseOrder.owner_id,
                         func.count(PurchaseOrder.id).label('cnt')
                     )
                     .where(
@@ -36,9 +35,9 @@ class OverdueCheckerScheduler:
                         PurchaseOrder.actual_arrival_date.is_(None),
                         PurchaseOrder.eta.isnot(None),
                         PurchaseOrder.eta < today,
-                        PurchaseOrder.owner.isnot(None),
+                        PurchaseOrder.owner_id.isnot(None),
                     )
-                    .group_by(PurchaseOrder.owner)
+                    .group_by(PurchaseOrder.owner_id)
                 )
                 rows = result.all()
                 if not rows:
@@ -47,17 +46,11 @@ class OverdueCheckerScheduler:
 
                 notification_count = 0
                 for row in rows:
-                    owner_name = row.owner
+                    user_id = row.owner_id
                     overdue_count = row.cnt
 
-                    user_result = await db.execute(
-                        select(SysUser).where(SysUser.display_name == owner_name)
-                    )
-                    user = user_result.scalar_one_or_none()
-                    user_id = user.id if user else None
-
                     notification = Notification(
-                        user_id=user_id or 0,
+                        user_id=user_id,
                         type='material_alert',
                         title='逾期未到料提醒',
                         content=f'您负责的采购计划中有 {overdue_count} 条逾期未到物料，请及时跟进处理。',

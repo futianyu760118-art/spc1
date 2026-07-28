@@ -87,6 +87,7 @@ const USER_EXPORT_COLUMNS: ExportColumnOption[] = [
 export default function UserManagement() {
   const { exporting, exportData } = useExport()
   const isAdmin = useAuthStore(s => s.isAdmin())
+  const hasPermission = useAuthStore(s => s.hasPermission)
   const [users, setUsers] = useState<UserItem[]>([])
   const [roles, setRoles] = useState<RoleItem[]>([])
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([])
@@ -102,6 +103,7 @@ export default function UserManagement() {
   const [pwdForm] = Form.useForm()
   const [exportColumnModalOpen, setExportColumnModalOpen] = useState(false)
   const [syncingRoles, setSyncingRoles] = useState(false)
+  const [keyword, setKeyword] = useState('')
   const [userQuery, setUserQuery] = useState<{ sortBy?: string; sortOrder?: string; filters?: Record<string, string[]> }>({})
   const [userPage, setUserPage] = useState(1)
   const [userPageSize, setUserPageSize] = useState(20)
@@ -239,18 +241,20 @@ export default function UserManagement() {
     }
   }
 
-  const fetchUsers = async (opts?: { page?: number; pageSize?: number; sortBy?: string; sortOrder?: string; filters?: Record<string, string[]> }) => {
+  const fetchUsers = async (opts?: { page?: number; pageSize?: number; sortBy?: string; sortOrder?: string; filters?: Record<string, string[]>; keyword?: string }) => {
     const p = opts?.page ?? userPage
     const ps = opts?.pageSize ?? userPageSize
     const sortBy = opts?.sortBy ?? userQuery.sortBy
     const sortOrder = opts?.sortOrder ?? userQuery.sortOrder
     const filters = opts?.filters ?? userQuery.filters
+    const kw = opts?.keyword ?? keyword
     setUserQuery({ sortBy, sortOrder, filters })
     setLoading(true)
     try {
       const params: any = { page: p, page_size: ps }
       if (sortBy) params.sort_by = sortBy
       if (sortOrder) params.sort_order = sortOrder
+      if (kw?.trim()) params.keyword = kw.trim()
       if (filters?.role_code?.length) params.role_code = filters.role_code.join(',')
       if (filters?.is_active?.length) params.is_active = filters.is_active[0] === 'true'
       if (filters?.position_name?.length) params.position_name = filters.position_name.join(',')
@@ -494,6 +498,7 @@ export default function UserManagement() {
 
   const handleExportUsers = (selectedColumns: string[]) => {
     const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
+    if (keyword?.trim()) params.keyword = keyword.trim()
     if (userQuery.sortBy) params.sort_by = userQuery.sortBy
     if (userQuery.sortOrder) params.sort_order = userQuery.sortOrder
     if (userQuery.filters?.role_code?.length) params.role_code = userQuery.filters.role_code.join(',')
@@ -695,26 +700,43 @@ export default function UserManagement() {
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
         <Row gutter={12} align="middle">
           <Col flex="auto">
-            {(selectedRowKeys.length > 0 || isSelectAllFiltered) && (
-              <Space>
-                <span style={{ color: '#6b7280', fontSize: 13 }}>
-                  {isSelectAllFiltered ? `已选中所有筛选结果（共 ${userTotal} 个用户）` : `已选 ${selectedRowKeys.length} 项`}
-                </span>
-                <Button size="small" loading={batchLoading} onClick={() => handleBatchToggleActive(true)}>批量启用</Button>
-                <Button size="small" loading={batchLoading} onClick={() => handleBatchToggleActive(false)}>批量停用</Button>
-                <Button size="small" icon={<KeyOutlined />} loading={batchLoading} onClick={() => openConfirmModal('reset_password')}>批量重置密码</Button>
-                {isAdmin && (
-                  <Button size="small" danger icon={<DeleteOutlined />} loading={batchLoading} onClick={() => openConfirmModal('delete')}>批量删除</Button>
-                )}
-                <Button size="small" type="link" onClick={() => { setSelectedRowKeys([]); setIsSelectAllFiltered(false) }}>取消选择</Button>
-              </Space>
-            )}
+            <Space>
+              <Input
+                prefix={<SearchOutlined />}
+                placeholder="搜索用户名 / 显示名 / 工号 / 姓名"
+                value={keyword}
+                allowClear
+                onChange={(e) => {
+                  setKeyword(e.target.value)
+                  if (!e.target.value) {
+                    setUserPage(1)
+                    fetchUsers({ page: 1, keyword: '' })
+                  }
+                }}
+                onPressEnter={() => { setUserPage(1); fetchUsers({ page: 1 }) }}
+                style={{ width: 280 }}
+              />
+              {(selectedRowKeys.length > 0 || isSelectAllFiltered) && (
+                <>
+                  <span style={{ color: '#6b7280', fontSize: 13 }}>
+                    {isSelectAllFiltered ? `已选中所有筛选结果（共 ${userTotal} 个用户）` : `已选 ${selectedRowKeys.length} 项`}
+                  </span>
+                  <Button size="small" loading={batchLoading} onClick={() => handleBatchToggleActive(true)}>批量启用</Button>
+                  <Button size="small" loading={batchLoading} onClick={() => handleBatchToggleActive(false)}>批量停用</Button>
+                  <Button size="small" icon={<KeyOutlined />} loading={batchLoading} onClick={() => openConfirmModal('reset_password')}>批量重置密码</Button>
+                  {isAdmin && (
+                    <Button size="small" danger icon={<DeleteOutlined />} loading={batchLoading} onClick={() => openConfirmModal('delete')}>批量删除</Button>
+                  )}
+                  <Button size="small" type="link" onClick={() => { setSelectedRowKeys([]); setIsSelectAllFiltered(false) }}>取消选择</Button>
+                </>
+              )}
+            </Space>
           </Col>
           <Col><Space>
             <Button icon={<ReloadOutlined />} onClick={() => fetchUsers()}>刷新</Button>
             <Button icon={<SyncOutlined />} loading={syncingRoles} onClick={handleSyncRoles}>同步角色</Button>
             <Button icon={<ExportOutlined />} loading={exporting} onClick={() => setExportColumnModalOpen(true)}>导出</Button>
-            {isAdmin && <Button icon={<TeamOutlined />} onClick={handleOpenProvision}>批量开通用户</Button>}
+            {hasPermission('users', 'create') && <Button icon={<TeamOutlined />} onClick={handleOpenProvision}>批量开通用户</Button>}
             {isAdmin && <Button type="primary" icon={<UserAddOutlined />} onClick={openAdd}>新增用户</Button>}
           </Space></Col>
         </Row>

@@ -97,9 +97,11 @@ async def get_purchase_plan_analysis(
             cond.append(no_received)
             cond.append(PurchaseOrder.eta.isnot(None))
             cond.append(PurchaseOrder.eta < today)
+            cond.append(PurchaseOrder.is_closed == 0)
         elif status_key == 'pending':
             cond.append(no_received)
             cond.append(or_(PurchaseOrder.eta.is_(None), PurchaseOrder.eta >= today))
+            cond.append(PurchaseOrder.is_closed == 0)
         count_result = await db.execute(select(func.count(PurchaseOrder.id)).where(*cond))
         count = count_result.scalar() or 0
         status_distribution.append({
@@ -123,6 +125,7 @@ async def _get_supplier_overdue(db: AsyncSession, base: list, today: date_type):
     overdue_base.append(or_(PurchaseOrder.received_qty.is_(None), PurchaseOrder.received_qty == 0))
     overdue_base.append(PurchaseOrder.eta.isnot(None))
     overdue_base.append(PurchaseOrder.eta < today)
+    overdue_base.append(PurchaseOrder.is_closed == 0)
 
     result = await db.execute(
         select(

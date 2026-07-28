@@ -46,6 +46,7 @@ interface SpcField {
 interface MappingRow {
   erp_field: string
   spc_field: string | null
+  remark: string
 }
 
 interface ConditionParam {
@@ -68,12 +69,15 @@ const SYNC_TYPE_LABELS: Record<string, string> = {
   skus: 'SKU',
   products: '产品',
   warehouses: '仓库',
+  locations: '库位',
   processes: '工序',
   organizations: '组织',
   positions: '岗位',
   employees: '人员',
   purchase_invoices: '采购开票',
   quality_issues: '品质异常',
+  mrp_plan_orders: 'MRP计划订单',
+  inventory: '即时库存',
 }
 
 const SYNC_INTERVAL_OPTIONS = [
@@ -189,7 +193,7 @@ export default function SyncSqlConfig() {
       setMappingRows(prev => {
         const existing = new Set(prev.map(r => r.erp_field))
         const kept = prev.filter(r => cols.includes(r.erp_field))
-        const added = cols.filter(c => !existing.has(c)).map(c => ({ erp_field: c, spc_field: null }))
+        const added = cols.filter(c => !existing.has(c)).map(c => ({ erp_field: c, spc_field: null, remark: '' }))
         return [...kept, ...added]
       })
       message.success(`解析到 ${cols.length} 个 ERP 字段`)
@@ -201,26 +205,81 @@ export default function SyncSqlConfig() {
   }
 
   /* ================================================================ */
-  /* Auto-match                                                        */
+  /* AI Auto-match                                                     */
   /* ================================================================ */
 
-  const handleAutoMatch = () => {
+  const [aiMatching, setAiMatching] = useState(false)
+
+  const handleAutoMatch = async () => {
     if (!spcFields.length) {
       message.warning('请先选择同步类型以加载 SPC 字段')
       return
     }
+    const syncType = editingItem?.sync_type || form.getFieldValue('sync_type')
+    const sqlText = form.getFieldValue('sql_text')
+    if (!sqlText || !sqlText.trim()) {
+      message.warning('请先输入 SQL 语句')
+      return
+    }
+
+    setAiMatching(true)
+    try {
+      const res: any = await api.post(
+        '/basicdata/sync-sql/ai-auto-match',
+        {
+          sql_text: sqlText,
+          sync_type: syncType,
+          erp_fields: erpFields,
+          spc_fields: spcFields,
+        },
+        { timeout: 180000 },
+      )
+      const aiMappings = res.data?.mappings || {}
+
+      const updated = mappingRows.map(row => {
+        const ai = aiMappings[row.erp_field]
+        if (!ai || ai.spc_field === null || ai.spc_field === undefined) return row
+        return { ...row, spc_field: ai.spc_field || null, remark: ai.remark || row.remark }
+      })
+
+      // 如果还有未匹配但 AI 有结果的字段，也补上
+      const existingErp = new Set(mappingRows.map(r => r.erp_field))
+      for (const [erpField, ai] of Object.entries(aiMappings)) {
+        if (!existingErp.has(erpField) && ai && (ai as any).spc_field) {
+          updated.push({ erp_field: erpField, spc_field: (ai as any).spc_field || null, remark: (ai as any).remark || '' })
+        }
+      }
+
+      setMappingRows(updated)
+      const matched = updated.filter(r => r.spc_field).length
+      const withRemark = updated.filter(r => r.remark).length
+      message.success(`AI 匹配完成：${matched}/${updated.length} 个字段已映射，${withRemark} 个字段已添加备注`)
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || e?.message || 'AI 匹配失败'
+      if (detail.includes('AI 服务未配置')) {
+        // fallback 到简单名称匹配
+        message.warning('AI 服务未配置，使用简单名称匹配')
+        simpleAutoMatch()
+        return
+      }
+      message.error(detail)
+    } finally {
+      setAiMatching(false)
+    }
+  }
+
+  const simpleAutoMatch = () => {
     const spcNames = new Set(spcFields.map(f => f.name))
     const updated = mappingRows.map(row => {
-      if (row.spc_field) return row // 已映射的保留
+      if (row.spc_field) return row
       const lower = row.erp_field.toLowerCase()
-      // 尝试精确匹配
       if (spcNames.has(lower)) return { ...row, spc_field: lower }
       if (spcNames.has(row.erp_field)) return { ...row, spc_field: row.erp_field }
       return row
     })
     setMappingRows(updated)
     const matched = updated.filter(r => r.spc_field).length
-    message.info(`自动匹配了 ${matched} / ${updated.length} 个字段`)
+    message.info(`简单匹配了 ${matched} / ${updated.length} 个字段`)
   }
 
   /* ================================================================ */
@@ -229,6 +288,10 @@ export default function SyncSqlConfig() {
 
   const updateMappingSpc = (index: number, value: string | null) => {
     setMappingRows(prev => prev.map((r, i) => i === index ? { ...r, spc_field: value } : r))
+  }
+
+  const updateMappingRemark = (index: number, value: string) => {
+    setMappingRows(prev => prev.map((r, i) => i === index ? { ...r, remark: value } : r))
   }
 
   const removeMappingRow = (index: number) => {
@@ -260,18 +323,32 @@ export default function SyncSqlConfig() {
   /* ================================================================ */
 
   const mappingToJson = (rows: MappingRow[]): string => {
-    const obj: Record<string, string> = {}
-    rows.forEach(r => { if (r.spc_field) obj[r.erp_field] = r.spc_field })
+    const obj: Record<string, string | { target: string; remark: string }> = {}
+    rows.forEach(r => {
+      if (r.spc_field) {
+        if (r.remark) {
+          obj[r.erp_field] = { target: r.spc_field, remark: r.remark }
+        } else {
+          obj[r.erp_field] = r.spc_field
+        }
+      }
+    })
     return JSON.stringify(obj, null, 2)
   }
 
   const jsonToMapping = (json: string | null, erpCols: string[]): MappingRow[] => {
-    let parsed: Record<string, string> = {}
+    let parsed: Record<string, any> = {}
     if (json) {
       try { parsed = JSON.parse(json) } catch { /* ignore */ }
     }
     const allErp = new Set([...Object.keys(parsed), ...erpCols])
-    return Array.from(allErp).map(erp => ({ erp_field: erp, spc_field: parsed[erp] || null }))
+    return Array.from(allErp).map(erp => {
+      const val = parsed[erp]
+      if (typeof val === 'object' && val !== null) {
+        return { erp_field: erp, spc_field: val.target || null, remark: val.remark || '' }
+      }
+      return { erp_field: erp, spc_field: typeof val === 'string' ? val : null, remark: '' }
+    })
   }
 
   const conditionParamsToJson = (params: ConditionParam[]): string => {
@@ -579,9 +656,12 @@ export default function SyncSqlConfig() {
                   { value: 'skus', label: 'SKU' },
                   { value: 'products', label: '产品' },
                   { value: 'warehouses', label: '仓库' },
+                  { value: 'locations', label: '库位' },
                   { value: 'processes', label: '工序' },
                   { value: 'organizations', label: '组织' },
                   { value: 'employees', label: '人员' },
+                  { value: 'mrp_plan_orders', label: 'MRP计划订单' },
+                  { value: 'inventory', label: '即时库存' },
                   { value: 'purchase_invoices', label: '采购开票' },
                   { value: 'quality_issues', label: '品质异常' },
                 ]}
@@ -696,9 +776,14 @@ export default function SyncSqlConfig() {
                 <span style={{ fontSize: 12, color: '#64748b' }}>
                   共 {mappingRows.length} 个 ERP 字段，已映射 {mappingRows.filter(r => r.spc_field).length} 个
                 </span>
-                <Tooltip title="自动将同名的 ERP 字段映射到 SPC 字段">
-                  <Button size="small" icon={<ThunderboltOutlined />} onClick={handleAutoMatch}>
-                    自动匹配
+                <Tooltip title="使用 AI 分析 SQL 语义，自动匹配 ERP 字段到 SPC 字段并生成备注">
+                  <Button
+                    size="small"
+                    icon={<ThunderboltOutlined />}
+                    onClick={handleAutoMatch}
+                    loading={aiMatching}
+                  >
+                    {aiMatching ? 'AI 分析中...' : '自动匹配'}
                   </Button>
                 </Tooltip>
               </div>
@@ -722,6 +807,7 @@ export default function SyncSqlConfig() {
                   <span style={{ flex: 1 }}>ERP 字段</span>
                   <span style={{ width: 40, textAlign: 'center' }}>→</span>
                   <span style={{ flex: 1 }}>SPC 字段</span>
+                  <span style={{ flex: 1 }}>备注</span>
                   <span style={{ width: 40 }} />
                 </div>
 
@@ -763,6 +849,15 @@ export default function SyncSqlConfig() {
                             </span>
                           </div>
                         )}
+                      />
+                    </div>
+                    <div style={{ flex: 1, paddingLeft: 8 }}>
+                      <Input
+                        size="small"
+                        placeholder="字段备注"
+                        value={row.remark}
+                        onChange={(e) => updateMappingRemark(idx, e.target.value)}
+                        style={{ width: '100%' }}
                       />
                     </div>
                     <Tooltip title="移除此映射行">

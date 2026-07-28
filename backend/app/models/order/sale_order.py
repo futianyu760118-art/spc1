@@ -61,6 +61,7 @@ class SaleOrder(Base):
     risk_score = Column(Numeric(5, 2), comment="风险总评分0-100")
     risk_factors = Column(JSONB, comment="各因子分值明细 {delivery_delay,shortage,process_lag,quality,eta_delay,inspection_ng}")
     risk_assessed_at = Column(DateTime, comment="最近风险评估时间")
+    field_synced_at = Column(JSONB, comment="字段级同步时间 {field_name: ISO8601 str}")
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

@@ -175,27 +175,6 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* 快捷指令 */}
-      {messages.length === 0 && skills.length > 0 && (
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0' }}>
-          <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>
-            <ThunderboltOutlined /> 快捷指令
-          </Text>
-          <Space wrap size={[6, 6]}>
-            {skills.map(s => (
-              <Tag
-                key={s.intent}
-                color="blue"
-                style={{ cursor: 'pointer', fontSize: 12 }}
-                onClick={() => onSend(s.keywords[0] || s.name)}
-              >
-                {s.name}
-              </Tag>
-            ))}
-          </Space>
-        </div>
-      )}
-
       {/* 消息列表 */}
       <div
         ref={listRef}
@@ -203,29 +182,70 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
         style={{
           flex: 1,
           overflow: 'auto',
-          padding: '12px 16px',
+          padding: '12px 14px',
         }}
       >
         {messages.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
-            <div style={{ fontSize: 36, marginBottom: 12 }}>🤖</div>
-            <div>您好！我是AI智能助手</div>
-            <div style={{ fontSize: 12, marginTop: 4, color: '#bbb' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100%', textAlign: 'center', padding: '24px 8px' }}>
+            <div style={{
+              width: 64, height: 64, borderRadius: 20,
+              background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 12px 28px rgba(59,130,246,.35)',
+              marginBottom: 16,
+            }}>
+              <RobotOutlined style={{ fontSize: 32, color: '#fff' }} />
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: '#1e293b' }}>您好，我是 AI 智能助手</div>
+            <div style={{ fontSize: 12, marginTop: 6, color: '#94a3b8' }}>
               不仅能查询数据，还能给出行动建议
             </div>
-            <div style={{ marginTop: 12 }}>
-              <Space wrap size={[6, 6]}>
-                <Tag color="blue" style={{ cursor: 'pointer' }} onClick={() => onSend('今天有什么需要关注的？')}>
-                  📋 今日简报
-                </Tag>
-                <Tag color="blue" style={{ cursor: 'pointer' }} onClick={() => onSend('有哪些逾期订单？')}>
-                  ⚠️ 逾期订单
-                </Tag>
-                <Tag color="blue" style={{ cursor: 'pointer' }} onClick={() => onSend('采购有什么风险？')}>
-                  🔔 采购预警
-                </Tag>
-              </Space>
+
+            {/* 推荐提问 */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 18, width: '100%', maxWidth: 320 }}>
+              {[
+                { icon: '📋', text: '今日简报', q: '今天有什么需要关注的？' },
+                { icon: '⚠️', text: '逾期订单', q: '有哪些逾期订单？' },
+                { icon: '🔔', text: '采购预警', q: '采购有什么风险？' },
+              ].map(item => (
+                <div
+                  key={item.text}
+                  onClick={() => onSend(item.q)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 12px', borderRadius: 12,
+                    background: '#fff', border: '1px solid #e2e8f0',
+                    cursor: 'pointer', textAlign: 'left',
+                    transition: 'all .15s ease',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#93c5fd'; e.currentTarget.style.background = '#f0f9ff' }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.background = '#fff' }}
+                >
+                  <span style={{ fontSize: 18 }}>{item.icon}</span>
+                  <span style={{ fontSize: 13, color: '#334155' }}>{item.text}</span>
+                </div>
+              ))}
             </div>
+
+            {/* 技能快捷指令 */}
+            {skills.length > 0 && (
+              <>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 18, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <ThunderboltOutlined style={{ color: '#f59e0b' }} /> 快捷指令
+                </div>
+                <Space wrap size={[6, 6]} style={{ justifyContent: 'center', maxWidth: 320 }}>
+                  {skills.map(s => (
+                    <Tag
+                      key={s.intent}
+                      style={{ cursor: 'pointer', fontSize: 12, borderRadius: 12, padding: '2px 10px', border: '1px solid #dbeafe', background: '#eff6ff', color: '#1d4ed8', margin: 0 }}
+                      onClick={() => onSend(s.keywords[0] || s.name)}
+                    >
+                      {s.name}
+                    </Tag>
+                  ))}
+                </Space>
+              </>
+            )}
           </div>
         )}
         {messages.map((msg) => {
@@ -244,15 +264,17 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
               {/* 文本气泡 */}
               <div
                 style={{
-                  maxWidth: '85%',
-                  padding: '8px 12px',
-                  borderRadius: msg.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-                  background: msg.role === 'user' ? '#1890ff' : '#f5f5f5',
-                  color: msg.role === 'user' ? '#fff' : '#333',
+                  maxWidth: '88%',
+                  padding: '10px 14px',
+                  borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                  background: msg.role === 'user' ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' : '#fff',
+                  color: msg.role === 'user' ? '#fff' : '#1e293b',
                   fontSize: 13,
-                  lineHeight: 1.6,
+                  lineHeight: 1.65,
                   wordBreak: 'break-word',
-                  minHeight: msg.streaming && !msg.content ? 32 : undefined,
+                  minHeight: msg.streaming && !msg.content ? 36 : undefined,
+                  boxShadow: msg.role === 'user' ? '0 4px 12px rgba(59,130,246,.25)' : '0 1px 3px rgba(15,23,42,.06)',
+                  border: msg.role === 'user' ? 'none' : '1px solid #eef2f7',
                 }}
               >
                 {/* 流式思考状态 */}
@@ -315,7 +337,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                         )
                       },
                       blockquote: ({ children }: { children?: React.ReactNode }) => (
-                        <blockquote style={{ borderLeft: '3px solid #1890ff', margin: '6px 0', paddingLeft: 10, color: '#555' }}>
+                        <blockquote style={{ borderLeft: '3px solid #6366f1', margin: '6px 0', paddingLeft: 10, color: '#555' }}>
                           {children}
                         </blockquote>
                       ),
@@ -334,7 +356,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                       display: 'inline-block',
                       width: 2,
                       height: 14,
-                      background: '#1890ff',
+                      background: '#6366f1',
                       marginLeft: 2,
                       animation: 'blink 1s infinite',
                       verticalAlign: 'text-bottom',
@@ -377,12 +399,11 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
 
               {/* 建议按钮 */}
               {msg.suggestions && msg.suggestions.length > 0 && (
-                <Space wrap size={[4, 4]} style={{ marginTop: 6 }}>
+                <Space wrap size={[6, 6]} style={{ marginTop: 8, maxWidth: '88%' }}>
                   {msg.suggestions.map((s, i) => (
                     <Tag
                       key={i}
-                      color="processing"
-                      style={{ cursor: 'pointer', fontSize: 12 }}
+                      style={{ cursor: 'pointer', fontSize: 12, borderRadius: 12, padding: '2px 10px', border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4338ca', margin: 0 }}
                       onClick={() => onSend(s)}
                     >
                       {s}
@@ -477,36 +498,50 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
       </div>
 
       {/* 输入区 */}
-      <div style={{ padding: '8px 12px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8 }}>
-        <Input
-          value={inputValue}
-          onChange={e => setInputValue(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={'输入问题，如"今天有什么需要关注的？"'}
-          style={{ flex: 1 }}
-          disabled={loading}
-        />
-        {loading && onStop ? (
-          <Button
-            icon={<PauseCircleOutlined />}
-            onClick={onStop}
-            danger
-            title="停止生成"
+      <div style={{ padding: '10px 12px', borderTop: '1px solid #eef2f7', background: '#fff' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f1f5f9', borderRadius: 12, padding: '4px 4px 4px 12px', border: '1px solid #e2e8f0' }}>
+          <Input
+            value={inputValue}
+            onChange={e => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={'输入问题，如"今天有什么需要关注的？"'}
+            variant="borderless"
+            style={{ flex: 1, background: 'transparent' }}
+            disabled={loading}
           />
-        ) : (
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={handleSend}
-            disabled={!inputValue.trim() || loading}
-          />
-        )}
+          {loading && onStop ? (
+            <Button
+              shape="circle"
+              size="small"
+              icon={<PauseCircleOutlined />}
+              onClick={onStop}
+              danger
+              title="停止生成"
+            />
+          ) : (
+            <Button
+              type="primary"
+              shape="circle"
+              size="small"
+              icon={<SendOutlined />}
+              onClick={handleSend}
+              disabled={!inputValue.trim() || loading}
+              style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)', border: 'none' }}
+            />
+          )}
+        </div>
         {messages.length > 0 && !loading && (
-          <Button
-            icon={<ClearOutlined />}
-            onClick={onClear}
-            title="清空对话"
-          />
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 6 }}>
+            <Button
+              type="text"
+              size="small"
+              icon={<ClearOutlined />}
+              onClick={onClear}
+              style={{ fontSize: 11, color: '#94a3b8', height: 24, padding: '0 8px' }}
+            >
+              清空对话
+            </Button>
+          </div>
         )}
       </div>
 

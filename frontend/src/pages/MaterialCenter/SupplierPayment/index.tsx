@@ -2,9 +2,10 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { Table, Input, Button, message, Row, Col, Card, DatePicker, Dropdown } from 'antd'
 import {
   SearchOutlined, ReloadOutlined, AccountBookOutlined,
-  DollarOutlined, ExclamationCircleOutlined, SafetyOutlined,
+  DollarOutlined, ExclamationCircleOutlined,
   LeftOutlined, RightOutlined,
-  DownloadOutlined, DownOutlined, CalendarOutlined,
+  DownloadOutlined, DownOutlined, UpOutlined, CalendarOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import { Pie } from '@ant-design/charts'
 import dayjs from 'dayjs'
@@ -24,6 +25,7 @@ interface InvoiceDetail {
   settlement_method: string
   invoice_amount: number
   remain_payable: number
+  paid_amount: number
 }
 
 interface SupplierPaymentRow {
@@ -67,6 +69,7 @@ export default function SupplierPayment() {
   const [sortBy, setSortBy] = useState<string>('')
   const [sortOrder, setSortOrder] = useState<string>('')
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+  const [showCharts, setShowCharts] = useState(false)
   const { exporting, exportData } = useExport()
 
   const handleExport = (format: 'xlsx' | 'csv') => {
@@ -180,7 +183,6 @@ export default function SupplierPayment() {
           { title: '总应付金额', value: summary?.total_payable != null ? `¥${summary.total_payable.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <DollarOutlined />, color: '#e11d48' },
           { title: '月到期应付金额', value: summary?.total_monthly_due != null ? `¥${summary.total_monthly_due.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <CalendarOutlined />, color: '#f59e0b' },
           { title: '到期未付', value: summary?.overdue_amount != null ? `¥${summary.overdue_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <ExclamationCircleOutlined />, color: '#dc2626' },
-          { title: '未到期', value: summary?.not_due_amount != null ? `¥${summary.not_due_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}` : '-', icon: <SafetyOutlined />, color: '#16a34a' },
         ].map((card, i) => (
           <Col flex={1} key={i}>
             <Card size="small" className="card-modern" style={{ padding: 0 }}>
@@ -199,68 +201,70 @@ export default function SupplierPayment() {
       </Row>
 
       {/* 图表 */}
-      <div className="card-modern" style={{ padding: '20px 24px', marginBottom: 16 }}>
-        <Row gutter={24}>
-          <Col span={12}>
-            <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#475569', marginBottom: 16 }}>应付金额分布</h3>
-            {summary && (summary.overdue_amount > 0 || summary.not_due_amount > 0) ? (
-              <Pie
-                data={[
-                  { name: '到期未付', value: summary.overdue_amount },
-                  { name: '未到期', value: summary.not_due_amount },
-                ]}
-                angleField="value"
-                colorField="name"
-                radius={0.8}
-                innerRadius={0.55}
-                color={['#dc2626', '#16a34a']}
-                label={{
-                  text: (d: { name: string; value: number }) => `${d.name}\n¥${d.value.toLocaleString('zh-CN', { minimumFractionDigits: 0 })}`,
-                  style: { fontSize: 11, fontWeight: 500 },
-                }}
-                legend={{
-                  color: { position: 'bottom' as const, layout: { justifyContent: 'center' } },
-                }}
-                statistic={{
-                  title: { content: '总应付', style: { fontSize: '12px', color: '#94a3b8' } },
-                  content: {
-                    content: `¥${((summary.overdue_amount + summary.not_due_amount) / 10000).toFixed(0)}万`,
-                    style: { fontSize: '22px', fontWeight: 700, color: '#1e293b' },
-                  },
-                }}
-                interaction={{ elementHighlight: true }}
-                height={260}
-              />
-            ) : (
-              <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>暂无数据</div>
-            )}
-          </Col>
-          <Col span={12}>
-            <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#475569', marginBottom: 16 }}>供应商应付 TOP10</h3>
-            {data.length > 0 ? (
-              <Pie
-                data={[...data]
-                  .sort((a, b) => (b.total_payable || 0) - (a.total_payable || 0))
-                  .slice(0, 10)
-                  .map((d) => ({ name: d.supplier_name || d.supplier_code, value: d.total_payable || 0 }))}
-                angleField="value"
-                colorField="name"
-                radius={0.8}
-                innerRadius={0.3}
-                label={{
-                  text: (d: { name: string; value: number }) => `${d.name}`,
-                  style: { fontSize: 10, fontWeight: 400 },
-                }}
-                legend={false}
-                interaction={{ elementHighlight: true }}
-                height={260}
-              />
-            ) : (
-              <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>暂无数据</div>
-            )}
-          </Col>
-        </Row>
-      </div>
+      {showCharts && (
+        <div className="card-modern" style={{ padding: '20px 24px', marginBottom: 16 }}>
+          <Row gutter={24}>
+            <Col span={12}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#475569', marginBottom: 16 }}>应付金额分布</h3>
+              {summary && (summary.overdue_amount > 0 || summary.not_due_amount > 0) ? (
+                <Pie
+                  data={[
+                    { name: '到期未付', value: summary.overdue_amount },
+                    { name: '未到期', value: summary.not_due_amount },
+                  ]}
+                  angleField="value"
+                  colorField="name"
+                  radius={0.8}
+                  innerRadius={0.55}
+                  color={['#dc2626', '#16a34a']}
+                  label={{
+                    text: (d: { name: string; value: number }) => `${d.name}\n¥${d.value.toLocaleString('zh-CN', { minimumFractionDigits: 0 })}`,
+                    style: { fontSize: 11, fontWeight: 500 },
+                  }}
+                  legend={{
+                    color: { position: 'bottom' as const, layout: { justifyContent: 'center' } },
+                  }}
+                  statistic={{
+                    title: { content: '总应付', style: { fontSize: '12px', color: '#94a3b8' } },
+                    content: {
+                      content: `¥${((summary.overdue_amount + summary.not_due_amount) / 10000).toFixed(0)}万`,
+                      style: { fontSize: '22px', fontWeight: 700, color: '#1e293b' },
+                    },
+                  }}
+                  interaction={{ elementHighlight: true }}
+                  height={260}
+                />
+              ) : (
+                <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>暂无数据</div>
+              )}
+            </Col>
+            <Col span={12}>
+              <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#475569', marginBottom: 16 }}>供应商应付 TOP10</h3>
+              {data.length > 0 ? (
+                <Pie
+                  data={[...data]
+                    .sort((a, b) => (b.total_payable || 0) - (a.total_payable || 0))
+                    .slice(0, 10)
+                    .map((d) => ({ name: d.supplier_name || d.supplier_code, value: d.total_payable || 0 }))}
+                  angleField="value"
+                  colorField="name"
+                  radius={0.8}
+                  innerRadius={0.3}
+                  label={{
+                    text: (d: { name: string; value: number }) => `${d.name}`,
+                    style: { fontSize: 10, fontWeight: 400 },
+                  }}
+                  legend={false}
+                  interaction={{ elementHighlight: true }}
+                  height={260}
+                />
+              ) : (
+                <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8' }}>暂无数据</div>
+              )}
+            </Col>
+          </Row>
+        </div>
+      )}
 
       {/* 筛选栏 */}
       <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
@@ -316,6 +320,14 @@ export default function SupplierPayment() {
           </Col>
           <Col flex="auto" />
           <Col>
+            <Button
+              icon={<BarChartOutlined />}
+              onClick={() => setShowCharts(!showCharts)}
+            >
+              {showCharts ? '隐藏图表' : '显示图表'}
+            </Button>
+          </Col>
+          <Col>
             <Dropdown
               menu={{
                 items: [
@@ -361,6 +373,8 @@ export default function SupplierPayment() {
                   render: (v: number) => v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
                 { title: '剩余应付', dataIndex: 'remain_payable', width: 120, align: 'right' as const,
                   render: (v: number) => <span style={{ color: v > 0 ? '#e11d48' : '#16a34a' }}>{v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> },
+                { title: '已付款金额', dataIndex: 'paid_amount', width: 120, align: 'right' as const,
+                  render: (v: number) => v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
               ]
               return (
                 <Table

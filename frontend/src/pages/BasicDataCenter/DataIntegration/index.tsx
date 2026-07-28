@@ -304,7 +304,7 @@ export default function DataImport() {
       }
 
       // 提交异步同步任务
-      const res: any = await importExportApi.syncData(type, params)
+      const res: any = await importExportApi.syncData(type as any, params)
       const taskId = res.data?.task_id
       if (!taskId) {
         // 兼容旧版直接返回结果

@@ -108,6 +108,38 @@ register_data_type(DataTypeDefinition(
 ))
 
 register_data_type(DataTypeDefinition(
+    data_type="boms",
+    data_name="BOM",
+    description="BOM物料清单",
+    model_name="Bom",
+    exposed_fields=[
+        "id", "bom_id", "bom_no", "material_id", "parent_material_id",
+        "bom_version", "bom_type", "bill_type_id", "base_qty", "aux_attr_qty",
+        "unit_id", "aux_attr_id", "supply_mode", "customer_material_id",
+        "audit_status", "use_status", "disabled_status", "void_flag",
+        "is_audited", "audit_date", "entry_date",
+    ],
+    filter_fields=["bom_type", "audit_status", "use_status", "disabled_status", "void_flag"],
+    search_fields=["bom_no", "material_id"],
+))
+
+register_data_type(DataTypeDefinition(
+    data_type="bom_details",
+    data_name="BOM明细",
+    description="BOM明细行数据",
+    model_name="BomDetail",
+    exposed_fields=[
+        "id", "bom_id", "line_no", "material_id", "standard_qty", "aux_qty",
+        "material_type", "config_type", "lead_offset_days", "back_flush",
+        "scrap_rate", "oper_sn", "process_id", "warehouse_id", "location_id",
+        "valid_date", "invalid_date", "unit_id", "customer_bom_code",
+        "aux_attr_id", "material_size", "kit_flag",
+    ],
+    filter_fields=["bom_id", "material_id", "material_type", "config_type", "kit_flag"],
+    search_fields=["bom_id", "line_no", "material_id"],
+))
+
+register_data_type(DataTypeDefinition(
     data_type="warehouses",
     data_name="仓库",
     description="仓库主数据",

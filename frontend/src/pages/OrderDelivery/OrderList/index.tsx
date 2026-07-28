@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Row, Col, Table, Tag, Input, InputNumber, Select, Button, message, Space, Tooltip, Modal, Form, DatePicker, Card, Spin, Progress, Dropdown, Switch, Checkbox } from 'antd'
+import { Row, Col, Table, Tag, Input, InputNumber, Select, Button, message, Space, Tooltip, Modal, Form, DatePicker, Card, Spin, Progress, Dropdown, Switch, Checkbox, Popover } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 const { RangePicker } = DatePicker
 import {
@@ -17,15 +17,20 @@ import {
   CloseOutlined,
   DownloadOutlined,
   DownOutlined,
+  SettingOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import RiskBadge from '../../../components/RiskBadge'
 import StatusTag from '../../../components/StatusTag'
 import RiskDetailModal from '../../../components/RiskDetailModal'
 import { orderApi, riskApi } from '../../../services/api'
+import api from '../../../services/api'
 import { formatDate, formatDateTime } from '../../../utils'
 import { useExport } from '../../../hooks/useExport'
 import ExportColumnSelector, { type ExportColumnOption } from '../../../components/ExportColumnSelector'
+import { useUiPreferencesStore } from '../../../store/uiPreferences'
+import ShippingAnalyticsCharts from './components/ShippingAnalyticsCharts'
 
 interface OrderRow {
   id: number
@@ -72,6 +77,7 @@ interface OrderRow {
   remark: string | null
   order_date: string | null
   shortage_count: number
+  field_synced_at: Record<string, string> | null
 }
 
 interface OrderLineData {
@@ -136,6 +142,68 @@ const MATERIAL_KEYS = [
   '彩盒', '说明书', '灯珠', '光源板', '电源板', '包材',
 ]
 
+// ── 列设置（显示/隐藏）──
+const ORDER_LIST_PAGE_KEY = 'order_list_columns'
+
+const ORDER_COLUMN_GROUPS: { title: string; keys: { key: string; label: string }[] }[] = [
+  {
+    title: '基本信息', keys: [
+      { key: 'department', label: '销售部门' },
+      { key: 'delivery_completed_date', label: '发货完成' },
+      { key: 'customer_grade', label: '客户等级' },
+      { key: 'customer_code', label: '客户' },
+      { key: 'order_no', label: '单号' },
+    ],
+  },
+  {
+    title: '风险/数量', keys: [
+      { key: 'risk_level', label: '风险等级' },
+      { key: 'order_qty', label: '数量' },
+      { key: 'order_amount', label: '金额' },
+      { key: 'completed_qty', label: '完成数量' },
+      { key: 'order_date', label: '下单时间' },
+    ],
+  },
+  {
+    title: '交期 & 计划', keys: [
+      { key: 'promised_date', label: '合同交期' },
+      { key: 'shipping_plan', label: '出货计划' },
+      { key: 'customer_inspection_date', label: '客户验货时间' },
+      { key: 'planned_start_date', label: '上线时间' },
+      { key: 'inspection_result', label: '客检结果' },
+      { key: 'packaging_status', label: '包装完成状况' },
+      { key: 'bom_return_date', label: 'BOM回收' },
+      { key: 'material_ready_date', label: '料齐套时间' },
+    ],
+  },
+  {
+    title: '发货 & 采购', keys: [
+      { key: 'shipping_status_desc', label: '发货状态即时说明' },
+      { key: 'procurement_status', label: '采购物料齐套' },
+    ],
+  },
+  {
+    title: '物料分类到料日期', keys: MATERIAL_KEYS.map(k => ({ key: `mat_${k}`, label: k })),
+  },
+  {
+    title: '生产节点', keys: [
+      { key: 'front_process_date', label: '前道' },
+      { key: 'first_article_date', label: '首件检验日期' },
+      { key: 'assembly_start_date', label: '组装上线日期' },
+      { key: 'assembly_complete_date', label: '组装完成日期' },
+    ],
+  },
+  {
+    title: '其他', keys: [
+      { key: 'remark', label: '备注' },
+      { key: 'is_closed', label: '是否关闭' },
+      { key: 'status', label: '状态' },
+    ],
+  },
+]
+
+const ORDER_COLUMN_KEYS: string[] = ORDER_COLUMN_GROUPS.flatMap(g => g.keys.map(k => k.key))
+
 
 const today = () => new Date().toISOString().slice(0, 10)
 
@@ -172,6 +240,11 @@ export default function OrderList() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { exporting, exportData } = useExport()
+  const getColumnVisibility = useUiPreferencesStore(s => s.getColumnVisibility)
+  const setColumnVisibility = useUiPreferencesStore(s => s.setColumnVisibility)
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState<string[]>(
+    () => getColumnVisibility(ORDER_LIST_PAGE_KEY, ORDER_COLUMN_KEYS)
+  )
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -201,6 +274,9 @@ export default function OrderList() {
   })
   const [sortInfo, setSortInfo] = useState<{ sort_by?: string; sort_order?: string }>({})
   const [summary, setSummary] = useState({ total: 0, red: 0, yellow: 0, blue: 0, green: 0, shortage: 0, order_qty_total: 0, order_amount_total: 0 })
+  const [showCharts, setShowCharts] = useState(false)
+  const [analyticsLoading, setAnalyticsLoading] = useState(false)
+  const [analyticsData, setAnalyticsData] = useState<any>(null)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editingRecord, setEditingRecord] = useState<OrderRow | null>(null)
   const [editForm] = Form.useForm()
@@ -213,6 +289,14 @@ export default function OrderList() {
   const [exportColumnModalOpen, setExportColumnModalOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx')
   const [selectedColumns, setSelectedColumns] = useState<string[]>([])
+  const [fieldRemarks, setFieldRemarks] = useState<Record<string, string>>({})
+
+  // ── 加载字段备注 ──
+  useEffect(() => {
+    api.get('/basicdata/sync-sql/field-remarks/orders').then((res: any) => {
+      if (res.data) setFieldRemarks(res.data)
+    }).catch(() => {})
+  }, [])
 
   // ── URL 参数处理 ──
   const urlSearchAppliedRef = useRef(false)
@@ -316,7 +400,10 @@ export default function OrderList() {
     }
     const isOverdue = opts?.overdue ? opts.overdue(value, record) : false
     const isGreen = opts?.green || false
-    return (
+    const syncField = field.startsWith('mat_') ? 'material_dates' : field
+    const syncedAt = record.field_synced_at?.[syncField]
+    const remark = fieldRemarks[syncField]
+    const display = (
       <div
         onClick={() => !savingCell && setEditingCell(cellKey)}
         style={{ cursor: 'pointer', padding: '4px 8px', minHeight: '24px' }}
@@ -329,6 +416,14 @@ export default function OrderList() {
           : <span style={{ color: '#cbd5e1' }}>-</span>}
       </div>
     )
+    if (remark || syncedAt) {
+      return (
+        <Tooltip title={<div style={{ fontSize: 12 }}>{remark && <div style={{ marginBottom: remark && syncedAt ? 4 : 0 }}>{remark}</div>}{syncedAt && <div>同步时间: {syncedAt}</div>}</div>}>
+          {display}
+        </Tooltip>
+      )
+    }
+    return display
   }
 
   const editableSelect = (field: string, options: { value: string; label: string }[], renderValue?: (v: string | null, r: OrderRow) => React.ReactNode) =>
@@ -356,7 +451,9 @@ export default function OrderList() {
         )
       }
       const display = renderValue ? renderValue(value, record) : (value || '-')
-      return (
+      const syncedAt = record.field_synced_at?.[field]
+      const remark = fieldRemarks[field]
+      const cell = (
         <div
           onClick={() => !savingCell && setEditingCell(cellKey)}
           style={{ cursor: 'pointer', padding: '4px 8px', minHeight: '24px' }}
@@ -364,6 +461,10 @@ export default function OrderList() {
           {display}
         </div>
       )
+      if (remark || syncedAt) {
+        return <Tooltip title={<div style={{ fontSize: 12 }}>{remark && <div style={{ marginBottom: remark && syncedAt ? 4 : 0 }}>{remark}</div>}{syncedAt && <div>同步时间: {syncedAt}</div>}</div>}>{cell}</Tooltip>
+      }
+      return cell
     }
 
   const editableText = (field: string, renderValue?: (v: string | null, r: OrderRow) => React.ReactNode) =>
@@ -387,7 +488,9 @@ export default function OrderList() {
         )
       }
       const display = renderValue ? renderValue(value, record) : (value || <span style={{ color: '#cbd5e1' }}>-</span>)
-      return (
+      const syncedAt = record.field_synced_at?.[field]
+      const remark = fieldRemarks[field]
+      const cell = (
         <div
           onClick={() => !savingCell && setEditingCell(cellKey)}
           style={{ cursor: 'pointer', padding: '4px 8px', minHeight: '24px' }}
@@ -395,6 +498,10 @@ export default function OrderList() {
           {display}
         </div>
       )
+      if (remark || syncedAt) {
+        return <Tooltip title={<div style={{ fontSize: 12 }}>{remark && <div style={{ marginBottom: remark && syncedAt ? 4 : 0 }}>{remark}</div>}{syncedAt && <div>同步时间: {syncedAt}</div>}</div>}>{cell}</Tooltip>
+      }
+      return cell
     }
 
   const editableNumber = (field: string, min = 0, renderValue?: (v: number | null, r: OrderRow) => React.ReactNode) =>
@@ -423,7 +530,9 @@ export default function OrderList() {
       const display = renderValue
         ? renderValue(value, record)
         : (value != null ? value : <span style={{ color: '#cbd5e1' }}>-</span>)
-      return (
+      const syncedAt = record.field_synced_at?.[field]
+      const remark = fieldRemarks[field]
+      const cell = (
         <div
           onClick={() => !savingCell && setEditingCell(cellKey)}
           style={{ cursor: 'pointer', padding: '4px 8px', textAlign: 'right' }}
@@ -431,6 +540,10 @@ export default function OrderList() {
           {display}
         </div>
       )
+      if (remark || syncedAt) {
+        return <Tooltip title={<div style={{ fontSize: 12 }}>{remark && <div style={{ marginBottom: remark && syncedAt ? 4 : 0 }}>{remark}</div>}{syncedAt && <div>同步时间: {syncedAt}</div>}</div>}>{cell}</Tooltip>
+      }
+      return cell
     }
 
   const fetchOrders = useCallback(async (
@@ -578,6 +691,26 @@ export default function OrderList() {
       message.error('风险扫描失败')
     } finally {
       setScanning(false)
+    }
+  }
+
+  const loadAnalytics = useCallback(async () => {
+    setAnalyticsLoading(true)
+    try {
+      const res: any = await orderApi.getShippingAnalytics()
+      setAnalyticsData(res.data)
+    } catch {
+      console.error('加载分析数据失败')
+    } finally {
+      setAnalyticsLoading(false)
+    }
+  }, [])
+
+  const toggleCharts = () => {
+    const next = !showCharts
+    setShowCharts(next)
+    if (next && !analyticsData) {
+      loadAnalytics()
     }
   }
 
@@ -876,7 +1009,7 @@ export default function OrderList() {
         return (
           <Tooltip title={v}>
             <div>
-              <a onClick={() => navigate(`/orders/${v}/lines/${r.line_no || '10'}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
+              <a onClick={() => navigate(`/orders/${v}`)} style={{ fontWeight: 600, fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>{displayValue}</a>
               {orderTypeTag}
             </div>
           </Tooltip>
@@ -1642,18 +1775,27 @@ export default function OrderList() {
       filterMultiple: true,
     },
     {
-      title: '', key: 'action', minWidth: 50, fixed: 'right' as const,
+      title: '操作', key: 'action', minWidth: 80, fixed: 'right' as const,
       render: (_: any, r: OrderRow) => (
-        <Tooltip title="编辑">
-          <Button type="link" size="small" icon={<EditOutlined />}
-            onClick={() => openEditModal(r)}
-          />
-        </Tooltip>
+        <Space size="small">
+          <Tooltip title="盘点物料库存">
+            <Button type="link" size="small"
+              onClick={() => navigate(`/inventory-check?orderNo=${r.order_no}`)}
+              style={{ color: '#6366f1', fontSize: 'calc(0.75rem * var(--font-size-scale))' }}
+            >盘点</Button>
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button type="link" size="small" icon={<EditOutlined />}
+              onClick={() => openEditModal(r)}
+            />
+          </Tooltip>
+        </Space>
       ),
     },
-  ].map(col =>
+  ].filter(col => col.key === 'action' || visibleColumnKeys.includes(col.key))
+   .map(col =>
     col.key === 'action' ? col : { ...col, ellipsis: true, minWidth: Math.min(col.minWidth || 100, 100) }
-  ), [editingCell, savingCell, handleCellSave, navigate, filters, pagination, sortInfo, fetchOrders, openEditModal])
+  ), [editingCell, savingCell, handleCellSave, navigate, filters, pagination, sortInfo, fetchOrders, openEditModal, visibleColumnKeys])
 
   return (
     <div>
@@ -1694,6 +1836,68 @@ export default function OrderList() {
           <Col flex="auto" />
           <Col>
             <Space>
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                overlayStyle={{ maxWidth: 'calc(100vw - 32px)' }}
+                title={
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: 320 }}>
+                    <span>选择显示列</span>
+                    <Space size="small">
+                      <a
+                        style={{ fontSize: 12 }}
+                        onClick={() => {
+                          setVisibleColumnKeys(ORDER_COLUMN_KEYS)
+                          setColumnVisibility(ORDER_LIST_PAGE_KEY, ORDER_COLUMN_KEYS)
+                        }}
+                      >全选</a>
+                      <a
+                        style={{ fontSize: 12 }}
+                        onClick={() => {
+                          const next = ORDER_COLUMN_KEYS.slice(0, 1)
+                          setVisibleColumnKeys(next)
+                          setColumnVisibility(ORDER_LIST_PAGE_KEY, next)
+                        }}
+                      >清空</a>
+                    </Space>
+                  </div>
+                }
+                content={
+                  <div style={{ maxHeight: 420, overflowY: 'auto', width: 360, paddingRight: 4 }}>
+                    <Checkbox.Group
+                      value={visibleColumnKeys}
+                      onChange={(checked) => {
+                        const next = checked as string[]
+                        if (next.length === 0) return
+                        setVisibleColumnKeys(next)
+                        setColumnVisibility(ORDER_LIST_PAGE_KEY, next)
+                      }}
+                    >
+                      {ORDER_COLUMN_GROUPS.map(group => (
+                        <div key={group.title} style={{ marginBottom: 10 }}>
+                          <div style={{ fontWeight: 600, fontSize: 12, color: '#64748b', marginBottom: 4, borderBottom: '1px solid #f0f0f0', paddingBottom: 2 }}>
+                            {group.title}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, auto)', gap: '2px 16px' }}>
+                            {group.keys.map(({ key, label }) => (
+                              <Checkbox key={key} value={key}>{label}</Checkbox>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </Checkbox.Group>
+                  </div>
+                }
+              >
+                <Button icon={<SettingOutlined />}>列设置</Button>
+              </Popover>
+              <Button
+                icon={<BarChartOutlined />}
+                type={showCharts ? 'primary' : 'default'}
+                onClick={toggleCharts}
+              >
+                {showCharts ? '隐藏图表' : '分析图表'}
+              </Button>
               <Dropdown
                 menu={{
                   items: [
@@ -1711,6 +1915,10 @@ export default function OrderList() {
         </Row>
       </div>
 
+      {showCharts && (
+        <ShippingAnalyticsCharts loading={analyticsLoading} data={analyticsData} />
+      )}
+
       <div className="card-modern" style={{ padding: '2px 0 0' }}>
         <div className="table-modern">
           <Table
@@ -1722,22 +1930,66 @@ export default function OrderList() {
             scroll={{ x: 'max-content', y: 'calc(100vh - 380px)' }}
             locale={{ emptyText: '暂无订单数据' }}
             onChange={handleTableChange}
-            summary={() => (
-              <Table.Summary fixed>
-                <Table.Summary.Row>
-                  <Table.Summary.Cell index={0} colSpan={7}>
+            summary={() => {
+              const visKeys: string[] = columns.map((c: any) => c.key)
+              const qtyIdx = visKeys.indexOf('order_qty')
+              const amtIdx = visKeys.indexOf('order_amount')
+              const lastIdx = visKeys.length - 1
+              // 数量/金额都隐藏时，只显示合计标签
+              if (qtyIdx === -1 && amtIdx === -1) {
+                return (
+                  <Table.Summary fixed>
+                    <Table.Summary.Row>
+                      <Table.Summary.Cell index={0} colSpan={Math.max(1, lastIdx + 1)}>
+                        <span style={{ fontWeight: 600 }}>合计</span>
+                      </Table.Summary.Cell>
+                    </Table.Summary.Row>
+                  </Table.Summary>
+                )
+              }
+              const firstNumIdx = qtyIdx !== -1 ? qtyIdx : amtIdx
+              const lastNumIdx = amtIdx !== -1 ? amtIdx : qtyIdx
+              const cells: React.ReactNode[] = []
+              // 合计标签（占据第一个数值列之前的所有列）
+              if (firstNumIdx > 0) {
+                cells.push(
+                  <Table.Summary.Cell key="label" index={0} colSpan={firstNumIdx}>
                     <span style={{ fontWeight: 600 }}>合计</span>
                   </Table.Summary.Cell>
-                  <Table.Summary.Cell index={7} align="right">
-                    <span style={{ fontWeight: 600 }}>{summary.order_qty_total?.toLocaleString() || '0'}</span>
-                  </Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right">
-                    <span style={{ fontWeight: 600 }}>{summary.order_amount_total?.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}</span>
-                  </Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} colSpan={columns.length - 10} />
-                </Table.Summary.Row>
-              </Table.Summary>
-            )}
+                )
+              }
+              // 在两个数值列之间逐列填充
+              for (let i = firstNumIdx; i <= lastNumIdx; i++) {
+                if (i === qtyIdx) {
+                  cells.push(
+                    <Table.Summary.Cell key="qty" index={i} align="right">
+                      <span style={{ fontWeight: 600 }}>{summary.order_qty_total?.toLocaleString() || '0'}</span>
+                    </Table.Summary.Cell>
+                  )
+                } else if (i === amtIdx) {
+                  cells.push(
+                    <Table.Summary.Cell key="amt" index={i} align="right">
+                      <span style={{ fontWeight: 600 }}>{summary.order_amount_total?.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '0.00'}</span>
+                    </Table.Summary.Cell>
+                  )
+                } else {
+                  cells.push(<Table.Summary.Cell key={`gap-${i}`} index={i} />)
+                }
+              }
+              // 末尾填充（排除操作列）
+              const fillerStart = lastNumIdx + 1
+              const fillerSpan = lastIdx - fillerStart
+              if (fillerSpan > 0) {
+                cells.push(<Table.Summary.Cell key="filler" index={fillerStart} colSpan={fillerSpan} />)
+              }
+              return (
+                <Table.Summary fixed>
+                  <Table.Summary.Row>
+                    {cells}
+                  </Table.Summary.Row>
+                </Table.Summary>
+              )
+            }}
             expandable={{
               expandedRowKeys: expandedKeys,
               onExpandedRowsChange: (keys) => {

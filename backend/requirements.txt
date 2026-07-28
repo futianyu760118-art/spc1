@@ -18,3 +18,4 @@ pyodbc==5.2.0
 apscheduler==3.10.4
 openai>=1.0.0
 dashscope>=1.0.0
+tiktoken>=0.7.0

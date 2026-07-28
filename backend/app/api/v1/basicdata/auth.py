@@ -5,6 +5,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from typing import Optional
+
 from pydantic import BaseModel
 
 from app.core.database import get_db
@@ -16,6 +18,7 @@ from app.core.permissions import merge_role_permission_additions
 from app.core.token_blacklist import add_token_to_blacklist
 from app.models.basicdata.user import SysUser, SysRole
 from app.models.basicdata.supplier import Supplier
+from app.models.basicdata.employee import Employee
 from app.schemas.basicdata.schemas import TokenResponse, UserInfo
 from app.schemas.common import ResponseModel
 
@@ -30,7 +33,8 @@ class ChangePasswordRequest(BaseModel):
 
 
 class UpdatePreferencesRequest(BaseModel):
-    font_size_scale: str
+    font_size_scale: Optional[str] = None
+    ui_preferences: Optional[dict] = None
 
 
 @router.post("/login", response_model=ResponseModel[TokenResponse])
@@ -140,6 +144,16 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
     else:
         is_default = user.is_default_password
 
+    # 获取关联员工的岗位名称；员工未关联时回退到角色名称
+    position_name = None
+    if user.emp_code:
+        emp_result = await db.execute(
+            select(Employee.position).where(Employee.emp_code == user.emp_code)
+        )
+        position_name = emp_result.scalar_one_or_none()
+    if not position_name:
+        position_name = role.role_name
+
     return ResponseModel(data=UserInfo(
         id=user.id,
         username=user.username,
@@ -150,8 +164,10 @@ async def get_me(current_user: dict = Depends(get_current_user), db: AsyncSessio
         supplier_name=user.supplier_name,
         supplier_code=supplier_code,
         font_size_scale=user.font_size_scale,
+        ui_preferences=user.ui_preferences,
         is_default_password=is_default,
         login_version=user.login_version,
+        position_name=position_name,
     ))
 
 
@@ -193,6 +209,9 @@ async def update_preferences(
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
 
-    user.font_size_scale = body.font_size_scale
+    if body.font_size_scale is not None:
+        user.font_size_scale = body.font_size_scale
+    if body.ui_preferences is not None:
+        user.ui_preferences = body.ui_preferences
     await db.commit()
     return ResponseModel(data={"id": user.id, "message": "偏好设置已更新"})

@@ -11,7 +11,7 @@ import {
   BarChartOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { materialApi, orderApi } from '../../../services/api'
+import { materialApi, orderApi, userApi } from '../../../services/api'
 import { formatDate } from '../../../utils'
 import { useExport } from '../../../hooks/useExport'
 import { useAuthStore } from '../../../store/auth'
@@ -40,6 +40,7 @@ interface PlanRow {
   stagnant_qty: number | null
   shortage_qty: number | null
   owner: string | null
+  owner_id: number | null
   po_date: string | null
   is_closed: number
 }
@@ -110,6 +111,10 @@ export default function PurchasePlan() {
   const [batchEditModal, setBatchEditModal] = useState(false)
   const [chatModalOpen, setChatModalOpen] = useState(false)
   const [chatRecord, setChatRecord] = useState<PlanRow | null>(null)
+  const [userOptions, setUserOptions] = useState<{ value: number; label: string; display_name: string }[]>([])
+  const [userSearching, setUserSearching] = useState(false)
+  const [batchUserOptions, setBatchUserOptions] = useState<{ value: number; label: string; display_name: string }[]>([])
+  const [addUserOptions, setAddUserOptions] = useState<{ value: number; label: string; display_name: string }[]>([])
   const [savingCell, setSavingCell] = useState<string | null>(null)
   const [editingCell, setEditingCell] = useState<string | null>(null)
 
@@ -208,6 +213,29 @@ export default function PurchasePlan() {
     }
   }
 
+  const searchUsers = useCallback(async (keyword: string, mode: 'edit' | 'batch' | 'add' = 'edit') => {
+    setUserSearching(true)
+    try {
+      const res: any = await userApi.employeeOptions({ keyword: keyword || undefined })
+      const options = (res.data || []).map((u: any) => ({
+        value: u.id,
+        label: u.display_name || u.username,
+        display_name: u.display_name || u.username,
+      }))
+      if (mode === 'batch') {
+        setBatchUserOptions(options)
+      } else if (mode === 'add') {
+        setAddUserOptions(options)
+      } else {
+        setUserOptions(options)
+      }
+    } catch {
+      // ignore
+    } finally {
+      setUserSearching(false)
+    }
+  }, [])
+
   const openEdit = (row: PlanRow) => {
     setEditRecord(row)
     loadOrders()
@@ -226,9 +254,13 @@ export default function PurchasePlan() {
       arrival_hour_note: row.arrival_hour_note,
       inspection_date: row.inspection_date ? dayjs(row.inspection_date) : null,
       owner: row.owner,
+      owner_id: row.owner_id,
       is_closed: row.is_closed,
     })
     setEditModal(true)
+    if (row.owner) {
+      searchUsers(row.owner, 'edit')
+    }
   }
 
   const handleEditSubmit = async (values: any) => {
@@ -248,6 +280,7 @@ export default function PurchasePlan() {
         arrival_hour_note: values.arrival_hour_note,
         inspection_date: values.inspection_date ? dayjs(values.inspection_date).format('YYYY-MM-DD') : null,
         owner: values.owner || null,
+        owner_id: values.owner_id || null,
         is_closed: values.is_closed ? 1 : 0,
       }
       await materialApi.updatePurchasePlan(editRecord.id, payload)
@@ -390,6 +423,7 @@ export default function PurchasePlan() {
         eta: values.eta ? dayjs(values.eta).format('YYYY-MM-DD') : null,
         order_no: values.order_no,
         owner: values.owner || null,
+        owner_id: values.owner_id || null,
         po_status: 'pending',
         data_source: 'csv_plan',
       }
@@ -422,6 +456,7 @@ export default function PurchasePlan() {
         ids: number[]
         eta?: string
         owner?: string
+        owner_id?: number
         supplier_account?: string
         actual_arrival_date?: string
         inspection_date?: string
@@ -430,6 +465,11 @@ export default function PurchasePlan() {
       } = { ids: selectedRowKeys }
       if (values.eta) payload.eta = dayjs(values.eta).format('YYYY-MM-DD')
       if (values.owner !== undefined && values.owner !== '') payload.owner = values.owner
+      if (values.owner_id !== undefined && values.owner_id !== null) {
+        payload.owner_id = values.owner_id
+        const opt = batchUserOptions.find(u => u.value === values.owner_id)
+        if (opt && !values.owner) payload.owner = opt.display_name
+      }
       if (values.supplier_account !== undefined && values.supplier_account !== '') payload.supplier_account = values.supplier_account
       if (values.actual_arrival_date) payload.actual_arrival_date = dayjs(values.actual_arrival_date).format('YYYY-MM-DD')
       if (values.inspection_date) payload.inspection_date = dayjs(values.inspection_date).format('YYYY-MM-DD')
@@ -438,6 +478,7 @@ export default function PurchasePlan() {
       if (
         !payload.eta
         && !payload.owner
+        && !payload.owner_id
         && !payload.supplier_account
         && !payload.actual_arrival_date
         && !payload.inspection_date
@@ -640,7 +681,11 @@ export default function PurchasePlan() {
     {
       title: '责任人', dataIndex: 'owner', width: 80, fixed: 'right' as const, sorter: true,
       ...getTextFilterProps('owner'),
-      render: editableText('owner'),
+      render: (v: string | null) => (
+        <div style={{ padding: '4px 8px', minHeight: '24px' }}>
+          {v || <span style={{ color: '#cbd5e1' }}>-</span>}
+        </div>
+      ),
     },
     {
       title: <Tooltip title="检验单日期">检验日期</Tooltip>, dataIndex: 'inspection_date', width: 120,
@@ -865,20 +910,78 @@ export default function PurchasePlan() {
         <Form form={form} layout="vertical" onFinish={handleAdd}>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="supplier_name" label="供应商" rules={[{ required: true }]}>
-                <Input />
+              <Form.Item name="owner_id" label="责任人" shouldUpdate>
+                {({ getFieldValue, setFieldValue }) => (
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="搜索选择责任人"
+                    loading={userSearching}
+                    filterOption={false}
+                    onSearch={(val) => searchUsers(val, 'add')}
+                    onChange={(val: number | undefined) => {
+                      setFieldValue('owner_id', val || null)
+                      if (val) {
+                        const opt = addUserOptions.find(u => u.value === val)
+                        if (opt) setFieldValue('owner', opt.display_name)
+                      } else {
+                        setFieldValue('owner', null)
+                      }
+                    }}
+                    value={getFieldValue('owner_id')}
+                    onFocus={() => {
+                      if (addUserOptions.length === 0) searchUsers('', 'add')
+                    }}
+                  >
+                    {addUserOptions.map(u => (
+                      <Select.Option key={u.value} value={u.value}>{u.label}</Select.Option>
+                    ))}
+                  </Select>
+                )}
               </Form.Item>
             </Col>
+            <Form.Item name="owner" hidden>
+              <Input />
+            </Form.Item>
             <Col span={12}>
               <Form.Item name="supplier_account" label="供应商账号">
                 <Input placeholder="用于供应商登录/同步" />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="material_code" label="物料长代码" rules={[{ required: true }]}>
-                <Input />
+              <Form.Item name="owner_id" label="责任人" shouldUpdate>
+                {({ getFieldValue, setFieldValue }) => (
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="搜索选择责任人"
+                    loading={userSearching}
+                    filterOption={false}
+                    onSearch={(val) => searchUsers(val, 'edit')}
+                    onChange={(val: number | undefined) => {
+                      setFieldValue('owner_id', val || null)
+                      if (val) {
+                        const opt = userOptions.find(u => u.value === val)
+                        if (opt) setFieldValue('owner', opt.display_name)
+                      } else {
+                        setFieldValue('owner', null)
+                      }
+                    }}
+                    value={getFieldValue('owner_id')}
+                    onFocus={() => {
+                      if (userOptions.length === 0) searchUsers('', 'edit')
+                    }}
+                  >
+                    {userOptions.map(u => (
+                      <Select.Option key={u.value} value={u.value}>{u.label}</Select.Option>
+                    ))}
+                  </Select>
+                )}
               </Form.Item>
             </Col>
+            <Form.Item name="owner" hidden>
+              <Input />
+            </Form.Item>
             <Col span={12}>
               <Form.Item name="material_name" label="物料名称">
                 <Input />
@@ -1048,8 +1151,37 @@ export default function PurchasePlan() {
           <Form.Item name="eta" label="交货时间">
             <DatePicker style={{ width: '100%' }} placeholder="选择交货日期" />
           </Form.Item>
-          <Form.Item name="owner" label="责任人">
-            <Input placeholder="输入责任人" />
+          <Form.Item name="owner_id" label="责任人" shouldUpdate>
+            {({ getFieldValue, setFieldValue }) => (
+              <Select
+                showSearch
+                allowClear
+                placeholder="搜索选择责任人"
+                loading={userSearching}
+                filterOption={false}
+                onSearch={(val) => searchUsers(val, 'batch')}
+                onChange={(val: number | undefined) => {
+                  setFieldValue('owner_id', val || null)
+                  if (val) {
+                    const opt = batchUserOptions.find(u => u.value === val)
+                    if (opt) setFieldValue('owner', opt.display_name)
+                  } else {
+                    setFieldValue('owner', null)
+                  }
+                }}
+                value={getFieldValue('owner_id')}
+                onFocus={() => {
+                  if (batchUserOptions.length === 0) searchUsers('', 'batch')
+                }}
+              >
+                {batchUserOptions.map(u => (
+                  <Select.Option key={u.value} value={u.value}>{u.label}</Select.Option>
+                ))}
+              </Select>
+            )}
+          </Form.Item>
+          <Form.Item name="owner" hidden>
+            <Input />
           </Form.Item>
           <Form.Item name="supplier_account" label="供应商账号">
             <Input placeholder="输入供应商账号" />

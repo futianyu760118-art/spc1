@@ -26,6 +26,7 @@ class PurchaseOrderOut(BaseModel):
     original_eta: Optional[date] = None
     actual_arrival_date: Optional[date] = None
     owner: Optional[str] = None
+    owner_id: Optional[int] = None
     remark: Optional[str] = None
     data_source: Optional[str] = None
     # CSV采购到料计划扩展字段
@@ -63,6 +64,7 @@ class PurchaseOrderCreate(BaseModel):
     eta: Optional[date] = None
     original_eta: Optional[date] = None
     owner: Optional[str] = None
+    owner_id: Optional[int] = None
     data_source: Optional[str] = None
     order_no: Optional[str] = None
     spec_model: Optional[str] = None
@@ -88,6 +90,7 @@ class PurchaseOrderUpdate(BaseModel):
     original_eta: Optional[date] = None
     actual_arrival_date: Optional[date] = None
     owner: Optional[str] = None
+    owner_id: Optional[int] = None
     remark: Optional[str] = None
     received_qty: Optional[float] = None
     arrival_hour_note: Optional[str] = None
@@ -100,6 +103,7 @@ class PurchaseOrderBatchUpdate(BaseModel):
     ids: List[int]
     eta: Optional[date] = None
     owner: Optional[str] = None
+    owner_id: Optional[int] = None
     supplier_account: Optional[str] = None
     actual_arrival_date: Optional[date] = None
     inspection_date: Optional[date] = None
@@ -240,12 +244,18 @@ class LongLeadDerivedItem(BaseModel):
 class KitAnalysisMaterialItem(BaseModel):
     material_code: str
     material_name: Optional[str] = None
+    product_code: Optional[str] = None
+    product_name: Optional[str] = None
     material_property: Optional[int] = None
     material_property_label: Optional[str] = None
     material_type: Optional[str] = None
     unit_name: Optional[str] = None
     supplier_name: Optional[str] = None
     order_qty: Optional[float] = None
+    mrp_qty: Optional[float] = None
+    po_qty: Optional[float] = None
+    stock_qty: Optional[float] = None
+    available_stock_qty: Optional[float] = None
     shortage_qty: Optional[float] = None
     req_date: Optional[date] = None
     po_no: Optional[str] = None
@@ -263,6 +273,8 @@ class KitAnalysisMaterialItem(BaseModel):
     is_closed: int = 0
     bill_type: Optional[int] = None
     bill_type_label: Optional[str] = None
+    bom_demand_qty: Optional[float] = None
+    transit_qty: Optional[float] = None
 
 
 class KitAnalysisItem(BaseModel):
@@ -325,6 +337,9 @@ class InvoiceDetail(BaseModel):
     settlement_method: str = ''
     invoice_amount: float = 0.0
     remain_payable: float = 0.0
+    payment_apply_amount: float = 0.0
+    paid_amount: float = 0.0
+    payment_order_id: Optional[int] = None
 
 
 class SupplierPaymentOut(BaseModel):
@@ -392,7 +407,65 @@ class MrpPlanOrderOut(BaseModel):
     is_closed: int = 0
     close_type: Optional[int] = None
     bill_type: Optional[int] = None
+    stock_qty: Optional[float] = None
+    audit_date: Optional[date] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+# ============ 订单物料盘点 ============
+
+class InventoryCheckCreate(BaseModel):
+    note: Optional[str] = None
+
+
+class MaterialSnapshotItem(BaseModel):
+    material_code: str
+    material_name: Optional[str] = None
+    status: str
+    bom_demand_qty: Optional[float] = None
+    stock_qty: Optional[float] = None
+    available_stock_qty: Optional[float] = None
+    transit_qty: Optional[float] = None
+    po_qty: Optional[float] = None
+    received_qty: Optional[float] = None
+    shortage_qty: Optional[float] = None
+    supplier_name: Optional[str] = None
+    po_no: Optional[str] = None
+    eta: Optional[date] = None
+    bill_type: Optional[int] = None
+    bill_type_label: Optional[str] = None
+    material_property: Optional[int] = None
+    material_property_label: Optional[str] = None
+
+
+class InventoryCheckOut(BaseModel):
+    id: int
+    order_no: str
+    checked_by: Optional[str] = None
+    checked_at: datetime
+    total_materials: Optional[int] = None
+    received_materials: Optional[int] = None
+    partial_received_materials: Optional[int] = None
+    not_ordered_materials: Optional[int] = None
+    overdue_materials: Optional[int] = None
+    kit_rate: Optional[float] = None
+    materials_snapshot: Optional[List[MaterialSnapshotItem]] = None
+    note: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class InventoryCheckListOut(BaseModel):
+    id: int
+    order_no: str
+    checked_by: Optional[str] = None
+    checked_at: datetime
+    total_materials: Optional[int] = None
+    kit_rate: Optional[float] = None
+    note: Optional[str] = None
 
     model_config = {"from_attributes": True}

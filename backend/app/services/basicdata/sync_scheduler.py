@@ -39,14 +39,19 @@ class SyncScheduler:
             "materials_masterdata": "sync_materials_masterdata",
             "skus": "sync_skus",
             "products": "sync_products",
+            "boms": "sync_boms",
+            "bom_details": "sync_bom_details",
             "warehouses": "sync_warehouses",
+            "locations": "sync_locations",
             "processes": "sync_processes",
             "organizations": "sync_organizations",
             "positions": "sync_positions",
             "employees": "sync_employees",
             "purchase_invoices": "sync_purchase_invoices",
+            "payment_applies": "sync_payment_applies",
             "quality_issues": "sync_quality_issues",
             "mrp_plan_orders": "sync_mrp_plan_orders",
+            "inventory": "sync_inventory",
         }
 
     async def _load_sync_configs(self, db: AsyncSession) -> list[SyncSqlConfig]:
@@ -188,14 +193,15 @@ class SyncScheduler:
                 synced_count = result.get("synced", 0)
                 created_count = result.get("created", 0)
                 updated_count = result.get("updated", 0)
-                errors_count = len(result.get("errors", []))
-                
+                errors_list = result.get("errors", [])
+                errors_count = len(errors_list)
+
                 message = f"同步完成: 处理{synced_count}条, 新增{created_count}条, 更新{updated_count}条"
                 if errors_count > 0:
                     message += f", 失败{errors_count}条"
-                
+
                 await self._update_sync_status(db, config, "success", message)
-                
+
                 # 更新 SyncLog
                 sync_log.status = "success" if errors_count == 0 else "failed"
                 sync_log.finished_at = datetime.now()
@@ -205,7 +211,12 @@ class SyncScheduler:
                 sync_log.updated_count = updated_count
                 sync_log.failed_count = errors_count
                 sync_log.message = message
-                
+                # 同步方法内部捕获的异常只进入了 stats["errors"]，
+                # 不会触发下方外层 except。这里把错误明细写入 error_detail，
+                # 否则前端只能看到 "失败N条" 而无法定位失败原因。
+                if errors_list:
+                    sync_log.error_detail = "\n".join(errors_list[:50])
+
                 logger.info(f"[同步任务] {sync_type} - {message}")
             else:
                 message = f"暂不支持 {sync_type} 的同步方法"

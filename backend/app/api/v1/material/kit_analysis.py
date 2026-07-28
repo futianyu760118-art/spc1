@@ -16,6 +16,7 @@ router = APIRouter()
 @router.get("", response_model=ResponseModel[dict])
 async def kit_analysis(
     order_no: Optional[str] = Query(None),
+    order_type: Optional[str] = Query(None, description="订单类型，多选逗号分隔：big（大单，HJ开头）, sample（样品单，HJY开头）"),
     risk_level: Optional[str] = Query(None),
     sort_by: Optional[str] = Query(None, description="排序字段"),
     sort_order: Optional[str] = Query(None, description="排序方向 asc/desc"),
@@ -27,7 +28,7 @@ async def kit_analysis(
     current_user: dict = Depends(PermissionChecker("materials.kit_analysis", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await get_kit_analysis(db, order_no=order_no, risk_level=risk_level, sort_by=sort_by, sort_order=sort_order, page=page, page_size=page_size, only_pending_shipment=only_pending_shipment, promised_date_start=promised_date_start, promised_date_end=promised_date_end)
+    result = await get_kit_analysis(db, order_no=order_no, order_type=order_type, risk_level=risk_level, sort_by=sort_by, sort_order=sort_order, page=page, page_size=page_size, only_pending_shipment=only_pending_shipment, promised_date_start=promised_date_start, promised_date_end=promised_date_end)
     return ResponseModel(data=result)
 
 
@@ -40,8 +41,8 @@ async def order_materials(
     material_type: Optional[str] = Query(None, description="物料类型筛选"),
     status: Optional[str] = Query(None, description="状态筛选"),
     supplier: Optional[str] = Query(None, description="供应商筛选"),
-    order_qty_min: Optional[float] = Query(None, description="需求量最小值"),
-    order_qty_max: Optional[float] = Query(None, description="需求量最大值"),
+    po_qty_min: Optional[float] = Query(None, description="下单数量最小值"),
+    po_qty_max: Optional[float] = Query(None, description="下单数量最大值"),
     received_qty_min: Optional[float] = Query(None, description="收料量最小值"),
     received_qty_max: Optional[float] = Query(None, description="收料量最大值"),
     eta_start: Optional[str] = Query(None, description="ETA开始日期"),
@@ -66,8 +67,8 @@ async def order_materials(
         material_type_filter=material_type,
         status_filter=status,
         supplier_filter=supplier,
-        order_qty_min=order_qty_min,
-        order_qty_max=order_qty_max,
+        po_qty_min=po_qty_min,
+        po_qty_max=po_qty_max,
         received_qty_min=received_qty_min,
         received_qty_max=received_qty_max,
         eta_start=eta_start,

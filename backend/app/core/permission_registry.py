@@ -143,6 +143,7 @@ declare_permission("orders", "订单交付中心", module="orders", sort_order=3
 declare_permission("orders.list", "订单总控台", module="orders", parent_code="orders", route_path="/orders", sort_order=1)
 declare_permission("orders.run_orders", "跑单管理", module="orders", parent_code="orders", route_path="/run-orders", sort_order=2)
 declare_permission("orders.risk_pool", "订单风险池", module="orders", parent_code="orders", route_path="/order-risk-pool", sort_order=3)
+declare_permission("orders.inventory_check", "订单物料盘点", module="orders", parent_code="orders", route_path="/inventory-check", sort_order=4)
 
 # 物料齐套中心
 declare_permission("materials", "物料齐套中心", module="materials", sort_order=4)
@@ -200,10 +201,12 @@ declare_permission("basicdata.data.materials", "物料", module="basicdata", par
 declare_permission("basicdata.data.skus", "SKU", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/skus", sort_order=4)
 declare_permission("basicdata.data.products", "产品", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/products", sort_order=5)
 declare_permission("basicdata.data.warehouses", "仓库", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/warehouses", sort_order=6)
-declare_permission("basicdata.data.processes", "工序", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/processes", sort_order=7)
-declare_permission("basicdata.data.organizations", "组织", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/organizations", sort_order=8)
-declare_permission("basicdata.data.positions", "岗位", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/positions", sort_order=9)
-declare_permission("basicdata.data.employees", "人员", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/employees", sort_order=10)
+declare_permission("basicdata.data.locations", "库位", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/locations", sort_order=7)
+declare_permission("basicdata.data.processes", "工序", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/processes", sort_order=8)
+declare_permission("basicdata.data.organizations", "组织", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/organizations", sort_order=9)
+declare_permission("basicdata.data.positions", "岗位", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/positions", sort_order=10)
+declare_permission("basicdata.data.employees", "人员", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/employees", sort_order=11)
+declare_permission("basicdata.data.inventory", "库存", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/inventory", sort_order=12)
 declare_permission("basicdata.feedback", "问题反馈", module="basicdata", parent_code="basicdata", route_path="/basicdata/feedback", sort_order=3)
 declare_permission("basicdata.files", "文件管理", module="basicdata", parent_code="basicdata", route_path="/basicdata/files", sort_order=4)
 declare_permission("basicdata.data_supply", "数据供给", module="basicdata", parent_code="basicdata", route_path="/basicdata/data-supply", sort_order=10)
@@ -212,3 +215,9 @@ declare_permission("users", "用户管理", module="basicdata", parent_code="bas
 declare_permission("roles", "角色管理", module="basicdata", parent_code="basicdata", route_path="/roles", sort_order=7)
 declare_permission("audit", "审计日志", module="basicdata", parent_code="basicdata", actions=["read"], route_path="/audit", sort_order=8)
 declare_permission("settings", "同步SQL配置", module="basicdata", parent_code="basicdata", route_path="/sync-config", sort_order=9)
+
+# 采购中心
+declare_permission("purchase", "采购中心", module="purchase", sort_order=11)
+declare_permission("purchase.price_change", "调价单管理", module="purchase", parent_code="purchase", route_path="/purchase/price-change", sort_order=1)
+declare_permission("purchase.price_change.pending", "待我审批", module="purchase", parent_code="purchase", route_path="/purchase/price-change/pending", sort_order=2)
+declare_permission("purchase.price_change.config", "审批配置", module="purchase", parent_code="purchase", route_path="/purchase/price-change/config", sort_order=3)

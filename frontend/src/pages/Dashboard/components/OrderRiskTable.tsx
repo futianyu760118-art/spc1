@@ -101,7 +101,7 @@ export default function OrderRiskTable({ orders, loading, pagination, onPageChan
           </Space>
         ) : (
           <Space size="small">
-            <Button type="link" size="small" style={{ padding: 0 }} onClick={() => navigate(`/orders/${record.order_no}/lines/${record.line_no}`)}>
+            <Button type="link" size="small" style={{ padding: 0 }} onClick={() => navigate(`/orders/${record.order_no}`)}>
               详情
             </Button>
             <Button size="small" icon={<EditOutlined />} onClick={() => edit(record)} />

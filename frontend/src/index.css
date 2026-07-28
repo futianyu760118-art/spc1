@@ -125,6 +125,12 @@ body {
   border-bottom: 1px solid rgba(0,0,0,.06);
 }
 
+/* ===== 数据供给：Tabs 标签栏吸顶（紧贴 header 下方） ===== */
+/* 容器整体 sticky 由组件 inline style 控制，此处仅修复 AntD 内部 overflow */
+.data-supply-tabs .ant-tabs-nav-wrap {
+  overflow: visible !important;
+}
+
 /* ===== Login ===== */
 .login-bg {
   height: 100vh; overflow: hidden; display: flex; align-items: center; justify-content: center;
