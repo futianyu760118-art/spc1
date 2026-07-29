@@ -12,7 +12,9 @@ export default function OrderStandards() {
         update: documentApi.updateOrderStandard,
         remove: documentApi.deleteOrderStandard,
         versions: documentApi.listOrderStandardVersions,
-        publish: documentApi.publishOrderStandardVersion,
+        publishVersion: documentApi.publishOrderStandardVersion,
+        publish: documentApi.publishOrderStandard,
+        archive: documentApi.archiveOrderStandard,
       }}
     />
   )

@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
-from sqlalchemy import select, func, desc, or_, String as SAString
+from sqlalchemy import select, func, desc, or_, String as SAString, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.basicdata.inventory import Inventory
-from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.material import Material
 from app.models.material.inventory_check import StockCheck, StockCheckItem
-from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.order.sale_order import SaleOrder
 from app.services.order.order_materials_service import get_order_product_materials, MATERIAL_PROPERTY_LABELS
 
 
@@ -120,11 +118,45 @@ def _gen_check_no(seq: int) -> str:
     return f"PD{datetime.now().strftime('%Y%m%d')}-{seq:03d}"
 
 
-async def _get_stock_by_material_id(
+async def _get_stock_by_warehouse(
+    db: AsyncSession,
+    material_ids: List[int],
+) -> Dict[Tuple[int, int], Tuple[str, Decimal]]:
+    """按 (material_id, wh_id) 分组聚合 scm_inventory.qty_on_hand。
+
+    同仓多库位的 qty_on_hand 求和；返回 {(mid, wh_id): (wh_name, qty)}。
+    仅包含 scm_inventory 中存在记录的仓（含 qty=0 的仓）。
+    """
+    if not material_ids:
+        return {}
+    result = await db.execute(
+        select(
+            Inventory.material_id,
+            Inventory.wh_id,
+            func.max(Inventory.wh_name).label("wh_name"),
+            func.coalesce(func.sum(Inventory.qty_on_hand), 0).label("wh_qty"),
+        )
+        .where(Inventory.material_id.in_(material_ids))
+        .group_by(Inventory.material_id, Inventory.wh_id)
+    )
+    out: Dict[Tuple[int, int], Tuple[str, Decimal]] = {}
+    for row in result.all():
+        wh_name = (row.wh_name or "").strip() or f"WH#{row.wh_id}"
+        out[(int(row.material_id), int(row.wh_id))] = (
+            wh_name,
+            Decimal(str(row.wh_qty or 0)),
+        )
+    return out
+
+
+async def _get_stock_aggregated_by_material_id(
     db: AsyncSession,
     material_ids: List[int],
 ) -> Dict[int, Decimal]:
-    """按 material_id 聚合 scm_inventory.qty_on_hand"""
+    """按 material_id 聚合 scm_inventory.qty_on_hand（跨仓求和）。
+
+    用于 MaterialPickerModal 候选列表等需要单值的场景。
+    """
     if not material_ids:
         return {}
     result = await db.execute(
@@ -136,6 +168,64 @@ async def _get_stock_by_material_id(
         .group_by(Inventory.material_id)
     )
     return {row.material_id: Decimal(str(row.total_qty or 0)) for row in result}
+
+
+def _split_stock_by_warehouse(
+    stock_map: Dict[Tuple[int, int], Tuple[str, Decimal]],
+    material_ids: List[int],
+) -> Dict[int, List[Tuple[int, str, Decimal]]]:
+    """将 _get_stock_by_warehouse 的结果按 material_id 分组成
+    {material_id: [(wh_id, wh_name, qty), ...]}。
+    """
+    grouped: Dict[int, List[Tuple[int, str, Decimal]]] = {m: [] for m in material_ids}
+    for (mid, wh_id), (wh_name, qty) in stock_map.items():
+        if mid in grouped:
+            grouped[mid].append((wh_id, wh_name, qty))
+    for mid in grouped:
+        grouped[mid].sort(key=lambda x: (x[1], x[0]))
+    return grouped
+
+
+async def _get_recent_checked_by_warehouse(
+    db: AsyncSession,
+    keys: List[Tuple[Optional[int], Optional[int]]],
+) -> Dict[Tuple[Optional[int], Optional[int]], Dict]:
+    """对每个 (material_id, wh_id)，查最近一条 actual_qty 非空且所在盘点单未取消的行。
+
+    返回 {(mid, wh_id): {"actual_qty": Decimal, "check_no": str, "check_date": date}}。
+    wh_id 为 None 时按 IS NULL 匹配（未入库合成行）。
+    PostgreSQL 用 DISTINCT ON 一次取齐。
+    """
+    if not keys:
+        return {}
+    mids = [k[0] for k in keys]
+    sql = text(
+        """
+        SELECT DISTINCT ON (ic.material_id, ic.wh_id)
+               ic.material_id AS mid,
+               ic.wh_id       AS whid,
+               ic.actual_qty  AS actual_qty,
+               h.check_no     AS check_no,
+               h.check_date   AS check_date
+        FROM scm_inventory_check_item ic
+        JOIN scm_inventory_check h ON h.id = ic.check_id
+        WHERE ic.material_id = ANY(:mids)
+          AND ic.actual_qty IS NOT NULL
+          AND h.status <> 'cancelled'
+        ORDER BY ic.material_id, ic.wh_id, h.check_date DESC, h.created_at DESC
+        """
+    )
+    rows = (await db.execute(sql, {"mids": mids})).all()
+    out: Dict[Tuple[Optional[int], Optional[int]], Dict] = {}
+    for r in rows:
+        mid = int(r.mid) if r.mid is not None else None
+        whid = int(r.whid) if r.whid is not None else None
+        out[(mid, whid)] = {
+            "actual_qty": Decimal(str(r.actual_qty)),
+            "check_no": r.check_no,
+            "check_date": r.check_date,
+        }
+    return out
 
 
 async def enrich_items_assoc(db: AsyncSession, items: List[StockCheckItem]) -> None:
@@ -158,22 +248,12 @@ async def enrich_items_assoc(db: AsyncSession, items: List[StockCheckItem]) -> N
     for r in mat_res.all():
         prop_map[int(r.erp_material_id)] = r.material_property
         type_map[int(r.erp_material_id)] = r.material_type
-    wh_res = await db.execute(
-        select(Inventory.material_id, Inventory.wh_name)
-        .where(Inventory.material_id.in_(mids))
-        .distinct()
-    )
-    wh_map: Dict[int, List[str]] = defaultdict(list)
-    for r in wh_res.all():
-        name = r.wh_name and str(r.wh_name).strip()
-        if name:
-            wh_map[int(r.material_id)].append(name)
     for it in items:
         mid = int(it.material_id) if it.material_id is not None else None
         mp = prop_map.get(mid) if mid is not None else None
         it.material_property_label = MATERIAL_PROPERTY_LABELS.get(mp, str(mp)) if mp is not None else None
         it.material_type = type_map.get(mid) if mid is not None else None
-        it.warehouses = ", ".join(sorted(set(wh_map.get(mid, [])))) or None
+        it.warehouses = None
 
 
 async def _refresh_check_aggregates(db: AsyncSession, check_id: int) -> None:
@@ -264,7 +344,8 @@ async def create_stock_check_from_order(
         if mid not in seen:
             seen.add(mid)
             unique_mids.append(mid)
-    stock_map = await _get_stock_by_material_id(db, unique_mids)
+    stock_map = await _get_stock_by_warehouse(db, unique_mids)
+    warehouses_by_mid = _split_stock_by_warehouse(stock_map, unique_mids)
 
     # 记录本次盘点覆盖的产品行(用于"该订单哪些产品已盘点"的可追溯性)
     covered_products = [
@@ -297,25 +378,98 @@ async def create_stock_check_from_order(
     db.add(head)
     await db.flush()
 
-    item_rows: List[StockCheckItem] = []
+    # 1) 收敛：同一 (material_id, wh_id) 跨 BOM 节点/产品只取一行（取首次出现的物料信息）
+    dedup_order: List[Tuple[Optional[int], Optional[int]]] = []
+    dedup_row_meta: Dict[Tuple[int, Optional[int]], Dict] = {}
     for lm, n, lvl in nodes:
         mid = int(n.material_id)
-        sys_q = stock_map.get(mid, Decimal("0"))
-        item_rows.append(StockCheckItem(
-            check_id=head.id,
-            line_no=n.line_no,
-            level=lvl,
-            material_id=mid,
-            material_code=n.material_code,
-            material_name=n.material_name,
-            spec_model=n.spec_model,
-            unit=n.unit,
-            req_qty=Decimal(str(n.req_qty or 0)),
-            system_qty=sys_q,
-            actual_qty=None,
-            diff_qty=Decimal("0"),
-            is_checked=0,
-        ))
+        warehouses = warehouses_by_mid.get(mid, [])
+        if warehouses:
+            for wh_id, wh_name, sys_q in warehouses:
+                k = (mid, wh_id)
+                if k in dedup_row_meta:
+                    continue
+                dedup_row_meta[k] = {
+                    "material_code": n.material_code,
+                    "material_name": n.material_name,
+                    "spec_model": n.spec_model,
+                    "unit": n.unit,
+                    "system_qty": sys_q,
+                    "wh_name": wh_name,
+                }
+                dedup_order.append(k)
+        else:
+            k = (mid, None)
+            if k in dedup_row_meta:
+                continue
+            dedup_row_meta[k] = {
+                "material_code": n.material_code,
+                "material_name": n.material_name,
+                "spec_model": n.spec_model,
+                "unit": n.unit,
+                "system_qty": Decimal("0"),
+                "wh_name": "(未入库)",
+            }
+            dedup_order.append(k)
+
+    # 2) 查近盘预填补
+    from app.core.config import get_settings
+    skip_days = int(get_settings().STOCK_CHECK_RECENT_SKIP_DAYS)
+    recent_map = await _get_recent_checked_by_warehouse(db, dedup_order)
+    today = date.today()
+
+    # 3) 写行
+    item_rows: List[StockCheckItem] = []
+    for k in dedup_order:
+        mid, wh_id = k
+        meta = dedup_row_meta[k]
+        recent = recent_map.get(k)
+        prefill = (
+            recent is not None
+            and recent["check_date"] is not None
+            and (today - recent["check_date"]).days <= skip_days
+        )
+        if prefill:
+            actual_q = recent["actual_qty"]
+            item_rows.append(StockCheckItem(
+                check_id=head.id,
+                line_no=None,
+                level=None,
+                material_id=mid,
+                material_code=meta["material_code"],
+                material_name=meta["material_name"],
+                spec_model=meta["spec_model"],
+                unit=meta["unit"],
+                req_qty=Decimal("0"),
+                system_qty=meta["system_qty"],
+                wh_id=wh_id,
+                wh_name=meta["wh_name"],
+                actual_qty=actual_q,
+                diff_qty=Decimal(str(actual_q)) - Decimal(str(meta["system_qty"])),
+                is_checked=1,
+                checked_at=datetime.utcnow(),
+                checked_by="system-recent",
+                recent_checked_check_no=recent["check_no"],
+                recent_checked_date=recent["check_date"],
+            ))
+        else:
+            item_rows.append(StockCheckItem(
+                check_id=head.id,
+                line_no=None,
+                level=None,
+                material_id=mid,
+                material_code=meta["material_code"],
+                material_name=meta["material_name"],
+                spec_model=meta["spec_model"],
+                unit=meta["unit"],
+                req_qty=Decimal("0"),
+                system_qty=meta["system_qty"],
+                wh_id=wh_id,
+                wh_name=meta["wh_name"],
+                actual_qty=None,
+                diff_qty=Decimal("0"),
+                is_checked=0,
+            ))
     db.add_all(item_rows)
     await db.flush()
 
@@ -361,7 +515,8 @@ async def create_stock_check_from_materials(
         raise ValueError("所选物料均不存在或已删除,无法创建盘点单")
     mat_map = {m.erp_material_id: m for m in materials}
 
-    stock_map = await _get_stock_by_material_id(db, [m.erp_material_id for m in materials])
+    stock_map = await _get_stock_by_warehouse(db, [m.erp_material_id for m in materials])
+    warehouses_by_mid = _split_stock_by_warehouse(stock_map, [m.erp_material_id for m in materials])
 
     seq = await _next_seq_for_today(db)
     check_no = _gen_check_no(seq)
@@ -383,21 +538,43 @@ async def create_stock_check_from_materials(
 
     item_rows: List[StockCheckItem] = []
     for m in materials:
-        sys_q = stock_map.get(m.erp_material_id, Decimal("0"))
-        item_rows.append(StockCheckItem(
-            check_id=head.id,
-            line_no=None,
-            material_id=m.erp_material_id,
-            material_code=m.material_code,
-            material_name=m.material_name,
-            spec_model=m.spec_model,
-            unit=m.unit_of_measure,
-            req_qty=Decimal("0"),
-            system_qty=sys_q,
-            actual_qty=None,
-            diff_qty=Decimal("0"),
-            is_checked=0,
-        ))
+        mid = m.erp_material_id
+        warehouses = warehouses_by_mid.get(mid, [])
+        if warehouses:
+            for wh_id, wh_name, sys_q in warehouses:
+                item_rows.append(StockCheckItem(
+                    check_id=head.id,
+                    line_no=None,
+                    material_id=mid,
+                    material_code=m.material_code,
+                    material_name=m.material_name,
+                    spec_model=m.spec_model,
+                    unit=m.unit_of_measure,
+                    req_qty=Decimal("0"),
+                    system_qty=sys_q,
+                    wh_id=wh_id,
+                    wh_name=wh_name,
+                    actual_qty=None,
+                    diff_qty=Decimal("0"),
+                    is_checked=0,
+                ))
+        else:
+            item_rows.append(StockCheckItem(
+                check_id=head.id,
+                line_no=None,
+                material_id=mid,
+                material_code=m.material_code,
+                material_name=m.material_name,
+                spec_model=m.spec_model,
+                unit=m.unit_of_measure,
+                req_qty=Decimal("0"),
+                system_qty=Decimal("0"),
+                wh_id=None,
+                wh_name="(未入库)",
+                actual_qty=None,
+                diff_qty=Decimal("0"),
+                is_checked=0,
+            ))
     db.add_all(item_rows)
     await db.flush()
 
@@ -429,7 +606,7 @@ async def list_material_candidates(
     )).scalars().all()
 
     erp_ids = [m.erp_material_id for m in rows]
-    stock_map = await _get_stock_by_material_id(db, erp_ids)
+    stock_map = await _get_stock_aggregated_by_material_id(db, erp_ids)
 
     items: List[Dict] = []
     for m in rows:
@@ -451,12 +628,19 @@ async def update_stock_check_item(
     actual_qty: Optional[Decimal] = None,
     is_checked: Optional[int] = None,
     remark: Optional[str] = None,
+    force_recount: Optional[bool] = None,
     current_user: Optional[dict] = None,
 ) -> StockCheckItem:
     item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id))).scalar_one_or_none()
     if not item:
         raise ValueError(f"盘点行 {item_id} 不存在")
     await _assert_can_edit(db, item.check_id, current_user)
+    if force_recount:
+        item.recent_checked_check_no = None
+        item.recent_checked_date = None
+        item.is_checked = 0
+        item.checked_at = None
+        item.checked_by = None
     if actual_qty is not None:
         item.actual_qty = Decimal(str(actual_qty))
     if remark is not None:
@@ -493,6 +677,7 @@ async def batch_update_items(
             actual_qty=it.get("actual_qty"),
             is_checked=it.get("is_checked"),
             remark=it.get("remark"),
+            force_recount=it.get("force_recount"),
             current_user=current_user,
         )
         n += 1
@@ -628,24 +813,121 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
     if not candidates:
         return head
 
-    stock_map = await _get_stock_by_material_id(db, list(added_mids))
+    stock_map = await _get_stock_by_warehouse(db, list(added_mids))
+    warehouses_by_mid = _split_stock_by_warehouse(stock_map, list(added_mids))
+
+    # 收敛新增 (material_id, wh_id)，跳过已存在的
+    new_keys: List[Tuple[int, Optional[int]]] = []
+    new_meta: Dict[Tuple[int, Optional[int]], Dict] = {}
     for mid, n, lvl in candidates:
-        sys_q = stock_map.get(mid, Decimal("0"))
-        db.add(StockCheckItem(
-            check_id=check_id,
-            line_no=n.line_no,
-            level=lvl,
-            material_id=mid,
-            material_code=n.material_code,
-            material_name=n.material_name,
-            spec_model=n.spec_model,
-            unit=n.unit,
-            req_qty=Decimal(str(n.req_qty or 0)),
-            system_qty=sys_q,
-            actual_qty=None,
-            diff_qty=Decimal("0"),
-            is_checked=0,
-        ))
+        warehouses = warehouses_by_mid.get(mid, [])
+        if warehouses:
+            for wh_id, wh_name, sys_q in warehouses:
+                k = (mid, wh_id)
+                if k in new_meta:
+                    continue
+                exists = (await db.execute(
+                    select(func.count(StockCheckItem.id)).where(
+                        StockCheckItem.check_id == check_id,
+                        StockCheckItem.material_id == mid,
+                        StockCheckItem.wh_id == wh_id,
+                    )
+                )).scalar_one()
+                if exists:
+                    continue
+                new_meta[k] = {
+                    "material_code": n.material_code,
+                    "material_name": n.material_name,
+                    "spec_model": n.spec_model,
+                    "unit": n.unit,
+                    "system_qty": sys_q,
+                    "wh_name": wh_name,
+                }
+                new_keys.append(k)
+        else:
+            k = (mid, None)
+            if k in new_meta:
+                continue
+            exists = (await db.execute(
+                select(func.count(StockCheckItem.id)).where(
+                    StockCheckItem.check_id == check_id,
+                    StockCheckItem.material_id == mid,
+                    StockCheckItem.wh_id.is_(None),
+                )
+            )).scalar_one()
+            if exists:
+                continue
+            new_meta[k] = {
+                "material_code": n.material_code,
+                "material_name": n.material_name,
+                "spec_model": n.spec_model,
+                "unit": n.unit,
+                "system_qty": Decimal("0"),
+                "wh_name": "(未入库)",
+            }
+            new_keys.append(k)
+
+    if not new_keys:
+        await db.flush()
+        await _refresh_check_aggregates(db, check_id)
+        await db.flush()
+        return head
+
+    from app.core.config import get_settings
+    skip_days = int(get_settings().STOCK_CHECK_RECENT_SKIP_DAYS)
+    recent_map = await _get_recent_checked_by_warehouse(db, new_keys)
+    today = date.today()
+
+    for k in new_keys:
+        mid, wh_id = k
+        meta = new_meta[k]
+        recent = recent_map.get(k)
+        prefill = (
+            recent is not None
+            and recent["check_date"] is not None
+            and (today - recent["check_date"]).days <= skip_days
+        )
+        if prefill:
+            actual_q = recent["actual_qty"]
+            db.add(StockCheckItem(
+                check_id=check_id,
+                line_no=None,
+                level=None,
+                material_id=mid,
+                material_code=meta["material_code"],
+                material_name=meta["material_name"],
+                spec_model=meta["spec_model"],
+                unit=meta["unit"],
+                req_qty=Decimal("0"),
+                system_qty=meta["system_qty"],
+                wh_id=wh_id,
+                wh_name=meta["wh_name"],
+                actual_qty=actual_q,
+                diff_qty=Decimal(str(actual_q)) - Decimal(str(meta["system_qty"])),
+                is_checked=1,
+                checked_at=datetime.utcnow(),
+                checked_by="system-recent",
+                recent_checked_check_no=recent["check_no"],
+                recent_checked_date=recent["check_date"],
+            ))
+        else:
+            db.add(StockCheckItem(
+                check_id=check_id,
+                line_no=None,
+                level=None,
+                material_id=mid,
+                material_code=meta["material_code"],
+                material_name=meta["material_name"],
+                spec_model=meta["spec_model"],
+                unit=meta["unit"],
+                req_qty=Decimal("0"),
+                system_qty=meta["system_qty"],
+                wh_id=wh_id,
+                wh_name=meta["wh_name"],
+                actual_qty=None,
+                diff_qty=Decimal("0"),
+                is_checked=0,
+            ))
     await db.flush()
     await _refresh_check_aggregates(db, check_id)
     await db.flush()
@@ -730,7 +1012,7 @@ async def get_material_history(
     material_id: int,
     limit: int = 100,
 ) -> List[Dict]:
-    """查询某物料被哪些盘点单盘点过的历史记录 (含已完成/进行中/已取消)。
+    """查询某物料被哪些盘点单盘点过的历史记录 (不含已取消)。
     返回字典列表,字段与 MaterialHistoryItem 一致;含 customer 来自 sale_order。"""
     sql = (
         select(
@@ -745,6 +1027,7 @@ async def get_material_history(
         )
         .join(StockCheck, StockCheck.id == StockCheckItem.check_id)
         .where(StockCheckItem.material_id == material_id)
+        .where(StockCheck.status != "cancelled")
         .order_by(StockCheck.completed_at.desc().nulls_last(), StockCheck.created_at.desc())
         .limit(limit)
     )
@@ -778,98 +1061,3 @@ async def get_material_history(
         }
         for r in rows
     ]
-
-
-async def list_orders_using_material(
-    db: AsyncSession,
-    material_id: int,
-    page: int = 1,
-    page_size: int = 20,
-    *,
-    keyword: Optional[str] = None,
-    sort_by: Optional[str] = None,
-    sort_order: Optional[str] = None,
-) -> tuple[int, List[Dict]]:
-    """反查: 哪些未关闭/未取消/未发货的销售订单在使用该物料,各需多少。
-
-    通过 scm_bom_detail.material_id -> scm_bom_detail.bom_id -> sale_order_line.bom_id
-        -> sale_order 反向联查,计算 req_qty = standard_qty * order_qty。
-
-    返回 (total, items) 元组,items 为字典列表,字段与 MaterialOrderUsageOut 一致。
-    """
-    SORTABLE = {
-        "req_qty": "req_qty",
-        "promised_date": "promised_date",
-        "order_qty": "order_qty",
-    }
-
-    base = (
-        select(
-            SaleOrder.order_no.label("order_no"),
-            SaleOrder.line_no.label("line_no"),
-            SaleOrder.customer.label("customer"),
-            SaleOrderLine.product_code.label("product_code"),
-            SaleOrderLine.product_name.label("product_name"),
-            SaleOrderLine.order_qty.label("order_qty"),
-            SaleOrderLine.bom_no.label("bom_no"),
-            BomDetail.standard_qty.label("standard_qty"),
-            (BomDetail.standard_qty * SaleOrderLine.order_qty).label("req_qty"),
-            SaleOrder.promised_date.label("promised_date"),
-            SaleOrder.status.label("status"),
-            SaleOrder.order_nature.label("order_nature"),
-        )
-        .join(SaleOrderLine, SaleOrderLine.order_no == SaleOrder.order_no)
-        .join(BomDetail, BomDetail.bom_id == SaleOrderLine.bom_id.cast(SAString))
-        .where(BomDetail.material_id == material_id)
-        .where(SaleOrder.is_closed == 0)
-        .where(SaleOrder.status != "cancelled")
-        .where(SaleOrder.delivery_completed_date.is_(None))
-    )
-
-    if keyword:
-        like = f"%{keyword}%"
-        base = base.where(or_(
-            SaleOrder.order_no.ilike(like),
-            SaleOrder.customer.ilike(like),
-        ))
-
-    total = (await db.execute(
-        select(func.count()).select_from(base.subquery())
-    )).scalar() or 0
-
-    sb = (sort_by or "req_qty").lower()
-    so = (sort_order or "desc").lower()
-    sort_col = SORTABLE.get(sb, "req_qty")
-    order_clauses = {
-        "req_qty": (BomDetail.standard_qty * SaleOrderLine.order_qty),
-        "promised_date": SaleOrder.promised_date,
-        "order_qty": SaleOrderLine.order_qty,
-    }
-    col = order_clauses[sort_col]
-    if so == "asc":
-        base = base.order_by(col.asc().nullslast())
-    else:
-        base = base.order_by(col.desc().nullslast())
-
-    rows = (await db.execute(
-        base.offset((page - 1) * page_size).limit(page_size)
-    )).all()
-
-    items: List[Dict] = []
-    for r in rows:
-        items.append({
-            "order_no": r.order_no,
-            "line_no": r.line_no,
-            "customer": r.customer,
-            "product_code": r.product_code,
-            "product_name": r.product_name,
-            "order_qty": r.order_qty,
-            "bom_no": r.bom_no,
-            "standard_qty": r.standard_qty,
-            "req_qty": r.req_qty,
-            "promised_date": r.promised_date,
-            "status": r.status,
-            "order_nature": r.order_nature,
-        })
-
-    return int(total), items

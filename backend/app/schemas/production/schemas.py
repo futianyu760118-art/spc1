@@ -197,6 +197,7 @@ class ProductionDailyReportOut(BaseModel):
     """生产日报表列表行"""
     id: Optional[int] = None
     oa_id: Optional[str] = None
+    oa_detail_id: Optional[int] = None
     report_date: Optional[date] = None
     sale_order_no: Optional[str] = None
     production_order_no: Optional[str] = None
@@ -209,6 +210,28 @@ class ProductionDailyReportOut(BaseModel):
     workshop: Optional[str] = None
     work_hours: Optional[float] = None
     total_wages: Optional[float] = None
+    data_source: Optional[str] = None
+    erp_updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+# ============ 工价审核数据（ERP 同步，只读） ============
+
+class LaborPriceAuditOut(BaseModel):
+    """工价审核列表行"""
+    id: Optional[int] = None
+    oa_id: Optional[str] = None
+    doc_no: Optional[str] = None
+    apply_date: Optional[date] = None
+    valid_flag: Optional[int] = None
+    department_id: Optional[int] = None
+    material_id: Optional[int] = None
+    material_code: Optional[str] = None
+    labor_price_code: Optional[str] = None
+    labor_price_amount: Optional[float] = None
+    bom_id: Optional[int] = None
+    bom_code: Optional[str] = None
     data_source: Optional[str] = None
     erp_updated_at: Optional[datetime] = None
 

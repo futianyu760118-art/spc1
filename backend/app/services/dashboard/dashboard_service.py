@@ -16,6 +16,7 @@ from app.schemas.dashboard.schemas import (
     RiskDimensionItem, RiskFactorDistributionItem, OrderRiskDistributionData,
     ClosureAchievement,
     BoardItem, ProcurementBoardData,
+    ShipmentBoardItem, ShipmentBoardData,
 )
 from app.services.exception.risk_engine import FACTOR_MAX, FACTOR_LABELS
 from app.services.common.sync_filter import get_purchase_order_sync_filters
@@ -869,6 +870,58 @@ class DashboardService:
             ))
 
         return ProcurementBoardData(
+            items=items,
+            last_updated=datetime.now(),
+        )
+
+    async def get_shipment_board(self) -> ShipmentBoardData:
+        """出货计划看板：已逾期 + 今天的未发货完成订单"""
+        today = date.today()
+
+        # 查询：有出货计划日期、未发货完成、订单未关闭，且日期 <= 今天（逾期 + 今天）
+        q = await self.db.execute(
+            select(SaleOrder).where(
+                SaleOrder.shipping_plan != None,
+                SaleOrder.delivery_completed_date == None,
+                SaleOrder.is_closed == 0,
+                SaleOrder.shipping_plan <= today,
+            ).order_by(
+                # 逾期排最前（shipping_plan 升序 = 最早的最逾期），同日内按单号
+                SaleOrder.shipping_plan.asc(),
+                SaleOrder.order_no.asc(),
+            )
+        )
+        orders = q.scalars().all()
+
+        items: list[ShipmentBoardItem] = []
+        for o in orders:
+            is_overdue = False
+            overdue_days = 0
+            if o.shipping_plan and o.shipping_plan < today:
+                is_overdue = True
+                overdue_days = (today - o.shipping_plan).days
+
+            items.append(ShipmentBoardItem(
+                id=o.id,
+                order_no=o.order_no,
+                line_no=o.line_no,
+                shipping_plan=o.shipping_plan,
+                is_overdue=is_overdue,
+                overdue_days=overdue_days,
+                customer=o.customer,
+                customer_code=o.customer_code,
+                product_code=o.product_code,
+                product_name=o.product_name,
+                order_qty=float(o.order_qty) if o.order_qty is not None else None,
+                completed_qty=float(o.completed_qty) if o.completed_qty is not None else None,
+                promised_date=o.promised_date,
+                risk_level=o.risk_level,
+                owner=o.owner,
+                shipping_status_desc=o.shipping_status_desc,
+                status=o.status,
+            ))
+
+        return ShipmentBoardData(
             items=items,
             last_updated=datetime.now(),
         )

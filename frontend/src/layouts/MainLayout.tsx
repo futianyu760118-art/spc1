@@ -97,6 +97,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'production.assembly': <ToolOutlined />,
   'production.packaging': <ContainerOutlined />,
   'production.exceptions': <WarningOutlined />,
+  'production.daily_report': <FileTextOutlined />,
   'exceptions.pool': <WarningOutlined />,
   'exceptions.issue_log': <FileTextOutlined />,
   'exceptions.change_log': <SwapOutlined />,

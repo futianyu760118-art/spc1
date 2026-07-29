@@ -1,6 +1,6 @@
 """Shared business document and version ledger."""
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text, Index
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text, Index, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -20,6 +20,7 @@ class BusinessDocument(Base):
     applicable_process = Column(String(128), nullable=True)
     current_version = Column(String(32), nullable=True)
     status = Column(String(32), nullable=False, default="draft", index=True)
+    is_deleted = Column(Integer, nullable=False, default=0, index=True, comment="是否删除 0否1是")
     created_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -27,7 +28,10 @@ class BusinessDocument(Base):
     versions = relationship("BusinessDocumentVersion", back_populates="document", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index("uq_business_document_type_code", "doc_type", "code", unique=True),
+        Index(
+            "uq_business_document_type_code", "doc_type", "code",
+            unique=True, postgresql_where=text("is_deleted = 0"),
+        ),
     )
 
 

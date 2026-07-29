@@ -38,10 +38,13 @@ def _get_sync_type_overrides() -> dict:
     from app.models.basicdata.sku import SKU
     from app.models.basicdata.product import Product
     from app.models.basicdata.warehouse import Warehouse
+    from app.models.basicdata.subject_balance import SubjectBalance
     from app.models.basicdata.process import Process
     from app.models.basicdata.organization import Organization
     from app.models.basicdata.employee import Employee
     from app.models.basicdata.position import Position
+    from app.models.production.production_daily_report import ProductionDailyReport
+    from app.models.production.labor_price_audit import ProductionLaborPriceAudit
     return {
         "orders": SaleOrder,
         "order_details": SaleOrderLine,
@@ -53,10 +56,13 @@ def _get_sync_type_overrides() -> dict:
         "skus": SKU,
         "products": Product,
         "warehouses": Warehouse,
+        "subject_balances": SubjectBalance,
         "processes": Process,
         "organizations": Organization,
         "positions": Position,
         "employees": Employee,
+        "production_daily_reports": ProductionDailyReport,
+        "labor_price_audits": ProductionLaborPriceAudit,
     }
 
 
@@ -471,6 +477,72 @@ async def delete_sync_sql(
     await db.delete(config)
     await db.commit()
     return ResponseModel(data={"deleted": config_id})
+
+
+@router.get("/available-types", response_model=ResponseModel[list])
+async def get_available_sync_types(
+    current_user: dict = Depends(PermissionChecker("settings", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回所有已知同步类型（DB 配置 + 模型注册合并），前端用此列表动态渲染下拉/标签。"""
+    model_map = _get_model_map()
+    result_db = await db.execute(select(SyncSqlConfig))
+    configs = {c.sync_type: c for c in result_db.scalars().all()}
+
+    all_types: dict[str, dict] = {}
+
+    for sync_type, model in model_map.items():
+        if sync_type in ("all",):
+            continue
+        if sync_type in all_types:
+            all_types[sync_type]["has_model"] = True
+        else:
+            label = ""
+            cfg = configs.get(sync_type)
+            if cfg and cfg.description:
+                label = cfg.description.split("—")[0].strip()
+            all_types[sync_type] = {
+                "value": sync_type,
+                "label": label or _humanize_sync_type(sync_type),
+                "has_model": True,
+                "has_sql": bool(cfg and cfg.sql_text and cfg.sql_text.strip()),
+            }
+
+    for sync_type, cfg in configs.items():
+        if sync_type in all_types:
+            all_types[sync_type]["has_sql"] = bool(cfg.sql_text and cfg.sql_text.strip())
+            if not all_types[sync_type]["label"] and cfg.description:
+                all_types[sync_type]["label"] = cfg.description.split("—")[0].strip()
+        else:
+            label = ""
+            if cfg.description:
+                label = cfg.description.split("—")[0].strip()
+            all_types[sync_type] = {
+                "value": sync_type,
+                "label": label or _humanize_sync_type(sync_type),
+                "has_model": False,
+                "has_sql": bool(cfg.sql_text and cfg.sql_text.strip()),
+            }
+
+    return ResponseModel(data=sorted(all_types.values(), key=lambda x: x["value"]))
+
+
+def _humanize_sync_type(sync_type: str) -> str:
+    name_map = {
+        "orders": "订单数据", "order_details": "订单明细", "materials": "物料需求",
+        "purchase_orders": "采购订单", "customers": "客户", "suppliers": "供应商",
+        "materials_masterdata": "物料", "skus": "SKU", "products": "产品",
+        "warehouses": "仓库", "locations": "库位", "processes": "工序",
+        "organizations": "组织", "positions": "岗位", "employees": "人员",
+        "employee_organizations": "员工组织关系", "purchase_invoices": "采购开票",
+        "payment_applies": "付款申请", "quality_issues": "品质异常",
+        "mrp_plan_orders": "MRP计划订单", "production_task_orders": "生产任务单",
+        "production_daily_reports": "生产日报表", "inventory": "即时库存",
+        "subcontract_orders": "委外订单", "subcontract_order_details": "委外订单明细",
+        "subject_balances": "科目余额", "labor_price_audits": "工价审核数据",
+        "boms": "BOM", "bom_details": "BOM明细",
+    }
+    return name_map.get(sync_type, sync_type)
 
 
 @router.get("/spc-fields/{sync_type}", response_model=ResponseModel[list])

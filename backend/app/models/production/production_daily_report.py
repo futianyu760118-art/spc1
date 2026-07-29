@@ -10,6 +10,7 @@ class ProductionDailyReport(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     oa_id = Column(String(64), nullable=False, comment="ERP/OA 唯一键(业务主键,用于增量同步去重)")
+    oa_detail_id = Column(Integer, nullable=True, comment="明细ID")
     report_date = Column(Date, nullable=True, comment="日期")
     sale_order_no = Column(String(64), nullable=True, comment="销售订单号")
     production_order_no = Column(String(64), nullable=True, comment="生产订单号")
@@ -29,7 +30,7 @@ class ProductionDailyReport(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     __table_args__ = (
-        Index("uq_production_daily_report_oa_id", "oa_id", unique=True, postgresql_where=text("oa_id IS NOT NULL")),
+        Index("uq_production_daily_report_oa_id_detail", "oa_id", "oa_detail_id", unique=True, postgresql_where=text("oa_id IS NOT NULL AND oa_detail_id IS NOT NULL")),
         Index("ix_production_daily_report_report_date", "report_date"),
         Index("ix_production_daily_report_production_order_no", "production_order_no"),
         Index("ix_production_daily_report_material_code", "material_code"),

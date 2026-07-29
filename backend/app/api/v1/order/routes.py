@@ -17,6 +17,7 @@ from app.models.material.material_demand import MaterialDemand
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.material.binding import OrderMaterialPoBinding
+from app.models.production.labor_price_audit import ProductionLaborPriceAudit
 from app.models.basicdata.customer import Customer
 from app.models.basicdata.audit_log import AuditLog
 from app.schemas.common import ResponseModel, PageResult
@@ -248,6 +249,7 @@ async def list_orders(
     assembly_complete_date_start: Optional[str] = Query(None, description="组装完成日期开始 YYYY-MM-DD"),
     assembly_complete_date_end: Optional[str] = Query(None, description="组装完成日期结束 YYYY-MM-DD"),
     order_type: Optional[str] = Query(None, description="订单类型，多选逗号分隔：big（大单，HJ开头）, sample（样品单，HJY开头）"),
+    year: Optional[int] = Query(None, description="年份，按下单时间筛选"),
     sort_by: Optional[str] = Query("promised_date", description="排序字段"),
     sort_order: Optional[str] = Query("asc", description="排序方向 asc/desc"),
     current_user: dict = Depends(PermissionChecker("orders.list", "read")),
@@ -360,6 +362,9 @@ async def list_orders(
         if order_date_end:
             query = query.where(SaleOrder.order_date <= datetime.strptime(order_date_end, '%Y-%m-%d').date())
             count_query = count_query.where(SaleOrder.order_date <= datetime.strptime(order_date_end, '%Y-%m-%d').date())
+        if year:
+            query = query.where(func.extract('year', SaleOrder.order_date) == year)
+            count_query = count_query.where(func.extract('year', SaleOrder.order_date) == year)
         if customer_inspection_date_start:
             query = query.where(SaleOrder.customer_inspection_date >= datetime.strptime(customer_inspection_date_start, '%Y-%m-%d').date())
             count_query = count_query.where(SaleOrder.customer_inspection_date >= datetime.strptime(customer_inspection_date_start, '%Y-%m-%d').date())
@@ -520,6 +525,8 @@ async def list_orders(
             stats_query = stats_query.where(SaleOrder.order_date >= datetime.strptime(order_date_start, '%Y-%m-%d').date())
         if order_date_end:
             stats_query = stats_query.where(SaleOrder.order_date <= datetime.strptime(order_date_end, '%Y-%m-%d').date())
+        if year:
+            stats_query = stats_query.where(func.extract('year', SaleOrder.order_date) == year)
         if customer_inspection_date_start:
             stats_query = stats_query.where(SaleOrder.customer_inspection_date >= datetime.strptime(customer_inspection_date_start, '%Y-%m-%d').date())
         if customer_inspection_date_end:
@@ -744,6 +751,7 @@ async def export_orders(
     assembly_complete_date_start: Optional[str] = Query(None, description="组装完成日期开始 YYYY-MM-DD"),
     assembly_complete_date_end: Optional[str] = Query(None, description="组装完成日期结束 YYYY-MM-DD"),
     order_type: Optional[str] = Query(None, description="订单类型，多选逗号分隔：big（大单，HJ开头）, sample（样品单，HJY开头）"),
+    year: Optional[int] = Query(None, description="年份，按下单时间筛选"),
     sort_by: Optional[str] = Query("promised_date", description="排序字段"),
     sort_order: Optional[str] = Query("asc", description="排序方向 asc/desc"),
     current_user: dict = Depends(PermissionChecker("orders.list", "read")),
@@ -830,6 +838,8 @@ async def export_orders(
         query = query.where(SaleOrder.order_date >= datetime.strptime(order_date_start, '%Y-%m-%d').date())
     if order_date_end:
         query = query.where(SaleOrder.order_date <= datetime.strptime(order_date_end, '%Y-%m-%d').date())
+    if year:
+        query = query.where(func.extract('year', SaleOrder.order_date) == year)
     if customer_inspection_date_start:
         query = query.where(SaleOrder.customer_inspection_date >= datetime.strptime(customer_inspection_date_start, '%Y-%m-%d').date())
     if customer_inspection_date_end:
@@ -1381,9 +1391,34 @@ async def get_order_detail(
     )
     issues = [RiskIssueOut.model_validate(i) for i in issue_result.scalars().all()]
 
+    bom_no_to_normalized: dict[str, str] = {}
+    normalized_codes: set[str] = set()
+    for line in order.lines:
+        bn = line.bom_no
+        if bn:
+            normalized = bn[2:] if bn.startswith(("P-", "Y-")) else bn
+            bom_no_to_normalized[bn] = normalized
+            normalized_codes.add(normalized)
+    labor_price_map: dict[str, float] = {}
+    if normalized_codes:
+        lp_result = await db.execute(
+            select(ProductionLaborPriceAudit.bom_code, ProductionLaborPriceAudit.labor_price_amount).where(
+                ProductionLaborPriceAudit.bom_code.in_(normalized_codes),
+                ProductionLaborPriceAudit.labor_price_amount.isnot(None),
+            )
+        )
+        for row in lp_result.all():
+            if row[1] is not None:
+                labor_price_map[row[0]] = float(row[1])
+
     detail = OrderDetailOut(
         **SaleOrderOut.model_validate(order).model_dump(),
-        lines=[SaleOrderLineOut.model_validate(line) for line in order.lines],
+        lines=[
+            SaleOrderLineOut.model_validate(line).model_copy(update={
+                "labor_price_amount": labor_price_map.get(bom_no_to_normalized.get(line.bom_no, "")),
+            })
+            for line in order.lines
+        ],
         material_demands=materials,
         bindings=bindings,
         shortage_count=shortage_count,

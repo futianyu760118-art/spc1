@@ -20,7 +20,6 @@ from app.schemas.material.stock_check import (
     StockCheckItemBatchUpdate,
     CoCheckersUpdate,
     MaterialHistoryItem,
-    MaterialOrderUsageOut,
     MaterialCandidateOut,
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
@@ -38,7 +37,6 @@ from app.services.material.stock_check_service import (
     list_recent_stock_checks,
     list_stock_checks_by_order,
     get_material_history,
-    list_orders_using_material,
     list_co_checker_candidates,
     enrich_items_assoc,
     _user_can_edit,
@@ -138,34 +136,6 @@ async def get_material_history_view(
 ):
     rows = await get_material_history(db, material_id=material_id)
     return ResponseModel(data=[MaterialHistoryItem(**r) for r in rows])
-
-
-@router.get("/stock-check/material-orders", response_model=ResponseModel[PageResult[MaterialOrderUsageOut]])
-async def list_material_orders(
-    material_id: int = Query(..., description="物料ID"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    keyword: Optional[str] = Query(None, description="模糊搜索订单号/客户"),
-    sort_by: Optional[str] = Query("req_qty", description="排序字段:req_qty/promised_date/order_qty"),
-    sort_order: Optional[str] = Query("desc", description="asc/desc"),
-    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
-    db: AsyncSession = Depends(get_db),
-):
-    total, items = await list_orders_using_material(
-        db,
-        material_id=material_id,
-        page=page,
-        page_size=page_size,
-        keyword=keyword,
-        sort_by=sort_by,
-        sort_order=sort_order,
-    )
-    return ResponseModel(data=PageResult(
-        total=total,
-        page=page,
-        page_size=page_size,
-        items=[MaterialOrderUsageOut(**it) for it in items],
-    ))
 
 
 @router.get("/stock-check/recent", response_model=ResponseModel[PageResult[StockCheckListOut]])
@@ -288,6 +258,7 @@ async def update_item(
             actual_qty=body.actual_qty,
             is_checked=body.is_checked,
             remark=body.remark,
+            force_recount=body.force_recount,
             current_user=current_user,
         )
     except StockCheckPermissionError as e:

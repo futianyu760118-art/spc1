@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Col, DatePicker, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Upload, message } from 'antd'
-import { DeleteOutlined, EditOutlined, HistoryOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from '@ant-design/icons'
+import { Button, Col, DatePicker, Descriptions, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Upload, message } from 'antd'
+import { DeleteOutlined, EditOutlined, HistoryOutlined, InboxOutlined, InfoCircleOutlined, PlusOutlined, ReloadOutlined, SendOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { fileApi } from '../../services/api'
 import { formatDate, formatDateTime } from '../../utils'
@@ -11,7 +11,9 @@ type DocumentApiSet = {
   update: (id: number, data: Record<string, any>) => Promise<any>
   remove: (id: number) => Promise<any>
   versions: (id: number) => Promise<any>
-  publish: (id: number, data: Record<string, any>) => Promise<any>
+  publishVersion: (id: number, data: Record<string, any>) => Promise<any>
+  publish: (id: number) => Promise<any>
+  archive: (id: number) => Promise<any>
 }
 
 type Props = {
@@ -32,13 +34,14 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
-  const [status, setStatus] = useState<string | undefined>()
+  const [status, setStatus] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [versionModalOpen, setVersionModalOpen] = useState(false)
   const [versionRecord, setVersionRecord] = useState<any>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [detailOpen, setDetailOpen] = useState(false)
   const [versions, setVersions] = useState<any[]>([])
   const [form] = Form.useForm()
   const [versionForm] = Form.useForm()
@@ -48,7 +51,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
     try {
       const params: Record<string, any> = { page, page_size: pageSize }
       if (keyword.trim()) params.keyword = keyword.trim()
-      if (status) params.status = status
+      if (status.length) params.status = status.join(',')
       const res = await api.list(params)
       setData(res.data.items || [])
       setTotal(res.data.total || 0)
@@ -117,10 +120,10 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
     setVersionModalOpen(true)
   }
 
-  const handlePublish = async () => {
+  const handlePublishVersion = async () => {
     try {
       const values = await versionForm.validateFields()
-      await api.publish(versionRecord.id, {
+      await api.publishVersion(versionRecord.id, {
         ...values,
         attachments: normalizeAttachments(values.attachments?.fileList),
         effective_date: values.effective_date ? values.effective_date.format('YYYY-MM-DD') : null,
@@ -144,9 +147,42 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
     }
   }
 
-  const handleArchive = async (id: number) => {
+  const currentDetailVersion = versions.find(v => v.version_no === versionRecord?.current_version) || versions[0] || null
+
+  const openDetail = async (row: any) => {
+    setVersionRecord(row)
+    setDetailOpen(true)
+    try {
+      const res = await api.versions(row.id)
+      setVersions(res.data || [])
+    } catch (e: any) {
+      message.error(e.message || '获取详情失败')
+    }
+  }
+
+  const handleDelete = async (id: number) => {
     try {
       await api.remove(id)
+      message.success('已删除')
+      load()
+    } catch (e: any) {
+      message.error(e.message || '删除失败')
+    }
+  }
+
+  const handlePublish = async (id: number) => {
+    try {
+      await api.publish(id)
+      message.success('已发布')
+      load()
+    } catch (e: any) {
+      message.error(e.message || '发布失败')
+    }
+  }
+
+  const handleArchive = async (id: number) => {
+    try {
+      await api.archive(id)
       message.success('已归档')
       load()
     } catch (e: any) {
@@ -167,13 +203,28 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
     },
     { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (v: string) => formatDateTime(v) },
     {
-      title: '操作', width: 180, fixed: 'right' as const,
+      title: '操作', width: 280, fixed: 'right' as const,
       render: (_: any, row: any) => (
         <Space size={4}>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
-          <Button size="small" icon={<PlusOutlined />} onClick={() => openVersion(row)} />
+          <Button size="small" icon={<InfoCircleOutlined />} onClick={() => openDetail(row)} />
+          {row.status !== 'archived' && (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+          )}
+          {row.status === 'draft' && (
+            <Popconfirm title="确认发布？" onConfirm={() => handlePublish(row.id)}>
+              <Button size="small" type="primary" icon={<SendOutlined />} />
+            </Popconfirm>
+          )}
+          {row.status === 'published' && (
+            <>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => openVersion(row)} />
+              <Popconfirm title="确认归档？" onConfirm={() => handleArchive(row.id)}>
+                <Button size="small" icon={<InboxOutlined />} />
+              </Popconfirm>
+            </>
+          )}
           <Button size="small" icon={<HistoryOutlined />} onClick={() => openHistory(row)} />
-          <Popconfirm title="确认归档？" onConfirm={() => handleArchive(row.id)}>
+          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(row.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
@@ -196,11 +247,12 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
           </Col>
           <Col>
             <Select
+              mode="multiple"
               allowClear
               placeholder="状态"
               value={status}
               onChange={v => { setStatus(v); setPage(1) }}
-              style={{ width: 140 }}
+              style={{ minWidth: 180 }}
               options={Object.entries(STATUS_MAP).map(([value, item]) => ({ value, label: item.label }))}
             />
           </Col>
@@ -221,7 +273,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
           dataSource={data}
           loading={loading}
           size="small"
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1200, y: 'calc(100vh - 300px)' }}
           pagination={{
             total,
             current: page,
@@ -245,7 +297,6 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
             <Col span={8}><Form.Item name="applicable_product" label="适用产品"><Input /></Form.Item></Col>
             <Col span={8}><Form.Item name="applicable_order" label="适用订单"><Input /></Form.Item></Col>
             <Col span={8}><Form.Item name="applicable_process" label="适用工序"><Input /></Form.Item></Col>
-            <Col span={8}><Form.Item name="status" label="状态"><Select options={Object.entries(STATUS_MAP).map(([value, item]) => ({ value, label: item.label }))} /></Form.Item></Col>
             {!editing && (
               <>
                 <Col span={8}><Form.Item name="version_no" label="初始版本" rules={[{ required: true }]}><Input /></Form.Item></Col>
@@ -264,11 +315,10 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
         </Form>
       </Modal>
 
-      <Modal title={`发布新版本 - ${versionRecord?.title || ''}`} open={versionModalOpen} onOk={handlePublish} onCancel={() => setVersionModalOpen(false)} width={720}>
+      <Modal title={`发布新版本 - ${versionRecord?.title || ''}`} open={versionModalOpen} onOk={handlePublishVersion} onCancel={() => setVersionModalOpen(false)} width={720}>
         <Form form={versionForm} layout="vertical">
           <Row gutter={16}>
             <Col span={8}><Form.Item name="version_no" label="版本号" rules={[{ required: true }]}><Input /></Form.Item></Col>
-            <Col span={8}><Form.Item name="status" label="状态"><Select options={Object.entries(STATUS_MAP).map(([value, item]) => ({ value, label: item.label }))} /></Form.Item></Col>
             <Col span={8}><Form.Item name="effective_date" label="生效日期"><DatePicker style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={24}><Form.Item name="content" label="版本内容"><Input.TextArea rows={6} /></Form.Item></Col>
             <Col span={24}>
@@ -305,6 +355,32 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
             </List.Item>
           )}
         />
+      </Drawer>
+
+      <Drawer title={`详情 - ${versionRecord?.title || ''}`} open={detailOpen} onClose={() => setDetailOpen(false)} width={640}>
+        {versionRecord && (
+          <>
+            <Descriptions column={2} size="small" bordered>
+              <Descriptions.Item label="编码">{versionRecord.code}</Descriptions.Item>
+              <Descriptions.Item label="状态"><Tag color={STATUS_MAP[versionRecord.status]?.color}>{STATUS_MAP[versionRecord.status]?.label || versionRecord.status}</Tag></Descriptions.Item>
+              <Descriptions.Item label="标题" span={2}>{versionRecord.title}</Descriptions.Item>
+              <Descriptions.Item label="适用产品">{versionRecord.applicable_product || '-'}</Descriptions.Item>
+              <Descriptions.Item label="适用订单">{versionRecord.applicable_order || '-'}</Descriptions.Item>
+              <Descriptions.Item label="适用工序">{versionRecord.applicable_process || '-'}</Descriptions.Item>
+              <Descriptions.Item label="当前版本">{versionRecord.current_version || '-'}</Descriptions.Item>
+              <Descriptions.Item label="创建人">{versionRecord.created_by || '-'}</Descriptions.Item>
+              <Descriptions.Item label="更新时间" span={2}>{formatDateTime(versionRecord.updated_at)}</Descriptions.Item>
+            </Descriptions>
+            <div style={{ marginTop: 16, fontWeight: 500 }}>正文内容（{currentDetailVersion?.version_no || '-'}）</div>
+            <div style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{currentDetailVersion?.content || '-'}</div>
+            <div style={{ marginTop: 16, fontWeight: 500 }}>附件</div>
+            <div style={{ marginTop: 8 }}>
+              {currentDetailVersion?.attachments?.length
+                ? currentDetailVersion.attachments.map((a: any) => <Tag key={a.key || a.id}>{a.name}</Tag>)
+                : <span>-</span>}
+            </div>
+          </>
+        )}
       </Drawer>
     </div>
   )

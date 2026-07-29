@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl
 from sqlalchemy import select, func, or_
 
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.production.labor_price_audit import ProductionLaborPriceAudit
 
 from ..registry import register_external, ExternalCallContext
 
@@ -240,6 +241,26 @@ async def order_details_list(ctx: ExternalCallContext) -> dict:
     )
     rows = (await db.execute(query)).all()
 
+    bom_no_to_normalized: dict[str, str] = {}
+    normalized_codes: set[str] = set()
+    for row in rows:
+        bn = row.SaleOrderLine.bom_no
+        if bn:
+            normalized = bn[2:] if bn.startswith(("P-", "Y-")) else bn
+            bom_no_to_normalized[bn] = normalized
+            normalized_codes.add(normalized)
+    labor_price_map: dict[str, float] = {}
+    if normalized_codes:
+        lp_result = await db.execute(
+            select(ProductionLaborPriceAudit.bom_code, ProductionLaborPriceAudit.labor_price_amount).where(
+                ProductionLaborPriceAudit.bom_code.in_(normalized_codes),
+                ProductionLaborPriceAudit.labor_price_amount.isnot(None),
+            )
+        )
+        for lp_row in lp_result.all():
+            if lp_row[1] is not None:
+                labor_price_map[lp_row[0]] = float(lp_row[1])
+
     items = []
     for row in rows:
         line = row.SaleOrderLine
@@ -259,6 +280,7 @@ async def order_details_list(ctx: ExternalCallContext) -> dict:
             "batch_no": line.batch_no,
             "bom_no": line.bom_no,
             "bom_id": line.bom_id,
+            "labor_price_amount": labor_price_map.get(bom_no_to_normalized.get(line.bom_no, "")),
             "status": line.status,
             "customer": row.customer,
             "customer_code": row.customer_code,

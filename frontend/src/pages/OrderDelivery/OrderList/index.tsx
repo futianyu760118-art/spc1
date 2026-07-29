@@ -114,6 +114,7 @@ interface OrderDetailData {
 
 interface Filters {
   keyword: string
+  year: number | null
   risk_level: string[]
   customer_grade: string[]
   department: string[]
@@ -207,6 +208,9 @@ const ORDER_COLUMN_KEYS: string[] = ORDER_COLUMN_GROUPS.flatMap(g => g.keys.map(
 
 const today = () => new Date().toISOString().slice(0, 10)
 
+const CURRENT_YEAR = new Date().getFullYear()
+const YEAR_OPTIONS = Array.from({ length: CURRENT_YEAR - 2019 }, (_, i) => CURRENT_YEAR - i)
+
 function DateCell({ value, overdue }: { value: string | null; overdue?: boolean }) {
   if (!value) return <span style={{ color: '#cbd5e1' }}>-</span>
   return <span style={{ color: overdue ? '#e11d48' : undefined, fontWeight: overdue ? 600 : undefined }}>{formatDate(value)}</span>
@@ -251,6 +255,7 @@ export default function OrderList() {
   const [pagination, setPagination] = useState({ current: 1, pageSize: 50, total: 0 })
   const [filters, setFilters] = useState<Filters>({
     keyword: '',
+    year: new Date().getFullYear(),
     risk_level: [],
     customer_grade: [],
     department: [],
@@ -570,6 +575,7 @@ export default function OrderList() {
       if (f.delivery_completed.length > 0) params.delivery_completed = f.delivery_completed.join(',')
       if (f.is_closed.length > 0) params.is_closed = f.is_closed.join(',')
       if (f.order_type.length > 0) params.order_type = f.order_type.join(',')
+      if (f.year) params.year = f.year
       if (f.promised_date_range) {
         params.promised_date_start = f.promised_date_range[0]
         params.promised_date_end = f.promised_date_range[1]
@@ -729,6 +735,7 @@ export default function OrderList() {
     if (filters.delivery_completed.length > 0) params.delivery_completed = filters.delivery_completed.join(',')
     if (filters.is_closed.length > 0) params.is_closed = filters.is_closed.join(',')
     if (filters.order_type.length > 0) params.order_type = filters.order_type.join(',')
+    if (filters.year) params.year = filters.year
     if (filters.promised_date_range) {
       params.promised_date_start = filters.promised_date_range[0]
       params.promised_date_end = filters.promised_date_range[1]
@@ -1820,12 +1827,26 @@ export default function OrderList() {
             />
           </Col>
           <Col xs={24} sm={12} md={3}>
-            <Button 
-              icon={<ReloadOutlined />} 
+            <Button
+              icon={<ReloadOutlined />}
               onClick={() => fetchOrders()}
             >
               刷新
             </Button>
+          </Col>
+          <Col xs={24} sm={12} md={2}>
+            <Select<number | null>
+              value={filters.year}
+              placeholder="全部年份"
+              allowClear
+              style={{ width: '100%' }}
+              onChange={(v) => {
+                const newFilters = { ...filters, year: v ?? null }
+                setFilters(newFilters)
+                fetchOrders(1, pagination.pageSize, newFilters, sortInfo)
+              }}
+              options={YEAR_OPTIONS.map(y => ({ value: y, label: `${y}年` }))}
+            />
           </Col>
           <Col>
             <Switch
@@ -2163,6 +2184,13 @@ export default function OrderList() {
                     render: (v: number) => v?.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-',
                   },
                   {
+                    title: '工价',
+                    dataIndex: 'labor_price_amount',
+                    width: 100,
+                    align: 'right' as const,
+                    render: (v: number) => v != null ? v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-',
+                  },
+                  {
                     title: '交期',
                     dataIndex: 'promised_date',
                     width: 120,
@@ -2217,7 +2245,7 @@ export default function OrderList() {
                       rowKey="id"
                       size="small"
                       pagination={false}
-                      scroll={{ x: 570 }}
+                      scroll={{ x: 670 }}
                       locale={{ emptyText: '暂无明细行' }}
                     />
                   </div>

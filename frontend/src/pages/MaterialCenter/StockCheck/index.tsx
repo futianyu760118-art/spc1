@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
   InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select,
 } from 'antd'
-import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, UnorderedListOutlined, PlusOutlined, RightOutlined, DownOutlined } from '@ant-design/icons'
+import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined } from '@ant-design/icons'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
 import { materialApi, orderApi } from '@/services/api'
 import { formatDateTime } from '@/utils'
@@ -29,6 +29,11 @@ interface StockCheckItem {
   material_property_label?: string | null
   material_type?: string | null
   warehouses?: string | null
+  wh_id?: number | null
+  wh_name?: string | null
+  wh_code?: string | null
+  recent_checked_check_no?: string | null
+  recent_checked_date?: string | null
   req_qty?: number | null
   system_qty?: number | null
   actual_qty?: number | null
@@ -96,21 +101,6 @@ interface MaterialHistoryItem {
   created_by?: string | null
 }
 
-interface MaterialOrderUsage {
-  order_no: string
-  line_no: string
-  customer?: string | null
-  product_code?: string | null
-  product_name?: string | null
-  order_qty?: number | null
-  bom_no?: string | null
-  standard_qty?: number | null
-  req_qty?: number | null
-  promised_date?: string | null
-  status?: string | null
-  order_nature?: string | null
-}
-
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   open: { label: '待盘点', color: 'default' },
   in_progress: { label: '进行中', color: 'processing' },
@@ -120,7 +110,6 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 
 export default function StockCheckPage() {
   const [params, setParams] = useSearchParams()
-  const navigate = useNavigate()
   const poolCount = useStockCheckPoolStore((s) => s.items.length)
   const poolRemove = useStockCheckPoolStore((s) => s.remove)
   const [orderNo, setOrderNo] = useState<string>(params.get('orderNo') || '')
@@ -148,12 +137,6 @@ export default function StockCheckPage() {
   const [progressCollapsed, setProgressCollapsed] = useState(true)
   const [productFilter, setProductFilter] = useState<string>('all')
   const [colWidths, setColWidths] = useState<Record<string, number>>({})
-
-  const [orderUsageCache, setOrderUsageCache] = useState<Record<number, { total: number; items: MaterialOrderUsage[]; loading: boolean }>>({})
-  const [orderUsagePage, setOrderUsagePage] = useState<Record<number, { page: number; page_size: number; keyword: string }>>({})
-
-  const [usageModalOpen, setUsageModalOpen] = useState(false)
-  const [usageMaterial, setUsageMaterial] = useState<StockCheckItem | null>(null)
 
   const loadCheck = useCallback(async (checkId: number) => {
     setLoading(true)
@@ -383,52 +366,6 @@ export default function StockCheckPage() {
     }
   }, [])
 
-  const fetchOrderUsage = useCallback(async (materialId: number, page: number, keyword: string) => {
-    setOrderUsageCache(prev => ({
-      ...prev,
-      [materialId]: { total: prev[materialId]?.total || 0, items: prev[materialId]?.items || [], loading: true },
-    }))
-    try {
-      const res: any = await materialApi.getMaterialOrderUsage({
-        material_id: materialId,
-        page,
-        page_size: 10,
-        keyword: keyword || undefined,
-        sort_by: 'req_qty',
-        sort_order: 'desc',
-      })
-      const data = res.data || { total: 0, items: [] }
-      setOrderUsageCache(prev => ({
-        ...prev,
-        [materialId]: { total: data.total || 0, items: data.items || [], loading: false },
-      }))
-    } catch (e: any) {
-      setOrderUsageCache(prev => ({
-        ...prev,
-        [materialId]: { total: prev[materialId]?.total || 0, items: prev[materialId]?.items || [], loading: false },
-      }))
-      message.error(e?.response?.data?.detail || e.message || '加载订单需求失败')
-    }
-  }, [])
-
-  const openUsageModal = useCallback((record: StockCheckItem) => {
-    if (record.material_id == null) {
-      message.warning('该物料无 ID,无法查询使用订单')
-      return
-    }
-    setUsageMaterial(record)
-    setUsageModalOpen(true)
-    if (!orderUsageCache[record.material_id]) {
-      setOrderUsagePage(prev => ({ ...prev, [record.material_id!]: { page: 1, page_size: 10, keyword: '' } }))
-      fetchOrderUsage(record.material_id, 1, '')
-    }
-  }, [orderUsageCache, fetchOrderUsage])
-
-  const closeUsageModal = useCallback(() => {
-    setUsageModalOpen(false)
-    setUsageMaterial(null)
-  }, [])
-
   const saveItem = useCallback(async (item: StockCheckItem) => {
     try {
       const res: any = await materialApi.updateStockCheckItem(item.id, {
@@ -631,12 +568,6 @@ export default function StockCheckPage() {
     })
 
     return [
-      {
-        title: '层级', dataIndex: 'level', width: 70, fixed: 'left' as const, align: 'center' as const,
-        sorter: (a: any, b: any) => (Number(a.level) || 0) - (Number(b.level) || 0),
-        render: (v: any) => v != null ? `L${v}` : '—',
-        ...resizeCol('level', 70),
-      },
       { title: '物料编码', dataIndex: 'material_code', width: 140, fixed: 'left' as const, ...stringCol('material_code', 140), ...resizeCol('material_code', 140) },
       { title: '物料名称', dataIndex: 'material_name', width: 200, ellipsis: true, ...stringCol('material_name', 200), ...resizeCol('material_name', 200) },
       { title: '规格', dataIndex: 'spec_model', width: 140, ellipsis: true, ...stringCol('spec_model', 140), ...resizeCol('spec_model', 140) },
@@ -649,26 +580,57 @@ export default function StockCheckPage() {
         render: (v: any) => v != null ? Number(v).toFixed(2) : '-',
         ...resizeCol('system_qty', 90),
       },
-      { title: '仓库', dataIndex: 'warehouses', width: 160, ellipsis: true, ...stringCol('warehouses', 160), ...resizeCol('warehouses', 160) },
       {
-        title: '盘点数', dataIndex: 'actual_qty', width: 120, align: 'right' as const,
+        title: '仓库',
+        dataIndex: 'wh_name',
+        width: 160,
+        ellipsis: true,
+        ...stringCol('wh_name', 160),
+        ...resizeCol('wh_name', 160),
+        render: (v: any) => v || '—',
+      },
+      {
+        title: '盘点数', dataIndex: 'actual_qty', width: 220, align: 'right' as const,
         ...numCol('actual_qty'),
         render: (_: any, r: StockCheckItem) => (
-          <InputNumber
-            size="small"
-            min={0}
-            step={0.01}
-            style={{ width: 100 }}
-            disabled={readonly}
-            value={r.actual_qty != null ? Number(r.actual_qty) : null}
-            onChange={(v) => {
-              const actual = v == null ? null : Number(v)
-              const diff = actual != null && r.system_qty != null ? actual - Number(r.system_qty) : null
-              updateItem(r.id, { actual_qty: actual, diff_qty: diff })
-            }}
-          />
+          <Space size={4} style={{ width: '100%', justifyContent: 'flex-end' }}>
+            <InputNumber
+              size="small"
+              min={0}
+              step={0.01}
+              style={{ width: 100 }}
+              disabled={readonly || !!r.recent_checked_check_no}
+              value={r.actual_qty != null ? Number(r.actual_qty) : null}
+              onChange={(v) => {
+                const actual = v == null ? null : Number(v)
+                const diff = actual != null && r.system_qty != null ? actual - Number(r.system_qty) : null
+                updateItem(r.id, { actual_qty: actual, diff_qty: diff })
+              }}
+            />
+            {r.recent_checked_check_no && !readonly && (
+              <Tooltip title={`近期已盘 ${r.recent_checked_check_no}${r.recent_checked_date ? ` · ${r.recent_checked_date}` : ''}`}>
+                <Tag color="default">近期已盘</Tag>
+              </Tooltip>
+            )}
+            {r.recent_checked_check_no && !readonly && (
+              <Checkbox
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    materialApi.updateStockCheckItem(r.id, { force_recount: true }).then(async (res: any) => {
+                      const updated: StockCheckItem = res.data
+                      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p))
+                      const headRes: any = await materialApi.getStockCheck(updated.check_id)
+                      setActiveCheck(prev => prev ? { ...prev, ...headRes.data } : headRes.data)
+                    }).catch((err: any) => {
+                      message.error(err?.response?.data?.detail || err.message || '重盘失败')
+                    })
+                  }
+                }}
+              >重盘</Checkbox>
+            )}
+          </Space>
         ),
-        ...resizeCol('actual_qty', 120),
+        ...resizeCol('actual_qty', 220),
       },
       {
         title: <span data-tour="stock-check-diff">差异</span>, dataIndex: 'diff_qty', width: 90, align: 'right' as const,
@@ -714,7 +676,6 @@ export default function StockCheckPage() {
         title: '操作', key: 'op', width: 200, fixed: 'right' as const,
         ...resizeCol('op', 200),
         render: (_: any, r: StockCheckItem) => {
-          const usageTotal = r.material_id ? orderUsageCache[r.material_id]?.total : undefined
           return (
             <Space size="small">
               <Button type="link" size="small" icon={<SaveOutlined />}
@@ -726,22 +687,12 @@ export default function StockCheckPage() {
                   onClick={() => openMaterialHistory(r)}
                 />
               </Tooltip>
-              {r.material_id != null && (
-                <Tooltip title="查看使用该物料的订单及需求数">
-                  <Button
-                    type="link" size="small" icon={<UnorderedListOutlined />}
-                    onClick={() => openUsageModal(r)}
-                  >
-                    使用订单{usageTotal != null ? ` ${usageTotal}单` : ''}
-                  </Button>
-                </Tooltip>
-              )}
             </Space>
           )
         },
       },
     ]
-  }, [items, readonly, saveItem, updateItem, openMaterialHistory, orderUsageCache, openUsageModal, colWidths])
+  }, [items, readonly, saveItem, updateItem, openMaterialHistory, colWidths])
 
   // ===== 按产品筛选盘点明细 =====
   // 切到不同盘点单时重置过滤器
@@ -1114,101 +1065,6 @@ export default function StockCheckPage() {
           />
         )}
       </Drawer>
-      <Modal
-        title={
-          usageMaterial
-            ? `使用订单 — ${usageMaterial.material_code || ''} ${usageMaterial.material_name || ''}`.trim()
-            : '使用订单'
-        }
-        open={usageModalOpen}
-        onCancel={closeUsageModal}
-        footer={null}
-        width={1100}
-        destroyOnClose
-      >
-        {(() => {
-          const mid = usageMaterial?.material_id
-          if (mid == null) return <Empty description="该物料无 ID" />
-          const cache = orderUsageCache[mid]
-          const pg = orderUsagePage[mid] || { page: 1, page_size: 10, keyword: '' }
-          const data = cache?.items || []
-          return (
-            <div>
-              <Space style={{ marginBottom: 12 }} wrap>
-                <Tag color="blue">规格: {usageMaterial?.spec_model || '-'}</Tag>
-                <Tag color="cyan">单位: {usageMaterial?.unit || '-'}</Tag>
-                <Input.Search
-                  placeholder="搜索订单号/客户"
-                  allowClear
-                  style={{ width: 240 }}
-                  defaultValue={pg.keyword}
-                  onSearch={(v) => {
-                    setOrderUsagePage(prev => ({ ...prev, [mid]: { page: 1, page_size: 10, keyword: v } }))
-                    fetchOrderUsage(mid, 1, v)
-                  }}
-                />
-                <span style={{ color: '#64748b' }}>共 {cache?.total ?? 0} 个未结订单 (按需求数从高到低)</span>
-              </Space>
-              <Spin spinning={!!cache?.loading}>
-                <Table
-                  rowKey={(r: MaterialOrderUsage) => `${r.order_no}-${r.line_no}`}
-                  dataSource={data}
-                  size="small"
-                  pagination={{
-                    current: pg.page,
-                    pageSize: pg.page_size,
-                    total: cache?.total || 0,
-                    showSizeChanger: false,
-                    showTotal: t => `共 ${t} 条`,
-                    onChange: (p) => {
-                      setOrderUsagePage(prev => ({ ...prev, [mid]: { ...prev[mid], page: p } }))
-                      fetchOrderUsage(mid, p, pg.keyword)
-                    },
-                  }}
-                  columns={[
-                    {
-                      title: '订单号', dataIndex: 'order_no', width: 180,
-                      render: (v: any, r: MaterialOrderUsage) => (
-                        <a onClick={() => { closeUsageModal(); navigate(`/order-list?orderNo=${r.order_no}`) }}>{v}</a>
-                      ),
-                    },
-                    { title: '行号', dataIndex: 'line_no', width: 70 },
-                    { title: '客户', dataIndex: 'customer', width: 160, ellipsis: true,
-                      render: (v: any) => v || '-' },
-                    { title: '产品编码', dataIndex: 'product_code', width: 130, ellipsis: true,
-                      render: (v: any) => v || '-' },
-                    { title: '产品名称', dataIndex: 'product_name', width: 200, ellipsis: true,
-                      render: (v: any) => v || '-' },
-                    { title: 'BOM编号', dataIndex: 'bom_no', width: 130, ellipsis: true,
-                      render: (v: any) => v || '-' },
-                    {
-                      title: '订单数量', dataIndex: 'order_qty', width: 100, align: 'right' as const,
-                      render: (v: any) => v != null ? Number(v).toFixed(2) : '-',
-                    },
-                    {
-                      title: '单台用量', dataIndex: 'standard_qty', width: 100, align: 'right' as const,
-                      render: (v: any) => v != null ? Number(v).toFixed(4) : '-',
-                    },
-                    {
-                      title: <strong>需求数</strong>, dataIndex: 'req_qty', width: 110, align: 'right' as const,
-                      render: (v: any) => v != null
-                        ? <strong style={{ color: '#1677ff' }}>{Number(v).toFixed(2)}</strong>
-                        : '-',
-                    },
-                    { title: '交期', dataIndex: 'promised_date', width: 120,
-                      render: (v: any) => v || '-' },
-                    { title: '状态', dataIndex: 'status', width: 90,
-                      render: (v: any) => v ? <Tag>{v}</Tag> : '-' },
-                    { title: '订单性质', dataIndex: 'order_nature', width: 100, ellipsis: true,
-                      render: (v: any) => v || '-' },
-                  ]}
-                  scroll={{ x: 1400 }}
-                />
-              </Spin>
-            </div>
-          )
-        })()}
-      </Modal>
       <MaterialPickerModal
         open={pickerOpen}
         onCancel={() => setPickerOpen(false)}

@@ -73,6 +73,7 @@ class SaleOrderLineOut(BaseModel):
     batch_no: Optional[str] = None
     bom_no: Optional[str] = None
     bom_id: Optional[int] = None
+    labor_price_amount: Optional[float] = None
     status: str = "open"
 
     model_config = {"from_attributes": True}

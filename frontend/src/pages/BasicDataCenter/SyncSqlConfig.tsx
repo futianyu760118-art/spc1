@@ -80,6 +80,9 @@ const SYNC_TYPE_LABELS: Record<string, string> = {
   inventory: '即时库存',
   subcontract_orders: '委外订单',
   subcontract_order_details: '委外订单明细',
+  subject_balances: '科目余额',
+  production_daily_reports: '生产日报表',
+  labor_price_audits: '工价审核数据',
 }
 
 const SYNC_INTERVAL_OPTIONS = [
@@ -123,6 +126,12 @@ export default function SyncSqlConfig() {
   // ---------- 条件参数状态 ----------
   const [conditionParams, setConditionParams] = useState<ConditionParam[]>([])
 
+  // ---------- 动态同步类型 ----------
+  const [availableTypes, setAvailableTypes] = useState<{value: string, label: string}[]>([])
+
+  const syncTypeLabels: Record<string, string> = { ...SYNC_TYPE_LABELS }
+  availableTypes.forEach(t => { if (t.label) syncTypeLabels[t.value] = t.label })
+
 
   /* ================================================================ */
   /* Data fetching                                                     */
@@ -145,6 +154,12 @@ export default function SyncSqlConfig() {
   }
 
   useEffect(() => { fetchData() }, [sortInfo, tableFilters]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    api.get('/basicdata/sync-sql/available-types')
+      .then((res: any) => setAvailableTypes(res.data || []))
+      .catch(() => {})
+  }, [])
 
   const handleTableChange = (_pag: any, filters: any, sorter: any) => {
     const sortField = sorter.field
@@ -488,8 +503,8 @@ export default function SyncSqlConfig() {
   const columns = [
     {
       title: '同步类型', dataIndex: 'sync_type', key: 'sync_type', width: 120, sorter: true,
-      filters: Object.entries(SYNC_TYPE_LABELS).map(([k, v]) => ({ text: v, value: k })),
-      render: (v: string) => <Tag color="blue">{SYNC_TYPE_LABELS[v] || v}</Tag>,
+      filters: Object.entries(syncTypeLabels).map(([k, v]) => ({ text: v, value: k })),
+      render: (v: string) => <Tag color="blue">{syncTypeLabels[v] || v}</Tag>,
     },
     { title: '说明', dataIndex: 'description', key: 'description', ellipsis: true, width: 150, sorter: true },
     {
@@ -647,28 +662,11 @@ export default function SyncSqlConfig() {
                 filterOption={(input, option) =>
                   (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
                 }
-                options={[
-                  { value: 'orders', label: '订单数据' },
-                  { value: 'order_details', label: '订单明细数据' },
-                  { value: 'materials', label: '物料需求' },
-                  { value: 'purchase_orders', label: '采购订单' },
-                  { value: 'customers', label: '客户' },
-                  { value: 'suppliers', label: '供应商' },
-                  { value: 'materials_masterdata', label: '物料' },
-                  { value: 'skus', label: 'SKU' },
-                  { value: 'products', label: '产品' },
-                  { value: 'warehouses', label: '仓库' },
-                  { value: 'locations', label: '库位' },
-                  { value: 'processes', label: '工序' },
-                  { value: 'organizations', label: '组织' },
-                  { value: 'employees', label: '人员' },
-                  { value: 'mrp_plan_orders', label: 'MRP计划订单' },
-                  { value: 'inventory', label: '即时库存' },
-                  { value: 'purchase_invoices', label: '采购开票' },
-                  { value: 'quality_issues', label: '品质异常' },
-                  { value: 'subcontract_orders', label: '委外订单' },
-                  { value: 'subcontract_order_details', label: '委外订单明细' },
-                ]}
+                options={
+                  availableTypes.length > 0
+                    ? availableTypes.map(t => ({ value: t.value, label: t.label }))
+                    : Object.entries(SYNC_TYPE_LABELS).map(([k, v]) => ({ value: k, label: v }))
+                }
               />
             </Form.Item>
             <Form.Item name="description" label="说明" style={{ flex: 2 }}>

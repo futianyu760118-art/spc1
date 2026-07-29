@@ -146,4 +146,6 @@ export const productionApi = {
   createUpphFormulaConfig: (data: Record<string, any>) => api.post('/production/upph-formula-configs', data),
   updateUpphFormulaConfig: (id: number, data: Record<string, any>) => api.put(`/production/upph-formula-configs/${id}`, data),
   deleteUpphFormulaConfig: (id: number) => api.delete(`/production/upph-formula-configs/${id}`),
+  // 生产日报表（ERP/OA 同步，只读）
+  listDailyReports: (params: Record<string, any>) => api.get('/production/daily-reports', { params }),
 }

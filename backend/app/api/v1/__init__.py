@@ -60,6 +60,7 @@ api_router.include_router(basicdata.audit_router, prefix="/basicdata/audit", tag
 api_router.include_router(basicdata.import_export_router, prefix="/basicdata/import-export", tags=["导入导出"])
 api_router.include_router(basicdata.sync_router, prefix="/basicdata/sync", tags=["ERP同步"])
 api_router.include_router(basicdata.basicdata_router, prefix="/basicdata", tags=["基础数据管理"])
+api_router.include_router(basicdata.subject_balance_router, prefix="/basicdata/subject-balances", tags=["科目余额"])
 api_router.include_router(basicdata.sync_sql_router, prefix="/basicdata/sync-sql", tags=["同步SQL配置"])
 api_router.include_router(basicdata.feedback_router, prefix="/basicdata/feedback", tags=["问题反馈"])
 api_router.include_router(basicdata.announcements_router, prefix="/basicdata/announcements", tags=["公告管理"])

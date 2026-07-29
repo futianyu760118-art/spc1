@@ -15,6 +15,7 @@ from app.schemas.dashboard.schemas import (
     OrderRiskDistributionData,
     ClosureAchievement,
     ProcurementBoardData,
+    ShipmentBoardData,
 )
 from app.schemas.order.schemas import MaterialDemandOut
 from app.services.dashboard.dashboard_service import DashboardService
@@ -171,4 +172,15 @@ async def get_procurement_board(
     target = date.fromisoformat(target_date) if target_date else None
     service = DashboardService(db)
     data = await service.get_procurement_board(target_date=target)
+    return ResponseModel(data=data)
+
+
+@router.get("/shipment-board", response_model=ResponseModel[ShipmentBoardData])
+async def get_shipment_board(
+    current_user: dict = Depends(PermissionChecker("dashboard", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """供应链驾驶舱 — 出货计划看板（已逾期 + 今日）"""
+    service = DashboardService(db)
+    data = await service.get_shipment_board()
     return ResponseModel(data=data)

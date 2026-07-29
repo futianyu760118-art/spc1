@@ -34,6 +34,7 @@ from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.warehouse import Warehouse
 from app.models.basicdata.location import Location
 from app.models.basicdata.inventory import Inventory
+from app.models.basicdata.subject_balance import SubjectBalance
 from app.models.basicdata.process import Process
 from app.models.basicdata.organization import Organization
 from app.models.basicdata.employee import Employee
@@ -43,6 +44,7 @@ from app.models.exception.quality_issue import QualityIssue
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.production.production_task_order import ProductionTaskOrder
 from app.models.production.production_daily_report import ProductionDailyReport
+from app.models.production.labor_price_audit import ProductionLaborPriceAudit
 
 
 logger = logging.getLogger(__name__)
@@ -726,6 +728,8 @@ class ERPSyncService:
                     row_dict = self._map_row(row, mapping)
                     order_no = str(row_dict.get("order_no", "")).strip()
                     line_no = str(row_dict.get("line_no", "")).strip()
+                    row_dict["order_no"] = order_no
+                    row_dict["line_no"] = line_no
 
                     if not order_no:
                         stats["skipped"] += 1
@@ -830,6 +834,9 @@ class ERPSyncService:
                     order_no = str(row_dict.get("order_no", "")).strip()
                     line_no = str(row_dict.get("line_no", "")).strip()
                     erp_line_id = str(row_dict.get("erp_line_id", "")).strip()
+                    row_dict["order_no"] = order_no
+                    row_dict["line_no"] = line_no
+                    row_dict["erp_line_id"] = erp_line_id
 
                     if not order_no:
                         stats["skipped"] += 1
@@ -2882,6 +2889,50 @@ class ERPSyncService:
         return stats
 
     # ------------------------------------------------------------------
+    # 工价审核数据同步
+    # ------------------------------------------------------------------
+    async def sync_labor_price_audits(
+        self, since: Optional[datetime] = None, custom_params: Optional[dict] = None
+    ) -> dict:
+        """同步工价审核数据。幂等依据: labor_price_code 唯一。"""
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("labor_price_audits")
+
+            if since is None:
+                since = datetime.now() - timedelta(hours=24)
+
+            params = {"since": since}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条工价审核记录")
+
+            stats = await self._bulk_upsert(
+                ProductionLaborPriceAudit,
+                rows,
+                mapping,
+                key_fields=["labor_price_code"],
+                label="工价审核",
+            )
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"工价审核数据同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"工价审核数据同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
     # 即时库存同步
     # ------------------------------------------------------------------
     async def sync_inventory(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
@@ -2947,6 +2998,64 @@ class ERPSyncService:
         except Exception as e:
             stats["errors"].append(str(e))
             logger.exception(f"即时库存同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
+    # 科目余额同步
+    # ------------------------------------------------------------------
+    async def sync_subject_balances(
+        self, since: Optional[datetime] = None, custom_params: Optional[dict] = None
+    ) -> dict:
+        """同步科目余额（按期间 upsert，保留历史）。幂等依据:
+        (subject_id, item_code, fiscal_year, fiscal_month)。
+
+        核算项目代码(item_code)为空时统一归一化为 "0"，使 NULL 与 ''
+        落到同一去重键与存储值上（_bulk_upsert 对 NOT NULL 空键默认填 "1"，
+        这里在传入前显式规整为 "0" 以保持语义一致）。
+        """
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("subject_balances")
+
+            params = {}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"科目余额使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条科目余额记录")
+
+            # 归一化 item_code：定位 ERP 源字段（显式映射或身份映射）
+            item_code_sources = ["item_code"]
+            for src, tgt in (mapping or {}).items():
+                t = tgt.get("target") if isinstance(tgt, dict) else tgt
+                if t == "item_code":
+                    item_code_sources = [src]
+                    break
+            for row in rows:
+                for src in item_code_sources:
+                    val = row.get(src)
+                    if val is None or str(val).strip() == "":
+                        row[src] = "0"
+
+            stats = await self._bulk_upsert(
+                SubjectBalance,
+                rows,
+                mapping,
+                key_fields=["subject_id", "item_code", "fiscal_year", "fiscal_month"],
+                label="科目余额",
+            )
+
+            logger.info(f"科目余额同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"科目余额同步异常: {e}")
         finally:
             self._close_erp(keep_alive=True)
 

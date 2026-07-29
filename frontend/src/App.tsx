@@ -70,6 +70,7 @@ import Assembly from './pages/ProductionCenter/Assembly/index'
 import Packaging from './pages/ProductionCenter/Packaging/index'
 import ProcessExceptions from './pages/ProductionCenter/ProcessExceptions/index'
 import ProductProcessCapacity from './pages/ProductionCenter/ProductProcessCapacity/index'
+import DailyReports from './pages/ProductionCenter/DailyReports/index'
 import MeetingCenter from './pages/MeetingCenter/index'
 import NPICenter from './pages/NPICenter/index'
 import Login from './pages/Login'
@@ -206,6 +207,7 @@ export default function App() {
                             <Route path="packaging" element={<Packaging/>}/>
                             <Route path="product-process-capacities" element={<ProductProcessCapacity/>}/>
                             <Route path="process-exceptions" element={<ProcessExceptions/>}/>
+                            <Route path="daily-reports" element={<DailyReports/>}/>
                             <Route path="meetings" element={<MeetingCenter/>}/>
                             <Route path="npi" element={<NPICenter/>}/>
                             <Route path="import" element={<DataImport/>}/>

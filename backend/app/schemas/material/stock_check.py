@@ -54,6 +54,7 @@ class StockCheckItemUpdate(BaseModel):
     actual_qty: Optional[Decimal] = None
     is_checked: Optional[int] = None
     remark: Optional[str] = None
+    force_recount: Optional[bool] = None
 
 
 class StockCheckItemBatchUpdate(BaseModel):
@@ -81,6 +82,11 @@ class StockCheckItemOut(BaseModel):
     remark: Optional[str] = None
     material_property_label: Optional[str] = None
     material_type: Optional[str] = None
+    wh_id: Optional[int] = None
+    wh_name: Optional[str] = None
+    wh_code: Optional[str] = None
+    recent_checked_check_no: Optional[str] = None
+    recent_checked_date: Optional[date] = None
     warehouses: Optional[str] = None
 
     model_config = {"from_attributes": True}
@@ -144,23 +150,5 @@ class MaterialHistoryItem(BaseModel):
     actual_qty: Optional[Decimal] = None
     created_at: Optional[datetime] = None
     created_by: Optional[str] = None
-
-    model_config = {"from_attributes": True}
-
-
-class MaterialOrderUsageOut(BaseModel):
-    """物料反查: 哪些未结订单在使用该物料,各需多少"""
-    order_no: str
-    line_no: str
-    customer: Optional[str] = None
-    product_code: Optional[str] = None
-    product_name: Optional[str] = None
-    order_qty: Optional[Decimal] = None
-    bom_no: Optional[str] = None
-    standard_qty: Optional[Decimal] = None
-    req_qty: Optional[Decimal] = None
-    promised_date: Optional[date] = None
-    status: Optional[str] = None
-    order_nature: Optional[str] = None
 
     model_config = {"from_attributes": True}

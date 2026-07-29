@@ -110,6 +110,7 @@ export const dashboardApi = {
   getOrderRiskDistribution: () => api.get('/dashboard/order-risk-distribution'),
   getClosureAchievement: () => api.get('/dashboard/closure-achievement'),
   getProcurementBoard: (targetDate?: string) => api.get('/dashboard/procurement-board', { params: targetDate ? { target_date: targetDate } : {} }),
+  getShipmentBoard: () => api.get('/dashboard/shipment-board'),
 }
 
 // ============ 订单交付中心 ============
@@ -225,9 +226,9 @@ export const materialApi = {
     api.get(`/materials/stock-check/${checkId}`),
   getStockCheckItems: (checkId: number, params: Record<string, any> = {}) =>
     api.get(`/materials/stock-check/${checkId}/items`, { params }),
-  updateStockCheckItem: (itemId: number, data: { actual_qty?: number; is_checked?: number; remark?: string }) =>
+  updateStockCheckItem: (itemId: number, data: { actual_qty?: number; is_checked?: number; remark?: string; force_recount?: boolean }) =>
     api.put(`/materials/stock-check/items/${itemId}`, data),
-  batchUpdateStockCheckItems: (checkId: number, items: Array<{ id: number; actual_qty?: number; is_checked?: number; remark?: string }>) =>
+  batchUpdateStockCheckItems: (checkId: number, items: Array<{ id: number; actual_qty?: number; is_checked?: number; remark?: string; force_recount?: boolean }>) =>
     api.post('/materials/stock-check/items/batch', { check_id: checkId, items }),
   completeStockCheck: (checkId: number) =>
     api.post(`/materials/stock-check/${checkId}/complete`),
@@ -235,14 +236,6 @@ export const materialApi = {
     api.post(`/materials/stock-check/${checkId}/cancel`),
   getMaterialHistory: (params: { material_id: number }) =>
     api.get('/materials/stock-check/material-history', { params }),
-  getMaterialOrderUsage: (params: {
-    material_id: number
-    page?: number
-    page_size?: number
-    keyword?: string
-    sort_by?: string
-    sort_order?: string
-  }) => api.get('/materials/stock-check/material-orders', { params }),
   listMaterialCandidates: (params: { keyword?: string; page?: number; page_size?: number } = {}) =>
     api.get('/materials/stock-check/material-candidates', { params }),
   createStockCheckFromMaterials: (data: {
@@ -468,18 +461,24 @@ export const documentApi = {
   deleteProductSample: (id: number) => api.delete(`/exceptions/product-samples/${id}`),
   listProductSampleVersions: (id: number) => api.get(`/exceptions/product-samples/${id}/versions`),
   publishProductSampleVersion: (id: number, data: Record<string, any>) => api.post(`/exceptions/product-samples/${id}/versions`, data),
+  publishProductSample: (id: number) => api.post(`/exceptions/product-samples/${id}/publish`),
+  archiveProductSample: (id: number) => api.post(`/exceptions/product-samples/${id}/archive`),
   listOrderStandards: (params: Record<string, any> = {}) => api.get('/rules/order-standards', { params }),
   createOrderStandard: (data: Record<string, any>) => api.post('/rules/order-standards', data),
   updateOrderStandard: (id: number, data: Record<string, any>) => api.put(`/rules/order-standards/${id}`, data),
   deleteOrderStandard: (id: number) => api.delete(`/rules/order-standards/${id}`),
   listOrderStandardVersions: (id: number) => api.get(`/rules/order-standards/${id}/versions`),
   publishOrderStandardVersion: (id: number, data: Record<string, any>) => api.post(`/rules/order-standards/${id}/versions`, data),
+  publishOrderStandard: (id: number) => api.post(`/rules/order-standards/${id}/publish`),
+  archiveOrderStandard: (id: number) => api.post(`/rules/order-standards/${id}/archive`),
   listWorkInstructions: (params: Record<string, any> = {}) => api.get('/rules/work-instructions', { params }),
   createWorkInstruction: (data: Record<string, any>) => api.post('/rules/work-instructions', data),
   updateWorkInstruction: (id: number, data: Record<string, any>) => api.put(`/rules/work-instructions/${id}`, data),
   deleteWorkInstruction: (id: number) => api.delete(`/rules/work-instructions/${id}`),
   listWorkInstructionVersions: (id: number) => api.get(`/rules/work-instructions/${id}/versions`),
   publishWorkInstructionVersion: (id: number, data: Record<string, any>) => api.post(`/rules/work-instructions/${id}/versions`, data),
+  publishWorkInstruction: (id: number) => api.post(`/rules/work-instructions/${id}/publish`),
+  archiveWorkInstruction: (id: number) => api.post(`/rules/work-instructions/${id}/archive`),
 }
 
 export const inspectionRuleApi = {

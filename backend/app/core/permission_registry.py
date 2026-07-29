@@ -206,6 +206,7 @@ declare_permission("production.assembly", "组装管理", module="production", p
 declare_permission("production.packaging", "包装管理", module="production", parent_code="production", route_path="/packaging", sort_order=8)
 declare_permission("production.exceptions", "工序异常池", module="production", parent_code="production", route_path="/process-exceptions", sort_order=9)
 declare_permission("production.daily_report", "生产日报表", module="production", parent_code="production", route_path="/daily-reports", sort_order=10)
+declare_permission("production.labor_price_audit", "工价审核", module="production", parent_code="production", route_path="/labor-price-audits", sort_order=11)
 
 # 异常与质量中心
 declare_permission("exceptions", "异常与质量中心", module="exceptions", sort_order=6)
@@ -270,3 +271,7 @@ declare_permission("purchase", "采购中心", module="purchase", sort_order=11)
 declare_permission("purchase.price_change", "调价单管理", module="purchase", parent_code="purchase", route_path="/purchase/price-change", sort_order=1)
 declare_permission("purchase.price_change.pending", "待我审批", module="purchase", parent_code="purchase", route_path="/purchase/price-change/pending", sort_order=2)
 declare_permission("purchase.price_change.config", "审批配置", module="purchase", parent_code="purchase", route_path="/purchase/price-change/config", sort_order=3)
+
+# 财务数据
+declare_permission("finance", "财务数据", module="finance", sort_order=12)
+declare_permission("finance.data", "科目余额", module="finance", parent_code="finance", actions=["read"], route_path="/finance/subject-balances", sort_order=1)

@@ -7,15 +7,17 @@ import {
   PieChartOutlined,
   CheckSquareOutlined,
   ShoppingCartOutlined,
+  RocketOutlined,
 } from '@ant-design/icons'
 import TodayOverview from './components/TodayOverview'
 import RollingRisk14Days from './components/RollingRisk14Days'
 import OrderRiskDistribution from './components/OrderRiskDistribution'
 import ClosureAchievement from './components/ClosureAchievement'
 import ProcurementBoard from './components/ProcurementBoard'
+import ShipmentBoard from './components/ShipmentBoard'
 import { dashboardApi, riskApi } from '../../services/api'
 
-type DashboardTab = 'today' | 'rolling' | 'distribution' | 'closure' | 'procurement'
+type DashboardTab = 'today' | 'rolling' | 'distribution' | 'closure' | 'procurement' | 'shipment'
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('today')
@@ -194,6 +196,13 @@ export default function Dashboard() {
         <span><ShoppingCartOutlined style={{ marginRight: 6 }} />采购看板</span>
       ),
       children: <ProcurementBoard />,
+    },
+    {
+      key: 'shipment',
+      label: (
+        <span><RocketOutlined style={{ marginRight: 6 }} />出货计划看板</span>
+      ),
+      children: <ShipmentBoard />,
     },
   ]
 

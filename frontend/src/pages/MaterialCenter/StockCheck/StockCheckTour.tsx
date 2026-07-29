@@ -66,7 +66,7 @@ export const stockCheckManualDetailSteps: TourProps['steps'] = [
   },
   {
     title: '2. 差异列',
-    description: '差异自动算出:盘点数 − 库存数。正数=盘盈,负数=盘亏。可结合"使用订单"判断缺口对在制订单的影响。',
+    description: '差异自动算出:盘点数 − 库存数。正数=盘盈,负数=盘亏。',
     target: dataTour('diff'),
   },
   {

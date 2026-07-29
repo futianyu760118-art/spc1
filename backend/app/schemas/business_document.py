@@ -33,6 +33,7 @@ class BusinessDocumentOut(BaseModel):
     applicable_process: Optional[str] = None
     current_version: Optional[str] = None
     status: str
+    is_deleted: int = 0
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -46,7 +47,6 @@ class BusinessDocumentCreate(BaseModel):
     applicable_product: Optional[str] = None
     applicable_order: Optional[str] = None
     applicable_process: Optional[str] = None
-    status: str = "draft"
     version_no: str = "V1.0"
     content: Optional[str] = None
     attachments: Optional[list[dict[str, Any]]] = None
@@ -58,12 +58,10 @@ class BusinessDocumentUpdate(BaseModel):
     applicable_product: Optional[str] = None
     applicable_order: Optional[str] = None
     applicable_process: Optional[str] = None
-    status: Optional[str] = None
 
 
 class BusinessDocumentVersionCreate(BaseModel):
     version_no: str
     content: Optional[str] = None
     attachments: Optional[list[dict[str, Any]]] = None
-    status: str = "published"
     effective_date: Optional[date] = None

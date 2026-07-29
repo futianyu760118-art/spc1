@@ -11,6 +11,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "exceptions.product_samples": FULL_ACTIONS,
         "rules.order_standards": FULL_ACTIONS,
         "rules.work_instructions": FULL_ACTIONS,
+        "finance.data": ["read"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],
@@ -24,6 +25,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "users": ["read", "update", "reset_password"],
         "roles": ["read", "update"],
         "materials.subcontract_orders": ["read"],
+        "finance.data": ["read"],
     },
     "warehouse_Keeper": {
         "materials.subcontract_orders": ["read"],

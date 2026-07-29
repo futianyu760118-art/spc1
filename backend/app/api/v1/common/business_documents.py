@@ -33,9 +33,11 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
         current_user: dict = Depends(PermissionChecker(permission, "read")),
         db: AsyncSession = Depends(get_db),
     ):
-        conditions = [BusinessDocument.doc_type == doc_type]
+        conditions = [BusinessDocument.doc_type == doc_type, BusinessDocument.is_deleted == 0]
         if status:
-            conditions.append(BusinessDocument.status == status)
+            statuses = [s.strip() for s in status.split(",") if s.strip()]
+            if statuses:
+                conditions.append(BusinessDocument.status.in_(statuses))
         if keyword:
             like = f"%{keyword}%"
             conditions.append(
@@ -66,7 +68,11 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
         db: AsyncSession = Depends(get_db),
     ):
         exists = await db.execute(
-            select(BusinessDocument.id).where(BusinessDocument.doc_type == doc_type, BusinessDocument.code == data.code)
+            select(BusinessDocument.id).where(
+                BusinessDocument.doc_type == doc_type,
+                BusinessDocument.code == data.code,
+                BusinessDocument.is_deleted == 0,
+            )
         )
         if exists.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="资料编码已存在")
@@ -79,7 +85,7 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
             applicable_order=data.applicable_order,
             applicable_process=data.applicable_process,
             current_version=data.version_no,
-            status=data.status,
+            status="draft",
             created_by=current_user["username"],
         )
         db.add(document)
@@ -90,10 +96,8 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
             version_no=data.version_no,
             content=data.content,
             attachments=data.attachments or [],
-            status=data.status if data.status in {"draft", "published", "archived"} else "draft",
+            status="draft",
             effective_date=data.effective_date,
-            published_at=datetime.utcnow() if data.status == "published" else None,
-            published_by=current_user["username"] if data.status == "published" else None,
             created_by=current_user["username"],
         )
         db.add(version)
@@ -110,7 +114,11 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
         db: AsyncSession = Depends(get_db),
     ):
         document = (await db.execute(
-            select(BusinessDocument).where(BusinessDocument.id == document_id, BusinessDocument.doc_type == doc_type)
+            select(BusinessDocument).where(
+                BusinessDocument.id == document_id,
+                BusinessDocument.doc_type == doc_type,
+                BusinessDocument.is_deleted == 0,
+            )
         )).scalar_one_or_none()
         if not document:
             raise HTTPException(status_code=404, detail="资料不存在")
@@ -124,16 +132,96 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
         return ResponseModel(data=BusinessDocumentOut.model_validate(document))
 
     @router.delete("/{document_id}", response_model=ResponseModel[dict])
-    async def archive_document(
+    async def delete_document(
         document_id: int,
         current_user: dict = Depends(PermissionChecker(permission, "delete")),
         db: AsyncSession = Depends(get_db),
     ):
         document = (await db.execute(
-            select(BusinessDocument).where(BusinessDocument.id == document_id, BusinessDocument.doc_type == doc_type)
+            select(BusinessDocument).where(
+                BusinessDocument.id == document_id,
+                BusinessDocument.doc_type == doc_type,
+                BusinessDocument.is_deleted == 0,
+            )
         )).scalar_one_or_none()
         if not document:
             raise HTTPException(status_code=404, detail="资料不存在")
+
+        document.is_deleted = 1
+        await log_audit(
+            db,
+            "business_document",
+            document.id,
+            "delete",
+            field_name="is_deleted",
+            old_value="0",
+            new_value="1",
+            operator=current_user["username"],
+        )
+        await db.commit()
+        return ResponseModel(data={"deleted": document_id})
+
+    @router.post("/{document_id}/publish", response_model=ResponseModel[BusinessDocumentOut])
+    async def publish_document(
+        document_id: int,
+        current_user: dict = Depends(PermissionChecker(permission, "update")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        document = (await db.execute(
+            select(BusinessDocument).where(
+                BusinessDocument.id == document_id,
+                BusinessDocument.doc_type == doc_type,
+                BusinessDocument.is_deleted == 0,
+            )
+        )).scalar_one_or_none()
+        if not document:
+            raise HTTPException(status_code=404, detail="资料不存在")
+        if document.status != "draft":
+            raise HTTPException(status_code=400, detail="仅草稿状态的资料可以发布")
+
+        document.status = "published"
+        current_ver = (await db.execute(
+            select(BusinessDocumentVersion).where(
+                BusinessDocumentVersion.document_id == document_id,
+                BusinessDocumentVersion.version_no == document.current_version,
+            )
+        )).scalar_one_or_none()
+        if current_ver and current_ver.status != "published":
+            current_ver.status = "published"
+            current_ver.published_at = datetime.utcnow()
+            current_ver.published_by = current_user["username"]
+
+        await log_audit(
+            db,
+            "business_document",
+            document.id,
+            "update",
+            field_name="status",
+            old_value="draft",
+            new_value="published",
+            operator=current_user["username"],
+        )
+        await db.commit()
+        await db.refresh(document)
+        return ResponseModel(data=BusinessDocumentOut.model_validate(document))
+
+    @router.post("/{document_id}/archive", response_model=ResponseModel[BusinessDocumentOut])
+    async def archive_document(
+        document_id: int,
+        current_user: dict = Depends(PermissionChecker(permission, "update")),
+        db: AsyncSession = Depends(get_db),
+    ):
+        document = (await db.execute(
+            select(BusinessDocument).where(
+                BusinessDocument.id == document_id,
+                BusinessDocument.doc_type == doc_type,
+                BusinessDocument.is_deleted == 0,
+            )
+        )).scalar_one_or_none()
+        if not document:
+            raise HTTPException(status_code=404, detail="资料不存在")
+        if document.status != "published":
+            raise HTTPException(status_code=400, detail="仅已发布的资料可以归档")
 
         old_status = document.status
         document.status = "archived"
@@ -148,7 +236,8 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
             operator=current_user["username"],
         )
         await db.commit()
-        return ResponseModel(data={"archived": document_id})
+        await db.refresh(document)
+        return ResponseModel(data=BusinessDocumentOut.model_validate(document))
 
     @router.get("/{document_id}/versions", response_model=ResponseModel[list[BusinessDocumentVersionOut]])
     async def list_versions(
@@ -157,7 +246,11 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
         db: AsyncSession = Depends(get_db),
     ):
         document = (await db.execute(
-            select(BusinessDocument.id).where(BusinessDocument.id == document_id, BusinessDocument.doc_type == doc_type)
+            select(BusinessDocument.id).where(
+                BusinessDocument.id == document_id,
+                BusinessDocument.doc_type == doc_type,
+                BusinessDocument.is_deleted == 0,
+            )
         )).scalar_one_or_none()
         if not document:
             raise HTTPException(status_code=404, detail="资料不存在")
@@ -177,10 +270,16 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
         db: AsyncSession = Depends(get_db),
     ):
         document = (await db.execute(
-            select(BusinessDocument).where(BusinessDocument.id == document_id, BusinessDocument.doc_type == doc_type)
+            select(BusinessDocument).where(
+                BusinessDocument.id == document_id,
+                BusinessDocument.doc_type == doc_type,
+                BusinessDocument.is_deleted == 0,
+            )
         )).scalar_one_or_none()
         if not document:
             raise HTTPException(status_code=404, detail="资料不存在")
+        if document.status != "published":
+            raise HTTPException(status_code=400, detail="仅已发布的资料可以发新版本")
 
         exists = await db.execute(
             select(BusinessDocumentVersion.id).where(
@@ -191,21 +290,19 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
         if exists.scalar_one_or_none():
             raise HTTPException(status_code=400, detail="版本号已存在")
 
-        is_published = data.status == "published"
         version = BusinessDocumentVersion(
             document_id=document_id,
             version_no=data.version_no,
             content=data.content,
             attachments=data.attachments or [],
-            status=data.status,
+            status="published",
             effective_date=data.effective_date,
-            published_at=datetime.utcnow() if is_published else None,
-            published_by=current_user["username"] if is_published else None,
+            published_at=datetime.utcnow(),
+            published_by=current_user["username"],
             created_by=current_user["username"],
         )
         db.add(version)
         document.current_version = data.version_no
-        document.status = data.status
         await db.flush()
         await log_audit(db, "business_document_version", version.id, "create", field_name=doc_type, operator=current_user["username"])
         await db.commit()

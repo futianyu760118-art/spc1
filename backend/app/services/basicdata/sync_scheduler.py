@@ -53,7 +53,9 @@ class SyncScheduler:
             "mrp_plan_orders": "sync_mrp_plan_orders",
             "production_task_orders": "sync_production_task_orders",
             "production_daily_reports": "sync_production_daily_reports",
+            "labor_price_audits": "sync_labor_price_audits",
             "inventory": "sync_inventory",
+            "subject_balances": "sync_subject_balances",
             "subcontract_orders": "sync_subcontract_orders",
             "subcontract_order_details": "sync_subcontract_order_details",
         }

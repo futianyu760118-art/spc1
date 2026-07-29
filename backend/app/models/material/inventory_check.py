@@ -57,6 +57,15 @@ class StockCheckItem(Base):
     is_checked = Column(Integer, nullable=False, default=0, comment="盘点标记 0否1是")
     checked_at = Column(DateTime, nullable=True)
     checked_by = Column(String(100), nullable=True)
+    wh_id = Column(Integer, nullable=True, comment="仓库ID(快照);NULL=历史老盘点单或(未入库)")
+    wh_name = Column(String(50), nullable=True, comment="仓库名称(建单时快照)")
+    wh_code = Column(String(20), nullable=True, comment="仓库编码(建单时快照)")
+    recent_checked_check_no = Column(String(32), nullable=True, comment="近期已盘来源盘点单号(快照);NULL=普通行")
+    recent_checked_date = Column(Date, nullable=True, comment="近期已盘来源盘点日期(快照)")
     remark = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_sci_wh", "check_id", "material_id", "wh_id"),
+    )

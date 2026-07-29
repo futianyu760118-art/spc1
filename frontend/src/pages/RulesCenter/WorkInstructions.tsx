@@ -12,7 +12,9 @@ export default function WorkInstructions() {
         update: documentApi.updateWorkInstruction,
         remove: documentApi.deleteWorkInstruction,
         versions: documentApi.listWorkInstructionVersions,
-        publish: documentApi.publishWorkInstructionVersion,
+        publishVersion: documentApi.publishWorkInstructionVersion,
+        publish: documentApi.publishWorkInstruction,
+        archive: documentApi.archiveWorkInstruction,
       }}
     />
   )

@@ -463,3 +463,27 @@ class EmployeeOut(EmployeeBase):
     manager_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+# ── SubjectBalance (科目余额) ──
+class SubjectBalanceBase(BaseModel):
+    subject_category: Optional[str] = None
+    subject_id: int
+    subject_name: Optional[str] = None
+    subject_code: Optional[str] = None
+    item_code: str = ""
+    item_name: Optional[str] = None
+    parent_subject_id: Optional[int] = None
+    fiscal_year: int
+    fiscal_month: int
+    credit_amount_month: Decimal = Decimal("0")
+    credit_amount_year: Decimal = Decimal("0")
+
+
+class SubjectBalanceOut(SubjectBalanceBase):
+    id: int
+    data_source: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}

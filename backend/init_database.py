@@ -34,6 +34,7 @@ from app.models.production.process_exception import ProcessException
 from app.models.production.schedule_plan import ProductionSchedulePlan
 from app.models.production.production_task_order import ProductionTaskOrder
 from app.models.production.front_process_record import FrontProcessRecord
+from app.models.production.production_daily_report import ProductionDailyReport  # noqa: F401
 from app.models.exception.risk_issue import RiskIssue
 from app.models.exception.issue_log import IssueLog
 from app.models.exception.change_log import ChangeLog
@@ -276,7 +277,7 @@ class DatabaseInitializer:
             },
             "approval_config": {
                 "biz_name": "VARCHAR(128)",
-            }
+            },
             "purchase_price_change": {
                 "erp_price_snapshot": "JSONB",
             },
@@ -295,6 +296,17 @@ class DatabaseInitializer:
             },
             "scm_inventory_check_item": {
                 "level": "INTEGER",
+                "wh_id": "INTEGER",
+                "wh_name": "VARCHAR(50)",
+                "wh_code": "VARCHAR(20)",
+                "recent_checked_check_no": "VARCHAR(32)",
+                "recent_checked_date": "DATE",
+            },
+            "production_daily_report": {
+                "oa_detail_id": "INTEGER",
+            },
+            "business_document": {
+                "is_deleted": "INTEGER NOT NULL DEFAULT 0",
             },
         }
         # 删除已废弃的列
@@ -435,6 +447,63 @@ class DatabaseInitializer:
                 print("  scm_bom_detail.material_id index ensured")
             except Exception as e:
                 print(f"  scm_bom_detail.material_id index skipped: {e}")
+
+    async def migrate_production_daily_report_index(self):
+        """将 production_daily_report 的唯一索引由 (oa_id) 改为 (oa_id, oa_detail_id)，
+        并确保 oa_detail_id 列类型为 INTEGER。
+        幂等: 先 DROP 旧索引, 再 CREATE 新组合唯一索引；
+        若 oa_detail_id 已以 VARCHAR 存在则安全转换为 INTEGER。"""
+        print("Migrating production_daily_report unique index -> (oa_id, oa_detail_id)...")
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "DROP INDEX IF EXISTS uq_production_daily_report_oa_id"
+                ))
+                print("  dropped old uq_production_daily_report_oa_id (if existed)")
+            except Exception as e:
+                print(f"  drop old index skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE production_daily_report "
+                    "ALTER COLUMN oa_detail_id TYPE INTEGER "
+                    "USING (oa_detail_id::integer)"
+                ))
+                print("  ensured oa_detail_id column type = INTEGER")
+            except Exception as e:
+                print(f"  alter oa_detail_id type skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_production_daily_report_oa_id_detail "
+                    "ON production_daily_report (oa_id, oa_detail_id) "
+                    "WHERE oa_id IS NOT NULL AND oa_detail_id IS NOT NULL"
+                ))
+                print("  ensured uq_production_daily_report_oa_id_detail")
+            except Exception as e:
+                print(f"  create new index skipped: {e}")
+        print("production_daily_report index migration done")
+
+    async def migrate_business_document_soft_delete_index(self):
+        """将 business_document 的 (doc_type, code) 唯一索引改为部分唯一索引，
+        仅对 is_deleted = 0 的行生效，使软删除后同编码可复用。
+        幂等: 先 DROP 旧索引, 再 CREATE 部分唯一索引。"""
+        print("Migrating business_document unique index -> partial (is_deleted = 0)...")
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "DROP INDEX IF EXISTS uq_business_document_type_code"
+                ))
+                print("  dropped old uq_business_document_type_code (if existed)")
+            except Exception as e:
+                print(f"  drop old index skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_business_document_type_code "
+                    "ON business_document (doc_type, code) WHERE is_deleted = 0"
+                ))
+                print("  ensured partial unique index uq_business_document_type_code")
+            except Exception as e:
+                print(f"  create partial index skipped: {e}")
+        print("business_document index migration done")
 
     async def drop_pto_sale_order_id_fk(self):
         """production_task_order.sale_order_id 用于存放 ERP 的 FOrderInterID，
@@ -1624,6 +1693,18 @@ ORDER BY FModifyDate DESC
                         sync_enabled=True,
                         created_by="admin",
                     ),
+                    SyncSqlConfig(
+                        sync_type="labor_price_audits",
+                        description="工价审核数据 — 从ERP拉取（SQL待配置：部署后在「同步SQL配置」中填写真实表名/字段。字段：单据编号/申请日期/有效标志/部门ID/物料ID/物料代码/工价表唯一码/工价金额/BOM ID/BOM编码）",
+                        sql_text="",
+                        field_mapping_json=None,
+                        sync_interval="1h",
+                        sync_strategy="incremental",
+                        sync_priority=5,
+                        is_active=True,
+                        sync_enabled=True,
+                        created_by="admin",
+                    ),
                     # ---- 基础数据同步配置（占位，需根据实际 ERP 表结构配置 SQL 后启用） ----
                     SyncSqlConfig(
                         sync_type="customers",
@@ -1809,6 +1890,18 @@ ORDER BY FModifyDate DESC
                         sync_priority=8,
                         created_by="admin",
                     ),
+                    SyncSqlConfig(
+                        sync_type="subject_balances",
+                        description="科目余额 — 从ERP总账科目余额表拉取（按期间快照，幂等键: subject_id+item_code+fiscal_year+fiscal_month）",
+                        sql_text="-- TODO: 配置 ERP 科目余额查询 SQL，返回字段需包含: subject_category, subject_id, subject_name, subject_code, item_code, item_name, parent_subject_id, fiscal_year, fiscal_month, credit_amount_month, credit_amount_year\nSELECT NULL AS subject_category, NULL AS subject_id, NULL AS subject_name, NULL AS subject_code, NULL AS item_code, NULL AS item_name, NULL AS parent_subject_id, NULL AS fiscal_year, NULL AS fiscal_month, NULL AS credit_amount_month, NULL AS credit_amount_year WHERE 1 = 0",
+                        field_mapping_json=None,
+                        is_active=True,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="full",
+                        sync_priority=24,
+                        created_by="admin",
+                    ),
                 ]
 
                 new_configs = [c for c in configs if c.sync_type not in existing_types]
@@ -1839,6 +1932,8 @@ ORDER BY FModifyDate DESC
             await self.migrate_columns()
             await self.drop_pto_sale_order_id_fk()
             await self.ensure_indexes()
+            await self.migrate_production_daily_report_index()
+            await self.migrate_business_document_soft_delete_index()
             await self.rebuild_mrp_plan_order()
             await self.backfill_sale_order_id()
             await self.migrate_stock_check_permission()

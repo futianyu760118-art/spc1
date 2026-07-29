@@ -12,7 +12,9 @@ export default function ProductSamples() {
         update: documentApi.updateProductSample,
         remove: documentApi.deleteProductSample,
         versions: documentApi.listProductSampleVersions,
-        publish: documentApi.publishProductSampleVersion,
+        publishVersion: documentApi.publishProductSampleVersion,
+        publish: documentApi.publishProductSample,
+        archive: documentApi.archiveProductSample,
       }}
     />
   )

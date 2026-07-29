@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     AI_LOG_RETENTION_DAYS: int = 30
     AI_MAX_AGENT_DURATION_S: int = 120
 
+    # 物料盘点
+    STOCK_CHECK_RECENT_SKIP_DAYS: int = 7  # 订单盘点建单时，近 N 天内已盘过的(物料×仓库)行自动预填补
+
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

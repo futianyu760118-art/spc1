@@ -177,3 +177,32 @@ class ProcurementBoardData(BaseModel):
     """7日备料看板数据"""
     items: List[BoardItem] = []
     last_updated: datetime
+
+
+# ===== 出货计划看板 =====
+
+class ShipmentBoardItem(BaseModel):
+    """出货计划看板单行：日期 | 单号 | 客户 | 产品 | 数量 | 交期 | 风险"""
+    id: int
+    order_no: Optional[str] = None
+    line_no: Optional[str] = None
+    shipping_plan: Optional[date] = None
+    is_overdue: bool = False
+    overdue_days: int = 0
+    customer: Optional[str] = None
+    customer_code: Optional[str] = None
+    product_code: Optional[str] = None
+    product_name: Optional[str] = None
+    order_qty: Optional[float] = None
+    completed_qty: Optional[float] = None
+    promised_date: Optional[date] = None
+    risk_level: Optional[str] = None
+    owner: Optional[str] = None
+    shipping_status_desc: Optional[str] = None
+    status: Optional[str] = None
+
+
+class ShipmentBoardData(BaseModel):
+    """出货计划看板数据"""
+    items: List[ShipmentBoardItem] = []
+    last_updated: datetime
