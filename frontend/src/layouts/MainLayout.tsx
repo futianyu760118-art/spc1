@@ -140,7 +140,8 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
 // 从权限树动态生成菜单项
 function buildMenuItemsFromTree(nodes: PermNode[]): PermissionAwareItem[] {
   return nodes
-    .filter(node => node.code !== 'topbar') // 椤舵爮鍔熻兘涓嶅湪渚ц竟鏍忔樉绀?    .map(node => {
+    .filter(node => node.code !== 'topbar') // 顶栏功能不在侧边栏显示
+    .map(node => {
       const hasChildren = node.children && node.children.length > 0
       const icon = PERMISSION_ICON_MAP[node.code] || MODULE_ICON_MAP[node.module] || <AppstoreOutlined />
       const key = node.route_path || node.code
