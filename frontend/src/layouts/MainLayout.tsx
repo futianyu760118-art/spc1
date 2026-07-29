@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+﻿import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, Tabs, List, Tag, Typography, notification as antNotification } from 'antd'
 import {
@@ -48,7 +48,7 @@ import { usePermissionStore, PermNode } from '../store/permission'
 import { authApi, notificationApi } from '../services/api'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
-import { FloatingAssistant } from '../components/Assistant'
+import { FloatingAssistant, TopBarAssistant } from '../components/Assistant'
 import FontSizeSetting from '../components/FontSizeSetting'
 import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
 
@@ -140,8 +140,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
 // 从权限树动态生成菜单项
 function buildMenuItemsFromTree(nodes: PermNode[]): PermissionAwareItem[] {
   return nodes
-    .filter(node => node.code !== 'topbar') // 顶栏功能不在侧边栏显示
-    .map(node => {
+    .filter(node => node.code !== 'topbar') // 椤舵爮鍔熻兘涓嶅湪渚ц竟鏍忔樉绀?    .map(node => {
       const hasChildren = node.children && node.children.length > 0
       const icon = PERMISSION_ICON_MAP[node.code] || MODULE_ICON_MAP[node.module] || <AppstoreOutlined />
       const key = node.route_path || node.code
@@ -178,6 +177,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/orders', icon: <UnorderedListOutlined />, label: '订单总控台', permission: 'orders.list' },
       { key: '/run-orders', icon: <RocketOutlined />, label: '跑单管理', permission: 'orders.run_orders' },
       { key: '/order-risk-pool', icon: <WarningOutlined />, label: '订单风险池', permission: 'orders.risk_pool' },
+      { key: '/inventory-check', icon: <CheckOutlined />, label: '订单物料盘点', permission: 'orders.inventory_check' },
     ],
   },
   {

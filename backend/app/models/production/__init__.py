@@ -10,3 +10,4 @@ from app.models.production.production_task_order import ProductionTaskOrder  # n
 from app.models.production.front_process_record import FrontProcessRecord  # noqa: F401
 from app.models.production.production_daily_report import ProductionDailyReport  # noqa: F401
 from app.models.production.labor_price_audit import ProductionLaborPriceAudit  # noqa: F401
+from app.models.production.base_condition import ProductionBaseCondition  # noqa: F401
