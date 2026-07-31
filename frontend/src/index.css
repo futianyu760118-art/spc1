@@ -496,3 +496,11 @@ body {
   border-radius: 999px;
   line-height: 18px;
 }
+
+/* ===== Quality issues: hover row auto-expand (CSS-only, no re-render) ===== */
+.qi-table tr.ant-table-row:hover .ant-table-cell {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  word-break: break-word;
+}

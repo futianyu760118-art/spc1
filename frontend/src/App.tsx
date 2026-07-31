@@ -80,6 +80,7 @@ import PriceChangeNew from './pages/Purchase/PriceChange/new'
 import PriceChangeDetail from './pages/Purchase/PriceChange/detail'
 import PriceChangePending from './pages/Purchase/PriceChange/pending'
 import ApprovalConfig from './pages/Purchase/PriceChange/config'
+import SubjectBalances from './pages/FinanceCenter/SubjectBalances/index'
 import {useAuthStore} from './store/auth'
 import {useThemeStore} from './store/theme'
 import {setGlobalMessageApi} from './utils/antdMessage'
@@ -245,6 +246,7 @@ export default function App() {
                             <Route path="purchase/price-change/pending" element={<PriceChangePending/>}/>
                             <Route path="purchase/price-change/config" element={<ApprovalConfig/>}/>
                             <Route path="purchase/price-change/:id" element={<PriceChangeDetail/>}/>
+                            <Route path="finance/subject-balances" element={<SubjectBalances/>} key="finance-subject-balances"/>
                         </Route>
                     </Routes>
                 </BrowserRouter>

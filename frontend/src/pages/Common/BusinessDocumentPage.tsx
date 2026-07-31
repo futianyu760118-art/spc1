@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Col, DatePicker, Descriptions, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Upload, message } from 'antd'
+import { Button, Col, DatePicker, Descriptions, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Tooltip, Upload, message } from 'antd'
 import { DeleteOutlined, EditOutlined, HistoryOutlined, InboxOutlined, InfoCircleOutlined, PlusOutlined, ReloadOutlined, SendOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { fileApi } from '../../services/api'
@@ -206,27 +206,33 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       title: '操作', width: 280, fixed: 'right' as const,
       render: (_: any, row: any) => (
         <Space size={4}>
-          <Button size="small" icon={<InfoCircleOutlined />} onClick={() => openDetail(row)} />
+          <Tooltip title="详情"><Button size="small" icon={<InfoCircleOutlined />} onClick={() => openDetail(row)} /></Tooltip>
           {row.status !== 'archived' && (
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
+            <Tooltip title="编辑"><Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} /></Tooltip>
           )}
           {row.status === 'draft' && (
-            <Popconfirm title="确认发布？" onConfirm={() => handlePublish(row.id)}>
-              <Button size="small" type="primary" icon={<SendOutlined />} />
-            </Popconfirm>
+            <Tooltip title="发布">
+              <Popconfirm title="确认发布？" onConfirm={() => handlePublish(row.id)}>
+                <Button size="small" type="primary" icon={<SendOutlined />} />
+              </Popconfirm>
+            </Tooltip>
           )}
           {row.status === 'published' && (
             <>
-              <Button size="small" icon={<PlusOutlined />} onClick={() => openVersion(row)} />
-              <Popconfirm title="确认归档？" onConfirm={() => handleArchive(row.id)}>
-                <Button size="small" icon={<InboxOutlined />} />
-              </Popconfirm>
+              <Tooltip title="升级版本"><Button size="small" icon={<PlusOutlined />} onClick={() => openVersion(row)} /></Tooltip>
+              <Tooltip title="归档">
+                <Popconfirm title="确认归档？" onConfirm={() => handleArchive(row.id)}>
+                  <Button size="small" icon={<InboxOutlined />} />
+                </Popconfirm>
+              </Tooltip>
             </>
           )}
-          <Button size="small" icon={<HistoryOutlined />} onClick={() => openHistory(row)} />
-          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(row.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          <Tooltip title="历史"><Button size="small" icon={<HistoryOutlined />} onClick={() => openHistory(row)} /></Tooltip>
+          <Tooltip title="删除">
+            <Popconfirm title="确认删除？" onConfirm={() => handleDelete(row.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          </Tooltip>
         </Space>
       ),
     },
@@ -360,6 +366,11 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       <Drawer title={`详情 - ${versionRecord?.title || ''}`} open={detailOpen} onClose={() => setDetailOpen(false)} width={640}>
         {versionRecord && (
           <>
+            {versionRecord.status === 'published' && (
+              <div style={{ marginBottom: 16 }}>
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => { setDetailOpen(false); openVersion(versionRecord) }}>升级版本</Button>
+              </div>
+            )}
             <Descriptions column={2} size="small" bordered>
               <Descriptions.Item label="编码">{versionRecord.code}</Descriptions.Item>
               <Descriptions.Item label="状态"><Tag color={STATUS_MAP[versionRecord.status]?.color}>{STATUS_MAP[versionRecord.status]?.label || versionRecord.status}</Tag></Descriptions.Item>

@@ -220,6 +220,8 @@ export const materialApi = {
     api.post(`/materials/stock-check/from-order/${orderNo}`, data || {}),
   getRecentStockChecks: (params: Record<string, any> = {}) =>
     api.get('/materials/stock-check/recent', { params }),
+  getStockCheckStats: (params: { check_type?: string; date_from?: string; date_to?: string; status?: string } = {}) =>
+    api.get('/materials/stock-check/stats', { params }),
   getStockChecksByOrder: (orderNo: string) =>
     api.get(`/materials/stock-check/by-order/${orderNo}`),
   getStockCheck: (checkId: number) =>

@@ -74,6 +74,7 @@ class StockCheckItemOut(BaseModel):
     unit: Optional[str] = None
     req_qty: Optional[Decimal] = None
     system_qty: Optional[Decimal] = None
+    system_qty_time: Optional[datetime] = None
     actual_qty: Optional[Decimal] = None
     diff_qty: Optional[Decimal] = None
     is_checked: Optional[int] = None
@@ -88,6 +89,8 @@ class StockCheckItemOut(BaseModel):
     recent_checked_check_no: Optional[str] = None
     recent_checked_date: Optional[date] = None
     warehouses: Optional[str] = None
+    # 运行时计算(读详情时实时查 scm_inventory,不落库)
+    live_qty: Optional[Decimal] = None
 
     model_config = {"from_attributes": True}
 
@@ -152,3 +155,24 @@ class MaterialHistoryItem(BaseModel):
     created_by: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class TopDiffMaterial(BaseModel):
+    """盘盈盘亏 Top 差异物料（按 |净差异| 排序）"""
+    material_code: str
+    material_name: str
+    diff_qty: float
+    unit: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class StockCheckStats(BaseModel):
+    """盘盈盘亏统计（仅 is_checked=1 的已盘点行，排除已取消单）"""
+    total_checked: int
+    gain_count: int
+    loss_count: int
+    flat_count: int
+    total_gain_qty: float
+    total_loss_qty: float
+    top_diff_materials: List[TopDiffMaterial] = []

@@ -110,7 +110,7 @@ async def search_exceptions(db: AsyncSession, params: Dict[str, Any]) -> Dict[st
     if not exception_type or exception_type == "quality":
         q = select(QualityIssue)
         cq = select(func.count(QualityIssue.id))
-        filters = []
+        filters = [QualityIssue.is_deleted == False]
         if keyword:
             like = f"%{keyword}%"
             filters.append(QualityIssue.description.ilike(like) | QualityIssue.issue_no.ilike(like) | QualityIssue.product_name.ilike(like))

@@ -43,6 +43,7 @@ QUALITY_FILTERABLE_FIELDS = {
     "quality_manager_approval": QualityIssue.quality_manager_approval,
     "defect_rate": cast(QualityIssue.defect_qty, Float) / func.nullif(cast(QualityIssue.sample_qty, Float), 0),
     "status": QualityIssue.status,
+    "workflow_status": QualityIssue.workflow_status,
     "created_at": QualityIssue.created_at,
     "updated_at": QualityIssue.updated_at,
 }
@@ -87,6 +88,8 @@ def _build_quality_conditions(
         values = [v for v in values if v not in ("", None)]
         if values:
             conditions.append(column.in_(values))
+    # 软删除记录不进入列表/统计/导出
+    conditions.append(QualityIssue.is_deleted == False)
     return conditions
 
 
@@ -272,6 +275,7 @@ EXPORT_COLUMNS = [
     ExportColumn('preliminary_analysis_person', '初步分析负责人', 14),
     ExportColumn('quality_manager_approval', '品质经理审批', 16),
     ExportColumn('status', '状态', 10),
+    ExportColumn('workflow_status', '流程状态', 10),
 ]
 
 
@@ -333,6 +337,7 @@ async def export_quality_issues(
             'preliminary_analysis_person': item.preliminary_analysis_person or '',
             'quality_manager_approval': item.quality_manager_approval or '',
             'status': STATUS_LABELS.get(item.status, item.status),
+            'workflow_status': item.workflow_status or '',
         })
 
     svc = GenericExportService(EXPORT_COLUMNS, export_rows, sheet_name='品质异常')

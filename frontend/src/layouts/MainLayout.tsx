@@ -74,6 +74,7 @@ const MODULE_ICON_MAP: Record<string, React.ReactNode> = {
   npi: <ProjectOutlined />,
   rules: <ToolOutlined />,
   basicdata: <DatabaseOutlined />,
+  finance: <AccountBookOutlined />,
 }
 
 // 权限 code → 图标映射（叶子节点图标）
@@ -133,6 +134,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   roles: <SafetyOutlined />,
   audit: <AuditOutlined />,
   settings: <SwapOutlined />,
+  'finance.data': <AccountBookOutlined />,
   meetings: <TeamOutlined />,
   npi: <ProjectOutlined />,
 }

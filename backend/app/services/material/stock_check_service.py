@@ -6,7 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional, List, Dict, Tuple
 
-from sqlalchemy import select, func, desc, or_, String as SAString, text
+from sqlalchemy import select, func, desc, or_, String as SAString, text, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.basicdata.inventory import Inventory
@@ -121,10 +121,11 @@ def _gen_check_no(seq: int) -> str:
 async def _get_stock_by_warehouse(
     db: AsyncSession,
     material_ids: List[int],
-) -> Dict[Tuple[int, int], Tuple[str, Decimal]]:
+) -> Dict[Tuple[int, int], Tuple[str, Decimal, Optional[datetime]]]:
     """按 (material_id, wh_id) 分组聚合 scm_inventory.qty_on_hand。
 
-    同仓多库位的 qty_on_hand 求和；返回 {(mid, wh_id): (wh_name, qty)}。
+    同仓多库位的 qty_on_hand 求和；返回 {(mid, wh_id): (wh_name, qty, updated_at)}。
+    updated_at 取该组库存的最大更新时间(用于快照库存时间)。
     仅包含 scm_inventory 中存在记录的仓（含 qty=0 的仓）。
     """
     if not material_ids:
@@ -135,16 +136,18 @@ async def _get_stock_by_warehouse(
             Inventory.wh_id,
             func.max(Inventory.wh_name).label("wh_name"),
             func.coalesce(func.sum(Inventory.qty_on_hand), 0).label("wh_qty"),
+            func.max(Inventory.updated_at).label("wh_updated"),
         )
         .where(Inventory.material_id.in_(material_ids))
         .group_by(Inventory.material_id, Inventory.wh_id)
     )
-    out: Dict[Tuple[int, int], Tuple[str, Decimal]] = {}
+    out: Dict[Tuple[int, int], Tuple[str, Decimal, Optional[datetime]]] = {}
     for row in result.all():
         wh_name = (row.wh_name or "").strip() or f"WH#{row.wh_id}"
         out[(int(row.material_id), int(row.wh_id))] = (
             wh_name,
             Decimal(str(row.wh_qty or 0)),
+            row.wh_updated,
         )
     return out
 
@@ -171,16 +174,16 @@ async def _get_stock_aggregated_by_material_id(
 
 
 def _split_stock_by_warehouse(
-    stock_map: Dict[Tuple[int, int], Tuple[str, Decimal]],
+    stock_map: Dict[Tuple[int, int], Tuple[str, Decimal, Optional[datetime]]],
     material_ids: List[int],
-) -> Dict[int, List[Tuple[int, str, Decimal]]]:
+) -> Dict[int, List[Tuple[int, str, Decimal, Optional[datetime]]]]:
     """将 _get_stock_by_warehouse 的结果按 material_id 分组成
-    {material_id: [(wh_id, wh_name, qty), ...]}。
+    {material_id: [(wh_id, wh_name, qty, updated_at), ...]}。
     """
-    grouped: Dict[int, List[Tuple[int, str, Decimal]]] = {m: [] for m in material_ids}
-    for (mid, wh_id), (wh_name, qty) in stock_map.items():
+    grouped: Dict[int, List[Tuple[int, str, Decimal, Optional[datetime]]]] = {m: [] for m in material_ids}
+    for (mid, wh_id), (wh_name, qty, t) in stock_map.items():
         if mid in grouped:
-            grouped[mid].append((wh_id, wh_name, qty))
+            grouped[mid].append((wh_id, wh_name, qty, t))
     for mid in grouped:
         grouped[mid].sort(key=lambda x: (x[1], x[0]))
     return grouped
@@ -254,6 +257,33 @@ async def enrich_items_assoc(db: AsyncSession, items: List[StockCheckItem]) -> N
         it.material_property_label = MATERIAL_PROPERTY_LABELS.get(mp, str(mp)) if mp is not None else None
         it.material_type = type_map.get(mid) if mid is not None else None
         it.warehouses = None
+
+
+async def enrich_live_qty(db: AsyncSession, items: List[StockCheckItem]) -> None:
+    """为每条明细注入实时库存 live_qty(读时计算,不落库)。
+
+    优先按与快照相同的 (material_id, wh_id) 查询 scm_inventory.qty_on_hand;
+    老盘点单明细无 wh_id 时,回退到按物料跨仓聚合,保证兼容。
+    """
+    mids = [int(it.material_id) for it in items if it.material_id is not None]
+    stock_map = await _get_stock_by_warehouse(db, mids) if mids else {}
+    none_wh_mids = list({
+        int(it.material_id) for it in items
+        if it.material_id is not None and it.wh_id is None
+    })
+    agg_map = (
+        await _get_stock_aggregated_by_material_id(db, none_wh_mids) if none_wh_mids else {}
+    )
+    for it in items:
+        mid = int(it.material_id) if it.material_id is not None else None
+        wh_id = int(it.wh_id) if it.wh_id is not None else None
+        if mid is None:
+            it.live_qty = Decimal("0")
+        elif wh_id is not None:
+            entry = stock_map.get((mid, wh_id))
+            it.live_qty = entry[1] if entry else Decimal("0")
+        else:
+            it.live_qty = agg_map.get(mid, Decimal("0"))
 
 
 async def _refresh_check_aggregates(db: AsyncSession, check_id: int) -> None:
@@ -385,7 +415,7 @@ async def create_stock_check_from_order(
         mid = int(n.material_id)
         warehouses = warehouses_by_mid.get(mid, [])
         if warehouses:
-            for wh_id, wh_name, sys_q in warehouses:
+            for wh_id, wh_name, sys_q, sys_t in warehouses:
                 k = (mid, wh_id)
                 if k in dedup_row_meta:
                     continue
@@ -395,6 +425,7 @@ async def create_stock_check_from_order(
                     "spec_model": n.spec_model,
                     "unit": n.unit,
                     "system_qty": sys_q,
+                    "system_qty_time": sys_t,
                     "wh_name": wh_name,
                 }
                 dedup_order.append(k)
@@ -408,6 +439,7 @@ async def create_stock_check_from_order(
                 "spec_model": n.spec_model,
                 "unit": n.unit,
                 "system_qty": Decimal("0"),
+                "system_qty_time": None,
                 "wh_name": "(未入库)",
             }
             dedup_order.append(k)
@@ -442,6 +474,7 @@ async def create_stock_check_from_order(
                 unit=meta["unit"],
                 req_qty=Decimal("0"),
                 system_qty=meta["system_qty"],
+                system_qty_time=meta.get("system_qty_time"),
                 wh_id=wh_id,
                 wh_name=meta["wh_name"],
                 actual_qty=actual_q,
@@ -464,6 +497,7 @@ async def create_stock_check_from_order(
                 unit=meta["unit"],
                 req_qty=Decimal("0"),
                 system_qty=meta["system_qty"],
+                system_qty_time=meta.get("system_qty_time"),
                 wh_id=wh_id,
                 wh_name=meta["wh_name"],
                 actual_qty=None,
@@ -541,7 +575,7 @@ async def create_stock_check_from_materials(
         mid = m.erp_material_id
         warehouses = warehouses_by_mid.get(mid, [])
         if warehouses:
-            for wh_id, wh_name, sys_q in warehouses:
+            for wh_id, wh_name, sys_q, sys_t in warehouses:
                 item_rows.append(StockCheckItem(
                     check_id=head.id,
                     line_no=None,
@@ -552,6 +586,7 @@ async def create_stock_check_from_materials(
                     unit=m.unit_of_measure,
                     req_qty=Decimal("0"),
                     system_qty=sys_q,
+                    system_qty_time=sys_t,
                     wh_id=wh_id,
                     wh_name=wh_name,
                     actual_qty=None,
@@ -822,7 +857,7 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
     for mid, n, lvl in candidates:
         warehouses = warehouses_by_mid.get(mid, [])
         if warehouses:
-            for wh_id, wh_name, sys_q in warehouses:
+            for wh_id, wh_name, sys_q, sys_t in warehouses:
                 k = (mid, wh_id)
                 if k in new_meta:
                     continue
@@ -841,6 +876,7 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
                     "spec_model": n.spec_model,
                     "unit": n.unit,
                     "system_qty": sys_q,
+                    "system_qty_time": sys_t,
                     "wh_name": wh_name,
                 }
                 new_keys.append(k)
@@ -863,6 +899,7 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
                 "spec_model": n.spec_model,
                 "unit": n.unit,
                 "system_qty": Decimal("0"),
+                "system_qty_time": None,
                 "wh_name": "(未入库)",
             }
             new_keys.append(k)
@@ -900,6 +937,7 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
                 unit=meta["unit"],
                 req_qty=Decimal("0"),
                 system_qty=meta["system_qty"],
+                system_qty_time=meta.get("system_qty_time"),
                 wh_id=wh_id,
                 wh_name=meta["wh_name"],
                 actual_qty=actual_q,
@@ -922,6 +960,7 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
                 unit=meta["unit"],
                 req_qty=Decimal("0"),
                 system_qty=meta["system_qty"],
+                system_qty_time=meta.get("system_qty_time"),
                 wh_id=wh_id,
                 wh_name=meta["wh_name"],
                 actual_qty=None,
@@ -943,6 +982,7 @@ async def get_stock_check_with_items(db: AsyncSession, check_id: int) -> Optiona
     )
     head.items = list(items_res.scalars().all())
     await enrich_items_assoc(db, head.items)
+    await enrich_live_qty(db, head.items)
     return head
 
 
@@ -1061,3 +1101,78 @@ async def get_material_history(
         }
         for r in rows
     ]
+
+
+async def get_stock_check_stats(
+    db: AsyncSession,
+    *,
+    check_type: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    status: Optional[List[str]] = None,
+) -> Dict:
+    """盘盈盘亏统计（仅 is_checked=1 的已盘点行，排除已取消单）。
+    返回 dict 供路由层构造 StockCheckStats。"""
+    conds = [
+        StockCheckItem.is_checked == 1,
+        StockCheck.status != "cancelled",
+    ]
+    if check_type:
+        conds.append(StockCheck.check_type == check_type)
+    if date_from:
+        conds.append(StockCheck.check_date >= date_from)
+    if date_to:
+        conds.append(StockCheck.check_date <= date_to)
+    if status:
+        conds.append(StockCheck.status.in_(status))
+
+    gain_c = func.sum(case((StockCheckItem.diff_qty > 0, 1), else_=0)).label("gain_count")
+    loss_c = func.sum(case((StockCheckItem.diff_qty < 0, 1), else_=0)).label("loss_count")
+    flat_c = func.sum(case((StockCheckItem.diff_qty == 0, 1), else_=0)).label("flat_count")
+    total_gain = func.coalesce(
+        func.sum(case((StockCheckItem.diff_qty > 0, StockCheckItem.diff_qty), else_=0)), 0
+    ).label("total_gain_qty")
+    total_loss = func.coalesce(
+        func.sum(case((StockCheckItem.diff_qty < 0, StockCheckItem.diff_qty), else_=0)), 0
+    ).label("total_loss_qty")
+    total_checked = func.count(StockCheckItem.id).label("total_checked")
+
+    q1 = (
+        select(gain_c, loss_c, flat_c, total_gain, total_loss, total_checked)
+        .join(StockCheck, StockCheck.id == StockCheckItem.check_id)
+        .where(*conds)
+    )
+    row = (await db.execute(q1)).one()
+
+    q2 = (
+        select(
+            StockCheckItem.material_code,
+            func.max(StockCheckItem.material_name).label("material_name"),
+            func.max(StockCheckItem.unit).label("unit"),
+            func.sum(StockCheckItem.diff_qty).label("diff_qty"),
+        )
+        .join(StockCheck, StockCheck.id == StockCheckItem.check_id)
+        .where(*conds, StockCheckItem.material_code.isnot(None))
+        .group_by(StockCheckItem.material_code)
+        .order_by(func.abs(func.sum(StockCheckItem.diff_qty)).desc())
+        .limit(10)
+    )
+    top_rows = (await db.execute(q2)).all()
+
+    return {
+        "total_checked": int(row.total_checked or 0),
+        "gain_count": int(row.gain_count or 0),
+        "loss_count": int(row.loss_count or 0),
+        "flat_count": int(row.flat_count or 0),
+        "total_gain_qty": float(row.total_gain_qty or 0),
+        "total_loss_qty": float(row.total_loss_qty or 0),
+        "top_diff_materials": [
+            {
+                "material_code": r.material_code or "",
+                "material_name": r.material_name or "",
+                "diff_qty": float(r.diff_qty or 0),
+                "unit": r.unit,
+            }
+            for r in top_rows
+        ],
+    }

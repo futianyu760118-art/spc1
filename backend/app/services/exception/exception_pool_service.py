@@ -72,7 +72,7 @@ async def get_exception_pool(
 
     # --- QualityIssue ---
     if not source_type or source_type == "quality_issue":
-        q = select(QualityIssue)
+        q = select(QualityIssue).where(QualityIssue.is_deleted == False)
         if status:
             q = q.where(QualityIssue.status == status)
         if owner:
@@ -215,7 +215,7 @@ async def get_closure_tracking(
     # --- QualityIssue ---
     should_query_quality = not source_type or source_type == "quality_issue"
     if should_query_quality:
-        q = select(QualityIssue)
+        q = select(QualityIssue).where(QualityIssue.is_deleted == False)
         if status:
             q = q.where(QualityIssue.status == status)
         if owner:
@@ -333,7 +333,10 @@ async def get_closure_person_details(
             ))
 
     if not source_type or source_type == "quality_issue":
-        q = select(QualityIssue).where(_owner_filter(QualityIssue.responsible_person, owner))
+        q = select(QualityIssue).where(
+            _owner_filter(QualityIssue.responsible_person, owner),
+            QualityIssue.is_deleted == False,
+        )
         if status:
             q = q.where(QualityIssue.status == status)
         result = await db.execute(q.order_by(QualityIssue.created_at.desc()))

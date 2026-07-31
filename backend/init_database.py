@@ -56,6 +56,7 @@ from app.models.basicdata.position import Position
 # from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.file_asset import FileAsset
 from app.models.basicdata.feedback import Feedback
+from app.models.basicdata.share_link import ShareLink  # noqa: F401
 
 settings = get_settings()
 
@@ -265,6 +266,9 @@ class DatabaseInitializer:
                 "batch_qty": "INTEGER",
                 "sample_qty": "INTEGER",
                 "defect_qty": "INTEGER",
+                "workflow_status": "VARCHAR(32) NOT NULL DEFAULT '创建'",
+                "data_source": "VARCHAR(32) NOT NULL DEFAULT 'manual'",
+                "is_deleted": "BOOLEAN NOT NULL DEFAULT FALSE",
             },
             "production_schedule_plan": {
                 "frozen_locked_by": "VARCHAR(64)",
@@ -304,6 +308,7 @@ class DatabaseInitializer:
                 "wh_code": "VARCHAR(20)",
                 "recent_checked_check_no": "VARCHAR(32)",
                 "recent_checked_date": "DATE",
+                "system_qty_time": "TIMESTAMP",
             },
             "production_daily_report": {
                 "oa_detail_id": "INTEGER",
@@ -1903,6 +1908,18 @@ ORDER BY FModifyDate DESC
                         sync_interval="1d",
                         sync_strategy="full",
                         sync_priority=24,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="quality_issues_ids",
+                        description="品质异常删除检测 — 全量拉取OA/ERP端 erp_quality_id 做差集比对(仅 sync_quality_issues 内部调用, 勿独立调度; 配好真实SQL后即生效)",
+                        sql_text="-- TODO: 配置 OA/ERP 品质异常源表的全量 id 查询, 必须返回字段 erp_quality_id (不要加时间过滤)\nSELECT NULL AS erp_quality_id WHERE 1 = 0",
+                        field_mapping_json=None,
+                        is_active=True,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="full",
+                        sync_priority=25,
                         created_by="admin",
                     ),
                 ]

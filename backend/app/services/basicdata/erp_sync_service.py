@@ -158,6 +158,25 @@ class ERPSyncService:
 
         return config.sql_text, mapping
 
+    async def _load_optional_sql_config(self, sync_type: str) -> Optional[tuple[str, dict]]:
+        """
+        可选地加载某 sync_type 的 SQL 配置(不限 sync_enabled)。
+        用于辅助型查询(如删除检测), 读不到/未配置则返回 None 而非抛错。
+        """
+        result = await self.spc_db.execute(
+            select(SyncSqlConfig).where(SyncSqlConfig.sync_type == sync_type)
+        )
+        config = result.scalar_one_or_none()
+        if not config or not (config.sql_text or "").strip():
+            return None
+        mapping = {}
+        if config.field_mapping_json:
+            try:
+                mapping = json.loads(config.field_mapping_json)
+            except json.JSONDecodeError:
+                logger.warning(f"sync_type={sync_type} 的字段映射 JSON 解析失败，使用原始字段名")
+        return config.sql_text, mapping
+
     # ------------------------------------------------------------------
     # 通用：执行 SQL 并映射字段
     # ------------------------------------------------------------------
@@ -2641,7 +2660,7 @@ class ERPSyncService:
         self, since: Optional[datetime] = None, custom_params: Optional[dict] = None
     ) -> dict:
         """同步品质异常数据。幂等依据: ERP品质异常ID。"""
-        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "soft_deleted": 0, "errors": []}
 
         try:
             await self._connect_erp()
@@ -2719,13 +2738,26 @@ class ERPSyncService:
                     existing = result.scalar_one_or_none()
 
                     if existing:
-                        for k, v in row_dict.items():
-                            if k in ("erp_quality_id", "issue_no"):
-                                continue
-                            if v is not None:
-                                setattr(existing, k, v)
-                        stats["updated"] += 1
+                        # ERP sync guard: 只覆盖 ERP 来源/空的记录, 不动 manual/excel
+                        if getattr(existing, "data_source", None) in ("erp", None, ""):
+                            for k, v in row_dict.items():
+                                if k in ("erp_quality_id", "issue_no"):
+                                    continue
+                                if v is not None:
+                                    setattr(existing, k, v)
+                            existing.data_source = "erp"
+                            # 复活: ERP 端恢复的记录自动解除软删
+                            if getattr(existing, "is_deleted", False):
+                                existing.is_deleted = False
+                            stats["updated"] += 1
+                        else:
+                            logger.info(
+                                f"跳过品质异常更新 issue_no={getattr(existing, 'issue_no', None)}: "
+                                f"数据来源为 {getattr(existing, 'data_source', None)} 非 ERP"
+                            )
+                            stats["skipped"] += 1
                     else:
+                        row_dict.setdefault("data_source", "erp")
                         qi = QualityIssue(**row_dict)
                         self.spc_db.add(qi)
                         stats["created"] += 1
@@ -2744,6 +2776,47 @@ class ERPSyncService:
 
             await self.spc_db.flush()
             await self.spc_db.commit()
+
+            # ---- 删除检测 (方案C): 全量比对 erp_quality_id, 软删本地多余记录 ----
+            try:
+                optional = await self._load_optional_sql_config("quality_issues_ids")
+                if optional is None:
+                    logger.info("品质异常删除检测: 未配置 quality_issues_ids SQL, 跳过")
+                else:
+                    id_sql, id_mapping = optional
+                    id_rows = await self._execute_erp_sql(id_sql, {})
+                    erp_ids = set()
+                    for r in id_rows:
+                        mapped = self._map_row(r, id_mapping)
+                        eid = str(mapped.get("erp_quality_id", "")).strip()
+                        if eid:
+                            erp_ids.add(eid)
+                    logger.info(f"品质异常删除检测: ERP 端共 {len(erp_ids)} 条")
+
+                    # 安全护栏: ERP id 集合为空时绝不软删(避免误清全表)
+                    if erp_ids:
+                        existing_result = await self.spc_db.execute(
+                            select(QualityIssue).where(
+                                QualityIssue.data_source == "erp",
+                                QualityIssue.is_deleted == False,
+                            )
+                        )
+                        soft_deleted = 0
+                        for qi in existing_result.scalars().all():
+                            eid = str(qi.erp_quality_id or "").strip()
+                            if eid and eid not in erp_ids:
+                                qi.is_deleted = True
+                                soft_deleted += 1
+                        if soft_deleted:
+                            await self.spc_db.flush()
+                            await self.spc_db.commit()
+                        stats["soft_deleted"] = soft_deleted
+                        logger.info(f"品质异常删除检测: 软删 {soft_deleted} 条 ERP 中已不存在的记录")
+                    else:
+                        logger.warning("品质异常删除检测: ERP 端 id 集合为空, 跳过(避免误删全表)")
+            except Exception as de:
+                logger.warning(f"品质异常删除检测失败(不影响已完成的增量同步): {de}")
+
             logger.info(f"品质异常同步完成: {stats}")
 
         except Exception as e:

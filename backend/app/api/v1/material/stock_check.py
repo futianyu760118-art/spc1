@@ -4,12 +4,14 @@ from datetime import date
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel, PageResult
+from app.services.common.export_service import GenericExportService, ExportColumn
 from app.schemas.material.stock_check import (
     StockCheckCreate,
     StockCheckFromMaterialsCreate,
@@ -21,6 +23,7 @@ from app.schemas.material.stock_check import (
     CoCheckersUpdate,
     MaterialHistoryItem,
     MaterialCandidateOut,
+    StockCheckStats,
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.material.stock_check_service import (
@@ -39,12 +42,35 @@ from app.services.material.stock_check_service import (
     get_material_history,
     list_co_checker_candidates,
     enrich_items_assoc,
+    enrich_live_qty,
+    get_stock_check_stats,
     _user_can_edit,
     _resolve_user_names,
     StockCheckPermissionError,
 )
 
 router = APIRouter()
+
+
+STOCK_CHECK_EXPORT_COLUMNS: list[ExportColumn] = [
+    ExportColumn("material_code", "物料编码", 16),
+    ExportColumn("material_name", "物料名称", 24),
+    ExportColumn("spec_model", "规格", 16),
+    ExportColumn("material_type", "分类", 12),
+    ExportColumn("material_property_label", "属性", 10),
+    ExportColumn("unit", "单位", 8),
+    ExportColumn("system_qty", "快照库存", 12),
+    ExportColumn("system_qty_time", "快照时间", 18),
+    ExportColumn("live_qty", "即时库存", 12),
+    ExportColumn("wh_name", "仓库", 16),
+    ExportColumn("req_qty", "应盘数", 12),
+    ExportColumn("actual_qty", "盘点数", 12),
+    ExportColumn("diff_qty", "差异", 12),
+    ExportColumn("is_checked", "已盘", 8),
+    ExportColumn("checked_by", "标记人", 12),
+    ExportColumn("checked_at", "标记时间", 18),
+    ExportColumn("remark", "备注", 20),
+]
 
 
 async def _to_check_out(db: AsyncSession, head: StockCheck, current_user: dict) -> StockCheckOut:
@@ -210,6 +236,27 @@ async def co_checker_candidates(
     return ResponseModel(data=await list_co_checker_candidates(db))
 
 
+@router.get("/stock-check/stats", response_model=ResponseModel[StockCheckStats])
+async def stock_check_stats(
+    check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
+    date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
+    date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
+    status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed);cancelled 始终排除"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """盘盈盘亏统计（仅已盘点行 is_checked=1，排除已取消单）。"""
+    statuses = [s.strip() for s in (status or "").split(",") if s.strip()] or None
+    data = await get_stock_check_stats(
+        db,
+        check_type=check_type,
+        date_from=date_from,
+        date_to=date_to,
+        status=statuses,
+    )
+    return ResponseModel(data=StockCheckStats(**data))
+
+
 @router.get("/stock-check/{check_id}", response_model=ResponseModel[StockCheckOut])
 async def get_detail(
     check_id: int,
@@ -267,6 +314,7 @@ async def update_item(
         raise HTTPException(status_code=404, detail=str(e))
     item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id))).scalar_one()
     await enrich_items_assoc(db, [item])
+    await enrich_live_qty(db, [item])
     return ResponseModel(data=StockCheckItemOut.model_validate(item))
 
 
@@ -329,9 +377,70 @@ async def update_co_checkers(
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     head = await get_stock_check_with_items(db, check_id)
     return ResponseModel(data=await _to_check_out(db, head, current_user))
+
+
+@router.get("/stock-check/{check_id}/export")
+async def export_stock_check(
+    check_id: int,
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    columns: Optional[str] = Query(None, description="逗号分隔的导出字段 key,省略=全部"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """导出单个盘点单的明细(支持 xlsx/csv 与字段选择)。"""
+    head = await get_stock_check_with_items(db, check_id)
+    if not head:
+        raise HTTPException(status_code=404, detail="盘点单不存在")
+
+    selected_keys = [c.strip() for c in columns.split(",") if c.strip()] if columns else []
+    allowed = {c.key for c in STOCK_CHECK_EXPORT_COLUMNS}
+    invalid = [k for k in selected_keys if k not in allowed]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"无效导出字段: {', '.join(invalid)}")
+    selected_columns = [c for c in STOCK_CHECK_EXPORT_COLUMNS if not selected_keys or c.key in selected_keys]
+    if not selected_columns:
+        raise HTTPException(status_code=400, detail="请选择至少一个有效导出字段")
+
+    export_rows = []
+    for it in head.items:
+        snap_time = it.system_qty_time or head.created_at
+        export_rows.append({
+            "material_code": it.material_code or "",
+            "material_name": it.material_name or "",
+            "spec_model": it.spec_model or "",
+            "material_type": it.material_type or "",
+            "material_property_label": it.material_property_label or "",
+            "unit": it.unit or "",
+            "system_qty": it.system_qty if it.system_qty is not None else "",
+            "system_qty_time": snap_time.strftime("%Y-%m-%d %H:%M") if snap_time else "",
+            "live_qty": it.live_qty if it.live_qty is not None else "",
+            "wh_name": it.wh_name or "",
+            "req_qty": it.req_qty if it.req_qty is not None else "",
+            "actual_qty": it.actual_qty if it.actual_qty is not None else "",
+            "diff_qty": it.diff_qty if it.diff_qty is not None else "",
+            "is_checked": "是" if it.is_checked == 1 else "否",
+            "checked_by": it.checked_by or "",
+            "checked_at": it.checked_at.strftime("%Y-%m-%d %H:%M") if it.checked_at else "",
+            "remark": it.remark or "",
+        })
+
+    svc = GenericExportService(selected_columns, export_rows, sheet_name="物料盘点明细")
+    if format == "csv":
+        output = svc.to_csv()
+        return StreamingResponse(
+            output,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename=stock_check_{check_id}.csv"},
+        )
+    output = svc.to_xlsx()
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=stock_check_{check_id}.xlsx"},
+    )
 
 
 @router.post("/stock-check/{check_id}/refresh-bom", response_model=ResponseModel[StockCheckOut])

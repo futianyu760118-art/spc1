@@ -19,6 +19,11 @@ from app.schemas.business_document import (
     BusinessDocumentVersionOut,
 )
 from app.schemas.common import PageResult, ResponseModel
+from app.services.common.file_service import FileService
+
+
+def _attachment_keys(attachments) -> list[str]:
+    return [a.get("key") for a in (attachments or []) if isinstance(a, dict) and a.get("key")]
 
 
 def create_business_document_router(doc_type: str, permission: str) -> APIRouter:
@@ -101,6 +106,12 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
             created_by=current_user["username"],
         )
         db.add(version)
+        await db.flush()
+        await FileService(db).attach(
+            _attachment_keys(data.attachments),
+            doc_type,
+            f"business_document_version:{version.id}",
+        )
         await log_audit(db, "business_document", document.id, "create", field_name=doc_type, operator=current_user["username"])
         await db.commit()
         await db.refresh(document)
@@ -304,6 +315,11 @@ def create_business_document_router(doc_type: str, permission: str) -> APIRouter
         db.add(version)
         document.current_version = data.version_no
         await db.flush()
+        await FileService(db).attach(
+            _attachment_keys(data.attachments),
+            doc_type,
+            f"business_document_version:{version.id}",
+        )
         await log_audit(db, "business_document_version", version.id, "create", field_name=doc_type, operator=current_user["username"])
         await db.commit()
         await db.refresh(version)

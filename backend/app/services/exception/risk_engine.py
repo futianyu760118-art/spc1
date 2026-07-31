@@ -125,6 +125,7 @@ class RiskEngine:
         result = await self.db.execute(
             select(QualityIssue.status).where(
                 QualityIssue.order_no == order.order_no,
+                QualityIssue.is_deleted == False,
             )
         )
         issues = result.scalars().all()
@@ -483,6 +484,7 @@ class RiskEngine:
             qi_result = await self.db.execute(
                 select(QualityIssue).where(
                     QualityIssue.status.in_(["open", "processing"]),
+                    QualityIssue.is_deleted == False,
                 )
             )
             qi_items = qi_result.scalars().all()

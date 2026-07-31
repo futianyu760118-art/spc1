@@ -52,6 +52,7 @@ class StockCheckItem(Base):
     unit = Column(String(20), nullable=True)
     req_qty = Column(Numeric(18, 4), nullable=False, default=0, comment="应盘数(BOM standard_qty × order_qty)")
     system_qty = Column(Numeric(18, 4), nullable=False, default=0, comment="库存数(快照)")
+    system_qty_time = Column(DateTime, nullable=True, comment="快照库存对应的 scm_inventory.updated_at(建单时捕获)")
     actual_qty = Column(Numeric(18, 4), nullable=True, comment="盘点数(用户录入)")
     diff_qty = Column(Numeric(18, 4), nullable=False, default=0, comment="差异数=actual-system")
     is_checked = Column(Integer, nullable=False, default=0, comment="盘点标记 0否1是")

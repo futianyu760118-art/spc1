@@ -2,19 +2,22 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
-  InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select,
+  InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select, Dropdown,
 } from 'antd'
-import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined } from '@ant-design/icons'
+import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
+import { useExport } from '@/hooks/useExport'
 import { materialApi, orderApi } from '@/services/api'
 import { formatDateTime } from '@/utils'
 import { useUiPreferencesStore } from '@/store/uiPreferences'
 import { useStockCheckPoolStore } from '@/store/stockCheckPool'
+import ExportColumnSelector, { ExportColumnOption } from '@/components/ExportColumnSelector'
 import { stockCheckIntroSteps, stockCheckDetailSteps, stockCheckManualDetailSteps, STOCK_CHECK_INTRO_TOUR_ID, STOCK_CHECK_DETAIL_TOUR_ID, STOCK_CHECK_MANUAL_DETAIL_TOUR_ID } from './StockCheckTour'
 import MaterialPickerModal from './MaterialPickerModal'
 import OrderProductPickerModal, { OrderProductSelection, OrderProductLine } from './OrderProductPickerModal'
 import CoCheckerPickerModal from './CoCheckerPickerModal'
 import SearchableColumnFilter from './SearchableColumnFilter'
+import StatsCharts from './components/StatsCharts'
 
 interface StockCheckItem {
   id: number
@@ -36,6 +39,8 @@ interface StockCheckItem {
   recent_checked_date?: string | null
   req_qty?: number | null
   system_qty?: number | null
+  system_qty_time?: string | null
+  live_qty?: number | null
   actual_qty?: number | null
   diff_qty?: number | null
   is_checked?: number | null
@@ -108,6 +113,26 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   cancelled: { label: '已取消', color: 'error' },
 }
 
+const STOCK_CHECK_EXPORT_OPTIONS: ExportColumnOption[] = [
+  { field: 'material_code', label: '物料编码' },
+  { field: 'material_name', label: '物料名称' },
+  { field: 'spec_model', label: '规格' },
+  { field: 'material_type', label: '分类' },
+  { field: 'material_property_label', label: '属性' },
+  { field: 'unit', label: '单位' },
+  { field: 'system_qty', label: '快照库存' },
+  { field: 'system_qty_time', label: '快照时间' },
+  { field: 'live_qty', label: '即时库存' },
+  { field: 'wh_name', label: '仓库' },
+  { field: 'req_qty', label: '应盘数' },
+  { field: 'actual_qty', label: '盘点数' },
+  { field: 'diff_qty', label: '差异' },
+  { field: 'is_checked', label: '已盘' },
+  { field: 'checked_by', label: '标记人' },
+  { field: 'checked_at', label: '标记时间' },
+  { field: 'remark', label: '备注' },
+]
+
 export default function StockCheckPage() {
   const [params, setParams] = useSearchParams()
   const poolCount = useStockCheckPoolStore((s) => s.items.length)
@@ -137,6 +162,10 @@ export default function StockCheckPage() {
   const [progressCollapsed, setProgressCollapsed] = useState(true)
   const [productFilter, setProductFilter] = useState<string>('all')
   const [colWidths, setColWidths] = useState<Record<string, number>>({})
+
+  const { exporting, exportData } = useExport()
+  const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx')
+  const [exportColumnModalOpen, setExportColumnModalOpen] = useState(false)
 
   const loadCheck = useCallback(async (checkId: number) => {
     setLoading(true)
@@ -187,6 +216,13 @@ export default function StockCheckPage() {
     }),
     extraDeps: [dateRange, checkTypeFilter],
   })
+
+  const statsFilters = useMemo(() => ({
+    check_type: checkTypeFilter === 'all' ? undefined : checkTypeFilter,
+    date_from: dateRange?.[0],
+    date_to: dateRange?.[1],
+    status: (recentFilters.status as string[] | undefined)?.join(','),
+  }), [checkTypeFilter, dateRange, recentFilters.status])
 
   const loadOrderOverview = useCallback(async (no: string) => {
     setOverviewLoading(true)
@@ -497,6 +533,22 @@ export default function StockCheckPage() {
     setItems(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p))
   }, [])
 
+  const handleExportClick = (format: 'xlsx' | 'csv') => {
+    setExportFormat(format)
+    setExportColumnModalOpen(true)
+  }
+
+  const handleExportColumnConfirm = (selectedColumns: string[]) => {
+    setExportColumnModalOpen(false)
+    if (!activeCheck) return
+    const ext = exportFormat === 'csv' ? 'csv' : 'xlsx'
+    exportData(
+      `/api/v1/materials/stock-check/${activeCheck.id}/export`,
+      { format: exportFormat, columns: selectedColumns.join(',') },
+      `物料盘点明细_${activeCheck.check_no}.${ext}`,
+    )
+  }
+
   const readonly = activeCheck?.status === 'completed' || activeCheck?.status === 'cancelled' || activeCheck?.can_edit === false
 
   // 表格表头支持拖动改变列宽
@@ -575,10 +627,26 @@ export default function StockCheckPage() {
       { title: '属性', dataIndex: 'material_property_label', width: 90, ...stringCol('material_property_label', 90), ...resizeCol('material_property_label', 90) },
       { title: '单位', dataIndex: 'unit', width: 60, ...stringCol('unit', 60), ...resizeCol('unit', 60) },
       {
-        title: '即时库存', dataIndex: 'system_qty', width: 90, align: 'right' as const,
+        title: '快照库存', dataIndex: 'system_qty', width: 110, align: 'right' as const,
         ...numCol('system_qty'),
+        render: (v: any, r: StockCheckItem) => {
+          const snapTime = r.system_qty_time || activeCheck?.created_at
+          return (
+            <div style={{ lineHeight: 1.2 }}>
+              <div>{v != null ? Number(v).toFixed(2) : '-'}</div>
+              {snapTime && (
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>{formatDateTime(snapTime)}</div>
+              )}
+            </div>
+          )
+        },
+        ...resizeCol('system_qty', 110),
+      },
+      {
+        title: '即时库存', dataIndex: 'live_qty', width: 90, align: 'right' as const,
+        ...numCol('live_qty'),
         render: (v: any) => v != null ? Number(v).toFixed(2) : '-',
-        ...resizeCol('system_qty', 90),
+        ...resizeCol('live_qty', 90),
       },
       {
         title: '仓库',
@@ -692,7 +760,7 @@ export default function StockCheckPage() {
         },
       },
     ]
-  }, [items, readonly, saveItem, updateItem, openMaterialHistory, colWidths])
+  }, [items, readonly, saveItem, updateItem, openMaterialHistory, colWidths, activeCheck])
 
   // ===== 按产品筛选盘点明细 =====
   // 切到不同盘点单时重置过滤器
@@ -855,6 +923,7 @@ export default function StockCheckPage() {
     <div>
       {renderSearch()}
       {renderProductProgress()}
+      {!activeCheck && <StatsCharts filters={statsFilters} />}
       {!activeCheck ? (
         <div className="card-modern" style={{ padding: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
@@ -988,6 +1057,17 @@ export default function StockCheckPage() {
                   <Button icon={<SaveOutlined />} onClick={saveAll} loading={savingAll} disabled={readonly}>
                     保存全部
                   </Button>
+                  <Dropdown
+                    menu={{
+                      items: [
+                        { key: 'xlsx', label: '导出 Excel', icon: <DownloadOutlined /> },
+                        { key: 'csv', label: '导出 CSV', icon: <DownloadOutlined /> },
+                      ],
+                      onClick: ({ key }) => handleExportClick(key as 'xlsx' | 'csv'),
+                    }}
+                  >
+                    <Button icon={<DownloadOutlined />} loading={exporting}>导出 <DownOutlined /></Button>
+                  </Dropdown>
                   <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleComplete} disabled={readonly}>
                     标记完成
                   </Button>
@@ -1032,6 +1112,12 @@ export default function StockCheckPage() {
         steps={tourSteps}
         onClose={handleTourClose}
         onFinish={handleTourClose}
+      />
+      <ExportColumnSelector
+        open={exportColumnModalOpen}
+        columns={STOCK_CHECK_EXPORT_OPTIONS}
+        onConfirm={handleExportColumnConfirm}
+        onCancel={() => setExportColumnModalOpen(false)}
       />
       <Drawer
         title={historyMaterial ? `物料 ${historyMaterial.material_code} 历史盘点记录` : '历史盘点记录'}

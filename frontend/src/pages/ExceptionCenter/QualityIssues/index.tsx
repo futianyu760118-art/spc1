@@ -1,16 +1,17 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Table, Tag, Input, Select, Button, Space, message, Modal, Form,
-  DatePicker, InputNumber, Row, Col, Popconfirm, Dropdown,
+  DatePicker, InputNumber, Row, Col, Popconfirm, Dropdown, Popover, Checkbox,
 } from 'antd'
 import {
   ReloadOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
-  DownloadOutlined, DownOutlined,
+  DownloadOutlined, DownOutlined, SettingOutlined, HolderOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { exceptionApi } from '../../../services/api'
 import { formatDate } from '../../../utils'
 import { useExport } from '../../../hooks/useExport'
+import { useUiPreferencesStore } from '../../../store/uiPreferences'
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   open: { label: '待处理', color: 'error' },
@@ -18,7 +19,125 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   closed: { label: '已关闭', color: 'success' },
 }
 
+const WORKFLOW_STATUS_MAP: Record<string, { label: string; color: string }> = {
+  '创建': { label: '创建', color: 'default' },
+  '提交': { label: '提交', color: 'processing' },
+  '批准': { label: '批准', color: 'success' },
+  '归档': { label: '归档', color: 'default' },
+}
+
+const WORKFLOW_STATUS_OPTIONS = ['创建', '提交', '批准', '归档']
+
 const DEPT_OPTIONS = ['计划', '采购', '品质', '仓库', '生产', '销售', '工程', '研发']
+
+const QUALITY_PAGE_KEY = 'exception_quality_columns'
+
+const CONFIGURABLE_COLUMNS: { key: string; title: string }[] = [
+  { key: 'issue_no', title: '编号' },
+  { key: 'order_no', title: '订单编号' },
+  { key: 'product_code', title: '产品代码' },
+  { key: 'submit_dept', title: '提出部门' },
+  { key: 'submit_date', title: '提出日期' },
+  { key: 'submitter', title: '提出人' },
+  { key: 'product_name', title: '产品名称' },
+  { key: 'process', title: '工序' },
+  { key: 'defect_type', title: '缺陷类型' },
+  { key: 'description', title: '异常描述' },
+  { key: 'root_cause', title: '真实原因' },
+  { key: 'responsible_person', title: '责任人' },
+  { key: 'responsible_dept', title: '责任部门' },
+  { key: 'batch_qty', title: '批量数' },
+  { key: 'sample_qty', title: '抽样数量' },
+  { key: 'defect_qty', title: '不良数' },
+  { key: 'improvement_countermeasures', title: '改善对策' },
+  { key: 'improvement_countermeasures_date', title: '改善对策日期' },
+  { key: 'temporary_countermeasure', title: '临时对策' },
+  { key: 'temporary_countermeasure_date', title: '临时对策时间' },
+  { key: 'preliminary_analysis_person', title: '初步分析负责人' },
+  { key: 'quality_manager_approval', title: '品质经理审批' },
+  { key: 'defect_rate', title: '不良率' },
+]
+
+const DEFAULT_COLUMN_ORDER = CONFIGURABLE_COLUMNS.map(c => c.key)
+
+const FIXED_RIGHT_KEYS = ['workflow_status', 'status', '__action__']
+
+const ColumnSettingsPanel: React.FC<{
+  order: string[]
+  visibleKeys: string[]
+  onToggle: (key: string) => void
+  onReorder: (from: number, to: number) => void
+  onReset: () => void
+}> = ({ order, visibleKeys, onToggle, onReorder, onReset }) => {
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [overIndex, setOverIndex] = useState<number | null>(null)
+
+  return (
+    <div style={{ width: 260, maxHeight: 420, overflowY: 'auto', padding: 4 }}>
+      <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 13 }}>
+        列设置
+        <span style={{ fontWeight: 400, color: '#999', fontSize: 12 }}>（拖动 ⠿ 调序）</span>
+      </div>
+      {order.map((key, idx) => {
+        const meta = CONFIGURABLE_COLUMNS.find(m => m.key === key)
+        if (!meta) return null
+        const visible = visibleKeys.includes(key)
+        const isDragging = dragIndex === idx
+        const isOverTarget = overIndex === idx && dragIndex !== null && dragIndex !== idx
+        return (
+          <div
+            key={key}
+            onDragOver={e => {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              if (overIndex !== idx) setOverIndex(idx)
+            }}
+            onDrop={e => {
+              e.preventDefault()
+              if (dragIndex !== null && dragIndex !== idx) onReorder(dragIndex, idx)
+              setDragIndex(null)
+              setOverIndex(null)
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              padding: '4px 8px',
+              fontSize: 13,
+              borderRadius: 4,
+              marginBottom: 2,
+              border: isOverTarget ? '1px dashed #1890ff' : '1px solid transparent',
+              background: isDragging ? '#f5f5f5' : isOverTarget ? '#e6f7ff' : 'transparent',
+              opacity: isDragging ? 0.4 : 1,
+              transition: 'border-color 0.1s, background 0.1s',
+            }}
+          >
+            <span
+              draggable
+              onDragStart={e => {
+                setDragIndex(idx)
+                e.dataTransfer.effectAllowed = 'move'
+              }}
+              onDragEnd={() => {
+                setDragIndex(null)
+                setOverIndex(null)
+              }}
+              style={{ cursor: 'grab', padding: '0 6px 0 2px', color: '#bbb', lineHeight: 1 }}
+              title="拖动调序"
+            >
+              <HolderOutlined />
+            </span>
+            <Checkbox checked={visible} onChange={() => onToggle(key)}>
+              {meta.title}
+            </Checkbox>
+          </div>
+        )
+      })}
+      <div style={{ marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
+        <Button size="small" onClick={onReset}>重置默认</Button>
+      </div>
+    </div>
+  )
+}
 
 export default function QualityIssues() {
   const [data, setData] = useState<any[]>([])
@@ -35,6 +154,39 @@ export default function QualityIssues() {
   const { exporting, exportData } = useExport()
   const [showAnalysis, setShowAnalysis] = useState(false)
   const [statistics, setStatistics] = useState<any>(null)
+  const getColumnVisibility = useUiPreferencesStore(s => s.getColumnVisibility)
+  const setColumnVisibility = useUiPreferencesStore(s => s.setColumnVisibility)
+  const getColumnOrder = useUiPreferencesStore(s => s.getColumnOrder)
+  const setColumnOrder = useUiPreferencesStore(s => s.setColumnOrder)
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState<string[]>(
+    () => getColumnVisibility(QUALITY_PAGE_KEY, DEFAULT_COLUMN_ORDER)
+  )
+  const [columnOrder, setColumnOrderState] = useState<string[]>(
+    () => getColumnOrder(QUALITY_PAGE_KEY, DEFAULT_COLUMN_ORDER)
+  )
+
+  const handleToggleColumn = (key: string) => {
+    const prev = visibleColumnKeys
+    const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    if (next.length === 0) return
+    setVisibleColumnKeys(next)
+    setColumnVisibility(QUALITY_PAGE_KEY, next)
+  }
+
+  const handleReorderColumn = (from: number, to: number) => {
+    const next = [...columnOrder]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    setColumnOrderState(next)
+    setColumnOrder(QUALITY_PAGE_KEY, next)
+  }
+
+  const handleResetColumns = () => {
+    setVisibleColumnKeys(DEFAULT_COLUMN_ORDER)
+    setColumnOrderState(DEFAULT_COLUMN_ORDER)
+    setColumnVisibility(QUALITY_PAGE_KEY, DEFAULT_COLUMN_ORDER)
+    setColumnOrder(QUALITY_PAGE_KEY, DEFAULT_COLUMN_ORDER)
+  }
 
   const handleExport = (format: 'xlsx' | 'csv') => {
     const params: Record<string, any> = { format }
@@ -109,6 +261,7 @@ export default function QualityIssues() {
     setEditRecord(row)
     form.setFieldsValue({
       status: row.status,
+      workflow_status: row.workflow_status,
       improvement_countermeasures: row.improvement_countermeasures,
       improvement_countermeasures_date: row.improvement_countermeasures_date ? dayjs(row.improvement_countermeasures_date) : null,
       temporary_countermeasure: row.temporary_countermeasure,
@@ -129,6 +282,7 @@ export default function QualityIssues() {
     const payload = editRecord
       ? {
           status: values.status,
+          workflow_status: values.workflow_status,
           improvement_countermeasures: values.improvement_countermeasures,
           improvement_countermeasures_date: values.improvement_countermeasures_date ? dayjs(values.improvement_countermeasures_date).format('YYYY-MM-DD') : null,
           temporary_countermeasure: values.temporary_countermeasure,
@@ -189,72 +343,73 @@ export default function QualityIssues() {
     filters: uniqueFilters(field),
   })
 
-  const columns = [
-    { title: '编号', dataIndex: 'issue_no', width: 120, ...serverColumn('issue_no') },
-    { title: '订单编号', dataIndex: 'order_no', width: 120, ...serverColumn('order_no') },
-    { title: '产品代码', dataIndex: 'product_code', width: 120, ...serverColumn('product_code') },
-    { title: '提出部门', dataIndex: 'submit_dept', width: 80, ...serverColumn('submit_dept') },
-    { title: '提出日期', dataIndex: 'submit_date', width: 100, ...serverColumn('submit_date'), render: (v: string) => formatDate(v) },
-    { title: '提出人', dataIndex: 'submitter', width: 75, ...serverColumn('submitter') },
-    { title: '产品名称', dataIndex: 'product_name', width: 120, ellipsis: true, ...serverColumn('product_name') },
-    { title: '工序', dataIndex: 'process', width: 80, ...serverColumn('process') },
-    { title: '缺陷类型', dataIndex: 'defect_type', width: 90, ...serverColumn('defect_type') },
-    {
-      title: '异常描述', dataIndex: 'description', ellipsis: true, width: 200,
+  const columnByKey: Record<string, any> = {
+    issue_no: { title: '编号', dataIndex: 'issue_no', key: 'issue_no', width: 120, ...serverColumn('issue_no') },
+    order_no: { title: '订单编号', dataIndex: 'order_no', key: 'order_no', width: 120, ...serverColumn('order_no') },
+    product_code: { title: '产品代码', dataIndex: 'product_code', key: 'product_code', width: 120, ...serverColumn('product_code') },
+    submit_dept: { title: '提出部门', dataIndex: 'submit_dept', key: 'submit_dept', width: 80, ...serverColumn('submit_dept') },
+    submit_date: { title: '提出日期', dataIndex: 'submit_date', key: 'submit_date', width: 100, ...serverColumn('submit_date'), render: (v: string) => formatDate(v) },
+    submitter: { title: '提出人', dataIndex: 'submitter', key: 'submitter', width: 75, ...serverColumn('submitter') },
+    product_name: { title: '产品名称', dataIndex: 'product_name', key: 'product_name', width: 120, ellipsis: true, ...serverColumn('product_name') },
+    process: { title: '工序', dataIndex: 'process', key: 'process', width: 80, ...serverColumn('process') },
+    defect_type: { title: '缺陷类型', dataIndex: 'defect_type', key: 'defect_type', width: 90, ...serverColumn('defect_type') },
+    description: {
+      title: '异常描述', dataIndex: 'description', key: 'description', ellipsis: true, width: 200,
       ...serverColumn('description'),
       render: (v: string | null) => <span title={v || ''}>{v || '-'}</span>,
     },
-    {
-      title: '真实原因', dataIndex: 'root_cause', ellipsis: true, width: 180,
+    root_cause: {
+      title: '真实原因', dataIndex: 'root_cause', key: 'root_cause', ellipsis: true, width: 180,
       ...serverColumn('root_cause'),
       render: (v: string | null) => <span title={v || ''}>{v || '-'}</span>,
     },
-    { title: '责任人', dataIndex: 'responsible_person', width: 75, ...serverColumn('responsible_person') },
-    { title: '责任部门', dataIndex: 'responsible_dept', width: 80, ...serverColumn('responsible_dept') },
-    { title: '批量数', dataIndex: 'batch_qty', width: 70, ...serverColumn('batch_qty'), render: (v: number | null) => v ?? '-' },
-    { title: '抽样数量', dataIndex: 'sample_qty', width: 75, ...serverColumn('sample_qty'), render: (v: number | null) => v ?? '-' },
-    { title: '不良数', dataIndex: 'defect_qty', width: 70, ...serverColumn('defect_qty'), render: (v: number | null) => v ?? '-' },
-    {
-      title: '改善对策',
-      dataIndex: 'improvement_countermeasures',
-      width: 150,
-      ellipsis: true,
-      ...serverColumn('improvement_countermeasures'),
+    responsible_person: { title: '责任人', dataIndex: 'responsible_person', key: 'responsible_person', width: 75, ...serverColumn('responsible_person') },
+    responsible_dept: { title: '责任部门', dataIndex: 'responsible_dept', key: 'responsible_dept', width: 80, ...serverColumn('responsible_dept') },
+    batch_qty: { title: '批量数', dataIndex: 'batch_qty', key: 'batch_qty', width: 70, ...serverColumn('batch_qty'), render: (v: number | null) => v ?? '-' },
+    sample_qty: { title: '抽样数量', dataIndex: 'sample_qty', key: 'sample_qty', width: 75, ...serverColumn('sample_qty'), render: (v: number | null) => v ?? '-' },
+    defect_qty: { title: '不良数', dataIndex: 'defect_qty', key: 'defect_qty', width: 70, ...serverColumn('defect_qty'), render: (v: number | null) => v ?? '-' },
+    improvement_countermeasures: {
+      title: '改善对策', dataIndex: 'improvement_countermeasures', key: 'improvement_countermeasures',
+      width: 150, ellipsis: true, ...serverColumn('improvement_countermeasures'),
       render: (v: string | null) => <span title={v || ''}>{v || '-'}</span>,
     },
-    { title: '改善对策日期', dataIndex: 'improvement_countermeasures_date', width: 110, ...serverColumn('improvement_countermeasures_date'), render: (v: string) => formatDate(v) },
-    {
-      title: '临时对策',
-      dataIndex: 'temporary_countermeasure',
-      width: 120,
-      ellipsis: true,
-      ...serverColumn('temporary_countermeasure'),
+    improvement_countermeasures_date: { title: '改善对策日期', dataIndex: 'improvement_countermeasures_date', key: 'improvement_countermeasures_date', width: 110, ...serverColumn('improvement_countermeasures_date'), render: (v: string) => formatDate(v) },
+    temporary_countermeasure: {
+      title: '临时对策', dataIndex: 'temporary_countermeasure', key: 'temporary_countermeasure',
+      width: 120, ellipsis: true, ...serverColumn('temporary_countermeasure'),
       render: (v: string | null) => <span title={v || ''}>{v || '-'}</span>,
     },
-    { title: '临时对策时间', dataIndex: 'temporary_countermeasure_date', width: 110, ...serverColumn('temporary_countermeasure_date'), render: (v: string) => formatDate(v) },
-    {
-      title: '初步分析负责人',
-      dataIndex: 'preliminary_analysis_person',
-      width: 100,
-      ...serverColumn('preliminary_analysis_person'),
+    temporary_countermeasure_date: { title: '临时对策时间', dataIndex: 'temporary_countermeasure_date', key: 'temporary_countermeasure_date', width: 110, ...serverColumn('temporary_countermeasure_date'), render: (v: string) => formatDate(v) },
+    preliminary_analysis_person: {
+      title: '初步分析负责人', dataIndex: 'preliminary_analysis_person', key: 'preliminary_analysis_person',
+      width: 100, ...serverColumn('preliminary_analysis_person'),
       render: (v: string | null) => v || '-',
     },
-    {
-      title: '品质经理审批',
-      dataIndex: 'quality_manager_approval',
-      width: 180,
-      ellipsis: true,
-      ...serverColumn('quality_manager_approval'),
+    quality_manager_approval: {
+      title: '品质经理审批', dataIndex: 'quality_manager_approval', key: 'quality_manager_approval',
+      width: 180, ellipsis: true, ...serverColumn('quality_manager_approval'),
       render: (v: string | null) => <span title={v || ''}>{v || '-'}</span>,
     },
-    { title: '不良率', width: 80, sorter: true, render: (_: any, row: any) => {
+    defect_rate: {
+      title: '不良率', dataIndex: 'defect_rate', key: 'defect_rate', width: 80, sorter: true,
+      render: (_: any, row: any) => {
         const sampleQty = Number(row.sample_qty || 0)
         const defectQty = Number(row.defect_qty || 0)
         if (!sampleQty) return '-'
         return `${((defectQty / sampleQty) * 100).toFixed(2)}%`
-      }, dataIndex: 'defect_rate' },
-    {
-      title: '状态', dataIndex: 'status', width: 85, fixed: 'right' as const,
+      },
+    },
+    workflow_status: {
+      title: '流程状态', dataIndex: 'workflow_status', key: 'workflow_status', width: 90, fixed: 'right' as const,
+      sorter: true,
+      filters: WORKFLOW_STATUS_OPTIONS.map(v => ({ text: v, value: v })),
+      render: (v: string) => {
+        const s = WORKFLOW_STATUS_MAP[v] || { label: v || '-', color: 'default' }
+        return <Tag color={s.color}>{s.label}</Tag>
+      },
+    },
+    status: {
+      title: '状态', dataIndex: 'status', key: 'status', width: 85, fixed: 'right' as const,
       sorter: true,
       filters: [
         { text: '待处理', value: 'open' },
@@ -266,8 +421,8 @@ export default function QualityIssues() {
         return <Tag color={s.color}>{s.label}</Tag>
       },
     },
-    {
-      title: '操作', width: 90, fixed: 'right' as const,
+    __action__: {
+      title: '操作', key: '__action__', width: 90, fixed: 'right' as const,
       render: (_: any, row: any) => (
         <Space size={4}>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)} />
@@ -277,6 +432,15 @@ export default function QualityIssues() {
         </Space>
       ),
     },
+  }
+
+  const orderedVisible = [
+    ...columnOrder.filter(k => visibleColumnKeys.includes(k)),
+    ...visibleColumnKeys.filter(k => !columnOrder.includes(k)),
+  ]
+  const columns = [
+    ...orderedVisible.map(k => columnByKey[k]).filter(Boolean),
+    ...FIXED_RIGHT_KEYS.map(k => columnByKey[k]).filter(Boolean),
   ]
 
   return (
@@ -311,6 +475,21 @@ export default function QualityIssues() {
               >
                 <Button icon={<DownloadOutlined />} loading={exporting}>导出 <DownOutlined /></Button>
               </Dropdown>
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                content={
+                  <ColumnSettingsPanel
+                    order={columnOrder}
+                    visibleKeys={visibleColumnKeys}
+                    onToggle={handleToggleColumn}
+                    onReorder={handleReorderColumn}
+                    onReset={handleResetColumns}
+                  />
+                }
+              >
+                <Button icon={<SettingOutlined />}>列设置</Button>
+              </Popover>
               <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增品质异常</Button>
             </Space>
@@ -395,7 +574,7 @@ export default function QualityIssues() {
         </div>
       )}
 
-      <div className="card-modern" style={{ padding: '0 0 4px' }}>
+      <div className="card-modern qi-table" style={{ padding: '0 0 4px' }}>
         <Table
           rowKey="id"
           dataSource={data}
@@ -427,6 +606,13 @@ export default function QualityIssues() {
                   <Select.Option value="open">待处理</Select.Option>
                   <Select.Option value="in_progress">处理中</Select.Option>
                   <Select.Option value="closed">已关闭</Select.Option>
+                </Select>
+              </Form.Item>
+              <Form.Item name="workflow_status" label="流程状态">
+                <Select>
+                  {WORKFLOW_STATUS_OPTIONS.map(v => (
+                    <Select.Option key={v} value={v}>{v}</Select.Option>
+                  ))}
                 </Select>
               </Form.Item>
               <Form.Item name="improvement_countermeasures" label="改善对策">
@@ -494,6 +680,15 @@ export default function QualityIssues() {
                   <Select.Option value="open">待处理</Select.Option>
                   <Select.Option value="in_progress">处理中</Select.Option>
                   <Select.Option value="closed">已关闭</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="workflow_status" label="流程状态" initialValue="创建">
+                <Select>
+                  {WORKFLOW_STATUS_OPTIONS.map(v => (
+                    <Select.Option key={v} value={v}>{v}</Select.Option>
+                  ))}
                 </Select>
               </Form.Item>
             </Col>
