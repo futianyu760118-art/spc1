@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import get_settings
 from app.api.v1 import api_router
 from app.services.basicdata.sync_scheduler import scheduler  # noqa: F401
+from app.services.basicdata.writeback_worker import writeback_worker  # noqa: F401
 from app.services.exception.risk_scheduler import risk_scheduler  # noqa: F401
 from app.services.scheduler.overdue_checker import overdue_checker  # noqa: F401
 from app.services.scheduler.capacity_sync_scheduler import capacity_sync_scheduler  # noqa: F401
@@ -133,12 +134,15 @@ async def lifespan(app: FastAPI):
     overdue_checker.start()
     # 启动时：开启 OA 工序产能定时同步（白天每小时增量 + 凌晨3点全量兜底）
     capacity_sync_scheduler.start()
+    # 启动时：开启回写队列 Worker（变更回写 ERP）
+    writeback_worker.start()
     yield
     # 关闭时：停止调度器
     capacity_sync_scheduler.stop()
     overdue_checker.stop()
     risk_scheduler.stop()
     scheduler.stop()
+    await writeback_worker.stop()
 
 
 app = FastAPI(
