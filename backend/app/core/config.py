@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -29,6 +30,12 @@ class Settings(BaseSettings):
     ERP_SYNC_ENABLED: bool = False  # 是否启用 ERP 同步
     ERP_SYNC_DEFAULT_PASSWORD: str = "admin123"  # 自动创建用户的默认密码
     UPPH_MATCH_MODE: str="bom_code"
+
+    erp_db_url_write: Optional[str] = None
+    writeback_enabled: bool = True
+    writeback_poll_interval: int = 5
+    writeback_batch_size: int = 20
+    writeback_claim_timeout: int = 120
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -89,6 +96,13 @@ class Settings(BaseSettings):
 
     # 物料盘点
     STOCK_CHECK_RECENT_SKIP_DAYS: int = 7  # 订单盘点建单时，近 N 天内已盘过的(物料×仓库)行自动预填补
+
+    # WeCom (企业微信)
+    wecom_corp_id: Optional[str] = None
+    wecom_agent_id: Optional[str] = None
+    wecom_corp_secret: Optional[str] = None
+    wecom_contact_secret: Optional[str] = None
+    frontend_base_url: Optional[str] = None
 
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 
