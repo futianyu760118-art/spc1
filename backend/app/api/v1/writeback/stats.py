@@ -33,7 +33,7 @@ async def stats(current_user: dict = Depends(get_current_user),
         {"t": one_hour_ago},
     )).scalar()
     failures = (await db.execute(
-        text("SELECT queue_id, writeback_type, last_error AS error, "
+        text("SELECT id AS queue_id, writeback_type, last_error AS error, "
              "COALESCE(finished_at, picked_at, created_at) AS at "
              "FROM writeback_queue WHERE status='dead' "
              "ORDER BY id DESC LIMIT 10")
