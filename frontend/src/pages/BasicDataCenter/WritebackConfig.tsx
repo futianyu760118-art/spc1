@@ -67,7 +67,18 @@ export default function WritebackConfig() {
   const handleSave = async () => {
     try {
       const values = await form.validateFields()
-      await api.post('/writeback/config', values)
+      const payload = {
+        ...values,
+        target_key_fields: typeof values.target_key_fields === 'string'
+          ? JSON.parse(values.target_key_fields || '[]')
+          : values.target_key_fields,
+        field_mapping_json: values.field_mapping_json
+          ? (typeof values.field_mapping_json === 'string'
+              ? JSON.parse(values.field_mapping_json || '{}')
+              : values.field_mapping_json)
+          : null,
+      }
+      await api.post('/writeback/config', payload)
       message.success(editingItem ? '更新成功' : '创建成功')
       setModalOpen(false)
       fetchData()
@@ -80,6 +91,17 @@ export default function WritebackConfig() {
     try {
       await api.post('/writeback/config', {
         writeback_type: record.writeback_type,
+        description: record.description,
+        target_table: record.target_table,
+        target_key_fields: typeof record.target_key_fields === 'string'
+          ? JSON.parse(record.target_key_fields || '[]')
+          : (record.target_key_fields || []),
+        update_sql_template: record.update_sql_template || '',
+        field_mapping_json: typeof record.field_mapping_json === 'string'
+          ? JSON.parse(record.field_mapping_json || '{}')
+          : (record.field_mapping_json || null),
+        enqueue_trigger: record.enqueue_trigger,
+        max_retries: record.max_retries,
         enabled: !record.enabled,
       })
       message.success(record.enabled ? '已禁用' : '已启用')
