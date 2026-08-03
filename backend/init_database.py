@@ -67,11 +67,11 @@ settings = get_settings()
 
 
 WRITEBACK_PERMISSIONS = {
-    "admin": {"writeback": ["enqueue", "view", "admin"]},
-    "purchaser": {"writeback": ["enqueue", "view"]},
-    "planner": {"writeback": ["view"]},
-    "manager": {"writeback": ["view"]},
-    "purchase_manager": {"writeback": ["enqueue", "view"]},
+    "admin": {"writeback": ["enqueue", "view", "admin"], "writeback.config": ["read", "update"], "writeback.monitor": ["read"]},
+    "purchaser": {"writeback": ["enqueue", "view"], "writeback.monitor": ["read"]},
+    "planner": {"writeback": ["view"], "writeback.monitor": ["read"]},
+    "manager": {"writeback": ["view"], "writeback.monitor": ["read"]},
+    "purchase_manager": {"writeback": ["enqueue", "view"], "writeback.monitor": ["read"]},
 }
 
 for _role_code, _perms in WRITEBACK_PERMISSIONS.items():

@@ -266,6 +266,11 @@ declare_permission("roles", "角色管理", module="basicdata", parent_code="bas
 declare_permission("audit", "审计日志", module="basicdata", parent_code="basicdata", actions=["read"], route_path="/audit", sort_order=8)
 declare_permission("settings", "同步SQL配置", module="basicdata", parent_code="basicdata", route_path="/sync-config", sort_order=9)
 
+# 数据回写
+declare_permission("writeback", "数据回写", module="basicdata", sort_order=10)
+declare_permission("writeback.config", "回写SQL配置", module="basicdata", parent_code="writeback", route_path="/writeback-config", sort_order=1)
+declare_permission("writeback.monitor", "回写监控", module="basicdata", parent_code="writeback", route_path="/writeback-monitor", sort_order=2)
+
 # 采购中心
 declare_permission("purchase", "采购中心", module="purchase", sort_order=11)
 declare_permission("purchase.price_change", "调价单管理", module="purchase", parent_code="purchase", route_path="/purchase/price-change", sort_order=1)
