@@ -57,8 +57,27 @@ from app.models.basicdata.position import Position
 from app.models.basicdata.file_asset import FileAsset
 from app.models.basicdata.feedback import Feedback
 from app.models.basicdata.share_link import ShareLink  # noqa: F401
+from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa: F401
+from app.models.basicdata.writeback_sql_config import WritebackSqlConfig  # noqa: F401
+from app.models.basicdata.writeback_queue import WritebackQueue  # noqa: F401
+from app.models.basicdata.writeback_log import WritebackLog  # noqa: F401
+from app.core.permissions import ROLE_PERMISSION_ADDITIONS
 
 settings = get_settings()
+
+
+WRITEBACK_PERMISSIONS = {
+    "admin": {"writeback": ["enqueue", "view", "admin"]},
+    "purchaser": {"writeback": ["enqueue", "view"]},
+    "planner": {"writeback": ["view"]},
+    "manager": {"writeback": ["view"]},
+    "purchase_manager": {"writeback": ["enqueue", "view"]},
+}
+
+for _role_code, _perms in WRITEBACK_PERMISSIONS.items():
+    _existing = ROLE_PERMISSION_ADDITIONS.setdefault(_role_code, {})
+    for _resource, _actions in _perms.items():
+        _existing.setdefault(_resource, []).extend(_actions)
 
 
 class DatabaseInitializer:
@@ -169,6 +188,8 @@ class DatabaseInitializer:
                 "received_qty": "NUMERIC(15,2)",
                 "arrival_hour_note": "VARCHAR(256)",
                 "inspection_date": "DATE",
+                "last_writeback_at": "TIMESTAMP",
+                "last_writeback_status": "VARCHAR(16)",
             },
             "production_task_order": {
                 "sale_order_id": "INTEGER",
@@ -310,6 +331,9 @@ class DatabaseInitializer:
                 "recent_checked_check_no": "VARCHAR(32)",
                 "recent_checked_date": "DATE",
                 "system_qty_time": "TIMESTAMP",
+                "counted_by_user_id": "BIGINT",
+                "counted_by": "VARCHAR(100)",
+                "counted_at": "TIMESTAMP",
             },
             "production_daily_report": {
                 "oa_detail_id": "INTEGER",
@@ -456,6 +480,14 @@ class DatabaseInitializer:
                 print("  scm_bom_detail.material_id index ensured")
             except Exception as e:
                 print(f"  scm_bom_detail.material_id index skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_sci_counted_by_date "
+                    "ON scm_inventory_check_item (counted_by_user_id, counted_at)"
+                ))
+                print("  scm_inventory_check_item.ix_sci_counted_by_date index ensured")
+            except Exception as e:
+                print(f"  scm_inventory_check_item.ix_sci_counted_by_date index skipped: {e}")
 
     async def migrate_production_daily_report_index(self):
         """将 production_daily_report 的唯一索引由 (oa_id) 改为 (oa_id, oa_detail_id)，
@@ -513,6 +545,31 @@ class DatabaseInitializer:
             except Exception as e:
                 print(f"  create partial index skipped: {e}")
         print("business_document index migration done")
+
+    async def backfill_inventory_check_counted_by(self):
+        """物料盘点明细 counted_by_user_id/counted_by/counted_at 历史回填。
+        仅按 checked_by = sys_user.username 匹配；排除 system-recent 沿用行
+        与近期已盘回填行；幂等: WHERE counted_by_user_id IS NULL 跳过已处理行。"""
+        print("Backfilling scm_inventory_check_item.counted_by from checked_by...")
+        async with self.engine.begin() as conn:
+            try:
+                result = await conn.execute(text(
+                    """
+                    UPDATE scm_inventory_check_item AS i
+                    SET counted_by_user_id = u.id,
+                        counted_by = i.checked_by,
+                        counted_at = i.checked_at
+                    FROM sys_user AS u
+                    WHERE i.counted_by_user_id IS NULL
+                      AND i.checked_by IS NOT NULL
+                      AND i.checked_by <> 'system-recent'
+                      AND i.recent_checked_check_no IS NULL
+                      AND i.checked_by = u.username
+                    """
+                ))
+                print(f"  backfill rows updated: {result.rowcount}")
+            except Exception as e:
+                print(f"  inventory_check counted_by backfill skipped: {e}")
 
     async def drop_pto_sale_order_id_fk(self):
         """production_task_order.sale_order_id 用于存放 ERP 的 FOrderInterID，
@@ -1994,6 +2051,52 @@ ORDER BY FModifyDate DESC
                 print(f"Error seeding sync SQL config: {e}")
                 raise
 
+    async def seed_default_writeback_configs(self):
+        """Seed default writeback SQL configurations (idempotent)."""
+        print("Seeding default writeback SQL configs...")
+        async with AsyncSessionLocal() as session:
+            try:
+                existing = await session.execute(
+                    select(WritebackSqlConfig.writeback_type)
+                )
+                existing_types = set(existing.scalars().all())
+
+                configs = [
+                    WritebackSqlConfig(
+                        writeback_type="po_status",
+                        description="采购订单状态回写（K3 ERP POOrder.FStatus）",
+                        target_table="POOrder",
+                        target_key_fields=["FBillNo", "FEntryID"],
+                        update_sql_template=(
+                            "UPDATE POOrder SET "
+                            "  FStatus = :payload__new_status, "
+                            "  FModifyDate = :writeback_at "
+                            "WHERE FBillNo = :target_keys__FBillNo "
+                            "  AND FEntryID = :target_keys__FEntryID"
+                        ),
+                        enqueue_trigger="system:hook:po_status",
+                        max_retries=6,
+                        enabled=True,
+                        created_by="system:init",
+                    ),
+                ]
+
+                new_configs = [c for c in configs if c.writeback_type not in existing_types]
+                if not new_configs:
+                    print("Writeback SQL config: all types already exist, nothing to add")
+                    return
+
+                for c in new_configs:
+                    session.add(c)
+
+                await session.commit()
+                print(f"Writeback SQL config seeded: added {len(new_configs)} new types ({', '.join(c.writeback_type for c in new_configs)})")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding writeback SQL config: {e}")
+                raise
+
     async def seed_base_conditions(self):
         """Seed 车间排产基础条件默认值 (人数/工时/周日排产, 按排产阶段分桶).
 
@@ -2075,6 +2178,7 @@ ORDER BY FModifyDate DESC
             await self.ensure_indexes()
             await self.migrate_production_daily_report_index()
             await self.migrate_business_document_soft_delete_index()
+            await self.backfill_inventory_check_counted_by()
             await self.rebuild_mrp_plan_order()
             await self.backfill_sale_order_id()
             await self.migrate_stock_check_permission()
@@ -2086,6 +2190,7 @@ ORDER BY FModifyDate DESC
             await self.seed_normal_order_standards()
             await self.seed_base_conditions()
             await self.seed_sync_sql_config()
+            await self.seed_default_writeback_configs()
             await self.seed_sample_data()
             
             print("=" * 50)
