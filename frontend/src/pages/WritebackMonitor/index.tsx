@@ -137,7 +137,7 @@ export default function WritebackMonitor() {
         <Row gutter={24}>
           <Col span={4}>
             <Statistic
-              title={<span style={{ color: stats && stats.dead > 0 ? '#ef4444' : undefined }}>Dead</span>}
+              title={<span style={{ color: stats && stats.dead > 0 ? '#ef4444' : undefined }}>死信</span>}
               value={stats?.dead ?? 0}
               valueStyle={stats && stats.dead > 0 ? { color: '#ef4444' } : undefined}
             />
@@ -164,7 +164,7 @@ export default function WritebackMonitor() {
           <Col span={4}>
             <Statistic
               title="Worker"
-              value={stats?.worker_alive ? 'Alive' : 'Dead'}
+              value={stats?.worker_alive ? '运行中' : '已停止'}
               valueStyle={{ color: stats?.worker_alive ? '#22c55e' : '#ef4444' }}
             />
           </Col>
