@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import assistant, basicdata, common, dashboard, exception, masterdata, material, meeting, npi, order, production, purchase, rules
+from app.api.v1 import assistant, basicdata, common, dashboard, exception, masterdata, material, meeting, npi, order, production, purchase, rules, writeback
 
 api_router = APIRouter()
 
@@ -77,3 +77,6 @@ api_router.include_router(assistant.assistant_router, prefix="/assistant", tags=
 
 # Purchase center
 api_router.include_router(purchase.price_change_router, prefix="/purchase/price-change", tags=["采购中心-调价单"])
+
+# Writeback center
+api_router.include_router(writeback.router)
