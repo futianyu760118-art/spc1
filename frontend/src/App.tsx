@@ -44,6 +44,8 @@ import {
     RoleManagement,
     DataSupply
 } from './pages/BasicDataCenter'
+import WritebackConfig from './pages/BasicDataCenter/WritebackConfig'
+import WritebackMonitor from './pages/WritebackMonitor/index'
 import Customers from './pages/BasicDataCenter/Customers'
 import Suppliers from './pages/BasicDataCenter/Suppliers'
 import Materials from './pages/BasicDataCenter/Materials'
@@ -223,6 +225,8 @@ export default function App() {
                             <Route path="roles" element={<RoleManagement/>}/>
                             <Route path="audit" element={<AuditLog/>}/>
                             <Route path="sync-config" element={<SyncSqlConfig/>}/>
+                            <Route path="writeback-config" element={<WritebackConfig/>}/>
+                            <Route path="writeback-monitor" element={<WritebackMonitor/>}/>
                             <Route path="basicdata" element={<Navigate to="/basicdata/customers" replace/>}/>
                             <Route path="masterdata" element={<Navigate to="/basicdata/customers" replace/>}/>
                             <Route path="basicdata/customers" element={<Customers/>} key="customers"/>
