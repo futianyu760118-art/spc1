@@ -2,7 +2,7 @@
 
 from typing import Optional, List, Dict
 from datetime import date, datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 
 # ============ 采购订单 / 采购到料计划（合并模型） ============
@@ -114,6 +114,13 @@ class PurchaseOrderBatchUpdate(BaseModel):
 class POStatusUpdate(BaseModel):
     po_status: str
     remark: Optional[str] = None
+
+    @validator("po_status")
+    def validate_po_status(cls, v):
+        from app.services.basicdata.writeback_helpers import SPC_TO_K3_FSTATUS
+        if v not in SPC_TO_K3_FSTATUS:
+            raise ValueError(f"无效状态 '{v}'，允许值: {list(SPC_TO_K3_FSTATUS.keys())}")
+        return v
 
 
 class POTimelineItem(BaseModel):
