@@ -113,16 +113,20 @@ async def update_po_status(
         po.remark = data.remark
 
     if po.data_source == "erp":
-        from app.services.basicdata.writeback_service import enqueue_writeback
-        await enqueue_writeback(
-            db,
-            writeback_type="po_status",
-            business_table="purchase_order",
-            business_pk=str(po.id),
-            target_keys={"FBillNo": po.po_no, "FEntryID": po.detail_id},
-            payload={"new_status": po.po_status},
-            enqueued_by="system:hook:po_status",
-        )
+        try:
+            from app.services.basicdata.writeback_service import enqueue_writeback
+            await enqueue_writeback(
+                db,
+                writeback_type="po_status",
+                business_table="purchase_order",
+                business_pk=str(po.id),
+                target_keys={"FBillNo": po.po_no, "FEntryID": po.detail_id},
+                payload={"new_status": po.po_status},
+                enqueued_by="system:hook:po_status",
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"writeback enqueue failed for po {po.po_no}: {e}")
 
     await log_audit(db, "purchase_order", po.id, "update", field_name="po_status", old_value=old_status, new_value=data.po_status, operator=current_user["username"])
     await db.commit()

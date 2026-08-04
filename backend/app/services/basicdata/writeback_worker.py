@@ -74,10 +74,14 @@ class WritebackWorker:
                 engine = get_erp_write_engine()
                 if engine is None:
                     raise RuntimeError("ERP_DB_URL_WRITE 未配置")
-                with engine.begin() as conn:
-                    from sqlalchemy import text as sql_text
-                    result = conn.execute(sql_text(sql_template), params)
-                    rows_affected = result.rowcount
+
+                def _erp_write():
+                    with engine.begin() as conn:
+                        from sqlalchemy import text as sql_text
+                        result = conn.execute(sql_text(sql_template), params)
+                        return result.rowcount
+
+                rows_affected = await asyncio.to_thread(_erp_write)
                 finished_at = datetime.utcnow()
                 duration_ms = int((finished_at - started_at).total_seconds() * 1000)
                 async with AsyncSessionLocal() as log_db:
