@@ -95,7 +95,6 @@ async def login(
         "sub": str(user.id),
         "username": user.username,
         "role": role.role_code,
-        "permissions": permissions,
         "login_type": login_type,
         "supplier_name": user.supplier_name if is_supplier_account else None,
         "login_version": user.login_version,

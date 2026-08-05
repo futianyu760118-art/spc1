@@ -1,10 +1,11 @@
 """基础数据与集成中心 — 科目余额查询 API"""
 
 import logging
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Tuple
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,43 @@ def _apply_sort(query, sort_by: Optional[str], sort_order: Optional[str]):
     return query.order_by(SubjectBalance.id.desc())
 
 
+async def _resolve_default_period(db: AsyncSession, year: int) -> Tuple[int, int]:
+    """默认期间解析 (基于已确定的 fiscal_year):
+      1) 该年内 MAX(month) - 1（>=1）; 若 MAX=1 不存在 -1, 用 MAX;
+      2) 该年无任何记录, 回退到 DB 最新存在年的 MAX(month) - 1 / MAX;
+      3) DB 完全为空, 返回 (year, 当前服务器月).
+    返回 (fiscal_year, fiscal_month).
+    """
+    max_month = (
+        await db.execute(
+            select(func.max(SubjectBalance.fiscal_month)).where(
+                SubjectBalance.fiscal_year == year
+            )
+        )
+    ).scalar()
+
+    if max_month is not None and max_month >= 1:
+        target = max_month - 1 if max_month >= 2 else max_month
+        return year, target
+
+    latest_year = (
+        await db.execute(select(func.max(SubjectBalance.fiscal_year)))
+    ).scalar()
+    if latest_year is not None:
+        max_month_latest = (
+            await db.execute(
+                select(func.max(SubjectBalance.fiscal_month)).where(
+                    SubjectBalance.fiscal_year == latest_year
+                )
+            )
+        ).scalar()
+        if max_month_latest is not None and max_month_latest >= 1:
+            target = max_month_latest - 1 if max_month_latest >= 2 else max_month_latest
+            return int(latest_year), target
+
+    return year, datetime.now().month
+
+
 @router.get("", response_model=ResponseModel[dict])
 @exposable(
     endpoint_code="int:finance.subject_balances.list",
@@ -60,9 +98,20 @@ async def list_subject_balances(
     credit_max: Optional[Decimal] = Query(None, description="本月贷方发生上限"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query(None, description="asc/desc"),
+    response: Response = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user_or_api_key),
 ):
+    used_default = False
+    if fiscal_year is None:
+        fiscal_year = datetime.now().year
+        used_default = True
+    if fiscal_month is None:
+        fiscal_year, fiscal_month = await _resolve_default_period(db, fiscal_year)
+        used_default = True
+    if used_default and response is not None:
+        response.headers["X-Default-Period"] = f"{fiscal_year}-{fiscal_month:02d}"
+
     query = select(SubjectBalance)
     if fiscal_year is not None:
         query = query.where(SubjectBalance.fiscal_year == fiscal_year)
@@ -214,9 +263,19 @@ async def list_subject_balance_roots(
     keyword: Optional[str] = Query(None),
     item_code: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
+    response: Response = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user_or_api_key),
 ):
+    used_default = False
+    if fiscal_year is None:
+        fiscal_year = datetime.now().year
+        used_default = True
+    if fiscal_month is None:
+        fiscal_year, fiscal_month = await _resolve_default_period(db, fiscal_year)
+        used_default = True
+    if used_default and response is not None:
+        response.headers["X-Default-Period"] = f"{fiscal_year}-{fiscal_month:02d}"
     nodes = await _build_subject_nodes(
         db, None, True, fiscal_year, fiscal_month,
         subject_category, keyword, item_code, item_name,
@@ -239,9 +298,19 @@ async def list_subject_balance_children(
     keyword: Optional[str] = Query(None),
     item_code: Optional[str] = Query(None),
     item_name: Optional[str] = Query(None),
+    response: Response = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user_or_api_key),
 ):
+    used_default = False
+    if fiscal_year is None:
+        fiscal_year = datetime.now().year
+        used_default = True
+    if fiscal_month is None:
+        fiscal_year, fiscal_month = await _resolve_default_period(db, fiscal_year)
+        used_default = True
+    if used_default and response is not None:
+        response.headers["X-Default-Period"] = f"{fiscal_year}-{fiscal_month:02d}"
     nodes = await _build_subject_nodes(
         db, parent_subject_id, False, fiscal_year, fiscal_month,
         subject_category, keyword, item_code, item_name,

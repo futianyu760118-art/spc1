@@ -8,6 +8,16 @@ export interface PoolMaterial {
   unit: string | null
   system_qty: number | null
   added_at: string
+  // 仓库维度: wh_id === undefined 表示旧版数据(整物料全仓库); null 表示未入库合成行; 数字表示具体仓库
+  wh_id?: number | null
+  wh_code?: string | null
+  wh_name?: string | null
+}
+
+export function poolKey(m: Pick<PoolMaterial, 'erp_material_id' | 'wh_id'>): string {
+  if (m.wh_id === undefined) return `${m.erp_material_id}|all`
+  if (m.wh_id === null) return `${m.erp_material_id}|none`
+  return `${m.erp_material_id}|${m.wh_id}`
 }
 
 const STORAGE_KEY_PREFIX = 'spc_stock_check_pool'
@@ -39,9 +49,9 @@ interface StockCheckPoolState {
   currentUserId: number | null
   items: PoolMaterial[]
   add: (materials: PoolMaterial[]) => void
-  remove: (erpMaterialIds: number[]) => void
+  remove: (materials: Array<Pick<PoolMaterial, 'erp_material_id' | 'wh_id'>>) => void
   clear: () => void
-  has: (erpMaterialId: number) => boolean
+  has: (material: Pick<PoolMaterial, 'erp_material_id' | 'wh_id'>) => boolean
   loadForUser: (userId: number | null) => void
 }
 
@@ -56,8 +66,8 @@ export const useStockCheckPoolStore = create<StockCheckPoolState>((set, get) => 
 
     add: (materials) => {
       const state = get()
-      const existing = new Set(state.items.map((m) => m.erp_material_id))
-      const incoming = materials.filter((m) => !existing.has(m.erp_material_id))
+      const existing = new Set(state.items.map((m) => poolKey(m)))
+      const incoming = materials.filter((m) => !existing.has(poolKey(m)))
       if (incoming.length === 0) return
       const stamped = incoming.map((m) => ({ ...m, added_at: m.added_at || nowIso() }))
       const next = [...state.items, ...stamped]
@@ -65,10 +75,10 @@ export const useStockCheckPoolStore = create<StockCheckPoolState>((set, get) => 
       writePool(state.currentUserId, next)
     },
 
-    remove: (erpMaterialIds) => {
+    remove: (materials) => {
       const state = get()
-      const drop = new Set(erpMaterialIds)
-      const next = state.items.filter((m) => !drop.has(m.erp_material_id))
+      const drop = new Set(materials.map((m) => poolKey(m)))
+      const next = state.items.filter((m) => !drop.has(poolKey(m)))
       if (next.length === state.items.length) return
       set({ items: next })
       writePool(state.currentUserId, next)
@@ -80,7 +90,7 @@ export const useStockCheckPoolStore = create<StockCheckPoolState>((set, get) => 
       writePool(state.currentUserId, [])
     },
 
-    has: (erpMaterialId) => get().items.some((m) => m.erp_material_id === erpMaterialId),
+    has: (material) => get().items.some((m) => poolKey(m) === poolKey(material)),
 
     loadForUser: (userId) => {
       const items = readPool(userId)

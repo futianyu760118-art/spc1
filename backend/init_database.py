@@ -259,6 +259,7 @@ class DatabaseInitializer:
                 "manager_oa_user_id": "VARCHAR(64)",
                 "login_id": "VARCHAR(64)",
                 "position_id": "BIGINT",
+                "erp_user_id": "BIGINT",
             },
             "sys_user": {
                 "login_version": "INTEGER NOT NULL DEFAULT 0",
@@ -341,6 +342,9 @@ class DatabaseInitializer:
             "business_document": {
                 "is_deleted": "INTEGER NOT NULL DEFAULT 0",
             },
+            "share_link": {
+                "reason": "VARCHAR(256)",
+            },
         }
         # 删除已废弃的列
         drop_columns = {
@@ -376,6 +380,26 @@ class DatabaseInitializer:
                 except Exception as e:
                     print(f"  Drop {table}.{col} skipped: {e}")
         print(f"Column migration completed ({added} statements executed)")
+
+        # purchase_invoice.invoice_no 扩容: K3 ERP FBillNo 可能含多号拼接
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE purchase_invoice ALTER COLUMN invoice_no TYPE VARCHAR(256)"
+                ))
+            print("  purchase_invoice.invoice_no resized to VARCHAR(256)")
+        except Exception as e:
+            print(f"  purchase_invoice.invoice_no resize skipped: {e}")
+
+        # share_link_recipient.wecom_msg_id 扩容: 企微 msgid 实际长度超过 64
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE share_link_recipient ALTER COLUMN wecom_msg_id TYPE VARCHAR(256)"
+                ))
+            print("  share_link_recipient.wecom_msg_id resized to VARCHAR(256)")
+        except Exception as e:
+            print(f"  share_link_recipient.wecom_msg_id resize skipped: {e}")
 
         # 物料盘点单 order_no 改为可空,支持 manual 类型独立物料盘点
         try:
@@ -1947,6 +1971,18 @@ ORDER BY FModifyDate DESC
                         sync_interval="1d",
                         sync_strategy="incremental",
                         sync_priority=19,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
+                        sync_type="erp_users",
+                        description="ERP用户 — 从ERP用户表拉取，通过姓名匹配 scm_employee 后回填 erp_user_id",
+                        sql_text="-- TODO: 配置 ERP 用户查询 SQL，返回字段需包含: erp_user_id, emp_name\nSELECT NULL AS erp_user_id, NULL AS emp_name WHERE 1 = 0 AND :since IS NOT NULL",
+                        field_mapping_json=None,
+                        is_active=False,
+                        sync_enabled=False,
+                        sync_interval="1d",
+                        sync_strategy="full",
+                        sync_priority=20,
                         created_by="admin",
                     ),
                     SyncSqlConfig(

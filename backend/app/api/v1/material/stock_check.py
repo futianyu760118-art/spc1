@@ -23,13 +23,16 @@ from app.schemas.material.stock_check import (
     CoCheckersUpdate,
     MaterialHistoryItem,
     MaterialCandidateOut,
+    StockCheckCountedItemOut,
     StockCheckStats,
+    StockCheckMyItemOut,
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.material.stock_check_service import (
     create_stock_check_from_order,
     create_stock_check_from_materials,
     list_material_candidates,
+    list_counted_materials_ledger,
     update_stock_check_item,
     batch_update_items,
     complete_stock_check,
@@ -44,7 +47,9 @@ from app.services.material.stock_check_service import (
     enrich_items_assoc,
     enrich_live_qty,
     get_stock_check_stats,
+    list_my_stock_check_items,
     _user_can_edit,
+    _current_user_id,
     _resolve_user_names,
     StockCheckPermissionError,
 )
@@ -117,12 +122,17 @@ async def create_from_materials(
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    if not body.material_ids or len(body.material_ids) > 500:
+    has_ids = bool(body.material_ids)
+    has_items = bool(body.items)
+    if not has_ids and not has_items:
         raise HTTPException(status_code=400, detail="请选择 1~500 个物料")
+    if (has_ids and len(body.material_ids) > 500) or (has_items and len(body.items) > 500):
+        raise HTTPException(status_code=400, detail="一次最多创建 500 个盘点项，请减少勾选数量")
     try:
         head = await create_stock_check_from_materials(
             db,
             material_ids=body.material_ids,
+            items=[(it.material_id, it.wh_id) for it in body.items] if body.items else None,
             current_user=current_user,
             title=body.title,
             check_date=body.check_date,
@@ -140,17 +150,56 @@ async def list_material_candidates_view(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = Query(None, description="搜索物料编码/名称/规格"),
+    wh_id: Optional[str] = Query(None, description="仓库ID(int)或名称(string)"),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     total, items = await list_material_candidates(
-        db, page=page, page_size=page_size, keyword=keyword
+        db, page=page, page_size=page_size, keyword=keyword, wh_id=wh_id
     )
     return ResponseModel(data=PageResult(
         total=total,
         page=page,
         page_size=page_size,
         items=[MaterialCandidateOut(**it) for it in items],
+    ))
+
+
+@router.get("/stock-check/counted-ledger", response_model=ResponseModel[PageResult[StockCheckCountedItemOut]])
+async def list_counted_materials_view(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="搜索物料编码/名称/规格"),
+    wh_id: Optional[str] = Query(None, description="仓库ID(int)或名称(string)"),
+    date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
+    date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
+    check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
+    status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed)"),
+    sort_by: Optional[str] = Query(None, description="排序字段:material_code/material_name/spec_model/unit/wh_name/system_qty/actual_qty/diff_qty/check_no/check_date/counted_by/counted_at/status"),
+    sort_order: Optional[str] = Query(None, description="排序方向:asc/desc"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """已盘点物料台账: 每个「物料×仓库」最近一条已盘点记录(排除已取消单)"""
+    statuses = [s.strip() for s in (status or "").split(",") if s.strip()] or None
+    total, items = await list_counted_materials_ledger(
+        db,
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        wh_id=wh_id,
+        date_from=date_from,
+        date_to=date_to,
+        check_type=check_type,
+        status=statuses,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    return ResponseModel(data=PageResult(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=[StockCheckCountedItemOut(**it) for it in items],
     ))
 
 
@@ -236,6 +285,51 @@ async def co_checker_candidates(
     return ResponseModel(data=await list_co_checker_candidates(db))
 
 
+@router.get("/stock-check/my-items", response_model=ResponseModel[PageResult[StockCheckMyItemOut]])
+async def list_my_items(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="搜索物料编码/名称/盘点单号"),
+    wh_id: Optional[str] = Query(None, description="仓库ID(int)或名称(string)"),
+    date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
+    date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
+    check_no: Optional[str] = Query(None, description="盘点单号模糊匹配"),
+    check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
+    status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed)"),
+    sort_by: Optional[str] = Query(None, description="排序字段:counted_at/check_no/order_no/check_date/material_code/material_name/spec_model/wh_name/system_qty/actual_qty/diff_qty/status"),
+    sort_order: Optional[str] = Query(None, description="排序方向:asc/desc"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """个人盘点台账：按当前登录用户(JWT)汇总其录入的盘点行。
+    user_id 取自 JWT，不接受客户端参数；无稳定 ID 返回 401。"""
+    user_id = _current_user_id(current_user)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="无法识别当前用户身份")
+    statuses = [s.strip() for s in (status or "").split(",") if s.strip()] or None
+    total, items = await list_my_stock_check_items(
+        db,
+        user_id=user_id,
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        wh_id=wh_id,
+        date_from=date_from,
+        date_to=date_to,
+        check_no=check_no,
+        check_type=check_type,
+        status=statuses,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    return ResponseModel(data=PageResult(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=[StockCheckMyItemOut(**it) for it in items],
+    ))
+
+
 @router.get("/stock-check/stats", response_model=ResponseModel[StockCheckStats])
 async def stock_check_stats(
     check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
@@ -298,11 +392,13 @@ async def update_item(
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
+    actual_qty_provided = "actual_qty" in body.model_fields_set
     try:
         await update_stock_check_item(
             db,
             item_id,
             actual_qty=body.actual_qty,
+            actual_qty_provided=actual_qty_provided,
             is_checked=body.is_checked,
             remark=body.remark,
             force_recount=body.force_recount,
@@ -325,7 +421,12 @@ async def batch_update(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        n = await batch_update_items(db, body.check_id, [it.model_dump() for it in body.items], current_user)
+        n = await batch_update_items(
+            db,
+            body.check_id,
+            [it.model_dump(exclude_unset=True) for it in body.items],
+            current_user,
+        )
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:

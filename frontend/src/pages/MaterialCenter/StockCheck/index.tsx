@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
-  InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select, Dropdown,
+  InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select, Dropdown, Tabs,
 } from 'antd'
 import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined, DownloadOutlined } from '@ant-design/icons'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
@@ -14,6 +14,7 @@ import { useStockCheckPoolStore } from '@/store/stockCheckPool'
 import ExportColumnSelector, { ExportColumnOption } from '@/components/ExportColumnSelector'
 import { stockCheckIntroSteps, stockCheckDetailSteps, stockCheckManualDetailSteps, STOCK_CHECK_INTRO_TOUR_ID, STOCK_CHECK_DETAIL_TOUR_ID, STOCK_CHECK_MANUAL_DETAIL_TOUR_ID } from './StockCheckTour'
 import MaterialPickerModal from './MaterialPickerModal'
+import CountedLedgerPanel from './CountedLedger'
 import OrderProductPickerModal, { OrderProductSelection, OrderProductLine } from './OrderProductPickerModal'
 import CoCheckerPickerModal from './CoCheckerPickerModal'
 import SearchableColumnFilter from './SearchableColumnFilter'
@@ -47,6 +48,35 @@ interface StockCheckItem {
   checked_at?: string | null
   checked_by?: string | null
   remark?: string | null
+  force_recount?: boolean
+}
+
+interface MyStockCheckItem {
+  item_id: number
+  check_id: number
+  check_no: string
+  order_no?: string | null
+  title?: string | null
+  check_type?: string | null
+  status?: string | null
+  check_date?: string | null
+  completed_at?: string | null
+  material_id?: number | null
+  material_code?: string | null
+  material_name?: string | null
+  spec_model?: string | null
+  unit?: string | null
+  wh_id?: number | null
+  wh_name?: string | null
+  wh_code?: string | null
+  system_qty?: number | null
+  actual_qty?: number | null
+  diff_qty?: number | null
+  counted_by_user_id?: number | null
+  counted_by?: string | null
+  counted_at?: string | null
+  recent_checked_check_no?: string | null
+  recent_checked_date?: string | null
 }
 
 interface CoveredProduct {
@@ -92,6 +122,10 @@ interface MaterialCandidate {
   spec_model?: string | null
   unit?: string | null
   system_qty?: number | null
+  // wh_id === undefined 表示旧版池数据(整物料全仓库); null 表示未入库合成行
+  wh_id?: number | null
+  wh_code?: string | null
+  wh_name?: string | null
 }
 
 interface MaterialHistoryItem {
@@ -148,8 +182,12 @@ export default function StockCheckPage() {
   const [items, setItems] = useState<StockCheckItem[]>([])
   const [loading, setLoading] = useState(false)
   const [savingAll, setSavingAll] = useState(false)
-  const [dateRange, setDateRange] = useState<[string?, string?]>([])
+  const [listTab, setListTab] = useState<'all' | 'my' | 'counted'>('all')
+  const [dateFrom, setDateFrom] = useState<string>()
+  const [dateTo, setDateTo] = useState<string>()
+  const [whFilter, setWhFilter] = useState<string>()
   const [checkTypeFilter, setCheckTypeFilter] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [orderPickerOpen, setOrderPickerOpen] = useState(false)
@@ -196,6 +234,7 @@ export default function StockCheckPage() {
   } = useAntTableQuery({
     initialFilters: { status: ['open', 'in_progress', 'completed'] },
     fetchData: async (params) => {
+      if (listTab !== 'all') return { items: [], total: 0 }
       const res: any = await materialApi.getRecentStockChecks({
         page: params.page,
         page_size: params.page_size,
@@ -211,18 +250,51 @@ export default function StockCheckPage() {
     },
     filterToQuery: (filters) => ({
       status: (filters.status as string[] | undefined)?.join(','),
-      date_from: dateRange[0],
-      date_to: dateRange[1],
+      date_from: dateFrom,
+      date_to: dateTo,
     }),
-    extraDeps: [dateRange, checkTypeFilter],
+    extraDeps: [listTab, dateFrom, dateTo, checkTypeFilter],
+  })
+
+  const {
+    tableProps: myItemsTableProps,
+    searchInput: myItemsSearchInput,
+    reload: reloadMyItems,
+    filters: myItemsFilters,
+  } = useAntTableQuery({
+    fetchData: async (params) => {
+      if (listTab !== 'my') return { items: [], total: 0 }
+      try {
+        const res: any = await materialApi.getMyStockCheckItems({
+          page: params.page,
+          page_size: params.page_size,
+          keyword: params.keyword,
+          sort_by: params.sort_by,
+          sort_order: params.sort_order,
+          date_from: dateFrom,
+          date_to: dateTo,
+          wh_id: whFilter,
+          check_type: checkTypeFilter === 'all' ? undefined : checkTypeFilter,
+          status: params.status ?? (statusFilter === 'all' ? undefined : statusFilter),
+        })
+        return { items: res.data?.items || [], total: res.data?.total || 0 }
+      } catch (e: any) {
+        message.error(e?.response?.data?.detail || e.message || '加载我的盘点台账失败')
+        throw e
+      }
+    },
+    filterToQuery: (filters) => ({
+      status: (filters.status as string[] | undefined)?.join(','),
+    }),
+    extraDeps: [listTab, dateFrom, dateTo, whFilter, checkTypeFilter, statusFilter],
   })
 
   const statsFilters = useMemo(() => ({
     check_type: checkTypeFilter === 'all' ? undefined : checkTypeFilter,
-    date_from: dateRange?.[0],
-    date_to: dateRange?.[1],
+    date_from: dateFrom,
+    date_to: dateTo,
     status: (recentFilters.status as string[] | undefined)?.join(','),
-  }), [checkTypeFilter, dateRange, recentFilters.status])
+  }), [checkTypeFilter, dateFrom, dateTo, recentFilters.status])
 
   const loadOrderOverview = useCallback(async (no: string) => {
     setOverviewLoading(true)
@@ -265,13 +337,19 @@ export default function StockCheckPage() {
   const handleCreateFromMaterials = useCallback(async (selected: MaterialCandidate[], source: 'search' | 'pool') => {
     setCreating(true)
     try {
+      // 带仓库信息的行走 items(按物料+仓库精确创建); 旧版无仓库信息的池数据走 material_ids 兜底(全仓库)
+      const items = selected
+        .filter((s) => s.wh_id !== undefined)
+        .map((s) => ({ material_id: s.erp_material_id, wh_id: s.wh_id ?? null }))
+      const legacyIds = selected.filter((s) => s.wh_id === undefined).map((s) => s.erp_material_id)
       const res: any = await materialApi.createStockCheckFromMaterials({
-        material_ids: selected.map((s) => s.erp_material_id),
+        ...(items.length ? { items } : {}),
+        ...(legacyIds.length ? { material_ids: legacyIds } : {}),
       })
       const c: StockCheck = res.data
       message.success(`已创建手动盘点单 ${c.check_no}`)
       if (source === 'pool') {
-        poolRemove(selected.map((s) => s.erp_material_id))
+        poolRemove(selected.map((s) => ({ erp_material_id: s.erp_material_id, wh_id: s.wh_id })))
       }
       setPickerOpen(false)
       setActiveCheck(c)
@@ -405,12 +483,13 @@ export default function StockCheckPage() {
   const saveItem = useCallback(async (item: StockCheckItem) => {
     try {
       const res: any = await materialApi.updateStockCheckItem(item.id, {
-        actual_qty: item.actual_qty ?? undefined,
+        actual_qty: item.actual_qty != null ? Number(item.actual_qty) : null,
         is_checked: item.is_checked ?? 0,
         remark: item.remark ?? undefined,
+        force_recount: item.force_recount || undefined,
       })
       const updated: StockCheckItem = res.data
-      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p))
+      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated, force_recount: undefined } : p))
       const headRes: any = await materialApi.getStockCheck(updated.check_id)
       setActiveCheck(prev => prev ? { ...prev, ...headRes.data } : headRes.data)
     } catch (e: any) {
@@ -426,12 +505,14 @@ export default function StockCheckPage() {
         activeCheck.id,
         items.map(it => ({
           id: it.id,
-          actual_qty: it.actual_qty ?? undefined,
+          actual_qty: it.actual_qty != null ? Number(it.actual_qty) : null,
           is_checked: it.is_checked ?? 0,
           remark: it.remark ?? undefined,
+          force_recount: it.force_recount || undefined,
         })),
       )
       message.success('已批量保存')
+      setItems(prev => prev.map(p => ({ ...p, force_recount: undefined })))
       await loadCheck(activeCheck.id)
     } catch (e: any) {
       message.error(e?.response?.data?.detail || e.message || '批量保存失败')
@@ -686,7 +767,7 @@ export default function StockCheckPage() {
                   if (e.target.checked) {
                     materialApi.updateStockCheckItem(r.id, { force_recount: true }).then(async (res: any) => {
                       const updated: StockCheckItem = res.data
-                      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated } : p))
+                      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated, force_recount: true } : p))
                       const headRes: any = await materialApi.getStockCheck(updated.check_id)
                       setActiveCheck(prev => prev ? { ...prev, ...headRes.data } : headRes.data)
                     }).catch((err: any) => {
@@ -928,78 +1009,166 @@ export default function StockCheckPage() {
         <div className="card-modern" style={{ padding: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
             <Space>
-              <h3 style={{ margin: 0 }}>最近盘点单</h3>
-              <span data-tour="stock-check-type-filter">
-                <Segmented
-                  value={checkTypeFilter}
-                  onChange={(v) => setCheckTypeFilter(v as string)}
-                  options={[
-                    { label: '全部', value: 'all' },
-                    { label: '订单盘点', value: 'order' },
-                    { label: '手动盘点', value: 'manual' },
-                  ]}
-                />
-              </span>
+              <Tabs
+                activeKey={listTab}
+                onChange={(key) => setListTab(key as 'all' | 'my' | 'counted')}
+                items={[
+                  { key: 'all', label: '全部盘点单' },
+                  { key: 'my', label: '我的盘点台账' },
+                  { key: 'counted', label: '已盘点物料台账' },
+                ]}
+                tabBarStyle={{ margin: 0 }}
+              />
+              {listTab !== 'counted' && (
+                <span data-tour="stock-check-type-filter">
+                  <Segmented
+                    value={checkTypeFilter}
+                    onChange={(v) => setCheckTypeFilter(v as string)}
+                    options={[
+                      { label: '全部', value: 'all' },
+                      { label: '订单盘点', value: 'order' },
+                      { label: '手动盘点', value: 'manual' },
+                    ]}
+                  />
+                </span>
+              )}
             </Space>
             <Space wrap>
-              {recentSearchInput}
-              <DatePicker.RangePicker
-                onChange={(d) => {
-                  setDateRange([
-                    d?.[0]?.format('YYYY-MM-DD'),
-                    d?.[1]?.format('YYYY-MM-DD'),
-                  ])
-                }}
-              />
-              <Button icon={<ReloadOutlined />} onClick={reloadRecentList}>刷新</Button>
+              {listTab === 'counted' ? null : (
+                <>
+                  {listTab === 'all' ? recentSearchInput : myItemsSearchInput}
+                  {listTab === 'my' && (
+                    <Input.Search
+                      placeholder="输入仓库名称或ID"
+                      allowClear
+                      defaultValue={whFilter}
+                      onSearch={(value) => setWhFilter(value.trim() || undefined)}
+                      onChange={(e) => {
+                        if (!e.target.value) setWhFilter(undefined)
+                      }}
+                      style={{ width: 180 }}
+                    />
+                  )}
+                  {listTab === 'my' && (
+                    <Select
+                      value={statusFilter}
+                      onChange={setStatusFilter}
+                      style={{ width: 120 }}
+                      options={[
+                        { label: '全部状态', value: 'all' },
+                        ...STATUS_OPTIONS.map((option) => ({ label: option.text, value: option.value })),
+                      ]}
+                    />
+                  )}
+                  <DatePicker.RangePicker
+                    onChange={(d) => {
+                      setDateFrom(d?.[0]?.format('YYYY-MM-DD'))
+                      setDateTo(d?.[1]?.format('YYYY-MM-DD'))
+                    }}
+                  />
+                  <Button
+                    icon={<ReloadOutlined />}
+                    onClick={listTab === 'all' ? reloadRecentList : reloadMyItems}
+                  >刷新</Button>
+                </>
+              )}
             </Space>
           </div>
-          <Table
-            rowKey="id"
-            dataSource={recentTableProps.dataSource}
-            loading={recentTableProps.loading}
-            pagination={recentTableProps.pagination}
-            onChange={recentTableProps.onChange}
-            scroll={{ x: 1500 }}
-            columns={[
-              { title: '盘点单号', dataIndex: 'check_no', width: 180, sorter: true },
-              {
-                title: '类型', dataIndex: 'check_type', width: 90,
-                render: (v: any) => v === 'manual'
-                  ? <Tag color="purple">手动</Tag>
-                  : <Tag color="blue">订单</Tag>,
-              },
-              { title: '订单号', dataIndex: 'order_no', width: 180, sorter: true, render: (v: any) => v || '—' },
-              { title: '标题', dataIndex: 'title', ellipsis: true },
-              {
-                title: '状态', dataIndex: 'status', width: 100,
-                filters: STATUS_OPTIONS,
-                filteredValue: (recentFilters.status as string[] | undefined) ?? null,
-                filterMultiple: true,
-                render: (v: any) => <Tag color={STATUS_MAP[v]?.color || 'default'}>{STATUS_MAP[v]?.label || v}</Tag>,
-              },
-              { title: '盘点日期', dataIndex: 'check_date', width: 120, sorter: true },
-              { title: '应盘', dataIndex: 'total_materials', width: 70, align: 'right' as const, sorter: true },
-              { title: '已盘', dataIndex: 'checked_materials', width: 70, align: 'right' as const, sorter: true },
-              {
-                title: '总差异', dataIndex: 'total_diff_qty', width: 100, align: 'right' as const, sorter: true,
-                render: (v: any) => v != null ? Number(v).toFixed(2) : '-',
-              },
-              { title: '创建人', dataIndex: 'created_by', width: 100 },
-              { title: '创建时间', dataIndex: 'created_at', width: 160, sorter: true, render: (v: any) => v ? formatDateTime(v) : '-' },
-              {
-                title: '操作', key: 'op', width: 100, fixed: 'right' as const,
-                render: (_: any, r: StockCheck) => (
-                  <Button type="link" size="small" onClick={() => {
-                    setCheckIdParam(r.id)
-                    setOrderNo('')
-                    setParams({ checkId: String(r.id) })
-                    loadCheck(r.id)
-                  }}>详情</Button>
-                ),
-              },
-            ]}
-          />
+          {listTab === 'all' ? (
+            <Table
+              rowKey="id"
+              dataSource={recentTableProps.dataSource}
+              loading={recentTableProps.loading}
+              pagination={recentTableProps.pagination}
+              onChange={recentTableProps.onChange}
+              scroll={{ x: 1500 }}
+              columns={[
+                { title: '盘点单号', dataIndex: 'check_no', width: 180, sorter: true },
+                {
+                  title: '类型', dataIndex: 'check_type', width: 90,
+                  render: (v: any) => v === 'manual'
+                    ? <Tag color="purple">手动</Tag>
+                    : <Tag color="blue">订单</Tag>,
+                },
+                { title: '订单号', dataIndex: 'order_no', width: 180, sorter: true, render: (v: any) => v || '—' },
+                { title: '标题', dataIndex: 'title', ellipsis: true },
+                {
+                  title: '状态', dataIndex: 'status', width: 100,
+                  filters: STATUS_OPTIONS,
+                  filteredValue: (recentFilters.status as string[] | undefined) ?? null,
+                  filterMultiple: true,
+                  render: (v: any) => <Tag color={STATUS_MAP[v]?.color || 'default'}>{STATUS_MAP[v]?.label || v}</Tag>,
+                },
+                { title: '盘点日期', dataIndex: 'check_date', width: 120, sorter: true },
+                { title: '应盘', dataIndex: 'total_materials', width: 70, align: 'right' as const, sorter: true },
+                { title: '已盘', dataIndex: 'checked_materials', width: 70, align: 'right' as const, sorter: true },
+                {
+                  title: '总差异', dataIndex: 'total_diff_qty', width: 100, align: 'right' as const, sorter: true,
+                  render: (v: any) => v != null ? Number(v).toFixed(2) : '-',
+                },
+                { title: '创建人', dataIndex: 'created_by', width: 100 },
+                { title: '创建时间', dataIndex: 'created_at', width: 160, sorter: true, render: (v: any) => v ? formatDateTime(v) : '-' },
+                {
+                  title: '操作', key: 'op', width: 100, fixed: 'right' as const,
+                  render: (_: any, r: StockCheck) => (
+                    <Button type="link" size="small" onClick={() => {
+                      setCheckIdParam(r.id)
+                      setOrderNo('')
+                      setParams({ checkId: String(r.id) })
+                      loadCheck(r.id)
+                    }}>详情</Button>
+                  ),
+                },
+              ]}
+            />
+          ) : listTab === 'my' ? (
+            <Table
+              rowKey="item_id"
+              dataSource={myItemsTableProps.dataSource}
+              loading={myItemsTableProps.loading}
+              pagination={myItemsTableProps.pagination}
+              onChange={myItemsTableProps.onChange}
+              scroll={{ x: 1600 }}
+              columns={[
+                { title: '盘点时间', dataIndex: 'counted_at', width: 170, sorter: true, render: (v: any) => v ? formatDateTime(v) : '-' },
+                { title: '盘点单号', dataIndex: 'check_no', width: 180, sorter: true },
+                { title: '订单号', dataIndex: 'order_no', width: 180, sorter: true, render: (v: any) => v || '-' },
+                { title: '物料编码', dataIndex: 'material_code', width: 150, sorter: true },
+                { title: '物料名称', dataIndex: 'material_name', width: 200, sorter: true, ellipsis: true },
+                { title: '规格', dataIndex: 'spec_model', width: 150, sorter: true, ellipsis: true, render: (v: any) => v || '-' },
+                { title: '单位', dataIndex: 'unit', width: 70, render: (v: any) => v || '-' },
+                {
+                  title: '仓库', dataIndex: 'wh_name', width: 160, sorter: true, ellipsis: true,
+                  render: (v: any, r: MyStockCheckItem) => v || r.wh_code || '-',
+                },
+                {
+                  title: '库存快照', dataIndex: 'system_qty', width: 110, sorter: true, align: 'right' as const,
+                  render: (v: any) => v != null ? Number(v).toFixed(2) : '-',
+                },
+                {
+                  title: '实盘数量', dataIndex: 'actual_qty', width: 110, sorter: true, align: 'right' as const,
+                  render: (v: any) => v != null ? Number(v).toFixed(2) : '-',
+                },
+                {
+                  title: '差异', dataIndex: 'diff_qty', width: 100, sorter: true, align: 'right' as const,
+                  render: (v: any) => {
+                    if (v == null) return '-'
+                    const n = Number(v)
+                    const color = n > 0 ? '#16a34a' : n < 0 ? '#dc2626' : '#64748b'
+                    return <span style={{ color, fontWeight: 500 }}>{n.toFixed(2)}</span>
+                  },
+                },
+                {
+                  title: '盘点单状态', dataIndex: 'status', width: 120, sorter: true,
+                  filters: STATUS_OPTIONS,
+                  filteredValue: (myItemsFilters.status as string[] | undefined) ?? null,
+                  render: (v: any) => <Tag color={STATUS_MAP[v]?.color || 'default'}>{STATUS_MAP[v]?.label || v}</Tag>,
+                },
+              ]}
+            />
+          ) : (
+            <CountedLedgerPanel />
+          )}
         </div>
       ) : (
         <div>

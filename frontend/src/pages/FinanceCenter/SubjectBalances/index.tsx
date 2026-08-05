@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Tree, Table, Button, Input, InputNumber, Select, Space, Row, Col, Statistic, message, Tag, Empty } from 'antd'
 import type { DataNode } from 'antd/es/tree'
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
@@ -62,6 +62,8 @@ export default function SubjectBalances() {
     itemCode?: string
     itemName?: string
   }>({})
+  const [defaultPeriod, setDefaultPeriod] = useState<{ year: number; month: number } | null>(null)
+  const initialResolvedRef = useRef(false)
 
   const buildParams = useCallback(() => {
     const p: any = {}
@@ -77,7 +79,19 @@ export default function SubjectBalances() {
   const loadRoots = useCallback(async () => {
     setTreeLoading(true)
     try {
-      const res: any = await api.get('/basicdata/subject-balances/tree/roots', { params: buildParams() })
+      const params = !initialResolvedRef.current ? {} : buildParams()
+      const res: any = await api.get('/basicdata/subject-balances/tree/roots', { params })
+      if (!initialResolvedRef.current) {
+        const headerPeriod = res._headers?.['x-default-period']
+        if (headerPeriod) {
+          const [y, m] = headerPeriod.split('-').map(Number)
+          if (!Number.isNaN(y) && !Number.isNaN(m)) {
+            setDefaultPeriod({ year: y, month: m })
+            setFilters((f) => ({ ...f, fiscalYear: y, fiscalMonth: m }))
+          }
+        }
+        initialResolvedRef.current = true
+      }
       const items: SubjectNode[] = res.data?.items || []
       setTreeData(items.map(nodeToDataNode))
     } catch (e) {
@@ -120,6 +134,8 @@ export default function SubjectBalances() {
     setPeriodLoading(true)
     try {
       const params: any = { page, page_size: pageSize, subject_id: selectedSubjectId }
+      if (filters.fiscalYear !== undefined && filters.fiscalYear !== null) params.fiscal_year = filters.fiscalYear
+      if (filters.fiscalMonth !== undefined && filters.fiscalMonth !== null) params.fiscal_month = filters.fiscalMonth
       const res: any = await api.get('/basicdata/subject-balances', { params })
       setPeriodRows(res.data?.items || [])
       setPeriodPagination({
@@ -132,7 +148,7 @@ export default function SubjectBalances() {
     } finally {
       setPeriodLoading(false)
     }
-  }, [selectedSubjectId])
+  }, [selectedSubjectId, filters.fiscalYear, filters.fiscalMonth])
 
   useEffect(() => {
     if (selectedSubjectId != null) {
@@ -151,7 +167,11 @@ export default function SubjectBalances() {
   }, [selectedSubjectId, treeData])
 
   const handleReset = () => {
-    setFilters({})
+    setFilters(
+      defaultPeriod
+        ? { fiscalYear: defaultPeriod.year, fiscalMonth: defaultPeriod.month }
+        : {}
+    )
     setSelectedSubjectId(null)
   }
 
@@ -186,8 +206,8 @@ export default function SubjectBalances() {
   ]
 
   return (
-    <div>
-      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
+    <div style={{ height: 'calc(100vh - 130px)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16, flexShrink: 0 }}>
         <Row gutter={[12, 12]} align="middle">
           <Col>
             <InputNumber
@@ -255,28 +275,30 @@ export default function SubjectBalances() {
         </Row>
       </div>
 
-      <Row gutter={16}>
-        <Col xs={24} md={9} lg={8}>
-          <div className="card-modern" style={{ padding: '12px 16px', maxHeight: 640, overflow: 'auto' }}>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>科目树</div>
-            {treeData.length === 0 && !treeLoading ? (
-              <Empty description="暂无数据" />
-            ) : (
-              <Tree
-                treeData={treeData}
-                loadData={onLoadChildren}
-                onSelect={onSelect}
-                selectedKeys={selectedSubjectId != null ? [nodeKey(selectedSubjectId)] : []}
-                showLine
-                defaultExpandedKeys={[]}
-              />
-            )}
+      <Row gutter={16} style={{ flex: 1, minHeight: 0 }}>
+        <Col xs={24} md={9} lg={8} style={{ height: '100%' }}>
+          <div className="card-modern" style={{ padding: '12px 16px', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div style={{ marginBottom: 8, fontWeight: 600, flexShrink: 0 }}>科目树</div>
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              {treeData.length === 0 && !treeLoading ? (
+                <Empty description="暂无数据" />
+              ) : (
+                <Tree
+                  treeData={treeData}
+                  loadData={onLoadChildren}
+                  onSelect={onSelect}
+                  selectedKeys={selectedSubjectId != null ? [nodeKey(selectedSubjectId)] : []}
+                  showLine
+                  defaultExpandedKeys={[]}
+                />
+              )}
+            </div>
           </div>
         </Col>
-        <Col xs={24} md={15} lg={16}>
-          <div className="card-modern" style={{ padding: '12px 16px' }}>
+        <Col xs={24} md={15} lg={16} style={{ height: '100%' }}>
+          <div className="card-modern" style={{ padding: '12px 16px', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {selectedNode ? (
-              <Row gutter={16} style={{ marginBottom: 12 }}>
+              <Row gutter={16} style={{ marginBottom: 12, flexShrink: 0 }}>
                 <Col><Statistic title="科目" value={selectedNode.subject_name || '-'} /></Col>
                 <Col><Statistic title="科目编码" value={selectedNode.subject_code || '-'} /></Col>
                 <Col><Statistic title="最新期间" value={selectedNode.latest_year ? `${selectedNode.latest_year}-${String(selectedNode.latest_month).padStart(2, '0')}` : '-'} /></Col>
@@ -284,7 +306,7 @@ export default function SubjectBalances() {
                 <Col><Statistic title="子科目数" value={selectedNode.child_count} /></Col>
               </Row>
             ) : (
-              <div style={{ marginBottom: 12, color: '#999' }}>请选择左侧科目节点查看明细</div>
+              <div style={{ marginBottom: 12, color: '#999', flexShrink: 0 }}>请选择左侧科目节点查看明细</div>
             )}
             <Table
               rowKey="id"
@@ -292,7 +314,7 @@ export default function SubjectBalances() {
               dataSource={periodRows}
               loading={periodLoading}
               size="small"
-              scroll={{ x: 900 }}
+              scroll={{ x: 900, y: 'calc(100vh - 380px)' }}
               locale={{ emptyText: selectedSubjectId == null ? '请选择科目' : '无数据' }}
               pagination={{
                 ...periodPagination,

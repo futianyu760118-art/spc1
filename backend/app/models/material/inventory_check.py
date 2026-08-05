@@ -58,6 +58,9 @@ class StockCheckItem(Base):
     is_checked = Column(Integer, nullable=False, default=0, comment="盘点标记 0否1是")
     checked_at = Column(DateTime, nullable=True)
     checked_by = Column(String(100), nullable=True)
+    counted_by_user_id = Column(BigInteger, nullable=True, comment="最后录入实盘数量的用户ID")
+    counted_by = Column(String(100), nullable=True, comment="最后录入实盘数量的用户名称快照")
+    counted_at = Column(DateTime, nullable=True, comment="最后录入实盘数量的时间")
     wh_id = Column(Integer, nullable=True, comment="仓库ID(快照);NULL=历史老盘点单或(未入库)")
     wh_name = Column(String(50), nullable=True, comment="仓库名称(建单时快照)")
     wh_code = Column(String(20), nullable=True, comment="仓库编码(建单时快照)")
@@ -69,4 +72,5 @@ class StockCheckItem(Base):
 
     __table_args__ = (
         Index("ix_sci_wh", "check_id", "material_id", "wh_id"),
+        Index("ix_sci_counted_by_date", "counted_by_user_id", "counted_at"),
     )

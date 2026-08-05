@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import assistant, basicdata, common, dashboard, exception, masterdata, material, meeting, npi, order, production, purchase, rules, writeback
+from app.api.v1 import assistant, basicdata, common, dashboard, exception, external, masterdata, material, meeting, npi, order, production, purchase, rules, writeback
 
 api_router = APIRouter()
 
@@ -63,12 +63,17 @@ api_router.include_router(basicdata.feedback_router, prefix="/basicdata/feedback
 api_router.include_router(basicdata.announcements_router, prefix="/basicdata/announcements", tags=["公告管理"])
 api_router.include_router(basicdata.notifications_router, prefix="/notifications", tags=["通知中心"])
 api_router.include_router(basicdata.share_router, prefix="/share", tags=["页面分享"])
+api_router.include_router(basicdata.wecom_public_router, prefix="/wecom", tags=["企业微信"])
+api_router.include_router(basicdata.wecom_share_router, prefix="/share", tags=["页面分享"])
 
 # 权限定义
 api_router.include_router(basicdata.permissions_router, prefix="/permissions", tags=["权限定义"])
 
 # 数据供给
 api_router.include_router(basicdata.data_supply_router, prefix="/basicdata/data-supply", tags=["数据供给"])
+
+# 对外接口（外部系统集成，需 API Key 签名认证）
+api_router.include_router(external.external_router, prefix="/external", tags=["对外接口"])
 
 # Common files and assistant
 api_router.include_router(common.files_router, prefix="/files", tags=["文件"])
@@ -79,4 +84,4 @@ api_router.include_router(assistant.assistant_router, prefix="/assistant", tags=
 api_router.include_router(purchase.price_change_router, prefix="/purchase/price-change", tags=["采购中心-调价单"])
 
 # Writeback center
-api_router.include_router(writeback.router)
+api_router.include_router(writeback.router, tags=["数据回写"])

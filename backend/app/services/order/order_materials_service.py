@@ -368,8 +368,11 @@ async def _expand_bom_tree(
 
     算法对齐 kit_analysis_service._get_bom_demand_map：
       - visited 防环；MAX_BOM_LEVEL 深度上限
-      - 子级 factor = 父级 factor × standard_qty / parent_bom.base_qty
-      - base_qty 缺省取 1
+      - 需求量公式（纯连乘，无除法）：
+          factor(root) = 订单数量
+          req(N)        = N.standard_qty × factor(N)
+          factor(child) = req(parent)
+        即：req(N) = N.standard_qty × 订单数量 × Π(所有父级 standard_qty)
       - 父子挂载延迟到 BFS 结束后统一执行（子节点此时已全部创建）
     """
     if not root_bom_id:
@@ -495,8 +498,7 @@ async def _expand_bom_tree(
                     parent_links.append((parent_key, key))
 
                 if sub_bom and sub_bom.bom_id not in visited:
-                    base_qty = sub_bom.base_qty if sub_bom.base_qty else Decimal("1")
-                    next_factor = (req_qty_decimal or Decimal("0")) / base_qty
+                    next_factor = req_qty_decimal or Decimal("0")
                     next_queue.append((
                         sub_bom.bom_id,
                         next_factor,

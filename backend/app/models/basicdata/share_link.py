@@ -15,6 +15,7 @@ class ShareLink(Base):
     target_path = Column(String(512), nullable=False, comment="目标页面路径")
     target_params = Column(JSONB, nullable=True, comment="额外参数")
     permissions = Column(JSONB, nullable=True, comment="分享权限，如 ['read','create','update','delete']")
+    reason = Column(String(256), nullable=True, comment="分享原因")
     created_by = Column(Integer, nullable=False, comment="创建人 user_id")
     expires_at = Column(DateTime(timezone=True), nullable=True, comment="过期时间，null 表示永久")
     is_revoked = Column(Boolean, nullable=False, default=False, comment="是否已撤销")

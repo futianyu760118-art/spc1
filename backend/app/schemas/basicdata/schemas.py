@@ -435,6 +435,7 @@ class EmployeeBase(BaseModel):
     org_id: Optional[int] = None
     position_id: Optional[int] = None
     manager_oa_user_id: Optional[str] = None
+    erp_user_id: Optional[int] = None
     position: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -450,6 +451,7 @@ class EmployeeUpdate(BaseModel):
     org_id: Optional[int] = None
     position_id: Optional[int] = None
     manager_oa_user_id: Optional[str] = None
+    erp_user_id: Optional[int] = None
     position: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None

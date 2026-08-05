@@ -24,6 +24,14 @@ api.interceptors.response.use(
       err._apiResponse = response
       return Promise.reject(err)
     }
+    if (data && typeof data === 'object') {
+      Object.defineProperty(data, '_headers', {
+        value: response.headers,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      })
+    }
     return data
   },
   (error) => {
@@ -223,6 +231,8 @@ export const materialApi = {
     api.post(`/materials/stock-check/from-order/${orderNo}`, data || {}),
   getRecentStockChecks: (params: Record<string, any> = {}) =>
     api.get('/materials/stock-check/recent', { params }),
+  getMyStockCheckItems: (params: Record<string, any> = {}) =>
+    api.get('/materials/stock-check/my-items', { params }),
   getStockCheckStats: (params: { check_type?: string; date_from?: string; date_to?: string; status?: string } = {}) =>
     api.get('/materials/stock-check/stats', { params }),
   getStockChecksByOrder: (orderNo: string) =>
@@ -231,9 +241,9 @@ export const materialApi = {
     api.get(`/materials/stock-check/${checkId}`),
   getStockCheckItems: (checkId: number, params: Record<string, any> = {}) =>
     api.get(`/materials/stock-check/${checkId}/items`, { params }),
-  updateStockCheckItem: (itemId: number, data: { actual_qty?: number; is_checked?: number; remark?: string; force_recount?: boolean }) =>
+  updateStockCheckItem: (itemId: number, data: { actual_qty?: number | null; is_checked?: number; remark?: string; force_recount?: boolean }) =>
     api.put(`/materials/stock-check/items/${itemId}`, data),
-  batchUpdateStockCheckItems: (checkId: number, items: Array<{ id: number; actual_qty?: number; is_checked?: number; remark?: string; force_recount?: boolean }>) =>
+  batchUpdateStockCheckItems: (checkId: number, items: Array<{ id: number; actual_qty?: number | null; is_checked?: number; remark?: string; force_recount?: boolean }>) =>
     api.post('/materials/stock-check/items/batch', { check_id: checkId, items }),
   completeStockCheck: (checkId: number) =>
     api.post(`/materials/stock-check/${checkId}/complete`),
@@ -241,10 +251,20 @@ export const materialApi = {
     api.post(`/materials/stock-check/${checkId}/cancel`),
   getMaterialHistory: (params: { material_id: number }) =>
     api.get('/materials/stock-check/material-history', { params }),
-  listMaterialCandidates: (params: { keyword?: string; page?: number; page_size?: number } = {}) =>
+  listMaterialCandidates: (params: { keyword?: string; wh_id?: string | number; page?: number; page_size?: number } = {}) =>
     api.get('/materials/stock-check/material-candidates', { params }),
+  listCountedMaterials: (params: {
+    keyword?: string
+    wh_id?: string | number
+    date_from?: string
+    date_to?: string
+    check_type?: string
+    page?: number
+    page_size?: number
+  } = {}) => api.get('/materials/stock-check/counted-ledger', { params }),
   createStockCheckFromMaterials: (data: {
-    material_ids: number[]
+    material_ids?: number[]
+    items?: Array<{ material_id: number; wh_id?: number | null }>
     title?: string
     check_date?: string
     remark?: string
@@ -631,12 +651,47 @@ export const userApi = {
 }
 
 // ============ 页面分享 ============
+export interface ShareCreateRecipient {
+  user_ids: string[]
+}
+
+export interface WecomUser {
+  userid: string
+  name: string
+  department?: number[]
+}
+
+export interface WecomDepartment {
+  id: number
+  parent_id: number
+  name: string
+  order?: number
+}
+
 export const shareApi = {
-  create: (data: { target_path: string; target_params?: object; expires_in?: string; permissions?: string[] }) =>
-    api.post('/share', data),
-  verify: (token: string) => api.get(`/share/${token}`),
+  create: (params: {
+    target_path: string
+    expires_in?: string
+    permissions?: string[]
+    reason?: string
+    target_params?: Record<string, string>
+    auto_send_wecom?: boolean
+    recipient?: ShareCreateRecipient
+  }) => api.post('/share', params),
+  verify: (token: string, code?: string) =>
+    api.get(`/share/${token}`, { params: code ? { code } : {} }),
   list: () => api.get('/share/list'),
   revoke: (id: number) => api.delete(`/share/${id}`),
+  sendWecom: (shareId: number, recipient: ShareCreateRecipient) =>
+    api.post(`/share/${shareId}/send-wecom`, recipient),
+}
+
+export const wecomApi = {
+  listUsers: (keyword?: string) =>
+    api.get<WecomUser[], WecomUser[]>('/wecom/users', { params: keyword ? { keyword } : {} }),
+  listDepartments: () =>
+    api.get<WecomDepartment[], WecomDepartment[]>('/wecom/departments'),
+  testConnection: () => api.post('/wecom/test-connection'),
 }
 
 
