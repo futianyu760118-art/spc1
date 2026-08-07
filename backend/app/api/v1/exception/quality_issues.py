@@ -13,6 +13,8 @@ from app.core.audit import log_audit
 from app.models.exception.quality_issue import QualityIssue
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.exception.schemas import QualityIssueOut, QualityIssueCreate, QualityIssueUpdate
+from app.schemas.exception.quality_analysis import QualityAnalysisReportOut
+from app.services.exception.quality_analysis_service import generate_quality_analysis
 from app.services.common.export_service import GenericExportService, ExportColumn
 
 router = APIRouter()
@@ -175,6 +177,31 @@ async def get_quality_issue_statistics(
         "inProgressCount": by_status.get("in_progress", 0),
         "closedCount": by_status.get("closed", 0),
     })
+
+
+@router.get("/analyze", response_model=ResponseModel[QualityAnalysisReportOut])
+async def analyze_quality_issues(
+    request: Request,
+    submit_dept: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    current_user: dict = Depends(PermissionChecker("exceptions.quality", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """对当前筛选范围的品质异常做 AI 结构化分析，输出高频/根因/策略/行动项/预防。"""
+    conditions = _build_quality_conditions(request, submit_dept, status, keyword)
+    filter_summary = {
+        "submit_dept": submit_dept,
+        "status": status,
+        "keyword": keyword,
+        "column_filters": {
+            field: request.query_params.getlist(field)
+            for field in QUALITY_FILTERABLE_FIELDS
+            if request.query_params.getlist(field)
+        },
+    }
+    report = await generate_quality_analysis(db, conditions, filter_summary)
+    return ResponseModel(data=report)
 
 
 @router.post("", response_model=ResponseModel[QualityIssueOut])

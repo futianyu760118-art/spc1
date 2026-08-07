@@ -89,6 +89,7 @@ export default function PurchasePlan() {
     owner: '',
     order_no: '',
     arrival_hour_note: '',
+    po_no: '',
     po_date: null as [string, string] | null,
     eta: null as [string, string] | null,
     actual_arrival_date: null as [string, string] | null,
@@ -124,7 +125,7 @@ export default function PurchasePlan() {
     const p: Record<string, any> = {}
     if (filters.keyword) p.keyword = filters.keyword
     if (filters.po_status.length) p.po_status = filters.po_status.join(',')
-    const textKeys = ['supplier_name', 'supplier_account', 'material_code', 'material_name', 'spec_model', 'unit', 'owner', 'order_no', 'arrival_hour_note'] as const
+    const textKeys = ['supplier_name', 'supplier_account', 'material_code', 'material_name', 'spec_model', 'unit', 'owner', 'order_no', 'arrival_hour_note', 'po_no'] as const
     textKeys.forEach(k => { if (filters[k]) p[k] = filters[k] })
     if (filters.po_date) { p.po_date_start = filters.po_date[0]; p.po_date_end = filters.po_date[1] }
     if (filters.eta) { p.eta_start = filters.eta[0]; p.eta_end = filters.eta[1] }
@@ -599,6 +600,12 @@ export default function PurchasePlan() {
       render: editableText('supplier_account'),
     },
     {
+      title: '采购单号', dataIndex: 'po_no', width: 120, sorter: true,
+      ...getTextFilterProps('po_no'),
+      onCell: () => ({ style: { maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }),
+      render: (v: string) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v}</span>,
+    },
+    {
       title: '物料长代码', dataIndex: 'material_code', maxWidth: 100, ellipsis: true, fixed: 'left' as const, sorter: true,
       ...getTextFilterProps('material_code'),
       onCell: () => ({ style: { maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }),
@@ -786,7 +793,7 @@ export default function PurchasePlan() {
           <Col>
             <Input
               prefix={<SearchOutlined />}
-              placeholder="搜索物料/供应商/订单号"
+              placeholder="搜索物料/供应商/订单号/采购单号"
               value={filters.keyword}
               onChange={e => { setFilters(f => ({ ...f, keyword: e.target.value })); setPage(1) }}
               style={{ width: 240 }}
@@ -858,7 +865,7 @@ export default function PurchasePlan() {
             const statusFilter = (tableFilters?.po_status as string[] | undefined) || []
             const stagnantFilter = (tableFilters?.is_stagnant as string[] | undefined) || []
             // 文本列筛选
-            const textKeys = ['supplier_name', 'supplier_account', 'material_code', 'material_name', 'spec_model', 'unit', 'owner', 'order_no', 'arrival_hour_note'] as const
+            const textKeys = ['supplier_name', 'supplier_account', 'material_code', 'material_name', 'spec_model', 'unit', 'owner', 'order_no', 'arrival_hour_note', 'po_no'] as const
             const textUpdates: Record<string, string> = {}
             textKeys.forEach(k => { textUpdates[k] = (tableFilters?.[k]?.[0] as string) || '' })
             const materialProperty = tableFilters?.material_property?.[0] as number | undefined

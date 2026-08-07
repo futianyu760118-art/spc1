@@ -397,6 +397,18 @@ export const exceptionApi = {
     const qs = queryParams.toString()
     return api.get(`/exceptions/quality/statistics${qs ? `?${qs}` : ''}`)
   },
+  analyzeQuality: (params: Record<string, any>) => {
+    const queryParams = new URLSearchParams()
+    Object.entries(params).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(item => queryParams.append(key, String(item)))
+      } else if (value !== undefined && value !== null && value !== '') {
+        queryParams.append(key, String(value))
+      }
+    })
+    const qs = queryParams.toString()
+    return api.get(`/exceptions/quality/analyze${qs ? `?${qs}` : ''}`, { timeout: 90000 })
+  },
   createQuality: (data: Record<string, any>) => api.post('/exceptions/quality', data),
   updateQuality: (id: number, data: Record<string, any>) => api.put(`/exceptions/quality/${id}`, data),
   deleteQuality: (id: number) => api.delete(`/exceptions/quality/${id}`),

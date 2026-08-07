@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+﻿import { useEffect, useState, useCallback } from 'react'
 import {
   Table, Tag, Input, Select, Button, Space, message, Modal, Form,
   DatePicker, InputNumber, Row, Col, Popconfirm, Dropdown, Popover, Checkbox,
@@ -6,12 +6,14 @@ import {
 import {
   ReloadOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
   DownloadOutlined, DownOutlined, SettingOutlined, HolderOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { exceptionApi } from '../../../services/api'
 import { formatDate } from '../../../utils'
 import { useExport } from '../../../hooks/useExport'
 import { useUiPreferencesStore } from '../../../store/uiPreferences'
+import AnalysisReportDrawer, { QualityAnalysisReportOut } from './components/AnalysisReportDrawer'
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   open: { label: '待处理', color: 'error' },
@@ -154,6 +156,10 @@ export default function QualityIssues() {
   const { exporting, exportData } = useExport()
   const [showAnalysis, setShowAnalysis] = useState(false)
   const [statistics, setStatistics] = useState<any>(null)
+  const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [analysisReport, setAnalysisReport] = useState<QualityAnalysisReportOut | null>(null)
+  const [analysisDrawerOpen, setAnalysisDrawerOpen] = useState(false)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
   const getColumnVisibility = useUiPreferencesStore(s => s.getColumnVisibility)
   const setColumnVisibility = useUiPreferencesStore(s => s.setColumnVisibility)
   const getColumnOrder = useUiPreferencesStore(s => s.getColumnOrder)
@@ -227,9 +233,9 @@ export default function QualityIssues() {
       setTotal(res.data.total)
       
     } catch (e: any) {
-      message.error(e.message || '获取品质异常失败')
-    } finally {
-      setLoading(false)
+message.error(e.message || '获取品质异常失败')
+      } finally {
+        setLoading(false)
     }
   }, [page, pageSize, keyword, tableFilters, sorterState])
 
@@ -245,11 +251,30 @@ export default function QualityIssues() {
       const res: any = await exceptionApi.getQualityStatistics(params)
       setStatistics(res.data)
     } catch (e: any) {
-      message.error(e.message || '鑾峰彇鍝佽川寮傚父缁熻澶辫触')
+      message.error(e.message || '获取品质异常统计失败')
     }
   }, [keyword, tableFilters])
 
   useEffect(() => { loadStatistics() }, [loadStatistics])
+
+  const handleAnalyze = useCallback(async () => {
+    const params: any = {}
+    if (keyword.trim()) params.keyword = keyword.trim()
+    Object.entries(tableFilters).forEach(([field, values]) => {
+      if (values && values.length) params[field] = values
+    })
+    setAnalysisLoading(true)
+    setAnalysisError(null)
+    setAnalysisDrawerOpen(true)
+    try {
+      const res: any = await exceptionApi.analyzeQuality(params)
+      setAnalysisReport(res.data)
+    } catch (e: any) {
+      setAnalysisError(e?.message || '分析失败，请稍后重试')
+    } finally {
+      setAnalysisLoading(false)
+    }
+  }, [keyword, tableFilters])
 
   const openCreate = () => {
     setEditRecord(null)
@@ -500,7 +525,12 @@ export default function QualityIssues() {
       {/* 统计分析面板 */}
       {showAnalysis && statistics && (
         <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
-          <h3 style={{ marginBottom: 16, fontSize: 16, fontWeight: 600 }}>品质异常统计分析</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <span style={{ fontSize: 16, fontWeight: 600 }}>品质异常统计分析</span>
+            <Button type="primary" icon={<ThunderboltOutlined />} loading={analysisLoading} onClick={handleAnalyze}>
+              分析
+            </Button>
+          </div>
           <Row gutter={16} style={{ marginBottom: 16 }}>
             <Col span={6}>
               <div style={{ background: '#f8fafc', padding: 16, borderRadius: 8 }}>
@@ -792,6 +822,14 @@ export default function QualityIssues() {
           )}
         </Form>
       </Modal>
+      <AnalysisReportDrawer
+        open={analysisDrawerOpen}
+        onClose={() => setAnalysisDrawerOpen(false)}
+        report={analysisReport}
+        loading={analysisLoading}
+        error={analysisError}
+        onRerun={handleAnalyze}
+      />
     </div>
   )
 }

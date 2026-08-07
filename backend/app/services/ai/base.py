@@ -1,10 +1,13 @@
 """统一 AI 服务层 — 抽象基类与数据结构"""
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional, Type
 
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -57,6 +60,52 @@ class NotSupportedError(Exception):
     pass
 
 
+def _extract_json_object(raw: str) -> dict:
+    """从 LLM 原始输出中提取 JSON 对象，兼容纯 JSON / markdown 代码块 / 带说明文字的 markdown 报告。
+
+    提取策略（依次尝试）：
+    1. 去首尾空白后直接 json.loads（裸 JSON）
+    2. 剥离 markdown 代码块围栏（```json ... ``` 或 ``` ... ```）后 json.loads
+    3. 取首个 '{' 到末个 '}' 之间的子串 json.loads（JSON 埋在说明文字中）
+    全部失败则抛 json.JSONDecodeError。
+    """
+    import json as _json
+
+    text = raw.strip()
+
+    # 策略 1：直接解析
+    try:
+        return _json.loads(text)
+    except _json.JSONDecodeError:
+        pass
+
+    # 策略 2：剥离 markdown 围栏
+    fenced = text
+    if fenced.startswith("```"):
+        lines = fenced.split("\n")
+        if len(lines) > 2:
+            inner = lines[1:]
+            if inner and inner[-1].strip().startswith("```"):
+                inner = inner[:-1]
+            fenced = "\n".join(inner).strip()
+        try:
+            return _json.loads(fenced)
+        except _json.JSONDecodeError:
+            pass
+
+    # 策略 3：首尾大括号截取
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start:end + 1]
+        try:
+            return _json.loads(candidate)
+        except _json.JSONDecodeError:
+            pass
+
+    raise _json.JSONDecodeError("未能从模型输出中提取到有效 JSON", raw, 0)
+
+
 class LLMProvider(ABC):
     """LLM Provider 抽象基类，所有 provider 实现此接口"""
 
@@ -102,7 +151,7 @@ class LLMProvider(ABC):
         options: Optional[ChatOptions] = None,
     ) -> BaseModel:
         """调用 LLM 并将输出解析为指定 pydantic schema 实例。
-        默认实现：调用 chat + json.loads + pydantic 校验，失败重试 1 次。
+        默认实现：调用 chat + 多策略 JSON 提取 + pydantic 校验，失败重试 1 次。
         """
         import json
 
@@ -117,17 +166,20 @@ class LLMProvider(ABC):
 
         for attempt in range(2):
             raw = await self.chat(messages, options)
-            # 尝试提取 JSON
-            text = raw.strip()
-            if text.startswith("```"):
-                lines = text.split("\n")
-                text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
             try:
-                data = json.loads(text)
+                data = _extract_json_object(raw)
                 return schema.model_validate(data)
-            except (json.JSONDecodeError, Exception):
+            except (json.JSONDecodeError, ValueError, Exception) as e:
+                logger.warning(
+                    "[structured_output] 解析失败 attempt=%d provider=%s error=%s",
+                    attempt + 1, self.name, e,
+                )
+                logger.warning(
+                    "[structured_output] 原始输出前1000字符:\n%s",
+                    raw[:1000] if raw else "(空)",
+                )
                 if attempt == 0:
                     messages.append(ChatMessage(role="assistant", content=raw))
-                    messages.append(ChatMessage(role="user", content="输出格式不正确，请严格输出纯 JSON，不要包含其他内容。"))
+                    messages.append(ChatMessage(role="user", content="输出格式不正确，请严格输出纯 JSON，不要包含其他内容、不要使用 markdown 代码块。"))
                     continue
                 raise

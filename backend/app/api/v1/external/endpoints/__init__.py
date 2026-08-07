@@ -10,6 +10,7 @@
 from . import orders  # noqa: F401
 from . import bom  # noqa: F401
 from . import bom_detail  # noqa: F401
+from . import bom_tree  # noqa: F401
 from . import masterdata  # noqa: F401
 from . import purchase  # noqa: F401
 from . import production  # noqa: F401

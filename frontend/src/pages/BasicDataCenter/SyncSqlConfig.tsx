@@ -74,6 +74,7 @@ const SYNC_TYPE_LABELS: Record<string, string> = {
   organizations: '组织',
   positions: '岗位',
   employees: '人员',
+  employee_organizations: '员工组织关系',
   purchase_invoices: '采购开票',
   quality_issues: '品质异常',
   mrp_plan_orders: 'MRP计划订单',

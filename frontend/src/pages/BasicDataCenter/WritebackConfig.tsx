@@ -53,13 +53,19 @@ export default function WritebackConfig() {
     setModalOpen(true)
   }
 
+  const toJsonText = (v: unknown, fallback: string): string => {
+    if (v === null || v === undefined || v === '') return fallback
+    if (typeof v === 'string') return v
+    try { return JSON.stringify(v) } catch { return fallback }
+  }
+
   const openEdit = (record: WritebackConfigItem) => {
     setEditingItem(record)
     form.setFieldsValue({
       ...record,
-      target_key_fields: record.target_key_fields || '',
+      target_key_fields: toJsonText(record.target_key_fields, '[]'),
       update_sql_template: record.update_sql_template || '',
-      field_mapping_json: record.field_mapping_json || '',
+      field_mapping_json: toJsonText(record.field_mapping_json, ''),
     })
     setModalOpen(true)
   }
@@ -83,7 +89,10 @@ export default function WritebackConfig() {
       setModalOpen(false)
       fetchData()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '保存失败')
+      const detail = e?.response?.data?.detail
+        || (e instanceof SyntaxError ? `JSON 格式错误：${e.message}` : null)
+        || '保存失败'
+      message.error(detail)
     }
   }
 

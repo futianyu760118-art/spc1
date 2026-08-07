@@ -238,7 +238,7 @@ async def verify_share_link(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"code": 1007, "message": "企业微信身份验证失败，请在企业微信中打开", "oauth_url": _build_oauth_url(share)},
             )
-        wecom_userid = userinfo.get("UserId")
+        wecom_userid = userinfo.get("UserId") or userinfo.get("userid")
         logger.info(f"[share] OAuth code 换身份: token={token} userinfo={userinfo} userid={wecom_userid}")
         if not wecom_userid or not await _is_authorized_recipient(db, share.id, wecom_userid):
             logger.warning(f"[share] 授权拒绝: token={token} userid={wecom_userid} recipients={await _recipient_ids(db, share.id)}")

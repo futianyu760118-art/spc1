@@ -21,6 +21,7 @@ interface LedgerRow {
   wh_id?: number | null
   wh_name?: string | null
   system_qty?: number | null
+  system_qty_time?: string | null
   live_qty?: number | null
   actual_qty?: number | null
   diff_qty?: number | null
@@ -90,8 +91,15 @@ export default function CountedLedgerPanel() {
       render: fmtNum,
     },
     {
-      title: '快照库存', dataIndex: 'system_qty', key: 'system_qty', width: 100, sorter: true, align: 'right' as const,
-      render: fmtNum,
+      title: '快照库存', dataIndex: 'system_qty', key: 'system_qty', width: 130, sorter: true, align: 'right' as const,
+      render: (v: number | null | undefined, r: LedgerRow) => (
+        <div>
+          <div>{fmtNum(v)}</div>
+          {r.system_qty_time ? (
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>{new Date(r.system_qty_time).toLocaleString()}</div>
+          ) : null}
+        </div>
+      ),
     },
     {
       title: '盘点数', dataIndex: 'actual_qty', key: 'actual_qty', width: 100, sorter: true, align: 'right' as const,

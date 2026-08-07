@@ -47,7 +47,6 @@ class SyncScheduler:
             "organizations": "sync_organizations",
             "positions": "sync_positions",
             "employees": "sync_employees",
-            "erp_users": "sync_erp_users",
             "purchase_invoices": "sync_purchase_invoices",
             "payment_applies": "sync_payment_applies",
             "quality_issues": "sync_quality_issues",

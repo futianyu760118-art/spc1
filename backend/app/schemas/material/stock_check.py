@@ -80,6 +80,7 @@ class StockCheckCountedItemOut(BaseModel):
     wh_code: Optional[str] = None
     wh_name: Optional[str] = None
     system_qty: Optional[Decimal] = None
+    system_qty_time: Optional[datetime] = None
     actual_qty: Optional[Decimal] = None
     diff_qty: Optional[Decimal] = None
     counted_by: Optional[str] = None

@@ -24,6 +24,7 @@ router = APIRouter()
 
 
 SORTABLE_COLUMNS = {
+    'po_no': PurchaseOrder.po_no,
     'supplier_name': PurchaseOrder.supplier_name,
     'supplier_account': PurchaseOrder.supplier_account,
     'material_code': PurchaseOrder.material_code,
@@ -54,6 +55,7 @@ STATUS_LABELS = {
 }
 
 EXPORT_COLUMNS = [
+    ExportColumn('po_no', '采购单号', 20),
     ExportColumn('supplier_name', '供应商', 16),
     ExportColumn('supplier_account', '供应商账号', 18),
     ExportColumn('material_code', '物料长代码', 20),
@@ -92,6 +94,7 @@ def _build_filters(
     owner: Optional[str] = None,
     owner_id: Optional[int] = None,
     arrival_hour_note: Optional[str] = None,
+    po_no: Optional[str] = None,
     po_date_start: Optional[str] = None,
     po_date_end: Optional[str] = None,
     eta_start: Optional[str] = None,
@@ -133,6 +136,8 @@ def _build_filters(
         base.append(PurchaseOrder.owner_id == owner_id)
     if arrival_hour_note:
         base.append(PurchaseOrder.arrival_hour_note.ilike(f'%{arrival_hour_note}%'))
+    if po_no:
+        base.append(PurchaseOrder.po_no.ilike(f'%{po_no}%'))
     if po_date_start:
         base.append(PurchaseOrder.po_date >= date_type.fromisoformat(po_date_start))
     if po_date_end:
@@ -216,6 +221,7 @@ def _build_filters(
             | PurchaseOrder.material_name.ilike(like)
             | PurchaseOrder.supplier_name.ilike(like)
             | PurchaseOrder.order_no.ilike(like)
+            | PurchaseOrder.po_no.ilike(like)
         )
     if is_closed:
         closed_list = [s.strip() for s in is_closed.split(',')]
@@ -293,6 +299,7 @@ async def list_purchase_plan(
     owner: Optional[str] = Query(None),
     owner_id: Optional[int] = Query(None),
     arrival_hour_note: Optional[str] = Query(None),
+    po_no: Optional[str] = Query(None),
     po_date_start: Optional[str] = Query(None),
     po_date_end: Optional[str] = Query(None),
     eta_start: Optional[str] = Query(None),
@@ -317,6 +324,7 @@ async def list_purchase_plan(
         material_code=material_code, material_name=material_name,
         material_property=material_property, spec_model=spec_model, unit=unit, owner=owner, owner_id=owner_id,
         arrival_hour_note=arrival_hour_note,
+        po_no=po_no,
         po_date_start=po_date_start, po_date_end=po_date_end,
         eta_start=eta_start, eta_end=eta_end,
         actual_arrival_start=actual_arrival_start, actual_arrival_end=actual_arrival_end,
@@ -509,6 +517,7 @@ async def export_purchase_plan(
     owner: Optional[str] = Query(None),
     owner_id: Optional[int] = Query(None),
     arrival_hour_note: Optional[str] = Query(None),
+    po_no: Optional[str] = Query(None),
     po_date_start: Optional[str] = Query(None),
     po_date_end: Optional[str] = Query(None),
     eta_start: Optional[str] = Query(None),
@@ -535,6 +544,7 @@ async def export_purchase_plan(
         material_property=material_property,
         spec_model=spec_model, unit=unit, owner=owner, owner_id=owner_id,
         arrival_hour_note=arrival_hour_note,
+        po_no=po_no,
         po_date_start=po_date_start, po_date_end=po_date_end,
         eta_start=eta_start, eta_end=eta_end,
         actual_arrival_start=actual_arrival_start, actual_arrival_end=actual_arrival_end,
@@ -557,6 +567,7 @@ async def export_purchase_plan(
     export_rows = []
     for item in items:
         export_rows.append({
+            'po_no': item.po_no or '',
             'supplier_name': item.supplier_name or '',
             'material_code': item.material_code,
             'material_name': item.material_name or '',
@@ -611,6 +622,7 @@ async def get_purchase_plan_stats(
     owner: Optional[str] = Query(None),
     owner_id: Optional[int] = Query(None),
     arrival_hour_note: Optional[str] = Query(None),
+    po_no: Optional[str] = Query(None),
     po_date_start: Optional[str] = Query(None),
     po_date_end: Optional[str] = Query(None),
     eta_start: Optional[str] = Query(None),
@@ -638,6 +650,7 @@ async def get_purchase_plan_stats(
         material_property=material_property,
         spec_model=spec_model, unit=unit, owner=owner, owner_id=owner_id,
         arrival_hour_note=arrival_hour_note,
+        po_no=po_no,
         po_date_start=po_date_start, po_date_end=po_date_end,
         eta_start=eta_start, eta_end=eta_end,
         actual_arrival_start=actual_arrival_start, actual_arrival_end=actual_arrival_end,

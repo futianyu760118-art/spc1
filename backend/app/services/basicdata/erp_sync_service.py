@@ -2472,121 +2472,6 @@ class ERPSyncService:
         return stats
 
     # ------------------------------------------------------------------
-    # ERP 用户同步（通过姓名匹配，回填 erp_user_id 到 scm_employee）
-    # ------------------------------------------------------------------
-    async def sync_erp_users(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
-        """
-        同步 ERP 用户数据，仅用于回填 scm_employee.erp_user_id。
-        匹配规则：ERP 用户姓名 -> scm_employee.emp_name（去除首尾空白后精确匹配）。
-        命中且现有 erp_user_id 与新值不同时更新；erp_user_id 为 None 或空的新值会被跳过。
-        本同步只回填 erp_user_id 字段，不创建新员工、不覆盖其他字段。
-        """
-        stats = {"synced": 0, "matched": 0, "updated": 0, "skipped": 0, "no_match": 0, "errors": []}
-
-        logger.info(f"[ERP用户同步] 开始同步 since={since}")
-        try:
-            await self._connect_erp()
-            sql_text, mapping = await self._load_sql_config("erp_users")
-
-            if since is None:
-                since = datetime(1900, 1, 1)
-
-            params = {"since": since}
-            if custom_params:
-                params.update(custom_params)
-                logger.info(f"[ERP用户同步] 使用自定义参数: {custom_params}")
-
-            rows = await self._execute_erp_sql(sql_text, params)
-            logger.info(f"[ERP用户同步] 从 ERP 获取到 {len(rows)} 条用户记录")
-
-            # 一次性加载现有员工，构建姓名 -> list[Employee] 索引，避免逐行查询
-            emp_result = await self.spc_db.execute(
-                select(Employee).where(Employee.status == 1)
-            )
-            all_employees = emp_result.scalars().all()
-            name_index: dict[str, list[Employee]] = {}
-            for emp in all_employees:
-                name = (emp.emp_name or "").strip()
-                if not name:
-                    continue
-                name_index.setdefault(name, []).append(emp)
-            logger.info(f"[ERP用户同步] 本地员工姓名索引共 {len(name_index)} 个不同姓名，{len(all_employees)} 条在职员工")
-
-            for idx, row in enumerate(rows):
-                try:
-                    await self.spc_db.begin_nested()
-                    row_dict = self._map_row(row, mapping)
-                    erp_user_id_raw = row_dict.get("erp_user_id")
-                    emp_name = str(row_dict.get("emp_name", "")).strip()
-
-                    try:
-                        erp_user_id = int(erp_user_id_raw) if erp_user_id_raw not in (None, "") else None
-                    except (ValueError, TypeError):
-                        stats["skipped"] += 1
-                        logger.warning(f"[ERP用户同步] 第{idx+1}条记录 erp_user_id='{erp_user_id_raw}' 非整数，跳过 name={emp_name}")
-                        await self.spc_db.commit()
-                        continue
-                    erp_user_id_str = str(erp_user_id) if erp_user_id is not None else ""
-                    if not erp_user_id_str:
-                        stats["skipped"] += 1
-                        logger.debug(f"[ERP用户同步] 第{idx+1}条记录 erp_user_id 为空，跳过 name={emp_name}")
-                        await self.spc_db.commit()
-                        continue
-                    if not emp_name:
-                        stats["skipped"] += 1
-                        logger.debug(f"[ERP用户同步] 第{idx+1}条记录 emp_name 为空，跳过 erp_user_id={erp_user_id}")
-                        await self.spc_db.commit()
-                        continue
-
-                    matches = name_index.get(emp_name)
-                    if not matches:
-                        stats["no_match"] += 1
-                        logger.info(f"[ERP用户同步] ERP用户 erp_user_id={erp_user_id} 姓名='{emp_name}' 在 scm_employee 中无匹配")
-                        await self.spc_db.commit()
-                        continue
-
-                    stats["matched"] += 1
-                    row_updated = False
-                    for emp in matches:
-                        if emp.erp_user_id != erp_user_id:
-                            old_val = emp.erp_user_id
-                            emp.erp_user_id = erp_user_id
-                            row_updated = True
-                            logger.info(
-                                f"[ERP用户同步] 回填 erp_user_id emp_code={emp.emp_code} emp_name='{emp_name}' "
-                                f"{old_val}->{erp_user_id}"
-                            )
-                    if row_updated:
-                        stats["updated"] += 1
-                    else:
-                        stats["skipped"] += 1
-
-                    stats["synced"] += 1
-                    await self.spc_db.commit()
-                except Exception as e:
-                    try:
-                        await self.spc_db.rollback()
-                    except Exception:
-                        pass
-                    stats["errors"].append(f"ERP用户 {row_dict.get('erp_user_id')}/{row_dict.get('emp_name')}: {e}")
-                    logger.error(f"[ERP用户同步] 处理第{idx+1}条记录异常: {e}")
-
-            await self.spc_db.flush()
-            await self.spc_db.commit()
-            logger.info(
-                f"[ERP用户同步] 完成: 处理{len(rows)}条 命中{stats['matched']} 更新{stats['updated']} "
-                f"无匹配{stats['no_match']} 跳过{stats['skipped']} errors={len(stats['errors'])}"
-            )
-
-        except Exception as e:
-            stats["errors"].append(str(e))
-            logger.exception(f"[ERP用户同步] 异常: {e}")
-        finally:
-            self._close_erp(keep_alive=True)
-
-        return stats
-
-    # ------------------------------------------------------------------
     # 采购开票同步
     # ------------------------------------------------------------------
     async def sync_purchase_invoices(
@@ -3363,11 +3248,6 @@ class ERPSyncService:
             results["positions"] = await self.sync_positions(since, custom_params)
             results["employees"] = await self.sync_employees(since, custom_params)
             results["employee_organizations"] = await self.sync_employee_organizations(since, custom_params)
-            try:
-                results["erp_users"] = await self.sync_erp_users(since, custom_params)
-            except Exception as e:
-                logger.warning(f"[sync_all] erp_users 同步跳过: {e}")
-                results["erp_users"] = {"synced": 0, "errors": [str(e)]}
             results["purchase_invoices"] = await self.sync_purchase_invoices(since, custom_params)
             results["payment_applies"] = await self.sync_payment_applies(since, custom_params)
             results["quality_issues"] = await self.sync_quality_issues(since, custom_params)

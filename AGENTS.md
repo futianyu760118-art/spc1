@@ -75,6 +75,8 @@ Root-level `debug-*.md` files track open, evidence-gathering investigations — 
 - `CODE_WIKI.md` — architecture, module map, model overview (large; skim the TOC).
 - `backend/ERP_INTEGRATION.md` — ERP sync SQL/mapping model and manual trigger commands.
 - `init_database.py` — seed data (roles, users, risk rules, node standards) and the real migration logic.
+- `docs/最易出错约束点复盘-2026-07.md` — July 2026 session audit: the most error-prone constraint points (int/string ID mismatch, init_database-vs-Alembic drift, ERP sync correctness, connection pool, permissions) with real error strings. Read before touching models/sync/permissions.
+- `docs/开发约束预检清单.md` — actionable, checkable constraint conditions (CC-A1..F2) mapped by requirement type, each with trigger / rule / pass criteria / real error / verify command. Run the applicable checklist before starting and before sign-off.
 
 ## Change reporting format
 

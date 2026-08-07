@@ -47,6 +47,12 @@ backend/perf_*.py
 backend/quick_test.py
 backend/test_*.py
 
+# 本地调试输出(不提交)
+backend/report_pretty.txt
+backend/roots_no_params.json
+backend/test_inventory_list_report.json
+backend/test_subject_balance_report.json
+
 # 根目录调试脚本(不提交)
 /*.py
 # 但保留 init_database 等必要脚本(在 backend/ 下)
