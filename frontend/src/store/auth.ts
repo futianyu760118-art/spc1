@@ -258,11 +258,13 @@ export const useAuthStore = create<AuthState>((set, get) => {
         if (Array.isArray(actions) && actions.includes(action)) return true
       }
       for (const candidate of resourcesToCheck) {
-        const dot = candidate.indexOf('.')
-        if (dot <= 0) continue
-        const parent = candidate.substring(0, dot)
-        const parentActions = (perms as Record<string, string[]>)[parent]
-        if (Array.isArray(parentActions) && parentActions.includes(action)) return true
+        const parts = candidate.split('.')
+        for (let i = parts.length - 1; i > 0; i--) {
+          const parent = parts.slice(0, i).join('.')
+          if (!parent) continue
+          const parentActions = (perms as Record<string, string[]>)[parent]
+          if (Array.isArray(parentActions) && parentActions.includes(action)) return true
+        }
       }
       return false
     },

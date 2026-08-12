@@ -2,6 +2,7 @@
 export { default as DataIntegration } from './DataIntegration'
 export { default as UserManagement } from './UserManagement'
 export { default as RoleManagement } from './RoleManagement'
+export { default as PermissionManagement } from './PermissionManagement'
 export { default as AuditLog } from './AuditLog'
 export { default as SyncSqlConfig } from './SyncSqlConfig'
 export { default as DataSupply } from './DataSupply'

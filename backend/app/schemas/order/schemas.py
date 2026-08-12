@@ -24,6 +24,8 @@ class SaleOrderOut(BaseModel):
     audit_date: Optional[date] = None
     owner: Optional[str] = None
     status: str = "open"
+    erp_id: Optional[int] = None
+    erp_status: Optional[int] = None
     risk_level: Optional[str] = None
     extra_data: Optional[dict] = None
     data_source: Optional[str] = None

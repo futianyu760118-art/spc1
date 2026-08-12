@@ -45,6 +45,12 @@ class StockCheckFromMaterialsCreate(BaseModel):
 
 class CoCheckersUpdate(BaseModel):
     co_checker_user_ids: List[int] = []
+    expected_version: Optional[int] = None
+
+
+class PresenceUpdate(BaseModel):
+    """协作存在感:某用户正在编辑 item_id;item_id=None 表示离开/idle"""
+    item_id: Optional[int] = None
 
 
 class MaterialCandidateOut(BaseModel):
@@ -98,6 +104,7 @@ class StockCheckItemUpdate(BaseModel):
     is_checked: Optional[int] = None
     remark: Optional[str] = None
     force_recount: Optional[bool] = None
+    expected_version: Optional[int] = None
 
 
 class StockCheckItemBatchUpdate(BaseModel):
@@ -107,6 +114,7 @@ class StockCheckItemBatchUpdate(BaseModel):
 
 class StockCheckItemOut(BaseModel):
     id: int
+    version: Optional[int] = None
     check_id: int
     line_no: Optional[str] = None
     level: Optional[int] = None
@@ -143,6 +151,7 @@ class StockCheckItemOut(BaseModel):
 
 class StockCheckOut(BaseModel):
     id: int
+    version: Optional[int] = None
     check_no: str
     order_no: Optional[str] = None
     title: Optional[str] = None
@@ -255,3 +264,17 @@ class StockCheckStats(BaseModel):
     total_gain_qty: float
     total_loss_qty: float
     top_diff_materials: List[TopDiffMaterial] = []
+
+
+class StockCheckConflictOut(BaseModel):
+    """乐观锁冲突响应 data 体"""
+    resource: str
+    item_id: Optional[int] = None
+    check_id: Optional[int] = None
+    server_version: int
+    server_item: Optional[Dict[str, Any]] = None
+
+
+class StockCheckActionBody(BaseModel):
+    """complete / cancel 的请求体(支持 expected_version)"""
+    expected_version: Optional[int] = None

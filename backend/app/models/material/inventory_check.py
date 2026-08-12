@@ -32,6 +32,7 @@ class StockCheck(Base):
     covered_products = Column(JSONB, nullable=True, comment="本次盘点覆盖的产品行 [{product_code,bom_no,line_no,product_name,order_qty}]")
     co_checker_user_ids = Column(JSONB, nullable=True, comment="共同盘点人 sys_user.id 列表")
     created_by_user_id = Column(BigInteger, nullable=True, comment="创建人 sys_user.id（用于修改权限判定）")
+    version = Column(Integer, nullable=False, default=0, comment="乐观锁版本号,每次更新+1")
 
     __table_args__ = (
         Index("ix_scm_inventory_check_order_date", "order_no", "check_date"),
@@ -69,6 +70,7 @@ class StockCheckItem(Base):
     remark = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    version = Column(Integer, nullable=False, default=0, comment="乐观锁版本号,每次更新+1")
 
     __table_args__ = (
         Index("ix_sci_wh", "check_id", "material_id", "wh_id"),

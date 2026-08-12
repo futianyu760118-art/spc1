@@ -14,11 +14,21 @@ from app.models.basicdata.material import Material
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.models.order.sale_order import SaleOrder
 from app.services.order.order_materials_service import get_order_product_materials, MATERIAL_PROPERTY_LABELS
+from app.services.material.stock_check_broker import publish_event
 
 
 class StockCheckPermissionError(Exception):
     """盘点单修改权限不足"""
     pass
+
+
+class StockCheckConflictError(Exception):
+    """乐观锁冲突。携带最新版本号与数据快照,供 API 层构造 409。"""
+    def __init__(self, resource: str, server_version: int, server_snapshot: dict):
+        self.resource = resource
+        self.server_version = server_version
+        self.server_snapshot = server_snapshot
+        super().__init__(f"{resource} version conflict: server_version={server_version}")
 
 
 def _current_user_id(user: Optional[dict]) -> Optional[int]:
@@ -286,6 +296,12 @@ async def enrich_live_qty(db: AsyncSession, items: List[StockCheckItem]) -> None
             it.live_qty = agg_map.get(mid, Decimal("0"))
 
 
+def _serialize_item(item: StockCheckItem) -> dict:
+    """序列化 item 行用于事件 payload(不含关联字段,客户端按 id 合并)。"""
+    from app.schemas.material.stock_check import StockCheckItemOut
+    return StockCheckItemOut.model_validate(item).model_dump()
+
+
 async def _refresh_check_aggregates(db: AsyncSession, check_id: int) -> None:
     """刷新头表 total_materials / checked_materials / total_diff_qty"""
     items_agg = await db.execute(
@@ -480,7 +496,7 @@ async def create_stock_check_from_order(
                 actual_qty=actual_q,
                 diff_qty=Decimal(str(actual_q)) - Decimal(str(meta["system_qty"])),
                 is_checked=1,
-                checked_at=datetime.utcnow(),
+                checked_at=datetime.now(),
                 checked_by="system-recent",
                 recent_checked_check_no=recent["check_no"],
                 recent_checked_date=recent["check_date"],
@@ -529,6 +545,41 @@ async def create_stock_check_from_materials(
     material_ids: 兼容旧方式, 整物料拆全仓库;
     两者可同时提供, 合并去重; 至少提供其一。
     """
+    unique_ids, selections = await _resolve_material_selections(db, material_ids, items)
+
+    seq = await _next_seq_for_today(db)
+    check_no = _gen_check_no(seq)
+
+    head = StockCheck(
+        check_no=check_no,
+        order_no=None,
+        title=title or f"手动盘点 {datetime.now().strftime('%Y-%m-%d')}",
+        check_type="manual",
+        status="in_progress",
+        check_date=check_date or date.today(),
+        created_by=current_user.get("username", "") if current_user else "",
+        created_by_user_id=_current_user_id(current_user) if current_user else None,
+        remark=remark,
+        co_checker_user_ids=co_checker_user_ids,
+    )
+    db.add(head)
+    await db.flush()
+
+    item_rows = await _build_manual_item_rows(db, head.id, selections, unique_ids)
+    db.add_all(item_rows)
+    await db.flush()
+
+    await _refresh_check_aggregates(db, head.id)
+    await db.flush()
+    return head
+
+
+async def _resolve_material_selections(
+    db: AsyncSession,
+    material_ids: Optional[List[int]] = None,
+    items: Optional[List[Tuple[int, Optional[int]]]] = None,
+) -> Tuple[List[int], List[Tuple[int, Optional[int]]]]:
+    """解析并去重 (material_ids | items) 选料。返回 (unique_ids, selections)。"""
     unique_ids: List[int] = []
     seen_ids = set()
     for mid in material_ids or []:
@@ -568,7 +619,16 @@ async def create_stock_check_from_materials(
 
     if not unique_ids:
         raise ValueError("请至少选择一个物料")
+    return unique_ids, selections
 
+
+async def _build_manual_item_rows(
+    db: AsyncSession,
+    check_id: int,
+    selections: List[Tuple[int, Optional[int]]],
+    unique_ids: List[int],
+) -> List[StockCheckItem]:
+    """加载物料与库存快照,按 selections 构建 StockCheckItem 行。"""
     mat_res = await db.execute(
         select(Material).where(
             Material.erp_material_id.in_(unique_ids),
@@ -583,34 +643,16 @@ async def create_stock_check_from_materials(
     stock_map = await _get_stock_by_warehouse(db, [m.erp_material_id for m in materials])
     warehouses_by_mid = _split_stock_by_warehouse(stock_map, [m.erp_material_id for m in materials])
 
-    seq = await _next_seq_for_today(db)
-    check_no = _gen_check_no(seq)
-
-    head = StockCheck(
-        check_no=check_no,
-        order_no=None,
-        title=title or f"手动盘点 {datetime.now().strftime('%Y-%m-%d')}",
-        check_type="manual",
-        status="in_progress",
-        check_date=check_date or date.today(),
-        created_by=current_user.get("username", "") if current_user else "",
-        created_by_user_id=_current_user_id(current_user) if current_user else None,
-        remark=remark,
-        co_checker_user_ids=co_checker_user_ids,
-    )
-    db.add(head)
-    await db.flush()
-
     item_rows: List[StockCheckItem] = []
     if selections:
-        # 新方式: 严格按用户选中的 (物料, 仓库) 生成行
+        # 严格按用户选中的 (物料, 仓库) 生成行
         for mid, wh_id in selections:
             m = mat_map.get(mid)
             if m is None:
                 continue
             if wh_id is None:
                 item_rows.append(StockCheckItem(
-                    check_id=head.id,
+                    check_id=check_id,
                     line_no=None,
                     material_id=mid,
                     material_code=m.material_code,
@@ -631,7 +673,7 @@ async def create_stock_check_from_materials(
                 continue
             wh_name, sys_q, sys_t = meta
             item_rows.append(StockCheckItem(
-                check_id=head.id,
+                check_id=check_id,
                 line_no=None,
                 material_id=mid,
                 material_code=m.material_code,
@@ -648,14 +690,14 @@ async def create_stock_check_from_materials(
                 is_checked=0,
             ))
     else:
-        # 旧兼容方式: 整物料拆全仓库
+        # 整物料拆全仓库
         for m in materials:
             mid = m.erp_material_id
             warehouses = warehouses_by_mid.get(mid, [])
             if warehouses:
                 for wh_id, wh_name, sys_q, sys_t in warehouses:
                     item_rows.append(StockCheckItem(
-                        check_id=head.id,
+                        check_id=check_id,
                         line_no=None,
                         material_id=mid,
                         material_code=m.material_code,
@@ -673,7 +715,7 @@ async def create_stock_check_from_materials(
                     ))
             else:
                 item_rows.append(StockCheckItem(
-                    check_id=head.id,
+                    check_id=check_id,
                     line_no=None,
                     material_id=mid,
                     material_code=m.material_code,
@@ -688,11 +730,79 @@ async def create_stock_check_from_materials(
                     diff_qty=Decimal("0"),
                     is_checked=0,
                 ))
+    return item_rows
+
+
+async def add_items_to_check(
+    db: AsyncSession,
+    check_id: int,
+    material_ids: Optional[List[int]] = None,
+    items: Optional[List[Tuple[int, Optional[int]]]] = None,
+    current_user: dict = None,
+) -> List[StockCheckItem]:
+    """为进行中的手动盘点单追加物料明细。返回新增的行。"""
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id).with_for_update())).scalar_one_or_none()
+    if not head:
+        raise ValueError(f"盘点单 {check_id} 不存在")
+    if not _user_can_edit(head, current_user):
+        raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
+    if head.check_type != "manual":
+        raise ValueError("仅手动盘点单支持自由添加明细")
+    if head.status in ("completed", "cancelled"):
+        raise ValueError(f"已{head.status}的盘点单不能添加明细")
+    unique_ids, selections = await _resolve_material_selections(db, material_ids, items)
+    item_rows = await _build_manual_item_rows(db, check_id, selections, unique_ids)
+    if not item_rows:
+        raise ValueError("所选物料均无可用库存行,请重新选择")
     db.add_all(item_rows)
     await db.flush()
-
-    await _refresh_check_aggregates(db, head.id)
+    await _refresh_check_aggregates(db, check_id)
+    head.version = int(head.version or 0) + 1
     await db.flush()
+    await publish_event(
+        check_id,
+        "bom_refreshed",
+        {
+            "check_id": check_id,
+            "head_version": int(head.version or 0),
+            "new_item_ids": [int(r.id) for r in item_rows],
+        },
+        _current_user_id(current_user),
+    )
+    return item_rows
+
+
+async def remove_item_from_check(
+    db: AsyncSession,
+    item_id: int,
+    current_user: dict,
+) -> StockCheck:
+    """从进行中的手动盘点单移除一条明细。已录入数据(is_checked=1 或 actual_qty 非空)的行禁删。"""
+    item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id).with_for_update())).scalar_one_or_none()
+    if not item:
+        raise ValueError(f"盘点行 {item_id} 不存在")
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == item.check_id).with_for_update())).scalar_one_or_none()
+    if not head:
+        raise ValueError(f"盘点单 {item.check_id} 不存在")
+    if not _user_can_edit(head, current_user):
+        raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
+    if head.check_type != "manual":
+        raise ValueError("仅手动盘点单支持自由移除明细")
+    if head.status in ("completed", "cancelled"):
+        raise ValueError(f"已{head.status}的盘点单不能移除明细")
+    if item.is_checked or item.actual_qty is not None:
+        raise ValueError("该行已录入盘点数据,请先取消标记/清空实盘数再移除")
+    await db.delete(item)
+    await db.flush()
+    await _refresh_check_aggregates(db, head.id)
+    head.version = int(head.version or 0) + 1
+    await db.flush()
+    await publish_event(
+        head.id,
+        "bom_refreshed",
+        {"check_id": head.id, "head_version": int(head.version or 0), "new_item_ids": []},
+        _current_user_id(current_user),
+    )
     return head
 
 
@@ -816,6 +926,11 @@ async def list_counted_materials_ledger(
     date_to: Optional[date] = None,
     check_type: Optional[str] = None,
     status: Optional[List[str]] = None,
+    check_no: Optional[str] = None,
+    counted_by: Optional[str] = None,
+    material_code: Optional[str] = None,
+    material_name: Optional[str] = None,
+    spec_model: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
 ) -> Tuple[int, List[Dict]]:
@@ -864,6 +979,21 @@ async def list_counted_materials_ledger(
     if check_type:
         params["check_type"] = check_type
         conds.append("h.check_type = :check_type")
+    if check_no:
+        params["check_no_like"] = f"%{check_no}%"
+        conds.append("h.check_no ILIKE :check_no_like")
+    if counted_by:
+        params["counted_by_like"] = f"%{counted_by}%"
+        conds.append("ic.counted_by ILIKE :counted_by_like")
+    if material_code:
+        params["mc_like"] = f"%{material_code}%"
+        conds.append("ic.material_code ILIKE :mc_like")
+    if material_name:
+        params["mn_like"] = f"%{material_name}%"
+        conds.append("ic.material_name ILIKE :mn_like")
+    if spec_model:
+        params["sm_like"] = f"%{spec_model}%"
+        conds.append("ic.spec_model ILIKE :sm_like")
     if status:
         statuses = [s.strip() for s in status if s and s.strip()]
         if statuses:
@@ -981,13 +1111,23 @@ async def update_stock_check_item(
     is_checked: Optional[int] = None,
     remark: Optional[str] = None,
     force_recount: Optional[bool] = None,
+    expected_version: Optional[int] = None,
     current_user: Optional[dict] = None,
 ) -> StockCheckItem:
-    item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id))).scalar_one_or_none()
+    item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id).with_for_update())).scalar_one_or_none()
     if not item:
         raise ValueError(f"盘点行 {item_id} 不存在")
+    # 状态守卫(修场景 8):已完结/取消的单子不允许再改行
+    head_for_guard = (await db.execute(select(StockCheck).where(StockCheck.id == item.check_id).with_for_update())).scalar_one_or_none()
+    if head_for_guard and head_for_guard.status in ("completed", "cancelled"):
+        raise StockCheckPermissionError(f"盘点单已{head_for_guard.status},不可修改")
     await _assert_can_edit(db, item.check_id, current_user)
+    # 乐观锁校验(with_for_update 已保证此处读到的 version 是已锁行的最新值)
+    if expected_version is not None and int(item.version or 0) != int(expected_version):
+        raise StockCheckConflictError("item", int(item.version or 0), _serialize_item(item))
     old_actual_qty = Decimal(str(item.actual_qty)) if item.actual_qty is not None else None
+    old_is_checked = int(item.is_checked or 0)
+    actual_qty_changed = False
     if force_recount:
         item.recent_checked_check_no = None
         item.recent_checked_date = None
@@ -1004,26 +1144,52 @@ async def update_stock_check_item(
             new_actual_qty = Decimal(str(actual_qty))
             item.actual_qty = new_actual_qty
             if new_actual_qty != old_actual_qty or force_recount:
+                actual_qty_changed = True
                 item.counted_by_user_id = _current_user_id(current_user)
                 item.counted_by = current_user.get("username", "") if current_user else None
-                item.counted_at = datetime.utcnow()
+                item.counted_at = datetime.now()
     if remark is not None:
         item.remark = remark
     if is_checked is not None:
-        item.is_checked = int(is_checked)
-        if int(is_checked) == 1:
-            item.checked_at = datetime.utcnow()
-            if current_user:
-                item.checked_by = current_user.get("username", "")
+        new_is_checked = int(is_checked)
+        if new_is_checked == 1:
+            item.is_checked = 1
+            # 标记人覆盖规则:仅 0→1 新签收,或 1→1 且实盘数变了(改数者代为重新签收)才记;
+            # 1→1 且实盘数未变时保留原标记人,防止整行保存误覆盖
+            if old_is_checked != 1 or actual_qty_changed:
+                item.checked_at = datetime.now()
+                if current_user:
+                    item.checked_by = current_user.get("username", "")
         else:
+            item.is_checked = 0
             item.checked_at = None
             item.checked_by = None
     if item.actual_qty is not None and item.system_qty is not None:
         item.diff_qty = Decimal(str(item.actual_qty)) - Decimal(str(item.system_qty))
     elif actual_qty_provided:
         item.diff_qty = Decimal("0")
+    item.version = int(item.version or 0) + 1
     await _refresh_check_aggregates(db, item.check_id)
     await db.flush()
+    # 发布事件(全量快照 payload:完整 item + 头 aggregates)
+    head_after = head_for_guard
+    if head_after is None:
+        head_after = (await db.execute(select(StockCheck).where(StockCheck.id == item.check_id))).scalar_one_or_none()
+    await publish_event(
+        item.check_id,
+        "item_updated",
+        {
+            "item_id": item.id,
+            "version": int(item.version or 0),
+            "item": _serialize_item(item),
+            "head_aggregates": {
+                "checked_materials": int(head_after.checked_materials or 0) if head_after else 0,
+                "total_materials": int(head_after.total_materials or 0) if head_after else 0,
+                "total_diff_qty": float(head_after.total_diff_qty or 0) if head_after else 0,
+            },
+        },
+        _current_user_id(current_user),
+    )
     return item
 
 
@@ -1045,18 +1211,27 @@ async def batch_update_items(
             is_checked=it.get("is_checked"),
             remark=it.get("remark"),
             force_recount=it.get("force_recount"),
+            expected_version=it.get("expected_version"),
             current_user=current_user,
         )
         n += 1
     return n
 
 
-async def complete_stock_check(db: AsyncSession, check_id: int, current_user: dict) -> StockCheck:
-    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
+async def complete_stock_check(
+    db: AsyncSession,
+    check_id: int,
+    current_user: dict,
+    *,
+    expected_version: Optional[int] = None,
+) -> StockCheck:
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id).with_for_update())).scalar_one_or_none()
     if not head:
         raise ValueError(f"盘点单 {check_id} 不存在")
     if not _user_can_edit(head, current_user):
         raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
+    if expected_version is not None and int(head.version or 0) != int(expected_version):
+        raise StockCheckConflictError("head", int(head.version or 0), {"check_id": check_id})
     if head.status == "cancelled":
         raise ValueError("已取消的盘点单不能完结")
     if head.status == "completed":
@@ -1083,30 +1258,63 @@ async def complete_stock_check(db: AsyncSession, check_id: int, current_user: di
             raise ValueError(f"物料 {item.material_code or item.material_id} 还未录入实盘数,请先填写再完结")
 
     head.status = "completed"
-    head.completed_at = datetime.utcnow()
+    head.completed_at = datetime.now()
     head.checked_by = current_user.get("username", "")
+    head.version = int(head.version or 0) + 1
     await db.flush()
+    await publish_event(
+        check_id,
+        "status_changed",
+        {
+            "check_id": check_id,
+            "status": "completed",
+            "head_version": int(head.version or 0),
+            "checked_by": head.checked_by,
+            "completed_at": head.completed_at.isoformat() if head.completed_at else None,
+        },
+        _current_user_id(current_user),
+    )
     return head
 
 
-async def cancel_stock_check(db: AsyncSession, check_id: int, current_user: dict) -> StockCheck:
-    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
+async def cancel_stock_check(
+    db: AsyncSession,
+    check_id: int,
+    current_user: dict,
+    *,
+    expected_version: Optional[int] = None,
+) -> StockCheck:
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id).with_for_update())).scalar_one_or_none()
     if not head:
         raise ValueError(f"盘点单 {check_id} 不存在")
     if not _user_can_edit(head, current_user):
         raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
+    if expected_version is not None and int(head.version or 0) != int(expected_version):
+        raise StockCheckConflictError("head", int(head.version or 0), {"check_id": check_id})
     if head.status == "completed":
         raise ValueError("已完结的盘点单不能取消")
     head.status = "cancelled"
+    head.version = int(head.version or 0) + 1
     await db.flush()
+    await publish_event(
+        check_id,
+        "status_changed",
+        {"check_id": check_id, "status": "cancelled", "head_version": int(head.version or 0)},
+        _current_user_id(current_user),
+    )
     return head
 
 
 async def set_co_checkers(
-    db: AsyncSession, check_id: int, user_ids: List[int], current_user: dict,
+    db: AsyncSession,
+    check_id: int,
+    user_ids: List[int],
+    current_user: dict,
+    *,
+    expected_version: Optional[int] = None,
 ) -> StockCheck:
-    """设置共同盘点人名单（仅创建人/admin 可改名单）。"""
-    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
+    """设置共同盘点人名单(仅创建人/admin 可改名单)。"""
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id).with_for_update())).scalar_one_or_none()
     if not head:
         raise ValueError(f"盘点单 {check_id} 不存在")
     uid = _current_user_id(current_user)
@@ -1117,6 +1325,8 @@ async def set_co_checkers(
     )
     if not (current_user.get("role") == "admin" or is_creator):
         raise StockCheckPermissionError("仅创建人或管理员可修改共同盘点人名单")
+    if expected_version is not None and int(head.version or 0) != int(expected_version):
+        raise StockCheckConflictError("head", int(head.version or 0), {"check_id": check_id})
     cleaned: List[int] = []
     seen: set = set()
     for x in (user_ids or []):
@@ -1128,7 +1338,20 @@ async def set_co_checkers(
             seen.add(v)
             cleaned.append(v)
     head.co_checker_user_ids = cleaned
+    head.version = int(head.version or 0) + 1
     await db.flush()
+    co_names = await _resolve_user_names(db, cleaned)
+    await publish_event(
+        check_id,
+        "co_checkers_changed",
+        {
+            "check_id": check_id,
+            "head_version": int(head.version or 0),
+            "co_checker_user_ids": cleaned,
+            "co_checkers": [{"user_id": i, "name": co_names.get(i, f"user#{i}")} for i in cleaned],
+        },
+        _current_user_id(current_user),
+    )
     return head
 
 
@@ -1275,7 +1498,7 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
                 actual_qty=actual_q,
                 diff_qty=Decimal(str(actual_q)) - Decimal(str(meta["system_qty"])),
                 is_checked=1,
-                checked_at=datetime.utcnow(),
+                checked_at=datetime.now(),
                 checked_by="system-recent",
                 recent_checked_check_no=recent["check_no"],
                 recent_checked_date=recent["check_date"],
@@ -1301,7 +1524,15 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
             ))
     await db.flush()
     await _refresh_check_aggregates(db, check_id)
+    head.version = int(head.version or 0) + 1
     await db.flush()
+    # 发布事件(new_item_ids 留空,客户端整体重拉)
+    await publish_event(
+        check_id,
+        "bom_refreshed",
+        {"check_id": check_id, "head_version": int(head.version or 0), "new_item_ids": []},
+        _current_user_id(current_user),
+    )
     return head
 
 
@@ -1522,6 +1753,10 @@ async def list_my_stock_check_items(
     check_no: Optional[str] = None,
     check_type: Optional[str] = None,
     status: Optional[List[str]] = None,
+    order_no: Optional[str] = None,
+    material_code: Optional[str] = None,
+    material_name: Optional[str] = None,
+    spec_model: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
 ) -> Tuple[int, List[Dict]]:
@@ -1557,6 +1792,14 @@ async def list_my_stock_check_items(
         ))
     if check_no:
         conds.append(StockCheck.check_no.ilike(f"%{check_no}%"))
+    if order_no:
+        conds.append(StockCheck.order_no.ilike(f"%{order_no}%"))
+    if material_code:
+        conds.append(StockCheckItem.material_code.ilike(f"%{material_code}%"))
+    if material_name:
+        conds.append(StockCheckItem.material_name.ilike(f"%{material_name}%"))
+    if spec_model:
+        conds.append(StockCheckItem.spec_model.ilike(f"%{spec_model}%"))
     if check_type:
         conds.append(StockCheck.check_type == check_type)
     if date_from:

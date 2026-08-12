@@ -259,7 +259,7 @@ async def order_details_list(ctx: ExternalCallContext) -> dict:
         )
         for lp_row in lp_result.all():
             if lp_row[1] is not None:
-                labor_price_map[lp_row[0]] = float(lp_row[1])
+                labor_price_map[lp_row[0]] = labor_price_map.get(lp_row[0], 0.0) + float(lp_row[1])
 
     items = []
     for row in rows:

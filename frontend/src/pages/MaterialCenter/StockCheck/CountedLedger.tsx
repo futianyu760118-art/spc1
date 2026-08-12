@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Space, Input, Select, DatePicker, Table, Tag, Typography, Button } from 'antd'
-import { SearchOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Space, Select, DatePicker, Table, Tag, Typography, Button } from 'antd'
+import { ReloadOutlined } from '@ant-design/icons'
 import { materialApi } from '@/services/api'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
+import { textColumnFilter, textFilterIcon } from './TextColumnFilter'
 
 const { RangePicker } = DatePicker
 
@@ -58,15 +59,13 @@ function fmtNum(v: number | null | undefined): string {
 
 export default function CountedLedgerPanel() {
   const navigate = useNavigate()
-  const [whFilter, setWhFilter] = useState('')
   const [checkType, setCheckType] = useState<string>()
   const [dateRange, setDateRange] = useState<[string, string] | undefined>()
 
-  const { data, loading, total, searchInput, tableProps, reload, filters } = useAntTableQuery({
+  const { searchInput, tableProps, reload, filters } = useAntTableQuery({
     fetchData: async (params) => {
       const res: any = await materialApi.listCountedMaterials({
         ...params,
-        wh_id: whFilter || undefined,
         check_type: checkType || undefined,
         date_from: dateRange?.[0],
         date_to: dateRange?.[1],
@@ -74,18 +73,48 @@ export default function CountedLedgerPanel() {
       return { items: res?.data?.items || [], total: Number(res?.data?.total || 0) }
     },
     initialKeyword: '',
-    filterToQuery: (filters) => ({
-      status: (filters.status as string[] | undefined)?.join(','),
-    }),
-    extraDeps: [whFilter, checkType, dateRange],
+    filterToQuery: (filters) => {
+      const first = (k: string) => (filters[k] as string[] | undefined)?.[0]
+      return {
+        status: (filters.status as string[] | undefined)?.join(','),
+        check_no: first('check_no'),
+        counted_by: first('counted_by'),
+        material_code: first('material_code'),
+        material_name: first('material_name'),
+        spec_model: first('spec_model'),
+        wh_id: first('wh_name'),
+      }
+    },
+    extraDeps: [checkType, dateRange],
   })
 
   const columns = [
-    { title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 150, sorter: true },
-    { title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 200, sorter: true, ellipsis: true },
-    { title: '规格', dataIndex: 'spec_model', key: 'spec_model', width: 180, sorter: true, ellipsis: true },
+    {
+      title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 150, sorter: true,
+      filterDropdown: textColumnFilter({ placeholder: '输入物料编码' }),
+      filterIcon: textFilterIcon,
+      filteredValue: (filters.material_code as string[] | undefined) ?? null,
+    },
+    {
+      title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 200, sorter: true, ellipsis: true,
+      filterDropdown: textColumnFilter({ placeholder: '输入物料名称' }),
+      filterIcon: textFilterIcon,
+      filteredValue: (filters.material_name as string[] | undefined) ?? null,
+    },
+    {
+      title: '规格', dataIndex: 'spec_model', key: 'spec_model', width: 180, sorter: true, ellipsis: true,
+      filterDropdown: textColumnFilter({ placeholder: '输入规格型号' }),
+      filterIcon: textFilterIcon,
+      filteredValue: (filters.spec_model as string[] | undefined) ?? null,
+    },
     { title: '单位', dataIndex: 'unit', key: 'unit', width: 70, sorter: true },
-    { title: '仓库', dataIndex: 'wh_name', key: 'wh_name', width: 130, sorter: true, render: (v: string | null | undefined) => v || '—' },
+    {
+      title: '仓库', dataIndex: 'wh_name', key: 'wh_name', width: 130, sorter: true,
+      render: (v: string | null | undefined) => v || '—',
+      filterDropdown: textColumnFilter({ placeholder: '输入仓库名称或ID' }),
+      filterIcon: textFilterIcon,
+      filteredValue: (filters.wh_name as string[] | undefined) ?? null,
+    },
     {
       title: '即时库存', dataIndex: 'live_qty', key: 'live_qty', width: 100, align: 'right' as const,
       render: fmtNum,
@@ -120,9 +149,18 @@ export default function CountedLedgerPanel() {
         v && r.check_id ? (
           <Typography.Link onClick={() => navigate(`/stock-check?checkId=${r.check_id}`)}>{v}</Typography.Link>
         ) : (v || '—'),
+      filterDropdown: textColumnFilter({ placeholder: '输入盘点单号' }),
+      filterIcon: textFilterIcon,
+      filteredValue: (filters.check_no as string[] | undefined) ?? null,
     },
     { title: '盘点日期', dataIndex: 'check_date', key: 'check_date', width: 110, sorter: true },
-    { title: '盘点人', dataIndex: 'counted_by', key: 'counted_by', width: 100, sorter: true, render: (v: string | null | undefined) => v || '—' },
+    {
+      title: '盘点人', dataIndex: 'counted_by', key: 'counted_by', width: 100, sorter: true,
+      render: (v: string | null | undefined) => v || '—',
+      filterDropdown: textColumnFilter({ placeholder: '输入盘点人' }),
+      filterIcon: textFilterIcon,
+      filteredValue: (filters.counted_by as string[] | undefined) ?? null,
+    },
     {
       title: '盘点时间', dataIndex: 'counted_at', key: 'counted_at', width: 160, sorter: true,
       render: (v: string | null | undefined) => (v ? new Date(v).toLocaleString() : '—'),
@@ -142,14 +180,6 @@ export default function CountedLedgerPanel() {
     <>
       <Space style={{ marginBottom: 12 }} wrap>
         {searchInput}
-        <Input
-          allowClear
-          prefix={<SearchOutlined />}
-          placeholder="仓库名称或ID"
-          value={whFilter}
-          onChange={(e) => setWhFilter(e.target.value)}
-          style={{ width: 180 }}
-        />
         <Select
           allowClear
           placeholder="盘点类型"

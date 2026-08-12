@@ -294,6 +294,7 @@ const allMenuItems: PermissionAwareItem[] = [
       },
       { key: '/users', icon: <UserOutlined />, label: '用户管理', permission: 'users' },
       { key: '/roles', icon: <SafetyOutlined />, label: '角色管理', permission: 'roles' },
+      { key: '/permissions', icon: <KeyOutlined />, label: '权限管理', permission: 'permissions' },
       { key: '/audit', icon: <AuditOutlined />, label: '审计日志', permission: 'audit' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
       { key: '/basicdata/data-supply', icon: <ApiOutlined />, label: '数据供给', permission: 'basicdata.data_supply' },
@@ -496,6 +497,7 @@ const pathToPermission: Record<string, string> = {
   '/roles': 'roles',
   '/audit': 'audit',
   '/sync-config': 'settings',
+  '/permissions': 'permissions',
   '/basicdata/customers': 'basicdata.data',
   '/basicdata/suppliers': 'basicdata.data',
   '/basicdata/materials': 'basicdata.data',
@@ -516,6 +518,7 @@ const pathToPermission: Record<string, string> = {
   '/purchase/price-change/new': 'purchase.price_change',
   '/purchase/price-change/pending': 'purchase.price_change.pending',
   '/purchase/price-change/config': 'purchase.price_change.config',
+  '/finance/subject-balances': 'finance.data',
 }
 
 function getRequiredPermission(pathname: string, dynamicMap?: Record<string, string>): string | undefined {

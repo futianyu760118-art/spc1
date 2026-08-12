@@ -87,7 +87,7 @@ async def list_customers(
     customer_level: Optional[str] = Query(None, description="客户等级筛选，逗号分隔"),
     status: Optional[str] = Query(None, description="状态筛选，逗号分隔"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))
+    current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "read"))
 ):
     """查询客户列表（分页+排序+筛选）"""
     SORTABLE = {
@@ -129,7 +129,7 @@ async def get_customer(customer_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/customers", response_model=CustomerOut)
-async def create_customer(customer: CustomerCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
+async def create_customer(customer: CustomerCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "create"))):
     """创建客户"""
     # 检查编码唯一性
     result = await db.execute(select(Customer).filter(Customer.customer_code == customer.customer_code))
@@ -147,7 +147,7 @@ async def create_customer(customer: CustomerCreate, db: AsyncSession = Depends(g
 
 
 @router.put("/customers/{customer_id}", response_model=CustomerOut)
-async def update_customer(customer_id: int, customer: CustomerUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_customer(customer_id: int, customer: CustomerUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "update"))):
     """更新客户"""
     result = await db.execute(select(Customer).filter(Customer.id == customer_id))
     db_item = result.scalar_one_or_none()
@@ -164,7 +164,7 @@ async def update_customer(customer_id: int, customer: CustomerUpdate, db: AsyncS
 
 
 @router.delete("/customers/{customer_id}")
-async def delete_customer(customer_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
+async def delete_customer(customer_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "delete"))):
     """删除客户"""
     result = await db.execute(select(Customer).filter(Customer.id == customer_id))
     db_item = result.scalar_one_or_none()
@@ -188,7 +188,7 @@ async def list_suppliers(
     supplier_type: Optional[str] = Query(None, description="供应商类型筛选，逗号分隔"),
     status: Optional[str] = Query(None, description="状态筛选，逗号分隔"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))
+    current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "read"))
 ):
     """查询供应商列表（分页+排序+筛选）"""
     SORTABLE = {
@@ -230,7 +230,7 @@ async def get_supplier(supplier_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/suppliers", response_model=SupplierOut)
-async def create_supplier(supplier: SupplierCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
+async def create_supplier(supplier: SupplierCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "create"))):
     """创建供应商"""
     result = await db.execute(select(Supplier).filter(Supplier.supplier_code == supplier.supplier_code))
     existing = result.scalar_one_or_none()
@@ -247,7 +247,7 @@ async def create_supplier(supplier: SupplierCreate, db: AsyncSession = Depends(g
 
 
 @router.put("/suppliers/{supplier_id}", response_model=SupplierOut)
-async def update_supplier(supplier_id: int, supplier: SupplierUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
+async def update_supplier(supplier_id: int, supplier: SupplierUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "update"))):
     """更新供应商"""
     result = await db.execute(select(Supplier).filter(Supplier.id == supplier_id))
     db_item = result.scalar_one_or_none()
@@ -264,7 +264,7 @@ async def update_supplier(supplier_id: int, supplier: SupplierUpdate, db: AsyncS
 
 
 @router.delete("/suppliers/{supplier_id}")
-async def delete_supplier(supplier_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
+async def delete_supplier(supplier_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "delete"))):
     """删除供应商"""
     result = await db.execute(select(Supplier).filter(Supplier.id == supplier_id))
     db_item = result.scalar_one_or_none()
@@ -322,7 +322,7 @@ async def list_materials(
     material_type: Optional[str] = Query(None, description="物料分类筛选，逗号分隔"),
     status: Optional[str] = Query(None, description="状态筛选，逗号分隔"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))
+    current_user: dict = Depends(PermissionChecker("basicdata.data.materials", "read"))
 ):
     """查询物料列表（分页+排序+筛选, 默认排除已删除）"""
     SORTABLE = {
@@ -370,7 +370,7 @@ async def get_material(erp_material_id: int, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/materials", response_model=MaterialOut)
-async def create_material(material: MaterialCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+async def create_material(material: MaterialCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.materials", "create"))):
     """创建物料"""
     result = await db.execute(select(Material).filter(Material.erp_material_id == material.erp_material_id))
     existing = result.scalar_one_or_none()
@@ -387,7 +387,7 @@ async def create_material(material: MaterialCreate, db: AsyncSession = Depends(g
 
 
 @router.put("/materials/{erp_material_id}", response_model=MaterialOut)
-async def update_material(erp_material_id: int, material: MaterialUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_material(erp_material_id: int, material: MaterialUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.materials", "update"))):
     """更新物料"""
     result = await db.execute(select(Material).filter(Material.erp_material_id == erp_material_id))
     db_item = result.scalar_one_or_none()
@@ -404,7 +404,7 @@ async def update_material(erp_material_id: int, material: MaterialUpdate, db: As
 
 
 @router.delete("/materials/{erp_material_id}")
-async def delete_material(erp_material_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+async def delete_material(erp_material_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.materials", "delete"))):
     """逻辑删除物料"""
     result = await db.execute(
         select(Material).filter(Material.erp_material_id == erp_material_id, Material.is_deleted == 0)
@@ -427,7 +427,8 @@ async def list_skus(
     keyword: Optional[str] = Query(None, description="搜索编码/名称"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "read"))
 ):
     """查询SKU列表（分页+排序+筛选）"""
     SORTABLE = {
@@ -460,7 +461,7 @@ async def get_sku(sku_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/skus", response_model=SKUOut)
-async def create_sku(sku: SKUCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+async def create_sku(sku: SKUCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "create"))):
     """创建SKU"""
     result = await db.execute(select(SKU).filter(SKU.sku_code == sku.sku_code))
     existing = result.scalar_one_or_none()
@@ -477,7 +478,7 @@ async def create_sku(sku: SKUCreate, db: AsyncSession = Depends(get_db), current
 
 
 @router.put("/skus/{sku_id}", response_model=SKUOut)
-async def update_sku(sku_id: int, sku: SKUUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_sku(sku_id: int, sku: SKUUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "update"))):
     """更新SKU"""
     result = await db.execute(select(SKU).filter(SKU.id == sku_id))
     db_item = result.scalar_one_or_none()
@@ -494,7 +495,7 @@ async def update_sku(sku_id: int, sku: SKUUpdate, db: AsyncSession = Depends(get
 
 
 @router.delete("/skus/{sku_id}")
-async def delete_sku(sku_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+async def delete_sku(sku_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "delete"))):
     """删除SKU"""
     result = await db.execute(select(SKU).filter(SKU.id == sku_id))
     db_item = result.scalar_one_or_none()
@@ -515,7 +516,8 @@ async def list_products(
     keyword: Optional[str] = Query(None, description="搜索编码"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.products", "read"))
 ):
     """查询产品列表（分页+排序+筛选）"""
     SORTABLE = {
@@ -548,7 +550,7 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/products", response_model=ProductOut)
-async def create_product(product: ProductCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+async def create_product(product: ProductCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.products", "create"))):
     """创建产品"""
     result = await db.execute(select(Product).filter(Product.product_code == product.product_code))
     existing = result.scalar_one_or_none()
@@ -565,7 +567,7 @@ async def create_product(product: ProductCreate, db: AsyncSession = Depends(get_
 
 
 @router.put("/products/{product_id}", response_model=ProductOut)
-async def update_product(product_id: int, product: ProductUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_product(product_id: int, product: ProductUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.products", "update"))):
     """更新产品"""
     result = await db.execute(select(Product).filter(Product.id == product_id))
     db_item = result.scalar_one_or_none()
@@ -582,7 +584,7 @@ async def update_product(product_id: int, product: ProductUpdate, db: AsyncSessi
 
 
 @router.delete("/products/{product_id}")
-async def delete_product(product_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+async def delete_product(product_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.products", "delete"))):
     """删除产品"""
     result = await db.execute(select(Product).filter(Product.id == product_id))
     db_item = result.scalar_one_or_none()
@@ -605,7 +607,8 @@ async def list_warehouses(
     sort_order: Optional[str] = Query(None),
     wh_type: Optional[str] = Query(None, description="仓库类型筛选，逗号分隔"),
     is_enabled: Optional[str] = Query(None, description="启用状态筛选，逗号分隔"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "read"))
 ):
     """查询仓库列表（分页+排序+筛选）"""
     SORTABLE = {
@@ -646,7 +649,7 @@ async def get_warehouse(warehouse_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/warehouses", response_model=WarehouseOut)
-async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "create"))):
     """创建仓库"""
     result = await db.execute(select(Warehouse).filter(Warehouse.wh_code == warehouse.wh_code))
     existing = result.scalar_one_or_none()
@@ -663,7 +666,7 @@ async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depend
 
 
 @router.put("/warehouses/{warehouse_id}", response_model=WarehouseOut)
-async def update_warehouse(warehouse_id: int, warehouse: WarehouseUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_warehouse(warehouse_id: int, warehouse: WarehouseUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "update"))):
     """更新仓库"""
     result = await db.execute(select(Warehouse).filter(Warehouse.id == warehouse_id))
     db_item = result.scalar_one_or_none()
@@ -680,7 +683,7 @@ async def update_warehouse(warehouse_id: int, warehouse: WarehouseUpdate, db: As
 
 
 @router.delete("/warehouses/{warehouse_id}")
-async def delete_warehouse(warehouse_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+async def delete_warehouse(warehouse_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "delete"))):
     """删除仓库"""
     result = await db.execute(select(Warehouse).filter(Warehouse.id == warehouse_id))
     db_item = result.scalar_one_or_none()
@@ -703,7 +706,8 @@ async def list_locations(
     sort_order: Optional[str] = Query(None),
     depth: Optional[str] = Query(None, description="层级深度筛选，逗号分隔"),
     detail_flag: Optional[str] = Query(None, description="明细标识筛选，逗号分隔"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "read"))
 ):
     """查询库位列表（分页+排序+筛选）"""
     SORTABLE = {
@@ -750,7 +754,7 @@ async def get_location(location_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/locations", response_model=LocationOut)
-async def create_location(location: LocationCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+async def create_location(location: LocationCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "create"))):
     """创建库位"""
     result = await db.execute(select(Location).filter(Location.location_id == location.location_id))
     existing = result.scalar_one_or_none()
@@ -767,7 +771,7 @@ async def create_location(location: LocationCreate, db: AsyncSession = Depends(g
 
 
 @router.put("/locations/{location_id}", response_model=LocationOut)
-async def update_location(location_id: int, location: LocationUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_location(location_id: int, location: LocationUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "update"))):
     """更新库位"""
     result = await db.execute(select(Location).filter(Location.id == location_id))
     db_item = result.scalar_one_or_none()
@@ -784,7 +788,7 @@ async def update_location(location_id: int, location: LocationUpdate, db: AsyncS
 
 
 @router.delete("/locations/{location_id}")
-async def delete_location(location_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+async def delete_location(location_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "delete"))):
     """删除库位"""
     result = await db.execute(select(Location).filter(Location.id == location_id))
     db_item = result.scalar_one_or_none()
@@ -807,7 +811,8 @@ async def list_processes(
     sort_order: Optional[str] = Query(None),
     process_group: Optional[str] = Query(None, description="工序分组筛选，逗号分隔"),
     is_qc_point: Optional[str] = Query(None, description="质检点筛选，逗号分隔"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "read"))
 ):
     """查询工序列表（分页+排序+筛选）"""
     SORTABLE = {
@@ -849,7 +854,7 @@ async def get_process(process_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/processes", response_model=ProcessOut)
-async def create_process(process: ProcessCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+async def create_process(process: ProcessCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "create"))):
     """创建工序"""
     result = await db.execute(select(Process).filter(Process.process_code == process.process_code))
     existing = result.scalar_one_or_none()
@@ -866,7 +871,7 @@ async def create_process(process: ProcessCreate, db: AsyncSession = Depends(get_
 
 
 @router.put("/processes/{process_id}", response_model=ProcessOut)
-async def update_process(process_id: int, process: ProcessUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_process(process_id: int, process: ProcessUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "update"))):
     """更新工序"""
     result = await db.execute(select(Process).filter(Process.id == process_id))
     db_item = result.scalar_one_or_none()
@@ -883,7 +888,7 @@ async def update_process(process_id: int, process: ProcessUpdate, db: AsyncSessi
 
 
 @router.delete("/processes/{process_id}")
-async def delete_process(process_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+async def delete_process(process_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "delete"))):
     """删除工序"""
     result = await db.execute(select(Process).filter(Process.id == process_id))
     db_item = result.scalar_one_or_none()
@@ -898,7 +903,7 @@ async def delete_process(process_id: int, db: AsyncSession = Depends(get_db), cu
 
 # ── Organization ──
 @router.get("/organizations/tree", response_model=ResponseModel[List[OrganizationTreeNode]])
-async def get_organization_tree(db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
+async def get_organization_tree(db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "read"))):
     """查询组织树形结构（含负责人姓名）"""
     result = await db.execute(
         select(
@@ -959,7 +964,7 @@ async def list_organizations(
     org_type: Optional[str] = Query(None, description="组织类型筛选，逗号分隔"),
     status: Optional[str] = Query(None, description="状态筛选，逗号分隔"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))
+    current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "read"))
 ):
     """查询组织列表（分页+排序+筛选，含负责人姓名）"""
     SORTABLE = {
@@ -995,7 +1000,7 @@ async def list_organizations(
 
 
 @router.get("/organizations/{org_id}", response_model=OrganizationWithLeaderOut)
-async def get_organization(org_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
+async def get_organization(org_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "read"))):
     """查询单个组织（含负责人姓名）"""
     result = await db.execute(
         select(Organization, Employee.emp_name.label('leader_name'))
@@ -1012,7 +1017,7 @@ async def get_organization(org_id: int, db: AsyncSession = Depends(get_db), curr
 
 
 @router.post("/organizations", response_model=OrganizationOut)
-async def create_organization(org: OrganizationCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+async def create_organization(org: OrganizationCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "create"))):
     """创建组织"""
     result = await db.execute(select(Organization).filter(Organization.org_code == org.org_code))
     existing = result.scalar_one_or_none()
@@ -1029,7 +1034,7 @@ async def create_organization(org: OrganizationCreate, db: AsyncSession = Depend
 
 
 @router.put("/organizations/{org_id}", response_model=OrganizationOut)
-async def update_organization(org_id: int, org: OrganizationUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_organization(org_id: int, org: OrganizationUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "update"))):
     """更新组织"""
     result = await db.execute(select(Organization).filter(Organization.id == org_id))
     db_item = result.scalar_one_or_none()
@@ -1046,7 +1051,7 @@ async def update_organization(org_id: int, org: OrganizationUpdate, db: AsyncSes
 
 
 @router.delete("/organizations/{org_id}")
-async def delete_organization(org_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+async def delete_organization(org_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "delete"))):
     """删除组织"""
     result = await db.execute(select(Organization).filter(Organization.id == org_id))
     db_item = result.scalar_one_or_none()
@@ -1069,7 +1074,7 @@ async def list_positions(
     sort_order: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="Comma separated statuses"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read")),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.positions", "read")),
 ):
     SORTABLE = {
         "position_code": Position.position_code,
@@ -1105,7 +1110,7 @@ async def list_positions(
 async def get_position(
     position_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read")),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.positions", "read")),
 ):
     result = await db.execute(select(Position).where(Position.id == position_id))
     position = result.scalar_one_or_none()
@@ -1124,7 +1129,7 @@ async def list_employees(
     status: Optional[str] = Query(None, description="状态筛选，逗号分隔"),
     org_id: Optional[int] = Query(None, description="所属组织ID筛选"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))
+    current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "read"))
 ):
     """查询人员列表（分页+排序+筛选），支持数据权限过滤"""
     SORTABLE = {
@@ -1163,7 +1168,7 @@ async def list_employees(
 
 
 @router.get("/employees/{employee_id}", response_model=EmployeeOut)
-async def get_employee(employee_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))):
+async def get_employee(employee_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "read"))):
     """查询单个人员"""
     Manager = aliased(Employee)
     result = await db.execute(
@@ -1180,7 +1185,7 @@ async def get_employee(employee_id: int, db: AsyncSession = Depends(get_db), cur
 
 
 @router.post("/employees", response_model=EmployeeOut)
-async def create_employee(employee: EmployeeCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "create"))):
+async def create_employee(employee: EmployeeCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "create"))):
     """创建人员"""
     result = await db.execute(select(Employee).filter(Employee.emp_code == employee.emp_code))
     existing = result.scalar_one_or_none()
@@ -1214,7 +1219,7 @@ async def create_employee(employee: EmployeeCreate, db: AsyncSession = Depends(g
 
 
 @router.put("/employees/{employee_id}", response_model=EmployeeOut)
-async def update_employee(employee_id: int, employee: EmployeeUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "update"))):
+async def update_employee(employee_id: int, employee: EmployeeUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "update"))):
     """更新人员"""
     result = await db.execute(select(Employee).filter(Employee.id == employee_id))
     db_item = result.scalar_one_or_none()
@@ -1251,7 +1256,7 @@ async def update_employee(employee_id: int, employee: EmployeeUpdate, db: AsyncS
 
 
 @router.delete("/employees/{employee_id}")
-async def delete_employee(employee_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data", "delete"))):
+async def delete_employee(employee_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "delete"))):
     """删除人员"""
     result = await db.execute(select(Employee).filter(Employee.id == employee_id))
     db_item = result.scalar_one_or_none()
@@ -1274,7 +1279,7 @@ async def get_organization_employees(
     keyword: Optional[str] = Query(None, description="搜索工号/姓名"),
     status: Optional[str] = Query(None, description="状态筛选，逗号分隔"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read"))
+    current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "read"))
 ):
     """查询指定组织下的全部员工列表（支持通过 id 或 oa_org_id 查询，不分页）"""
     SORTABLE = {
@@ -1353,7 +1358,7 @@ async def list_inventory(
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(PermissionChecker("basicdata.data", "read")),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.inventory", "read")),
 ):
     query = select(Inventory)
     count_query = select(func.count()).select_from(Inventory)

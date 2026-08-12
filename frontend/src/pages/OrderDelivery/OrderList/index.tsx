@@ -22,7 +22,6 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import RiskBadge from '../../../components/RiskBadge'
-import StatusTag from '../../../components/StatusTag'
 import RiskDetailModal from '../../../components/RiskDetailModal'
 import { orderApi, riskApi } from '../../../services/api'
 import api from '../../../services/api'
@@ -48,6 +47,8 @@ interface OrderRow {
   department: string | null
   owner: string | null
   status: string
+  erp_id: number | null
+  erp_status: number | null
   risk_level: string | null
   risk_score: number | null
   risk_factors: Record<string, number> | null
@@ -221,12 +222,17 @@ function GreenDateCell({ value }: { value: string | null }) {
   return <span style={{ color: '#16a34a', fontWeight: 500 }}>{formatDate(value)}</span>
 }
 
-function calculateOrderStatus(record: OrderRow) {
-  if (record.delivery_completed_date) return 'closed'
-  if (record.completed_qty && record.order_qty && record.completed_qty >= record.order_qty) return 'in_progress'
-  if (record.assembly_complete_date || record.assembly_start_date || record.first_article_date || record.front_process_date) return 'in_production'
-  if (record.material_ready_date || record.procurement_status || record.shipping_plan || record.planned_start_date) return 'in_progress'
-  return record.status || 'open'
+const ERP_STATUS_MAP: Record<number, { label: string; color: string }> = {
+  0: { label: '未审核', color: 'default' },
+  1: { label: '审核', color: 'blue' },
+  2: { label: '部分关闭', color: 'orange' },
+  3: { label: '已关闭', color: 'green' },
+}
+
+function ErpStatusTag({ value }: { value: number | null }) {
+  if (value == null) return <span style={{ color: '#cbd5e1' }}>-</span>
+  const cfg = ERP_STATUS_MAP[value]
+  return cfg ? <Tag color={cfg.color}>{cfg.label}</Tag> : <Tag>{value}</Tag>
 }
 
 
@@ -568,7 +574,7 @@ export default function OrderList() {
       if (f.risk_level.length > 0) params.risk_level = f.risk_level.join(',')
       if (f.customer_grade.length > 0) params.customer_grade = f.customer_grade.join(',')
       if (f.department.length > 0) params.department = f.department.join(',')
-      if (f.status.length > 0) params.status = f.status.join(',')
+      if (f.status.length > 0) params.erp_status = f.status.join(',')
       if (f.inspection_result.length > 0) params.inspection_result = f.inspection_result.join(',')
       if (f.packaging_status.length > 0) params.packaging_status = f.packaging_status.join(',')
       if (f.procurement_status.length > 0) params.procurement_status = f.procurement_status.join(',')
@@ -728,7 +734,7 @@ export default function OrderList() {
     if (filters.risk_level.length > 0) params.risk_level = filters.risk_level.join(',')
     if (filters.customer_grade.length > 0) params.customer_grade = filters.customer_grade.join(',')
     if (filters.department.length > 0) params.department = filters.department.join(',')
-    if (filters.status.length > 0) params.status = filters.status.join(',')
+    if (filters.status.length > 0) params.erp_status = filters.status.join(',')
     if (filters.inspection_result.length > 0) params.inspection_result = filters.inspection_result.join(',')
     if (filters.packaging_status.length > 0) params.packaging_status = filters.packaging_status.join(',')
     if (filters.procurement_status.length > 0) params.procurement_status = filters.procurement_status.join(',')
@@ -1772,14 +1778,14 @@ export default function OrderList() {
       filteredValue: filters.is_closed,
     },
     {
-      title: '状态', dataIndex: 'status', key: 'status', minWidth: 80,
-      render: (_: string, r: OrderRow) => <StatusTag status={calculateOrderStatus(r)} />,
+      title: '状态', dataIndex: 'erp_status', key: 'status', minWidth: 80,
+      render: (v: number | null) => <ErpStatusTag value={v} />,
       sorter: true,
       filters: [
-        { text: '待处理', value: 'open' },
-        { text: '处理中', value: 'in_progress' },
-        { text: '在产', value: 'in_production' },
-        { text: '已关闭', value: 'closed' },
+        { text: '未审核', value: 0 },
+        { text: '审核', value: 1 },
+        { text: '部分关闭', value: 2 },
+        { text: '已关闭', value: 3 },
       ],
       filterMultiple: true,
     },

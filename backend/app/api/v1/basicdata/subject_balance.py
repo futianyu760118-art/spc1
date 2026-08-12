@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_or_api_key
+from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
 from app.schemas.basicdata.schemas import SubjectBalanceOut, SubjectNodeOut
 from app.models.basicdata.subject_balance import SubjectBalance
@@ -18,6 +19,18 @@ from app.services.basicdata.exposable_registry import exposable
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+async def _finance_read_user(user: dict = Depends(get_current_user_or_api_key)) -> dict:
+    """科目余额读取鉴权：JWT 用户需持有 finance.data.read；admin / api_caller(API key) 放行。"""
+    role = (user or {}).get("role")
+    if role in ("admin", "api_caller"):
+        return user
+    checker = PermissionChecker("finance.data", "read")
+    perms = (user or {}).get("permissions") or {}
+    if not checker._check_one(perms, "finance.data", "read"):
+        raise HTTPException(status_code=403, detail="缺少 finance.data.read 权限")
+    return user
 
 
 _SORTABLE = {
@@ -100,7 +113,7 @@ async def list_subject_balances(
     sort_order: Optional[str] = Query(None, description="asc/desc"),
     response: Response = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user_or_api_key),
+    current_user: dict = Depends(_finance_read_user),
 ):
     used_default = False
     if fiscal_year is None:
@@ -265,7 +278,7 @@ async def list_subject_balance_roots(
     item_name: Optional[str] = Query(None),
     response: Response = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user_or_api_key),
+    current_user: dict = Depends(_finance_read_user),
 ):
     used_default = False
     if fiscal_year is None:
@@ -300,7 +313,7 @@ async def list_subject_balance_children(
     item_name: Optional[str] = Query(None),
     response: Response = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user_or_api_key),
+    current_user: dict = Depends(_finance_read_user),
 ):
     used_default = False
     if fiscal_year is None:
@@ -328,7 +341,7 @@ async def list_subject_balance_children(
 async def get_subject_balance(
     balance_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user_or_api_key),
+    current_user: dict = Depends(_finance_read_user),
 ):
     result = await db.execute(select(SubjectBalance).where(SubjectBalance.id == balance_id))
     item = result.scalar_one_or_none()

@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
-  InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select, Dropdown, Tabs,
+  InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select, Dropdown, Tabs, Typography,
 } from 'antd'
-import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined, DownloadOutlined } from '@ant-design/icons'
+import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined, DownloadOutlined, BarChartOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
 import { useExport } from '@/hooks/useExport'
 import { materialApi, orderApi } from '@/services/api'
@@ -18,7 +18,11 @@ import CountedLedgerPanel from './CountedLedger'
 import OrderProductPickerModal, { OrderProductSelection, OrderProductLine } from './OrderProductPickerModal'
 import CoCheckerPickerModal from './CoCheckerPickerModal'
 import SearchableColumnFilter from './SearchableColumnFilter'
+import { textColumnFilter, textFilterIcon } from './TextColumnFilter'
 import StatsCharts from './components/StatsCharts'
+import { useStockCheckSync } from './useStockCheckSync'
+import ConflictModal, { ConflictDraft } from './ConflictModal'
+import { useAuthStore } from '@/store/auth'
 
 interface StockCheckItem {
   id: number
@@ -49,6 +53,7 @@ interface StockCheckItem {
   checked_by?: string | null
   remark?: string | null
   force_recount?: boolean
+  version?: number | null
 }
 
 interface MyStockCheckItem {
@@ -104,6 +109,7 @@ interface StockCheck {
   checked_materials?: number | null
   total_diff_qty?: number | null
   created_by?: string | null
+  created_by_user_id?: number | null
   checked_by?: string | null
   created_at?: string | null
   completed_at?: string | null
@@ -113,6 +119,7 @@ interface StockCheck {
   co_checkers?: CoChecker[] | null
   can_edit?: boolean | null
   items?: StockCheckItem[]
+  version?: number | null
 }
 
 interface MaterialCandidate {
@@ -185,21 +192,32 @@ export default function StockCheckPage() {
   const [listTab, setListTab] = useState<'all' | 'my' | 'counted'>('all')
   const [dateFrom, setDateFrom] = useState<string>()
   const [dateTo, setDateTo] = useState<string>()
-  const [whFilter, setWhFilter] = useState<string>()
   const [checkTypeFilter, setCheckTypeFilter] = useState<string>('all')
-  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [addPickerOpen, setAddPickerOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [orderPickerOpen, setOrderPickerOpen] = useState(false)
   const [coPickerOpen, setCoPickerOpen] = useState(false)
   const [coPickerIds, setCoPickerIds] = useState<number[]>([])
   const [coSaving, setCoSaving] = useState(false)
+  const [editingItemId, setEditingItemId] = useState<number | null>(null)
+  const [presenceByItem, setPresenceByItem] = useState<Record<number, { user_id: number; name: string; isSelf: boolean }[]>>({})
+  const presenceHeartbeat = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [conflict, setConflict] = useState<{
+    myDraft: ConflictDraft
+    serverVersion: number
+    itemId: number
+    serverItem: Record<string, any> | null
+    serverChangedBy: string | null
+  } | null>(null)
+  const [syncBanner, setSyncBanner] = useState<string | null>(null)
   const [orderProducts, setOrderProducts] = useState<OrderProductLine[]>([])
   const [orderChecks, setOrderChecks] = useState<StockCheck[]>([])
   const [overviewLoading, setOverviewLoading] = useState(false)
   const [progressCollapsed, setProgressCollapsed] = useState(true)
   const [productFilter, setProductFilter] = useState<string>('all')
   const [colWidths, setColWidths] = useState<Record<string, number>>({})
+  const [statsOpen, setStatsOpen] = useState(false)
 
   const { exporting, exportData } = useExport()
   const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx')
@@ -219,11 +237,130 @@ export default function StockCheckPage() {
     }
   }, [])
 
+  const { connected: syncConnected, lastEventAt: syncLastEventAt } = useStockCheckSync({
+    checkId: activeCheck?.id ?? null,
+    onSnapshot: (p) => {
+      setActiveCheck((prev) => (prev ? { ...prev, ...p } : prev))
+      setItems(p.items || [])
+      const map: Record<number, { user_id: number; name: string; isSelf: boolean }[]> = {}
+      const me = useAuthStore.getState().currentUser?.id
+      for (const pr of (p.presence || [])) {
+        if (pr.item_id == null) continue
+        if (me != null && Number(pr.user_id) === Number(me)) continue  // 自己的不显示
+        ;(map[pr.item_id] ||= []).push({ user_id: pr.user_id, name: pr.name || `user#${pr.user_id}`, isSelf: false })
+      }
+      setPresenceByItem(map)
+      setSyncBanner(null)
+    },
+    onItemUpdated: (p) => {
+      // 编辑态保护:正编辑的行不覆盖、不更新 version,强制走 409
+      if (editingItemId === p.item_id) {
+        setSyncBanner(`行 #${p.item_id} 刚被他人修改,保存时会提示对比`)
+        return
+      }
+      setItems((prev) => {
+        const idx = prev.findIndex((it: any) => it.id === p.item_id)
+        if (idx === -1) return prev
+        const next = [...prev]
+        next[idx] = { ...next[idx], ...p.item, version: p.version }
+        return next
+      })
+      setActiveCheck((prev) =>
+        prev
+          ? {
+              ...prev,
+              checked_materials: p.head_aggregates.checked_materials,
+              total_materials: p.head_aggregates.total_materials,
+              total_diff_qty: p.head_aggregates.total_diff_qty,
+            }
+          : prev,
+      )
+    },
+    onStatusChanged: (p) => {
+      setActiveCheck((prev) => (prev ? { ...prev, status: p.status, version: p.head_version } : prev))
+      if (p.status === 'completed' || p.status === 'cancelled') {
+        setSyncBanner(`该盘点单已被 ${p.checked_by || '他人'} ${p.status === 'completed' ? '完成' : '取消'}`)
+      }
+    },
+    onCoCheckersChanged: (p) => {
+      setActiveCheck((prev) =>
+        prev
+          ? {
+              ...prev,
+              version: p.head_version,
+              co_checker_user_ids: p.co_checker_user_ids,
+              co_checkers: p.co_checkers,
+            }
+          : prev,
+      )
+      const me = useAuthStore.getState().currentUser?.id
+      const isCreator = activeCheck?.created_by_user_id === me
+      if (me && !isCreator && !(p.co_checker_user_ids || []).includes(Number(me))) {
+        setSyncBanner('你已被移出共同盘点,刷新后只读')
+      }
+    },
+    onBomRefreshed: () => {
+      if (activeCheck?.id) loadCheck(activeCheck.id)
+      setSyncBanner('BOM 已被刷新,行已重载')
+    },
+    onPresence: (p) => {
+      const me = useAuthStore.getState().currentUser?.id
+      if (me != null && Number(p.user_id) === Number(me)) return  // 自己的不显示
+      console.log('[presence-debug] onPresence 处理:', { payload: p, me })
+      setPresenceByItem((prev) => {
+        const next: Record<number, { user_id: number; name: string; isSelf: boolean }[]> = {}
+        for (const k of Object.keys(prev)) next[Number(k)] = prev[Number(k)].filter((x) => x.user_id !== p.user_id)
+        if (p.item_id != null) {
+          ;(next[p.item_id] ||= []).push({ user_id: p.user_id, name: p.name || `user#${p.user_id}`, isSelf: false })
+        }
+        for (const k of Object.keys(next)) if (next[Number(k)].length === 0) delete next[Number(k)]
+        return next
+      })
+    },
+  })
+
+  // 存在感:聚焦即声明编辑某行(立即广播 + 心跳续命);离开只停心跳,不发 null。
+  // 不发 null 的原因:Ant InputNumber 的 blur/focus 时序不稳定,blur 计时器会误触发,
+  // 把刚发出的 presence 立即清掉,导致对方看不到。改为靠 Redis TTL 60s 自然过期 +
+  // SSE 断开时服务端 finally 兜底清除(关页/导航立即清)。
+  const handleEditingFocus = useCallback((itemId: number) => {
+    setEditingItemId(itemId)
+    const cid = activeCheck?.id
+    if (!cid) { console.log('[presence-debug] focus 跳过: 无 activeCheck'); return }
+    console.log('[presence-debug] focus → 发送 POST presence', { cid, itemId })
+    materialApi.updateStockCheckPresence(cid, itemId)
+      .then(() => console.log('[presence-debug] POST presence 成功', itemId))
+      .catch((e) => console.log('[presence-debug] POST presence 失败', itemId, e?.response?.status, e?.response?.data))
+    if (presenceHeartbeat.current) clearInterval(presenceHeartbeat.current)
+    presenceHeartbeat.current = setInterval(
+      () => materialApi.updateStockCheckPresence(cid, itemId).catch(() => {}),
+      30000,
+    )
+  }, [activeCheck?.id])
+
+  const handleEditingBlur = useCallback(() => {
+    console.log('[presence-debug] blur → 停心跳(不发 null)')
+    setEditingItemId(null)
+    if (presenceHeartbeat.current) { clearInterval(presenceHeartbeat.current); presenceHeartbeat.current = null }
+  }, [])
+
+  // 卸载时清理心跳
+  useEffect(() => {
+    return () => {
+      if (presenceHeartbeat.current) clearInterval(presenceHeartbeat.current)
+    }
+  }, [])
+
   const STATUS_OPTIONS = [
     { text: '待盘点', value: 'open' },
     { text: '进行中', value: 'in_progress' },
     { text: '已完成', value: 'completed' },
     { text: '已取消', value: 'cancelled' },
+  ]
+  const MY_STATUS_OPTIONS = [
+    { text: '待盘点', value: 'open' },
+    { text: '进行中', value: 'in_progress' },
+    { text: '已完成', value: 'completed' },
   ]
 
   const {
@@ -273,9 +410,14 @@ export default function StockCheckPage() {
           sort_order: params.sort_order,
           date_from: dateFrom,
           date_to: dateTo,
-          wh_id: whFilter,
+          wh_id: params.wh_id,
           check_type: checkTypeFilter === 'all' ? undefined : checkTypeFilter,
-          status: params.status ?? (statusFilter === 'all' ? undefined : statusFilter),
+          check_no: params.check_no,
+          order_no: params.order_no,
+          material_code: params.material_code,
+          material_name: params.material_name,
+          spec_model: params.spec_model,
+          status: params.status,
         })
         return { items: res.data?.items || [], total: res.data?.total || 0 }
       } catch (e: any) {
@@ -283,10 +425,20 @@ export default function StockCheckPage() {
         throw e
       }
     },
-    filterToQuery: (filters) => ({
-      status: (filters.status as string[] | undefined)?.join(','),
-    }),
-    extraDeps: [listTab, dateFrom, dateTo, whFilter, checkTypeFilter, statusFilter],
+    filterToQuery: (filters) => {
+      const first = (k: string) => (filters[k] as string[] | undefined)?.[0]
+      const wh = first('wh_name')
+      return {
+        status: (filters.status as string[] | undefined)?.join(','),
+        check_no: first('check_no'),
+        order_no: first('order_no'),
+        material_code: first('material_code'),
+        material_name: first('material_name'),
+        spec_model: first('spec_model'),
+        wh_id: wh,
+      }
+    },
+    extraDeps: [listTab, dateFrom, dateTo, checkTypeFilter],
   })
 
   const statsFilters = useMemo(() => ({
@@ -364,6 +516,38 @@ export default function StockCheckPage() {
       setCreating(false)
     }
   }, [reloadRecentList, setParams, poolRemove])
+
+  const handleAddItemsToCheck = useCallback(async (selected: MaterialCandidate[], source: 'search' | 'pool') => {
+    if (!activeCheck?.id) return
+    setCreating(true)
+    try {
+      const items = selected
+        .filter((s) => s.wh_id !== undefined)
+        .map((s) => ({ material_id: s.erp_material_id, wh_id: s.wh_id ?? null }))
+      const legacyIds = selected.filter((s) => s.wh_id === undefined).map((s) => s.erp_material_id)
+      await materialApi.addStockCheckItems(activeCheck.id, {
+        ...(items.length ? { items } : {}),
+        ...(legacyIds.length ? { material_ids: legacyIds } : {}),
+      })
+      message.success(`已添加 ${selected.length} 条物料`)
+      setAddPickerOpen(false)
+      await loadCheck(activeCheck.id)
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e.message || '添加物料失败')
+    } finally {
+      setCreating(false)
+    }
+  }, [activeCheck?.id, loadCheck])
+
+  const handleRemoveItem = useCallback(async (item: StockCheckItem) => {
+    try {
+      await materialApi.removeStockCheckItem(item.id)
+      message.success('已移除该明细')
+      await loadCheck(activeCheck?.id as number)
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e.message || '移除失败')
+    }
+  }, [activeCheck?.id, loadCheck])
 
   const handleSearch = useCallback(() => {
     if (searchText.trim()) {
@@ -487,15 +671,49 @@ export default function StockCheckPage() {
         is_checked: item.is_checked ?? 0,
         remark: item.remark ?? undefined,
         force_recount: item.force_recount || undefined,
+        expected_version: item.version ?? undefined,
       })
       const updated: StockCheckItem = res.data
-      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated, force_recount: undefined } : p))
+      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated, version: updated.version, force_recount: undefined } : p))
       const headRes: any = await materialApi.getStockCheck(updated.check_id)
       setActiveCheck(prev => prev ? { ...prev, ...headRes.data } : headRes.data)
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e.message || '保存失败')
+      const code = e?.response?.data?.detail?.code ?? e?.response?.data?.code
+      if (code === 409) {
+        const detail = e?.response?.data?.detail?.data ?? e?.response?.data?.data ?? {}
+        setConflict({
+          myDraft: {
+            item_id: item.id,
+            material_code: item.material_code,
+            material_name: item.material_name,
+            actual_qty: item.actual_qty,
+            is_checked: item.is_checked,
+            remark: item.remark,
+          },
+          serverVersion: detail.server_version,
+          itemId: item.id,
+          serverItem: detail.server_item ?? null,
+          serverChangedBy: detail.server_item?.counted_by ?? detail.server_item?.checked_by ?? null,
+        })
+      } else {
+        message.error(e?.response?.data?.detail || e?.response?.data?.message || e.message || '保存失败')
+      }
     }
   }, [])
+
+  const handleConflictOverwrite = async () => {
+    if (!conflict) return
+    // 先按 itemId 重拉最新行,再用新 version + 用户的草稿重试一次
+    if (activeCheck?.id) {
+      await loadCheck(activeCheck.id)
+    }
+    setConflict(null)
+  }
+
+  const handleConflictDiscard = () => {
+    setConflict(null)
+    if (activeCheck?.id) loadCheck(activeCheck.id)
+  }
 
   const saveAll = useCallback(async () => {
     if (!activeCheck) return
@@ -533,17 +751,23 @@ export default function StockCheckPage() {
       content: '完结后所有行将不可再修改,确认继续?',
       onOk: async () => {
         try {
-          const res: any = await materialApi.completeStockCheck(activeCheck.id)
+          const res: any = await materialApi.completeStockCheck(activeCheck.id, activeCheck.version ?? undefined)
           setActiveCheck(res.data)
           setItems(res.data.items || [])
           message.success('已完结')
           if (orderNo) loadOrderOverview(orderNo)
         } catch (e: any) {
-          message.error(e?.response?.data?.detail || e.message || '完结失败')
+          const code = e?.response?.data?.detail?.code ?? e?.response?.data?.code
+          if (code === 409) {
+            message.warning('盘点单状态刚被他人修改,正在刷新')
+            loadCheck(activeCheck.id)
+          } else {
+            message.error(e?.response?.data?.detail || e.message || '完结失败')
+          }
         }
       },
     })
-  }, [activeCheck, items, orderNo, loadOrderOverview])
+  }, [activeCheck, items, orderNo, loadOrderOverview, loadCheck])
 
   const handleCancel = useCallback(async () => {
     if (!activeCheck) return
@@ -553,16 +777,22 @@ export default function StockCheckPage() {
       okType: 'danger',
       onOk: async () => {
         try {
-          const res: any = await materialApi.cancelStockCheck(activeCheck.id)
+          const res: any = await materialApi.cancelStockCheck(activeCheck.id, activeCheck.version ?? undefined)
           setActiveCheck(res.data)
           message.success('已取消')
           if (orderNo) loadOrderOverview(orderNo)
         } catch (e: any) {
-          message.error(e?.response?.data?.detail || e.message || '取消失败')
+          const code = e?.response?.data?.detail?.code ?? e?.response?.data?.code
+          if (code === 409) {
+            message.warning('盘点单状态刚被他人修改,正在刷新')
+            loadCheck(activeCheck.id)
+          } else {
+            message.error(e?.response?.data?.detail || e.message || '取消失败')
+          }
         }
       },
     })
-  }, [activeCheck, orderNo, loadOrderOverview])
+  }, [activeCheck, orderNo, loadOrderOverview, loadCheck])
 
   const goBack = useCallback(() => {
     setActiveCheck(null)
@@ -599,7 +829,7 @@ export default function StockCheckPage() {
     if (!activeCheck) return
     setCoSaving(true)
     try {
-      await materialApi.updateStockCheckCoCheckers(activeCheck.id, ids)
+      await materialApi.updateStockCheckCoCheckers(activeCheck.id, ids, activeCheck.version ?? undefined)
       setCoPickerOpen(false)
       await loadCheck(activeCheck.id)
       message.success('已更新共同盘点人')
@@ -750,6 +980,8 @@ export default function StockCheckPage() {
               style={{ width: 100 }}
               disabled={readonly || !!r.recent_checked_check_no}
               value={r.actual_qty != null ? Number(r.actual_qty) : null}
+              onFocus={() => handleEditingFocus(r.id)}
+              onBlur={() => handleEditingBlur()}
               onChange={(v) => {
                 const actual = v == null ? null : Number(v)
                 const diff = actual != null && r.system_qty != null ? actual - Number(r.system_qty) : null
@@ -776,6 +1008,17 @@ export default function StockCheckPage() {
                   }
                 }}
               >重盘</Checkbox>
+            )}
+            {(presenceByItem[r.id] || []).length > 0 && (
+              <Tooltip title={`${(presenceByItem[r.id] || []).map((x) => x.name).join('、')} 正在编辑此行`}>
+                <span style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                  {(presenceByItem[r.id] || []).map((x, i) => (
+                    <span key={x.user_id} style={{ color: x.isSelf ? '#2563eb' : '#d97706', marginLeft: i > 0 ? 4 : 0 }}>
+                      👤{x.name}
+                    </span>
+                  ))}
+                </span>
+              </Tooltip>
             )}
           </Space>
         ),
@@ -825,6 +1068,11 @@ export default function StockCheckPage() {
         title: '操作', key: 'op', width: 200, fixed: 'right' as const,
         ...resizeCol('op', 200),
         render: (_: any, r: StockCheckItem) => {
+          const canRemove = !readonly
+            && activeCheck?.check_type === 'manual'
+            && (activeCheck.status === 'in_progress' || activeCheck.status === 'open')
+            && r.is_checked === 0
+            && r.actual_qty == null
           return (
             <Space size="small">
               <Button type="link" size="small" icon={<SaveOutlined />}
@@ -836,12 +1084,18 @@ export default function StockCheckPage() {
                   onClick={() => openMaterialHistory(r)}
                 />
               </Tooltip>
+              {canRemove && (
+                <Tooltip title="移除该明细(已录入数据的行禁删)">
+                  <Button type="link" size="small" danger icon={<DeleteOutlined />}
+                    onClick={() => handleRemoveItem(r)}>删除</Button>
+                </Tooltip>
+              )}
             </Space>
           )
         },
       },
     ]
-  }, [items, readonly, saveItem, updateItem, openMaterialHistory, colWidths, activeCheck])
+  }, [items, readonly, saveItem, updateItem, openMaterialHistory, colWidths, activeCheck, presenceByItem, handleRemoveItem])
 
   // ===== 按产品筛选盘点明细 =====
   // 切到不同盘点单时重置过滤器
@@ -922,6 +1176,11 @@ export default function StockCheckPage() {
             </Badge>
           </span>
         </span>
+        <Button
+          type={statsOpen ? 'primary' : 'default'}
+          icon={<BarChartOutlined />}
+          onClick={() => setStatsOpen((v) => !v)}
+        >统计图表</Button>
         <Popover
           trigger="click"
           placement="bottomRight"
@@ -1003,8 +1262,8 @@ export default function StockCheckPage() {
   return (
     <div>
       {renderSearch()}
+      {statsOpen && !activeCheck && <StatsCharts filters={statsFilters} />}
       {renderProductProgress()}
-      {!activeCheck && <StatsCharts filters={statsFilters} />}
       {!activeCheck ? (
         <div className="card-modern" style={{ padding: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
@@ -1037,29 +1296,6 @@ export default function StockCheckPage() {
               {listTab === 'counted' ? null : (
                 <>
                   {listTab === 'all' ? recentSearchInput : myItemsSearchInput}
-                  {listTab === 'my' && (
-                    <Input.Search
-                      placeholder="输入仓库名称或ID"
-                      allowClear
-                      defaultValue={whFilter}
-                      onSearch={(value) => setWhFilter(value.trim() || undefined)}
-                      onChange={(e) => {
-                        if (!e.target.value) setWhFilter(undefined)
-                      }}
-                      style={{ width: 180 }}
-                    />
-                  )}
-                  {listTab === 'my' && (
-                    <Select
-                      value={statusFilter}
-                      onChange={setStatusFilter}
-                      style={{ width: 120 }}
-                      options={[
-                        { label: '全部状态', value: 'all' },
-                        ...STATUS_OPTIONS.map((option) => ({ label: option.text, value: option.value })),
-                      ]}
-                    />
-                  )}
                   <DatePicker.RangePicker
                     onChange={(d) => {
                       setDateFrom(d?.[0]?.format('YYYY-MM-DD'))
@@ -1131,15 +1367,44 @@ export default function StockCheckPage() {
               scroll={{ x: 1600 }}
               columns={[
                 { title: '盘点时间', dataIndex: 'counted_at', width: 170, sorter: true, render: (v: any) => v ? formatDateTime(v) : '-' },
-                { title: '盘点单号', dataIndex: 'check_no', width: 180, sorter: true },
-                { title: '订单号', dataIndex: 'order_no', width: 180, sorter: true, render: (v: any) => v || '-' },
-                { title: '物料编码', dataIndex: 'material_code', width: 150, sorter: true },
-                { title: '物料名称', dataIndex: 'material_name', width: 200, sorter: true, ellipsis: true },
-                { title: '规格', dataIndex: 'spec_model', width: 150, sorter: true, ellipsis: true, render: (v: any) => v || '-' },
+                {
+                  title: '盘点单号', dataIndex: 'check_no', key: 'check_no', width: 180, sorter: true,
+                  filterDropdown: textColumnFilter({ placeholder: '输入盘点单号' }),
+                  filterIcon: textFilterIcon,
+                  filteredValue: (myItemsFilters.check_no as string[] | undefined) ?? null,
+                },
+                {
+                  title: '订单号', dataIndex: 'order_no', key: 'order_no', width: 180, sorter: true,
+                  render: (v: any) => v || '-',
+                  filterDropdown: textColumnFilter({ placeholder: '输入订单号' }),
+                  filterIcon: textFilterIcon,
+                  filteredValue: (myItemsFilters.order_no as string[] | undefined) ?? null,
+                },
+                {
+                  title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 150, sorter: true,
+                  filterDropdown: textColumnFilter({ placeholder: '输入物料编码' }),
+                  filterIcon: textFilterIcon,
+                  filteredValue: (myItemsFilters.material_code as string[] | undefined) ?? null,
+                },
+                {
+                  title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 200, sorter: true, ellipsis: true,
+                  filterDropdown: textColumnFilter({ placeholder: '输入物料名称' }),
+                  filterIcon: textFilterIcon,
+                  filteredValue: (myItemsFilters.material_name as string[] | undefined) ?? null,
+                },
+                {
+                  title: '规格', dataIndex: 'spec_model', key: 'spec_model', width: 150, sorter: true, ellipsis: true, render: (v: any) => v || '-',
+                  filterDropdown: textColumnFilter({ placeholder: '输入规格型号' }),
+                  filterIcon: textFilterIcon,
+                  filteredValue: (myItemsFilters.spec_model as string[] | undefined) ?? null,
+                },
                 { title: '单位', dataIndex: 'unit', width: 70, render: (v: any) => v || '-' },
                 {
-                  title: '仓库', dataIndex: 'wh_name', width: 160, sorter: true, ellipsis: true,
+                  title: '仓库', dataIndex: 'wh_name', key: 'wh_name', width: 160, sorter: true, ellipsis: true,
                   render: (v: any, r: MyStockCheckItem) => v || r.wh_code || '-',
+                  filterDropdown: textColumnFilter({ placeholder: '输入仓库名称或ID' }),
+                  filterIcon: textFilterIcon,
+                  filteredValue: (myItemsFilters.wh_name as string[] | undefined) ?? null,
                 },
                 {
                   title: '库存快照', dataIndex: 'system_qty', width: 110, sorter: true, align: 'right' as const,
@@ -1159,8 +1424,9 @@ export default function StockCheckPage() {
                   },
                 },
                 {
-                  title: '盘点单状态', dataIndex: 'status', width: 120, sorter: true,
-                  filters: STATUS_OPTIONS,
+                  title: '盘点单状态', dataIndex: 'status', key: 'status', width: 120, sorter: true,
+                  filters: MY_STATUS_OPTIONS,
+                  filterMultiple: true,
                   filteredValue: (myItemsFilters.status as string[] | undefined) ?? null,
                   render: (v: any) => <Tag color={STATUS_MAP[v]?.color || 'default'}>{STATUS_MAP[v]?.label || v}</Tag>,
                 },
@@ -1173,6 +1439,12 @@ export default function StockCheckPage() {
       ) : (
         <div>
           <div className="card-modern" style={{ padding: 16, marginBottom: 16 }}>
+            <Space style={{ marginBottom: 8 }}>
+              <Tooltip title={syncLastEventAt ? `上次同步: ${new Date(syncLastEventAt).toLocaleTimeString()}` : '未收到事件'}>
+                <Badge status={syncConnected ? 'success' : 'default'} text={syncConnected ? '已同步(实时)' : '已断开,重连中…'} />
+              </Tooltip>
+              {syncBanner && <Typography.Text type="warning">{syncBanner}</Typography.Text>}
+            </Space>
             <Space style={{ marginBottom: 12 }} wrap>
               <Button icon={<ArrowLeftOutlined />} onClick={goBack}>返回</Button>
               <h2 style={{ margin: 0 }}>{activeCheck.check_no}</h2>
@@ -1198,6 +1470,9 @@ export default function StockCheckPage() {
               )}
               {!readonly && activeCheck.check_type === 'order' && (activeCheck.status === 'in_progress' || activeCheck.status === 'open') && (
                 <Button type="link" size="small" onClick={handleRefreshBom}>补入子BOM物料</Button>
+              )}
+              {!readonly && activeCheck.check_type === 'manual' && (activeCheck.status === 'in_progress' || activeCheck.status === 'open') && (
+                <Button type="link" size="small" icon={<PlusOutlined />} onClick={() => setAddPickerOpen(true)}>添加物料</Button>
               )}
             </div>
             <Row gutter={12}>
@@ -1326,6 +1601,12 @@ export default function StockCheckPage() {
         onConfirm={handleCreateFromMaterials}
         confirmLoading={creating}
       />
+      <MaterialPickerModal
+        open={addPickerOpen}
+        onCancel={() => setAddPickerOpen(false)}
+        onConfirm={handleAddItemsToCheck}
+        confirmLoading={creating}
+      />
       <OrderProductPickerModal
         open={orderPickerOpen}
         orderNo={orderNo}
@@ -1340,6 +1621,15 @@ export default function StockCheckPage() {
         onCancel={() => setCoPickerOpen(false)}
         onSave={handleSaveCoCheckers}
         saveLoading={coSaving}
+      />
+      <ConflictModal
+        open={!!conflict}
+        myDraft={conflict?.myDraft ?? null}
+        serverVersion={conflict?.serverVersion ?? null}
+        serverItem={conflict?.serverItem ?? null}
+        serverChangedBy={conflict?.serverChangedBy ?? null}
+        onOverwrite={handleConflictOverwrite}
+        onDiscard={handleConflictDiscard}
       />
     </div>
   )

@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect } from 'react'
 import { Table, Button, Input, message, Space, Row, Col, Statistic } from 'antd'
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import api from '../../services/api'
+import PermButton from '../../components/PermButton'
+import { useAuthStore } from '../../store/auth'
 
 interface InventoryItem {
   id: number
@@ -30,6 +32,8 @@ export default function Inventory() {
   const [keyword, setKeyword] = useState('')
   const [totals, setTotals] = useState({ onHand: 0, locked: 0, balance: 0, inTransit: 0, endingBalance: 0 })
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canRead = hasPermission('basicdata.data.inventory', 'read')
 
   const fetchData = useCallback(async (page = 1, pageSize = 20) => {
     setLoading(true)

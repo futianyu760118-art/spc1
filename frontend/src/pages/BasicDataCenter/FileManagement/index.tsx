@@ -5,6 +5,8 @@ import {
 } from 'antd'
 import { ReloadOutlined, SearchOutlined, DeleteOutlined, ClearOutlined } from '@ant-design/icons'
 import { fileApi } from '../../../services/api'
+import PermButton from '../../../components/PermButton'
+import { useAuthStore } from '../../../store/auth'
 
 const namespaceLabel: Record<string, string> = {
   feedback: '问题反馈',
@@ -33,6 +35,9 @@ export default function FileManagement() {
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const [cleanupDays, setCleanupDays] = useState(7)
   const [cleaning, setCleaning] = useState(false)
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canCreate = hasPermission('basicdata.files', 'create')
+  const canDelete = hasPermission('basicdata.files', 'delete')
 
   const fetchData = async (page = pagination.current, pageSize = pagination.pageSize, kw?: string) => {
     setLoading(true)
@@ -165,8 +170,8 @@ export default function FileManagement() {
       title: '操作', key: 'actions', width: 100, fixed: 'right',
       render: (_: any, r: any) => (
         <Space size="small">
-          <Popconfirm title="确定删除？删除后文件不可恢复" onConfirm={() => handleDelete(r.id)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          <Popconfirm title="确定删除？删除后文件不可恢复" onConfirm={() => handleDelete(r.id)} disabled={!canDelete}>
+            <PermButton permResource="basicdata.files" permAction="delete" type="link" size="small" danger icon={<DeleteOutlined />}>删除</PermButton>
           </Popconfirm>
         </Space>
       ),
@@ -196,7 +201,7 @@ export default function FileManagement() {
           </Col>
           <Col>
             <Space>
-              <Button icon={<ClearOutlined />} onClick={() => setCleanupOpen(true)}>清理孤儿</Button>
+              <PermButton permResource="basicdata.files" permAction="delete" icon={<ClearOutlined />} onClick={() => setCleanupOpen(true)}>清理孤儿</PermButton>
               <Button icon={<ReloadOutlined />} onClick={() => { fetchData(); fetchStats() }}>刷新</Button>
             </Space>
           </Col>

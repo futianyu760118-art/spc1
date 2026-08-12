@@ -42,6 +42,7 @@ import {
     FileManagement,
     AnnouncementManagement,
     RoleManagement,
+    PermissionManagement,
     DataSupply
 } from './pages/BasicDataCenter'
 import WritebackConfig from './pages/BasicDataCenter/WritebackConfig'
@@ -223,6 +224,7 @@ export default function App() {
                             <Route path="work-instructions" element={<WorkInstructions/>}/>
                             <Route path="users" element={<UserManagement/>}/>
                             <Route path="roles" element={<RoleManagement/>}/>
+                            <Route path="permissions" element={<PermissionManagement/>}/>
                             <Route path="audit" element={<AuditLog/>}/>
                             <Route path="sync-config" element={<SyncSqlConfig/>}/>
                             <Route path="writeback-config" element={<WritebackConfig/>}/>

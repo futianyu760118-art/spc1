@@ -5,6 +5,8 @@ import {
 } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import api from '../../services/api'
+import PermButton from '../../components/PermButton'
+import { useAuthStore } from '../../store/auth'
 
 const { TextArea } = Input
 
@@ -31,6 +33,9 @@ export default function WritebackConfig() {
   const [testResult, setTestResult] = useState<any>(null)
   const [testingType, setTestingType] = useState<string | null>(null)
   const [form] = Form.useForm()
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canCreate = hasPermission('writeback.config', 'create')
+  const canUpdate = hasPermission('writeback.config', 'update')
 
   const fetchData = async () => {
     setLoading(true)
@@ -178,7 +183,7 @@ export default function WritebackConfig() {
       width: 140,
       render: (_: any, record: WritebackConfigItem) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+          <PermButton permResource="writeback.config" permAction="update" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</PermButton>
           <Button
             size="small"
             icon={<PlayCircleOutlined />}
@@ -198,7 +203,7 @@ export default function WritebackConfig() {
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <Space>
             <Button onClick={fetchData}>刷新</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加配置</Button>
+            <PermButton permResource="writeback.config" permAction="create" type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加配置</PermButton>
           </Space>
         </div>
       </div>

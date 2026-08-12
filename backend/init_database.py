@@ -140,6 +140,8 @@ class DatabaseInitializer:
                 "audit_date": "DATE",
                 "owner": "VARCHAR(64)",
                 "status": "VARCHAR(32) NOT NULL DEFAULT 'open'",
+                "erp_id": "INTEGER",
+                "erp_status": "INTEGER",
                 "risk_level": "VARCHAR(16)",
                 "extra_data": "JSONB",
                 "data_source": "VARCHAR(32)",
@@ -330,6 +332,7 @@ class DatabaseInitializer:
                 "covered_products": "JSONB",
                 "co_checker_user_ids": "JSONB",
                 "created_by_user_id": "BIGINT",
+                "version": "INTEGER NOT NULL DEFAULT 0",
             },
             "scm_inventory_check_item": {
                 "level": "INTEGER",
@@ -342,6 +345,7 @@ class DatabaseInitializer:
                 "counted_by_user_id": "BIGINT",
                 "counted_by": "VARCHAR(100)",
                 "counted_at": "TIMESTAMP",
+                "version": "INTEGER NOT NULL DEFAULT 0",
             },
             "production_daily_report": {
                 "oa_detail_id": "INTEGER",
@@ -351,6 +355,9 @@ class DatabaseInitializer:
             },
             "share_link": {
                 "reason": "VARCHAR(256)",
+            },
+            "sys_user": {
+                "wecom_user_id": "VARCHAR(64)",
             },
         }
         # 删除已废弃的列
@@ -387,6 +394,18 @@ class DatabaseInitializer:
                 except Exception as e:
                     print(f"  Drop {table}.{col} skipped: {e}")
         print(f"Column migration completed ({added} statements executed)")
+
+        # sys_user.wecom_user_id 部分唯一索引：每个企业微信 userid 至多绑定一个系统用户；
+        # WHERE ... IS NOT NULL 使未绑定的用户（NULL）互不冲突。
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_sys_user_wecom_user_id "
+                    "ON sys_user (wecom_user_id) WHERE wecom_user_id IS NOT NULL"
+                ))
+            print("  sys_user.wecom_user_id unique index ensured")
+        except Exception as e:
+            print(f"  sys_user.wecom_user_id unique index skipped: {e}")
 
         # purchase_invoice.invoice_no 扩容: K3 ERP FBillNo 可能含多号拼接
         try:

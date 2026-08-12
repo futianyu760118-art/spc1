@@ -104,9 +104,12 @@ export const authApi = {
 }
 
 export const permissionApi = {
-  tree: () => api.get('/permissions/tree'),
-  list: () => api.get('/permissions'),
+  tree: (includeInactive = false) => api.get('/permissions/tree', { params: { include_inactive: includeInactive } }),
+  list: (includeInactive = false) => api.get('/permissions', { params: { include_inactive: includeInactive } }),
   routeMap: () => api.get('/permissions/route-map'),
+  create: (data: Record<string, any>) => api.post('/permissions', data),
+  update: (code: string, data: Record<string, any>) => api.put(`/permissions/${code}`, data),
+  remove: (code: string) => api.delete(`/permissions/${code}`),
 }
 
 // ============ 供应链驾驶舱 ============
@@ -241,14 +244,28 @@ export const materialApi = {
     api.get(`/materials/stock-check/${checkId}`),
   getStockCheckItems: (checkId: number, params: Record<string, any> = {}) =>
     api.get(`/materials/stock-check/${checkId}/items`, { params }),
-  updateStockCheckItem: (itemId: number, data: { actual_qty?: number | null; is_checked?: number; remark?: string; force_recount?: boolean }) =>
-    api.put(`/materials/stock-check/items/${itemId}`, data),
-  batchUpdateStockCheckItems: (checkId: number, items: Array<{ id: number; actual_qty?: number | null; is_checked?: number; remark?: string; force_recount?: boolean }>) =>
-    api.post('/materials/stock-check/items/batch', { check_id: checkId, items }),
-  completeStockCheck: (checkId: number) =>
-    api.post(`/materials/stock-check/${checkId}/complete`),
-  cancelStockCheck: (checkId: number) =>
-    api.post(`/materials/stock-check/${checkId}/cancel`),
+  updateStockCheckItem: (itemId: number, data: {
+    actual_qty?: number | null
+    is_checked?: number
+    remark?: string
+    force_recount?: boolean
+    expected_version?: number
+  }) => api.put(`/materials/stock-check/items/${itemId}`, data),
+  batchUpdateStockCheckItems: (
+    checkId: number,
+    items: Array<{
+      id: number
+      actual_qty?: number | null
+      is_checked?: number
+      remark?: string
+      force_recount?: boolean
+      expected_version?: number
+    }>
+  ) => api.post('/materials/stock-check/items/batch', { check_id: checkId, items }),
+  completeStockCheck: (checkId: number, expected_version?: number) =>
+    api.post(`/materials/stock-check/${checkId}/complete`, { expected_version }),
+  cancelStockCheck: (checkId: number, expected_version?: number) =>
+    api.post(`/materials/stock-check/${checkId}/cancel`, { expected_version }),
   getMaterialHistory: (params: { material_id: number }) =>
     api.get('/materials/stock-check/material-history', { params }),
   listMaterialCandidates: (params: { keyword?: string; wh_id?: string | number; page?: number; page_size?: number } = {}) =>
@@ -270,12 +287,20 @@ export const materialApi = {
     remark?: string
     co_checker_user_ids?: number[]
   }) => api.post('/materials/stock-check/from-materials', data),
-  updateStockCheckCoCheckers: (checkId: number, co_checker_user_ids: number[]) =>
-    api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids }),
+  updateStockCheckCoCheckers: (checkId: number, co_checker_user_ids: number[], expected_version?: number) =>
+    api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids, expected_version }),
   refreshStockCheckBom: (checkId: number) =>
     api.post(`/materials/stock-check/${checkId}/refresh-bom`),
   getCoCheckerCandidates: () =>
     api.get('/materials/stock-check/co-checker-candidates'),
+  updateStockCheckPresence: (checkId: number, itemId: number | null) =>
+    api.post(`/materials/stock-check/${checkId}/presence`, { item_id: itemId }),
+  addStockCheckItems: (checkId: number, data: {
+    material_ids?: number[]
+    items?: Array<{ material_id: number; wh_id?: number | null }>
+  }) => api.post(`/materials/stock-check/${checkId}/items`, data),
+  removeStockCheckItem: (itemId: number) =>
+    api.delete(`/materials/stock-check/items/${itemId}`),
   // 供应商风险
   getSupplierRisk: (params: Record<string, any>) =>
     api.get('/materials/supplier-risk', { params }),
@@ -640,9 +665,9 @@ export const userApi = {
   updateRole: (id: number, data: { role_name?: string; permissions?: Record<string, string[]> }) =>
     api.put(`/basicdata/users/roles/${id}`, data),
   deleteRole: (id: number) => api.delete(`/basicdata/users/roles/${id}`),
-  create: (data: { username: string; display_name?: string; password: string; role_id?: number; emp_code?: string; supplier_name?: string; is_active?: boolean }) =>
+  create: (data: { username: string; display_name?: string; password: string; role_id?: number; emp_code?: string; supplier_name?: string; wecom_user_id?: string; is_active?: boolean }) =>
     api.post('/basicdata/users', data),
-  update: (id: number, data: { display_name?: string; role_id?: number; emp_code?: string; supplier_name?: string; is_active?: boolean }) =>
+  update: (id: number, data: { display_name?: string; role_id?: number; emp_code?: string; supplier_name?: string; wecom_user_id?: string; is_active?: boolean }) =>
     api.put(`/basicdata/users/${id}`, data),
   resetPassword: (id: number, new_password: string) =>
     api.put(`/basicdata/users/${id}/password`, { new_password }),

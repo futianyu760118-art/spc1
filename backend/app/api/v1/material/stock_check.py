@@ -1,14 +1,16 @@
 """物料齐套中心 — 物料盘点 API (scm_inventory_check)"""
 
+import json
 from datetime import date
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.dependencies import get_current_user
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel, PageResult
 from app.services.common.export_service import GenericExportService, ExportColumn
@@ -21,11 +23,14 @@ from app.schemas.material.stock_check import (
     StockCheckItemUpdate,
     StockCheckItemBatchUpdate,
     CoCheckersUpdate,
+    PresenceUpdate,
     MaterialHistoryItem,
     MaterialCandidateOut,
     StockCheckCountedItemOut,
     StockCheckStats,
     StockCheckMyItemOut,
+    StockCheckConflictOut,
+    StockCheckActionBody,
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.material.stock_check_service import (
@@ -39,6 +44,8 @@ from app.services.material.stock_check_service import (
     cancel_stock_check,
     set_co_checkers,
     refresh_order_bom,
+    add_items_to_check,
+    remove_item_from_check,
     get_stock_check_with_items,
     list_recent_stock_checks,
     list_stock_checks_by_order,
@@ -52,7 +59,9 @@ from app.services.material.stock_check_service import (
     _current_user_id,
     _resolve_user_names,
     StockCheckPermissionError,
+    StockCheckConflictError,
 )
+from app.services.material.stock_check_broker import subscribe_stream, set_presence, clear_presence
 
 router = APIRouter()
 
@@ -86,6 +95,16 @@ async def _to_check_out(db: AsyncSession, head: StockCheck, current_user: dict) 
     out.co_checkers = [{"user_id": int(i), "name": name_map.get(int(i), f"user#{i}")} for i in ids]
     out.can_edit = _user_can_edit(head, current_user)
     return out
+
+
+def _user_can_view(head: Optional[StockCheck], current_user: dict) -> bool:
+    """SSE 订阅权限:拥有 materials.stock_check 读权限,或为创建人/共同盘点人/admin。"""
+    if current_user.get("role") == "admin":
+        return True
+    perms = current_user.get("permissions") or {}
+    if "materials.stock_check" in perms and "read" in (perms.get("materials.stock_check") or []):
+        return True
+    return _user_can_edit(head, current_user)
 
 
 @router.post("/stock-check/from-order/{order_no}", response_model=ResponseModel[StockCheckOut])
@@ -175,6 +194,11 @@ async def list_counted_materials_view(
     date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
     check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
     status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed)"),
+    check_no: Optional[str] = Query(None, description="盘点单号模糊匹配"),
+    counted_by: Optional[str] = Query(None, description="盘点人模糊匹配"),
+    material_code: Optional[str] = Query(None, description="物料编码模糊匹配"),
+    material_name: Optional[str] = Query(None, description="物料名称模糊匹配"),
+    spec_model: Optional[str] = Query(None, description="规格型号模糊匹配"),
     sort_by: Optional[str] = Query(None, description="排序字段:material_code/material_name/spec_model/unit/wh_name/system_qty/actual_qty/diff_qty/check_no/check_date/counted_by/counted_at/status"),
     sort_order: Optional[str] = Query(None, description="排序方向:asc/desc"),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
@@ -192,6 +216,11 @@ async def list_counted_materials_view(
         date_to=date_to,
         check_type=check_type,
         status=statuses,
+        check_no=check_no,
+        counted_by=counted_by,
+        material_code=material_code,
+        material_name=material_name,
+        spec_model=spec_model,
         sort_by=sort_by,
         sort_order=sort_order,
     )
@@ -296,6 +325,10 @@ async def list_my_items(
     check_no: Optional[str] = Query(None, description="盘点单号模糊匹配"),
     check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
     status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed)"),
+    order_no: Optional[str] = Query(None, description="订单号模糊匹配"),
+    material_code: Optional[str] = Query(None, description="物料编码模糊匹配"),
+    material_name: Optional[str] = Query(None, description="物料名称模糊匹配"),
+    spec_model: Optional[str] = Query(None, description="规格型号模糊匹配"),
     sort_by: Optional[str] = Query(None, description="排序字段:counted_at/check_no/order_no/check_date/material_code/material_name/spec_model/wh_name/system_qty/actual_qty/diff_qty/status"),
     sort_order: Optional[str] = Query(None, description="排序方向:asc/desc"),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
@@ -319,6 +352,10 @@ async def list_my_items(
         check_no=check_no,
         check_type=check_type,
         status=statuses,
+        order_no=order_no,
+        material_code=material_code,
+        material_name=material_name,
+        spec_model=spec_model,
         sort_by=sort_by,
         sort_order=sort_order,
     )
@@ -363,6 +400,69 @@ async def get_detail(
     return ResponseModel(data=await _to_check_out(db, head, current_user))
 
 
+@router.get("/stock-check/{check_id}/events")
+async def stream_check_events(
+    check_id: int,
+    request: Request,
+    token: str = Query(..., description="JWT token (EventSource 无法设 header)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """共同盘点 SSE 实时同步流。
+
+    客户端用 EventSource 连接,首帧 snapshot,后续 item_updated/status_changed/
+    co_checkers_changed/bom_refreshed。每 15s 发心跳注释行。
+    """
+    current_user = await get_current_user(token=token, db=db)
+    head = await get_stock_check_with_items(db, check_id)
+    if not head:
+        raise HTTPException(status_code=404, detail="盘点单不存在")
+    if not _user_can_view(head, current_user):
+        raise HTTPException(status_code=403, detail="无查看权限")
+
+    async def gen():
+        try:
+            async for chunk in subscribe_stream(check_id, db, current_user):
+                if await request.is_disconnected():
+                    break
+                yield chunk
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/stock-check/{check_id}/presence", response_model=ResponseModel[dict])
+async def update_presence(
+    check_id: int,
+    body: PresenceUpdate,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """协作存在感:声明当前用户正在编辑 item_id(None=离开)。无 DB 写,仅 Redis + 广播。"""
+    head = await get_stock_check_with_items(db, check_id)
+    if not head:
+        raise HTTPException(status_code=404, detail="盘点单不存在")
+    if not _user_can_view(head, current_user):
+        raise HTTPException(status_code=403, detail="无查看权限")
+    uid = _current_user_id(current_user)
+    name = current_user.get("username", "")
+    if uid is None:
+        raise HTTPException(status_code=400, detail="无法识别当前用户")
+    if body.item_id is not None:
+        await set_presence(check_id, uid, name, body.item_id)
+    else:
+        await clear_presence(check_id, uid, name)
+    return ResponseModel(data={"ok": True})
+
+
 @router.get("/stock-check/{check_id}/items", response_model=ResponseModel[PageResult[StockCheckItemOut]])
 async def list_items(
     check_id: int,
@@ -402,10 +502,26 @@ async def update_item(
             is_checked=body.is_checked,
             remark=body.remark,
             force_recount=body.force_recount,
+            expected_version=body.expected_version,
             current_user=current_user,
         )
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    except StockCheckConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": 409,
+                "message": "该行已被他人修改,请基于最新值重试",
+                "data": StockCheckConflictOut(
+                    resource=e.resource,
+                    item_id=e.server_snapshot.get("id") if e.resource == "item" else None,
+                    check_id=e.server_snapshot.get("check_id") if e.resource == "head" else None,
+                    server_version=e.server_version,
+                    server_item=e.server_snapshot if e.resource == "item" else None,
+                ).model_dump(),
+            },
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id))).scalar_one()
@@ -437,33 +553,59 @@ async def batch_update(
 @router.post("/stock-check/{check_id}/complete", response_model=ResponseModel[StockCheckOut])
 async def complete(
     check_id: int,
+    body: StockCheckActionBody = StockCheckActionBody(),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        await complete_stock_check(db, check_id, current_user)
+        head = await complete_stock_check(
+            db, check_id, current_user, expected_version=body.expected_version,
+        )
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    except StockCheckConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": 409,
+                "message": "盘点单刚被他人修改,请刷新后重试",
+                "data": {"resource": e.resource, "server_version": e.server_version},
+            },
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    head = await get_stock_check_with_items(db, check_id)
-    return ResponseModel(data=await _to_check_out(db, head, current_user))
+    head_out = await get_stock_check_with_items(db, check_id)
+    await db.refresh(head_out)
+    return ResponseModel(data=await _to_check_out(db, head_out, current_user))
 
 
 @router.post("/stock-check/{check_id}/cancel", response_model=ResponseModel[StockCheckOut])
 async def cancel(
     check_id: int,
+    body: StockCheckActionBody = StockCheckActionBody(),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        await cancel_stock_check(db, check_id, current_user)
+        head = await cancel_stock_check(
+            db, check_id, current_user, expected_version=body.expected_version,
+        )
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    except StockCheckConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": 409,
+                "message": "盘点单刚被他人修改,请刷新后重试",
+                "data": {"resource": e.resource, "server_version": e.server_version},
+            },
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    head = await get_stock_check_with_items(db, check_id)
-    return ResponseModel(data=await _to_check_out(db, head, current_user))
+    head_out = await get_stock_check_with_items(db, check_id)
+    await db.refresh(head_out)
+    return ResponseModel(data=await _to_check_out(db, head_out, current_user))
 
 
 @router.put("/stock-check/{check_id}/co-checkers", response_model=ResponseModel[StockCheckOut])
@@ -474,13 +616,65 @@ async def update_co_checkers(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        await set_co_checkers(db, check_id, body.co_checker_user_ids, current_user)
+        head = await set_co_checkers(
+            db, check_id, body.co_checker_user_ids, current_user,
+            expected_version=body.expected_version,
+        )
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except StockCheckConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": 409,
+                "message": "盘点单刚被他人修改,请刷新后重试",
+                "data": {"resource": e.resource, "server_version": e.server_version},
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    head_out = await get_stock_check_with_items(db, check_id)
+    await db.refresh(head_out)
+    return ResponseModel(data=await _to_check_out(db, head_out, current_user))
+
+
+@router.post("/stock-check/{check_id}/items", response_model=ResponseModel[dict])
+async def add_items(
+    check_id: int,
+    body: StockCheckFromMaterialsCreate,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """为进行中的手动盘点单追加物料明细(仅 check_type=manual、open/in_progress)。"""
+    try:
+        rows = await add_items_to_check(
+            db,
+            check_id,
+            material_ids=body.material_ids,
+            items=[(it.material_id, it.wh_id) for it in body.items] if body.items else None,
+            current_user=current_user,
+        )
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    head = await get_stock_check_with_items(db, check_id)
-    return ResponseModel(data=await _to_check_out(db, head, current_user))
+    return ResponseModel(data={"added": len(rows)})
+
+
+@router.delete("/stock-check/items/{item_id}", response_model=ResponseModel[dict])
+async def remove_item(
+    item_id: int,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """从进行中的手动盘点单移除一条明细。已录入数据的行禁删。"""
+    try:
+        head = await remove_item_from_check(db, item_id, current_user)
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ResponseModel(data={"removed": True, "check_id": head.id})
 
 
 @router.get("/stock-check/{check_id}/export")
@@ -559,5 +753,6 @@ async def refresh_bom(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     head = await get_stock_check_with_items(db, check_id)
+    await db.refresh(head)
     return ResponseModel(data=await _to_check_out(db, head, current_user))
 

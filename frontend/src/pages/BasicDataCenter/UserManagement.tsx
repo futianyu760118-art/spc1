@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Table, Tag, Button, Modal, Form, Input, Select, Space, message, Popconfirm, Switch, Row, Col } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, ReloadOutlined, ExportOutlined, SyncOutlined, UserAddOutlined, SearchOutlined, TeamOutlined } from '@ant-design/icons'
-import api, { userApi } from '../../services/api'
+import api, { userApi, wecomApi, type WecomUser } from '../../services/api'
 import ExportColumnSelector, { type ExportColumnOption } from '../../components/ExportColumnSelector'
 import { useExport } from '../../hooks/useExport'
 import { formatDateTime } from '../../utils'
@@ -59,6 +59,7 @@ interface UserItem {
   role_code: string
   role_name: string
   supplier_name: string | null
+  wecom_user_id: string | null
   is_active: boolean
   is_default_password: boolean
   last_login_time: string | null
@@ -94,6 +95,7 @@ export default function UserManagement() {
   const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([])
   const [employeeLoading, setEmployeeLoading] = useState(false)
   const [supplierLoading, setSupplierLoading] = useState(false)
+  const [wecomUsers, setWecomUsers] = useState<WecomUser[]>([])
   const [loading, setLoading] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [pwdModalOpen, setPwdModalOpen] = useState(false)
@@ -304,6 +306,15 @@ export default function UserManagement() {
     }
   }
 
+  const fetchWecomUsers = async () => {
+    try {
+      const res: any = await wecomApi.listUsers()
+      setWecomUsers(res.data || [])
+    } catch {
+      // 企业微信未配置或网络异常：静默，下拉为空，校验由后端兜底
+    }
+  }
+
   const mergeSuppliers = (list: SupplierOption[]) => {
     const map = new Map<string, SupplierOption>()
     list.forEach(item => {
@@ -367,6 +378,7 @@ export default function UserManagement() {
     fetchRoles()
     fetchEmployeeOptions()
     fetchSuppliers()
+    fetchWecomUsers()
 
     return () => {
       if (employeeSearchTimer.current) window.clearTimeout(employeeSearchTimer.current)
@@ -389,6 +401,7 @@ export default function UserManagement() {
       emp_code: record.emp_code,
       role_id: record.role_id,
       supplier_name: record.supplier_name,
+      wecom_user_id: record.wecom_user_id,
       is_active: record.is_active,
     })
     if (record.emp_code && !employeeOptions.some(item => item.emp_code === record.emp_code)) {
@@ -444,6 +457,7 @@ export default function UserManagement() {
           role_id: values.role_id,
           emp_code: values.emp_code,
           supplier_name: values.supplier_name,
+          wecom_user_id: values.wecom_user_id,
           is_active: values.is_active,
         })
         message.success('更新成功')
@@ -665,6 +679,16 @@ export default function UserManagement() {
       render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     {
+      title: '企业微信', dataIndex: 'wecom_user_id', key: 'wecom_user_id', width: 150,
+      render: (v: string | null) => {
+        if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
+        const u = wecomUsers.find(item => item.userid === v)
+        return u
+          ? <span>{u.name} <span style={{ color: '#94a3b8' }}>({v})</span></span>
+          : <span>{v}</span>
+      },
+    },
+    {
       title: '状态', dataIndex: 'is_active', key: 'is_active', width: 80, sorter: true,
       filters: [{ text: '启用', value: 'true' }, { text: '停用', value: 'false' }],
       render: (v: boolean, record: UserItem) => (
@@ -866,6 +890,16 @@ export default function UserManagement() {
               />
             </Form.Item>
           )}
+          <Form.Item name="wecom_user_id" label="企业微信账号">
+            <Select
+              allowClear
+              showSearch
+              placeholder="选择企业微信账号（可解绑）"
+              optionFilterProp="label"
+              options={wecomUsers.map(u => ({ value: u.userid, label: `${u.name} (${u.userid})` }))}
+              notFoundContent="未加载到企业微信通讯录"
+            />
+          </Form.Item>
           <Form.Item name="is_active" label="状态" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="停用" />
           </Form.Item>

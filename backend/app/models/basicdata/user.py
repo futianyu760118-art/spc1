@@ -30,6 +30,7 @@ class SysUser(Base):
     role_id = Column(Integer, nullable=False)
     supplier_name = Column(String(100), nullable=True, comment="关联供应商名称")
     emp_code = Column(String(20), nullable=True, comment="关联员工工号")
+    wecom_user_id = Column(String(64), nullable=True, unique=True, comment="绑定企业微信userid")
     is_active = Column(Boolean, nullable=False, default=True)
     login_version = Column(Integer, nullable=False, default=0, comment="登录版本号，用于单点登录控制")
     last_token_jti = Column(String(64), nullable=True, comment="上一次登录的token jti，用于立即失效")

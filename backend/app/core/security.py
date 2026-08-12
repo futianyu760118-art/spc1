@@ -149,6 +149,8 @@ _SHARE_PATH_TO_RESOURCE: dict[str, str] = {
     "/purchase/price-change": "purchase.price_change",
     "/purchase/price-change/pending": "purchase.price_change.pending",
     "/purchase/price-change/config": "purchase.price_change.config",
+    "/finance/subject-balances": "finance.data",
+    "/permissions": "permissions",
 }
 
 
@@ -184,16 +186,20 @@ class PermissionChecker:
         return [resource, *self._ALIASES.get(resource, [])]
 
     def _check_one(self, permissions: dict, resource: str, action: str) -> bool:
-        """检查单个 (resource, action) 是否通过，含别名和父级 fallback"""
-        for r in self._resource_candidates(resource):
+        """检查单个 (resource, action) 是否通过，含别名和全链路父级 fallback"""
+        candidates = self._resource_candidates(resource)
+        for r in candidates:
             if action in permissions.get(r, []):
                 return True
-        for r in self._resource_candidates(resource):
-            if "." not in r:
-                continue
-            parent = r.split(".")[0]
-            if action in permissions.get(parent, []):
-                return True
+        for r in candidates:
+            parts = r.split(".")
+            for i in range(len(parts) - 1, 0, -1):
+                parent = ".".join(parts[:i])
+                if not parent:
+                    continue
+                for pr in self._resource_candidates(parent):
+                    if action in permissions.get(pr, []):
+                        return True
         return False
 
     def _has_any_permission(self, permissions: dict) -> bool:

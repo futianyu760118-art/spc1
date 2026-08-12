@@ -182,6 +182,68 @@ def _strip_top_level_order_by(sql_text: str) -> str:
     return sql[:last_order_by].rstrip()
 
 
+def _strip_sql_comments(sql_text: str) -> str:
+    """剥离 SQL 注释（-- 行注释、/* */ 块注释），保留字符串字面量('...')、
+    双引号标识符("...")、T-SQL 方括号标识符([...])内的内容。
+
+    用于字段解析前的清洗：原始 SQL 中的行尾 -- 注释会与外层
+    `SELECT TOP 0 * FROM (...) AS __parse__` 的右括号粘连在同一行，
+    导致注释吞掉右括号而报语法错误。
+    """
+    result = []
+    i = 0
+    n = len(sql_text)
+    while i < n:
+        ch = sql_text[i]
+        nxt = sql_text[i + 1] if i + 1 < n else ""
+
+        if ch == "-" and nxt == "-":
+            j = i
+            while j < n and sql_text[j] != "\n":
+                j += 1
+            i = j
+            continue
+
+        if ch == "/" and nxt == "*":
+            j = i + 2
+            while j < n - 1 and not (sql_text[j] == "*" and sql_text[j + 1] == "/"):
+                j += 1
+            i = j + 2 if j < n - 1 else n
+            continue
+
+        if ch in ("'", '"'):
+            quote = ch
+            result.append(ch)
+            i += 1
+            while i < n:
+                result.append(sql_text[i])
+                if sql_text[i] == quote:
+                    if i + 1 < n and sql_text[i + 1] == quote:
+                        result.append(sql_text[i + 1])
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        if ch == "[":
+            result.append(ch)
+            i += 1
+            while i < n:
+                result.append(sql_text[i])
+                if sql_text[i] == "]":
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        result.append(ch)
+        i += 1
+
+    return "".join(result)
+
+
 def _run_erp_test(sql_text: str) -> dict:
     """同步执行 ERP SQL 并返回测试结果（在线程池中调用）"""
     from datetime import datetime, timedelta
@@ -226,8 +288,9 @@ def _run_erp_parse_fields(sql_text: str) -> list:
     try:
         with erp_engine.connect() as conn:
             since = datetime.now() - timedelta(days=30)
-            parse_sql = _strip_top_level_order_by(sql_text)
-            wrapped_sql = f"SELECT TOP 0 * FROM ({parse_sql}) AS __parse__"
+            cleaned = _strip_sql_comments(sql_text)
+            parse_sql = _strip_top_level_order_by(cleaned)
+            wrapped_sql = f"SELECT TOP 0 * FROM ({parse_sql}\n) AS __parse__"
             result = conn.execute(text(wrapped_sql), {"since": since})
             return list(result.keys())
     finally:

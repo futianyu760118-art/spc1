@@ -134,12 +134,13 @@ export default function StatsCharts({ filters }: StatsChartsProps) {
 
   return (
     <Collapse
-      defaultActiveKey={[]}
-      style={{ marginBottom: 16 }}
+      defaultActiveKey={['stats']}
+      bordered={false}
+      style={{ marginBottom: 16, background: 'transparent' }}
       items={[
         {
           key: 'stats',
-          label: '盘点统计图表',
+          label: '统计图表',
           children: (
             <Spin spinning={loading}>
               <Row gutter={[14, 14]}>

@@ -9,6 +9,8 @@ import {
 } from '@ant-design/icons'
 import type { DataNode } from 'antd/es/tree'
 import api from '../../services/api'
+import PermButton from '../../components/PermButton'
+import { useAuthStore } from '../../store/auth'
 import { EMPLOYEE_STATUS_OPTIONS, getEmployeeStatusMeta } from '../../constants/employeeStatus'
 
 interface Organization {
@@ -174,6 +176,10 @@ export default function Organizations() {
   const [empModalVisible, setEmpModalVisible] = useState(false)
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null)
   const [empForm] = Form.useForm()
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canCreate = hasPermission('basicdata.data.organizations', 'create')
+  const canUpdate = hasPermission('basicdata.data.organizations', 'update')
+  const canDelete = hasPermission('basicdata.data.organizations', 'delete')
   
   const fetchTreeData = useCallback(async () => {
     setTreeLoading(true)
@@ -386,9 +392,9 @@ export default function Organizations() {
       fixed: 'right' as const,
       render: (_: any, record: Employee) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => handleEditEmp(record)} />
-          <Popconfirm title="确认删除？" onConfirm={() => handleDeleteEmp(record.id)} okText="确认" cancelText="取消">
-            <Button size="small" danger icon={<DeleteOutlined />} />
+          <PermButton permResource="basicdata.data.organizations" permAction="update" size="small" icon={<EditOutlined />} onClick={() => handleEditEmp(record)} />
+          <Popconfirm title="确认删除？" onConfirm={() => handleDeleteEmp(record.id)} okText="确认" cancelText="取消" disabled={!canDelete}>
+            <PermButton permResource="basicdata.data.organizations" permAction="delete" size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
       ),
@@ -404,7 +410,7 @@ export default function Organizations() {
             extra={
               <Space>
                 <Button icon={<ReloadOutlined />} onClick={fetchTreeData} />
-                <Button type="primary" icon={<PlusOutlined />} onClick={handleAddOrg}>新增组织</Button>
+                <PermButton permResource="basicdata.data.organizations" permAction="create" type="primary" icon={<PlusOutlined />} onClick={handleAddOrg}>新增组织</PermButton>
               </Space>
             }
             style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
@@ -429,7 +435,7 @@ export default function Organizations() {
             extra={selectedOrgId ? (
               <Space>
                 <Button icon={<ReloadOutlined />} onClick={() => fetchEmployees(getOrgEmployeeQueryId(selectedOrg, selectedOrgId))} />
-                <Button type="primary" icon={<UserOutlined />} onClick={handleAddEmp}>新增员工</Button>
+                <PermButton permResource="basicdata.data.organizations" permAction="create" type="primary" icon={<UserOutlined />} onClick={handleAddEmp}>新增员工</PermButton>
               </Space>
             ) : null}
             style={{ height: '100%', display: 'flex', flexDirection: 'column' }}

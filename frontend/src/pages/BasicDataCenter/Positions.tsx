@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button, Col, Input, message, Row, Select, Space, Table, Tag } from 'antd'
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 import api from '../../services/api'
+import PermButton from '../../components/PermButton'
+import { useAuthStore } from '../../store/auth'
 
 interface Position {
   id: number
@@ -18,6 +20,10 @@ export default function Positions() {
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState<string | undefined>()
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canCreate = hasPermission('basicdata.data.positions', 'create')
+  const canUpdate = hasPermission('basicdata.data.positions', 'update')
+  const canDelete = hasPermission('basicdata.data.positions', 'delete')
 
   const fetchData = useCallback(async (page = 1, pageSize = 20) => {
     setLoading(true)
