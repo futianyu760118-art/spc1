@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { Result, Button, Spin } from 'antd'
 import { shareApi } from '../../services/api'
 import { useAuthStore } from '../../store/auth'
 
 export default function ShareAccess() {
   const { token } = useParams<{ token: string }>()
+  const [searchParams] = useSearchParams()
+  const code = searchParams.get('code')
   const navigate = useNavigate()
   const setShareAuth = useAuthStore((s) => s.setShareAuth)
   const [error, setError] = useState<string>('')
@@ -19,7 +21,7 @@ export default function ShareAccess() {
     }
 
     shareApi
-      .verify(token)
+      .verify(token, code || undefined)
       .then((result: any) => {
         const { access_token, target_path, target_params, permissions } = result.data
         // 设置分享认证状态
@@ -41,14 +43,21 @@ export default function ShareAccess() {
       })
       .catch((e: any) => {
         const detail = e?.response?.data?.detail
-        if (detail) {
+        // 限制型分享：需要企微 OAuth 身份验证，重定向到企微授权页
+        if (detail && typeof detail === 'object' && detail.oauth_url) {
+          window.location.href = detail.oauth_url
+          return
+        }
+        if (typeof detail === 'string') {
           setError(detail)
+        } else if (detail?.message) {
+          setError(detail.message)
         } else {
           setError(e?.message || '分享链接验证失败')
         }
         setLoading(false)
       })
-  }, [token, setShareAuth, navigate])
+  }, [token, code, setShareAuth, navigate])
 
   if (loading) {
     return (

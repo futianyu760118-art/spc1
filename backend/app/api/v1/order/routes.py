@@ -223,6 +223,7 @@ async def list_orders(
     data_source: Optional[str] = Query(None),
     department: Optional[str] = Query(None, description="销售部门，多选逗号分隔"),
     status: Optional[str] = Query(None, description="订单状态，多选逗号分隔"),
+    erp_status: Optional[str] = Query(None, description="ERP订单状态(整型)，多选逗号分隔如 0,1,2,3"),
     inspection_result: Optional[str] = Query(None, description="客检结果，多选逗号分隔"),
     packaging_status: Optional[str] = Query(None, description="包装状态，多选逗号分隔"),
     procurement_status: Optional[str] = Query(None, description="采购状态，多选逗号分隔"),
@@ -301,6 +302,14 @@ async def list_orders(
             elif statuses:
                 query = query.where(SaleOrder.status.in_(statuses))
                 count_query = count_query.where(SaleOrder.status.in_(statuses))
+        if erp_status:
+            erp_statuses = [int(x.strip()) for x in erp_status.split(',') if x.strip() != '']
+            if len(erp_statuses) == 1:
+                query = query.where(SaleOrder.erp_status == erp_statuses[0])
+                count_query = count_query.where(SaleOrder.erp_status == erp_statuses[0])
+            elif erp_statuses:
+                query = query.where(SaleOrder.erp_status.in_(erp_statuses))
+                count_query = count_query.where(SaleOrder.erp_status.in_(erp_statuses))
         if inspection_result:
             results = [x.strip() for x in inspection_result.split(',') if x.strip()]
             if len(results) == 1:
@@ -480,6 +489,12 @@ async def list_orders(
                 stats_query = stats_query.where(SaleOrder.status == statuses[0])
             elif statuses:
                 stats_query = stats_query.where(SaleOrder.status.in_(statuses))
+        if erp_status:
+            erp_statuses = [int(x.strip()) for x in erp_status.split(',') if x.strip() != '']
+            if len(erp_statuses) == 1:
+                stats_query = stats_query.where(SaleOrder.erp_status == erp_statuses[0])
+            elif erp_statuses:
+                stats_query = stats_query.where(SaleOrder.erp_status.in_(erp_statuses))
         if inspection_result:
             results = [x.strip() for x in inspection_result.split(',') if x.strip()]
             if len(results) == 1:
@@ -725,6 +740,7 @@ async def export_orders(
     data_source: Optional[str] = Query(None),
     department: Optional[str] = Query(None, description="销售部门，多选逗号分隔"),
     status: Optional[str] = Query(None, description="订单状态，多选逗号分隔"),
+    erp_status: Optional[str] = Query(None, description="ERP订单状态(整型)，多选逗号分隔如 0,1,2,3"),
     inspection_result: Optional[str] = Query(None, description="客检结果，多选逗号分隔"),
     packaging_status: Optional[str] = Query(None, description="包装状态，多选逗号分隔"),
     procurement_status: Optional[str] = Query(None, description="采购状态，多选逗号分隔"),
@@ -793,6 +809,12 @@ async def export_orders(
             query = query.where(SaleOrder.status == statuses[0])
         elif statuses:
             query = query.where(SaleOrder.status.in_(statuses))
+    if erp_status:
+        erp_statuses = [int(x.strip()) for x in erp_status.split(',') if x.strip() != '']
+        if len(erp_statuses) == 1:
+            query = query.where(SaleOrder.erp_status == erp_statuses[0])
+        elif erp_statuses:
+            query = query.where(SaleOrder.erp_status.in_(erp_statuses))
     if inspection_result:
         results = [x.strip() for x in inspection_result.split(',') if x.strip()]
         if len(results) == 1:
@@ -1409,7 +1431,7 @@ async def get_order_detail(
         )
         for row in lp_result.all():
             if row[1] is not None:
-                labor_price_map[row[0]] = float(row[1])
+                labor_price_map[row[0]] = labor_price_map.get(row[0], 0.0) + float(row[1])
 
     detail = OrderDetailOut(
         **SaleOrderOut.model_validate(order).model_dump(),

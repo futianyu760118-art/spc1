@@ -14,6 +14,8 @@ import {
   CodeOutlined, LockOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { dataSupplyApi } from '../../../services/api'
+import PermButton from '../../../components/PermButton'
+import { useAuthStore } from '../../../store/auth'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
@@ -303,6 +305,10 @@ export default function DataSupply() {
 
   // ── 统计 ──
   const [statistics, setStatistics] = useState<Statistics | null>(null)
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canCreate = hasPermission('basicdata.data_supply', 'create')
+  const canUpdate = hasPermission('basicdata.data_supply', 'update')
+  const canDelete = hasPermission('basicdata.data_supply', 'delete')
 
   // ═══════════════════════════════════════════
   // 数据加载
@@ -779,11 +785,11 @@ export default function DataSupply() {
                 const config = configs.find(c => c.data_type === r.data_type)
                 return config ? (
                   <Space>
-                    <Button size="small" type="link" icon={<SettingOutlined />} onClick={() => handleEditConfig(config)}>
+                    <PermButton permResource="basicdata.data_supply" permAction="update" size="small" type="link" icon={<SettingOutlined />} onClick={() => handleEditConfig(config)}>
                       编辑
-                    </Button>
-                    <Popconfirm title="确认删除此配置？" onConfirm={() => handleDeleteConfig(config.id)}>
-                      <Button size="small" type="link" danger>删除</Button>
+                    </PermButton>
+                    <Popconfirm title="确认删除此配置？" onConfirm={() => handleDeleteConfig(config.id)} disabled={!canDelete}>
+                      <PermButton permResource="basicdata.data_supply" permAction="delete" size="small" type="link" danger>删除</PermButton>
                     </Popconfirm>
                   </Space>
                 ) : <Text type="secondary" style={{ fontSize: 'calc(0.75rem * var(--font-size-scale))' }}>未配置</Text>
@@ -914,11 +920,11 @@ export default function DataSupply() {
               </div>
             </div>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreateApiKey} style={{
+          <PermButton permResource="basicdata.data_supply" permAction="create" type="primary" icon={<PlusOutlined />} onClick={handleCreateApiKey} style={{
             boxShadow: '0 2px 8px rgba(24, 144, 255, 0.3)',
           }}>
             创建 API Key
-          </Button>
+          </PermButton>
         </div>
 
         <Table
@@ -1074,9 +1080,9 @@ export default function DataSupply() {
               fixed: 'right' as const,
               render: (_: any, r: ApiKeyItem) => (
                 <Space>
-                  <Button size="small" type="link" onClick={() => handleEditApiKey(r)}>编辑</Button>
-                  <Popconfirm title="确认删除此 API Key？" onConfirm={() => handleDeleteApiKey(r.id)}>
-                    <Button size="small" type="link" danger>删除</Button>
+                  <PermButton permResource="basicdata.data_supply" permAction="update" size="small" type="link" onClick={() => handleEditApiKey(r)}>编辑</PermButton>
+                  <Popconfirm title="确认删除此 API Key？" onConfirm={() => handleDeleteApiKey(r.id)} disabled={!canDelete}>
+                    <PermButton permResource="basicdata.data_supply" permAction="delete" size="small" type="link" danger>删除</PermButton>
                   </Popconfirm>
                 </Space>
               ),

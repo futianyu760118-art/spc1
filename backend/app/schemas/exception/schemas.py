@@ -123,6 +123,7 @@ class QualityIssueOut(BaseModel):
     erp_quality_id: Optional[str] = None
     issue_no: str
     status: str
+    workflow_status: str = '创建'
     remark: Optional[str] = None
     submit_dept: Optional[str] = None
     submit_date: Optional[date] = None
@@ -187,6 +188,7 @@ class QualityIssueCreate(BaseModel):
     general_manager_approval: Optional[str] = None
     missed_inspector: Optional[str] = None
     status: Optional[str] = 'open'
+    workflow_status: Optional[str] = '创建'
     remark: Optional[str] = None
 
 
@@ -220,6 +222,7 @@ class QualityIssueUpdate(BaseModel):
     general_manager_approval: Optional[str] = None
     missed_inspector: Optional[str] = None
     status: Optional[str] = None
+    workflow_status: Optional[str] = None
     remark: Optional[str] = None
 
 

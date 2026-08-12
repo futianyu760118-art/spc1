@@ -435,6 +435,7 @@ class EmployeeBase(BaseModel):
     org_id: Optional[int] = None
     position_id: Optional[int] = None
     manager_oa_user_id: Optional[str] = None
+    erp_user_id: Optional[int] = None
     position: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -450,6 +451,7 @@ class EmployeeUpdate(BaseModel):
     org_id: Optional[int] = None
     position_id: Optional[int] = None
     manager_oa_user_id: Optional[str] = None
+    erp_user_id: Optional[int] = None
     position: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -485,5 +487,25 @@ class SubjectBalanceOut(SubjectBalanceBase):
     data_source: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+# 科目树节点(按 subject 聚合，一个科目一行)
+class SubjectNodeOut(BaseModel):
+    subject_id: int
+    subject_category: Optional[str] = None
+    subject_name: Optional[str] = None
+    subject_code: Optional[str] = None
+    parent_subject_id: Optional[int] = None
+    item_code: str = ""
+    item_name: Optional[str] = None
+    period_count: int = 0
+    has_children: bool = False
+    child_count: int = 0
+    latest_year: Optional[int] = None
+    latest_month: Optional[int] = None
+    credit_amount_month: Decimal = Decimal("0")
+    credit_amount_year: Decimal = Decimal("0")
 
     model_config = {"from_attributes": True}

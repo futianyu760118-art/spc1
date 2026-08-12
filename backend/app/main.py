@@ -133,8 +133,12 @@ async def lifespan(app: FastAPI):
     overdue_checker.start()
     # 启动时：开启 OA 工序产能定时同步（白天每小时增量 + 凌晨3点全量兜底）
     capacity_sync_scheduler.start()
+    # 启动时：开启写回 Worker
+    from app.services.basicdata.writeback_worker import writeback_worker
+    writeback_worker.start()
     yield
     # 关闭时：停止调度器
+    await writeback_worker.stop()
     capacity_sync_scheduler.stop()
     overdue_checker.stop()
     risk_scheduler.stop()

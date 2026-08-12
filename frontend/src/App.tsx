@@ -42,8 +42,11 @@ import {
     FileManagement,
     AnnouncementManagement,
     RoleManagement,
+    PermissionManagement,
     DataSupply
 } from './pages/BasicDataCenter'
+import WritebackConfig from './pages/BasicDataCenter/WritebackConfig'
+import WritebackMonitor from './pages/WritebackMonitor/index'
 import Customers from './pages/BasicDataCenter/Customers'
 import Suppliers from './pages/BasicDataCenter/Suppliers'
 import Materials from './pages/BasicDataCenter/Materials'
@@ -81,6 +84,7 @@ import PriceChangeNew from './pages/Purchase/PriceChange/new'
 import PriceChangeDetail from './pages/Purchase/PriceChange/detail'
 import PriceChangePending from './pages/Purchase/PriceChange/pending'
 import ApprovalConfig from './pages/Purchase/PriceChange/config'
+import SubjectBalances from './pages/FinanceCenter/SubjectBalances/index'
 import {useAuthStore} from './store/auth'
 import {useThemeStore} from './store/theme'
 import {setGlobalMessageApi} from './utils/antdMessage'
@@ -224,8 +228,11 @@ export default function App() {
                             <Route path="work-instructions" element={<WorkInstructions/>}/>
                             <Route path="users" element={<UserManagement/>}/>
                             <Route path="roles" element={<RoleManagement/>}/>
+                            <Route path="permissions" element={<PermissionManagement/>}/>
                             <Route path="audit" element={<AuditLog/>}/>
                             <Route path="sync-config" element={<SyncSqlConfig/>}/>
+                            <Route path="writeback-config" element={<WritebackConfig/>}/>
+                            <Route path="writeback-monitor" element={<WritebackMonitor/>}/>
                             <Route path="basicdata" element={<Navigate to="/basicdata/customers" replace/>}/>
                             <Route path="masterdata" element={<Navigate to="/basicdata/customers" replace/>}/>
                             <Route path="basicdata/customers" element={<Customers/>} key="customers"/>
@@ -249,6 +256,7 @@ export default function App() {
                             <Route path="purchase/price-change/pending" element={<PriceChangePending/>}/>
                             <Route path="purchase/price-change/config" element={<ApprovalConfig/>}/>
                             <Route path="purchase/price-change/:id" element={<PriceChangeDetail/>}/>
+                            <Route path="finance/subject-balances" element={<SubjectBalances/>} key="finance-subject-balances"/>
                         </Route>
                     </Routes>
                 </BrowserRouter>

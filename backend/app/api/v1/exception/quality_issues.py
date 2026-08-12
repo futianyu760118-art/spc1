@@ -13,6 +13,8 @@ from app.core.audit import log_audit
 from app.models.exception.quality_issue import QualityIssue
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.exception.schemas import QualityIssueOut, QualityIssueCreate, QualityIssueUpdate
+from app.schemas.exception.quality_analysis import QualityAnalysisReportOut
+from app.services.exception.quality_analysis_service import generate_quality_analysis
 from app.services.common.export_service import GenericExportService, ExportColumn
 
 router = APIRouter()
@@ -43,6 +45,7 @@ QUALITY_FILTERABLE_FIELDS = {
     "quality_manager_approval": QualityIssue.quality_manager_approval,
     "defect_rate": cast(QualityIssue.defect_qty, Float) / func.nullif(cast(QualityIssue.sample_qty, Float), 0),
     "status": QualityIssue.status,
+    "workflow_status": QualityIssue.workflow_status,
     "created_at": QualityIssue.created_at,
     "updated_at": QualityIssue.updated_at,
 }
@@ -87,6 +90,8 @@ def _build_quality_conditions(
         values = [v for v in values if v not in ("", None)]
         if values:
             conditions.append(column.in_(values))
+    # 软删除记录不进入列表/统计/导出
+    conditions.append(QualityIssue.is_deleted == False)
     return conditions
 
 
@@ -172,6 +177,31 @@ async def get_quality_issue_statistics(
         "inProgressCount": by_status.get("in_progress", 0),
         "closedCount": by_status.get("closed", 0),
     })
+
+
+@router.get("/analyze", response_model=ResponseModel[QualityAnalysisReportOut])
+async def analyze_quality_issues(
+    request: Request,
+    submit_dept: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    current_user: dict = Depends(PermissionChecker("exceptions.quality", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """对当前筛选范围的品质异常做 AI 结构化分析，输出高频/根因/策略/行动项/预防。"""
+    conditions = _build_quality_conditions(request, submit_dept, status, keyword)
+    filter_summary = {
+        "submit_dept": submit_dept,
+        "status": status,
+        "keyword": keyword,
+        "column_filters": {
+            field: request.query_params.getlist(field)
+            for field in QUALITY_FILTERABLE_FIELDS
+            if request.query_params.getlist(field)
+        },
+    }
+    report = await generate_quality_analysis(db, conditions, filter_summary)
+    return ResponseModel(data=report)
 
 
 @router.post("", response_model=ResponseModel[QualityIssueOut])
@@ -272,6 +302,7 @@ EXPORT_COLUMNS = [
     ExportColumn('preliminary_analysis_person', '初步分析负责人', 14),
     ExportColumn('quality_manager_approval', '品质经理审批', 16),
     ExportColumn('status', '状态', 10),
+    ExportColumn('workflow_status', '流程状态', 10),
 ]
 
 
@@ -333,6 +364,7 @@ async def export_quality_issues(
             'preliminary_analysis_person': item.preliminary_analysis_person or '',
             'quality_manager_approval': item.quality_manager_approval or '',
             'status': STATUS_LABELS.get(item.status, item.status),
+            'workflow_status': item.workflow_status or '',
         })
 
     svc = GenericExportService(EXPORT_COLUMNS, export_rows, sheet_name='品质异常')

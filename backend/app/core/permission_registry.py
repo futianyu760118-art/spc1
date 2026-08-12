@@ -75,8 +75,12 @@ def get_all_declared_permissions() -> Dict[str, PermissionDef]:
 
 
 async def sync_permissions_to_db(db: AsyncSession) -> int:
-    """将所有已声明的权限同步到 sys_permission 表（upsert）。
-    返回新增或更新的权限数量。
+    """将已声明的权限播种到 sys_permission 表（仅首次插入，不覆盖既有行）。
+
+    DB 是权限定义的唯一真相源：首次部署时把代码声明的权限 seed 进去，
+    之后管理员可通过「权限管理」页面在运行时增删改，重启不会被覆盖。
+    新增的代码声明（新 code）仍会在下次启动时自动 seed。
+    注意：对既有 code 的代码侧改名/调序不再回灌 DB——需在权限管理页面或迁移脚本中处理。
     """
     from app.models.basicdata.permission import SysPermission
 
@@ -86,7 +90,6 @@ async def sync_permissions_to_db(db: AsyncSession) -> int:
 
     synced = 0
     for code, perm in _declared_permissions.items():
-        # 使用 PostgreSQL 的 INSERT ... ON CONFLICT DO UPDATE
         stmt = pg_insert(SysPermission).values(
             code=perm.code,
             name=perm.name,
@@ -97,24 +100,13 @@ async def sync_permissions_to_db(db: AsyncSession) -> int:
             sort_order=perm.sort_order,
             is_active=True,
         )
-        # 冲突时更新 name、module、parent_code、actions、route_path、sort_order
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["code"],
-            set_={
-                "name": stmt.excluded.name,
-                "module": stmt.excluded.module,
-                "parent_code": stmt.excluded.parent_code,
-                "actions": stmt.excluded.actions,
-                "route_path": stmt.excluded.route_path,
-                "sort_order": stmt.excluded.sort_order,
-                "updated_at": sa_func_now(),
-            },
-        )
+        # 冲突时什么都不做——保留 DB 中的运行时编辑
+        stmt = stmt.on_conflict_do_nothing(index_elements=["code"])
         await db.execute(stmt)
         synced += 1
 
     await db.commit()
-    logger.info(f"[权限注册] 同步 {synced} 个权限定义到数据库")
+    logger.info(f"[权限注册] 播种 {synced} 个权限定义到数据库（仅首次插入）")
     return synced
 
 
@@ -265,6 +257,12 @@ declare_permission(
 declare_permission("roles", "角色管理", module="basicdata", parent_code="basicdata", route_path="/roles", sort_order=7)
 declare_permission("audit", "审计日志", module="basicdata", parent_code="basicdata", actions=["read"], route_path="/audit", sort_order=8)
 declare_permission("settings", "同步SQL配置", module="basicdata", parent_code="basicdata", route_path="/sync-config", sort_order=9)
+declare_permission("permissions", "权限管理", module="basicdata", parent_code="basicdata", actions=["create", "read", "update", "delete"], route_path="/permissions", sort_order=11)
+
+# 数据回写
+declare_permission("writeback", "数据回写", module="basicdata", sort_order=10)
+declare_permission("writeback.config", "回写SQL配置", module="basicdata", parent_code="writeback", route_path="/writeback-config", sort_order=1)
+declare_permission("writeback.monitor", "回写监控", module="basicdata", parent_code="writeback", route_path="/writeback-monitor", sort_order=2)
 
 # 采购中心
 declare_permission("purchase", "采购中心", module="purchase", sort_order=11)

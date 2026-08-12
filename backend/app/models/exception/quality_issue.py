@@ -1,6 +1,6 @@
 """异常与质量中心 — 品质异常模型"""
 
-from sqlalchemy import Column, Integer, String, Date, DateTime, Text
+from sqlalchemy import Column, Integer, String, Date, DateTime, Text, Boolean
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -13,6 +13,7 @@ class QualityIssue(Base):
     erp_quality_id = Column(String(64), unique=True, index=True)
     issue_no = Column(String(64), nullable=False, unique=True)
     status = Column(String(32), nullable=False, default='open')
+    workflow_status = Column(String(32), nullable=False, default='创建')  # 流程状态: 创建/提交/批准/归档
     remark = Column(Text)
 
     # 提出信息
@@ -59,6 +60,10 @@ class QualityIssue(Base):
     quality_manager_approval = Column(Text)  # 品质经理审批
     general_manager_approval = Column(Text)  # 总经理审批
     missed_inspector = Column(String(64))  # 漏检人
+
+    # 来源 & 软删除
+    data_source = Column(String(32), default='manual', index=True)  # 数据来源: erp / manual / excel
+    is_deleted = Column(Boolean, default=False, index=True)  # 软删除标记(源端已删除)
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

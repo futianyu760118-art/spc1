@@ -12,5 +12,6 @@ from app.api.v1.basicdata.notifications import router as notifications_router
 from app.api.v1.basicdata.share import router as share_router
 from app.api.v1.basicdata.permissions import router as permissions_router
 from app.api.v1.basicdata.data_supply import router as data_supply_router
+from app.api.v1.basicdata.wecom import wecom_public_router, wecom_share_router
 
 masterdata_router = basicdata_router

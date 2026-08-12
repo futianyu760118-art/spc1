@@ -24,6 +24,14 @@ api.interceptors.response.use(
       err._apiResponse = response
       return Promise.reject(err)
     }
+    if (data && typeof data === 'object') {
+      Object.defineProperty(data, '_headers', {
+        value: response.headers,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      })
+    }
     return data
   },
   (error) => {
@@ -96,9 +104,12 @@ export const authApi = {
 }
 
 export const permissionApi = {
-  tree: () => api.get('/permissions/tree'),
-  list: () => api.get('/permissions'),
+  tree: (includeInactive = false) => api.get('/permissions/tree', { params: { include_inactive: includeInactive } }),
+  list: (includeInactive = false) => api.get('/permissions', { params: { include_inactive: includeInactive } }),
   routeMap: () => api.get('/permissions/route-map'),
+  create: (data: Record<string, any>) => api.post('/permissions', data),
+  update: (code: string, data: Record<string, any>) => api.put(`/permissions/${code}`, data),
+  remove: (code: string) => api.delete(`/permissions/${code}`),
 }
 
 // ============ 供应链驾驶舱 ============
@@ -223,37 +234,73 @@ export const materialApi = {
     api.post(`/materials/stock-check/from-order/${orderNo}`, data || {}),
   getRecentStockChecks: (params: Record<string, any> = {}) =>
     api.get('/materials/stock-check/recent', { params }),
+  getMyStockCheckItems: (params: Record<string, any> = {}) =>
+    api.get('/materials/stock-check/my-items', { params }),
+  getStockCheckStats: (params: { check_type?: string; date_from?: string; date_to?: string; status?: string } = {}) =>
+    api.get('/materials/stock-check/stats', { params }),
   getStockChecksByOrder: (orderNo: string) =>
     api.get(`/materials/stock-check/by-order/${orderNo}`),
   getStockCheck: (checkId: number) =>
     api.get(`/materials/stock-check/${checkId}`),
   getStockCheckItems: (checkId: number, params: Record<string, any> = {}) =>
     api.get(`/materials/stock-check/${checkId}/items`, { params }),
-  updateStockCheckItem: (itemId: number, data: { actual_qty?: number; is_checked?: number; remark?: string; force_recount?: boolean }) =>
-    api.put(`/materials/stock-check/items/${itemId}`, data),
-  batchUpdateStockCheckItems: (checkId: number, items: Array<{ id: number; actual_qty?: number; is_checked?: number; remark?: string; force_recount?: boolean }>) =>
-    api.post('/materials/stock-check/items/batch', { check_id: checkId, items }),
-  completeStockCheck: (checkId: number) =>
-    api.post(`/materials/stock-check/${checkId}/complete`),
-  cancelStockCheck: (checkId: number) =>
-    api.post(`/materials/stock-check/${checkId}/cancel`),
+  updateStockCheckItem: (itemId: number, data: {
+    actual_qty?: number | null
+    is_checked?: number
+    remark?: string
+    force_recount?: boolean
+    expected_version?: number
+  }) => api.put(`/materials/stock-check/items/${itemId}`, data),
+  batchUpdateStockCheckItems: (
+    checkId: number,
+    items: Array<{
+      id: number
+      actual_qty?: number | null
+      is_checked?: number
+      remark?: string
+      force_recount?: boolean
+      expected_version?: number
+    }>
+  ) => api.post('/materials/stock-check/items/batch', { check_id: checkId, items }),
+  completeStockCheck: (checkId: number, expected_version?: number) =>
+    api.post(`/materials/stock-check/${checkId}/complete`, { expected_version }),
+  cancelStockCheck: (checkId: number, expected_version?: number) =>
+    api.post(`/materials/stock-check/${checkId}/cancel`, { expected_version }),
   getMaterialHistory: (params: { material_id: number }) =>
     api.get('/materials/stock-check/material-history', { params }),
-  listMaterialCandidates: (params: { keyword?: string; page?: number; page_size?: number } = {}) =>
+  listMaterialCandidates: (params: { keyword?: string; wh_id?: string | number; page?: number; page_size?: number } = {}) =>
     api.get('/materials/stock-check/material-candidates', { params }),
+  listCountedMaterials: (params: {
+    keyword?: string
+    wh_id?: string | number
+    date_from?: string
+    date_to?: string
+    check_type?: string
+    page?: number
+    page_size?: number
+  } = {}) => api.get('/materials/stock-check/counted-ledger', { params }),
   createStockCheckFromMaterials: (data: {
-    material_ids: number[]
+    material_ids?: number[]
+    items?: Array<{ material_id: number; wh_id?: number | null }>
     title?: string
     check_date?: string
     remark?: string
     co_checker_user_ids?: number[]
   }) => api.post('/materials/stock-check/from-materials', data),
-  updateStockCheckCoCheckers: (checkId: number, co_checker_user_ids: number[]) =>
-    api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids }),
+  updateStockCheckCoCheckers: (checkId: number, co_checker_user_ids: number[], expected_version?: number) =>
+    api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids, expected_version }),
   refreshStockCheckBom: (checkId: number) =>
     api.post(`/materials/stock-check/${checkId}/refresh-bom`),
   getCoCheckerCandidates: () =>
     api.get('/materials/stock-check/co-checker-candidates'),
+  updateStockCheckPresence: (checkId: number, itemId: number | null) =>
+    api.post(`/materials/stock-check/${checkId}/presence`, { item_id: itemId }),
+  addStockCheckItems: (checkId: number, data: {
+    material_ids?: number[]
+    items?: Array<{ material_id: number; wh_id?: number | null }>
+  }) => api.post(`/materials/stock-check/${checkId}/items`, data),
+  removeStockCheckItem: (itemId: number) =>
+    api.delete(`/materials/stock-check/items/${itemId}`),
   // 供应商风险
   getSupplierRisk: (params: Record<string, any>) =>
     api.get('/materials/supplier-risk', { params }),
@@ -374,6 +421,18 @@ export const exceptionApi = {
     })
     const qs = queryParams.toString()
     return api.get(`/exceptions/quality/statistics${qs ? `?${qs}` : ''}`)
+  },
+  analyzeQuality: (params: Record<string, any>) => {
+    const queryParams = new URLSearchParams()
+    Object.entries(params).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach(item => queryParams.append(key, String(item)))
+      } else if (value !== undefined && value !== null && value !== '') {
+        queryParams.append(key, String(value))
+      }
+    })
+    const qs = queryParams.toString()
+    return api.get(`/exceptions/quality/analyze${qs ? `?${qs}` : ''}`, { timeout: 90000 })
   },
   createQuality: (data: Record<string, any>) => api.post('/exceptions/quality', data),
   updateQuality: (id: number, data: Record<string, any>) => api.put(`/exceptions/quality/${id}`, data),
@@ -606,9 +665,9 @@ export const userApi = {
   updateRole: (id: number, data: { role_name?: string; permissions?: Record<string, string[]> }) =>
     api.put(`/basicdata/users/roles/${id}`, data),
   deleteRole: (id: number) => api.delete(`/basicdata/users/roles/${id}`),
-  create: (data: { username: string; display_name?: string; password: string; role_id?: number; emp_code?: string; supplier_name?: string; is_active?: boolean }) =>
+  create: (data: { username: string; display_name?: string; password: string; role_id?: number; emp_code?: string; supplier_name?: string; wecom_user_id?: string; is_active?: boolean }) =>
     api.post('/basicdata/users', data),
-  update: (id: number, data: { display_name?: string; role_id?: number; emp_code?: string; supplier_name?: string; is_active?: boolean }) =>
+  update: (id: number, data: { display_name?: string; role_id?: number; emp_code?: string; supplier_name?: string; wecom_user_id?: string; is_active?: boolean }) =>
     api.put(`/basicdata/users/${id}`, data),
   resetPassword: (id: number, new_password: string) =>
     api.put(`/basicdata/users/${id}/password`, { new_password }),
@@ -629,12 +688,47 @@ export const userApi = {
 }
 
 // ============ 页面分享 ============
+export interface ShareCreateRecipient {
+  user_ids: string[]
+}
+
+export interface WecomUser {
+  userid: string
+  name: string
+  department?: number[]
+}
+
+export interface WecomDepartment {
+  id: number
+  parent_id: number
+  name: string
+  order?: number
+}
+
 export const shareApi = {
-  create: (data: { target_path: string; target_params?: object; expires_in?: string; permissions?: string[] }) =>
-    api.post('/share', data),
-  verify: (token: string) => api.get(`/share/${token}`),
+  create: (params: {
+    target_path: string
+    expires_in?: string
+    permissions?: string[]
+    reason?: string
+    target_params?: Record<string, string>
+    auto_send_wecom?: boolean
+    recipient?: ShareCreateRecipient
+  }) => api.post('/share', params),
+  verify: (token: string, code?: string) =>
+    api.get(`/share/${token}`, { params: code ? { code } : {} }),
   list: () => api.get('/share/list'),
   revoke: (id: number) => api.delete(`/share/${id}`),
+  sendWecom: (shareId: number, recipient: ShareCreateRecipient) =>
+    api.post(`/share/${shareId}/send-wecom`, recipient),
+}
+
+export const wecomApi = {
+  listUsers: (keyword?: string) =>
+    api.get<WecomUser[], WecomUser[]>('/wecom/users', { params: keyword ? { keyword } : {} }),
+  listDepartments: () =>
+    api.get<WecomDepartment[], WecomDepartment[]>('/wecom/departments'),
+  testConnection: () => api.post('/wecom/test-connection'),
 }
 
 

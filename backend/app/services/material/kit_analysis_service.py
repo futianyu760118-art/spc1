@@ -335,7 +335,11 @@ async def _get_bom_demand_map(
 
     递归展开多层 BOM：若 BomDetail 中的子件物料本身有子 BOM（scm_bom 中存在该 material_id 的记录），
     则继续往下展开，将所有层级的物料拆解成列表放到同一层。
-    需求量 = 本级 standard_qty × 上级需求量，跨多行聚合求和；子级除以 base_qty 换算。
+    需求量公式（纯连乘，无除法）：
+        factor(root) = 订单数量
+        req(N)        = N.standard_qty × factor(N)
+        factor(child) = req(parent)
+      即：req(N) = N.standard_qty × 订单数量 × Π(所有父级 standard_qty)；跨多行聚合求和。
     返回 (demand_map, product_map)，其中：
       demand_map:  dict[material_code -> bom_demand_qty]
       product_map: dict[material_code -> (product_code, product_name)]
@@ -429,11 +433,10 @@ async def _get_bom_demand_map(
                 if material_code not in product:
                     product[material_code] = product_info
 
-                # 检查子物料是否有子 BOM，有则入队继续展开
+                # 检查子物料是否有子 BOM，有则入队继续展开（纯连乘：子级 factor = 本级需求量，不再除 base_qty）
                 sub_bom = sub_material_boms.get(material_id)
                 if sub_bom and sub_bom.bom_id not in visited_bom_ids:
-                    base_qty = sub_bom.base_qty if sub_bom.base_qty else Decimal("1")
-                    next_queue.append((sub_bom.bom_id, material_demand / base_qty, product_info))
+                    next_queue.append((sub_bom.bom_id, material_demand, product_info))
 
         queue = next_queue
 
@@ -1454,6 +1457,9 @@ def _attach_kit_to_tree(
         if code:
             covered_codes.add(code)
         base_data = kit_item.model_dump() if kit_item else {}
+        # 订单级物料未覆盖到的 BOM 节点,用 BOM 主数据单位兜底,保证单位列始终可见
+        if not kit_item and getattr(node, "unit", None):
+            base_data["unit_name"] = node.unit
         base_data.update({
             "level": node.level,
             "bom_id": node.bom_id,

@@ -23,3 +23,8 @@ from app.models.basicdata.file_asset import FileAsset  # noqa: F401
 from app.models.basicdata.feedback import Feedback  # noqa: F401
 from app.models.basicdata.permission import SysPermission  # noqa: F401
 from app.models.basicdata.data_supply import DataSupplyConfig, DataSupplyApiKey, DataSupplyCallLog  # noqa: F401
+from app.models.basicdata.share_link import ShareLink  # noqa: F401
+from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa: F401
+from app.models.basicdata.writeback_sql_config import WritebackSqlConfig  # noqa: F401
+from app.models.basicdata.writeback_queue import WritebackQueue  # noqa: F401
+from app.models.basicdata.writeback_log import WritebackLog  # noqa: F401

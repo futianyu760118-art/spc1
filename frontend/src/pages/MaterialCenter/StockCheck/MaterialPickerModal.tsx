@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Modal, Input, Table, Button, Space, message, Pagination, Spin, Tabs, Empty, Popconfirm } from 'antd'
+import { Modal, Input, Table, Button, Space, message, Pagination, Spin, Tabs, Empty, Popconfirm, Tag, Tooltip } from 'antd'
 import { SearchOutlined, ClearOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { materialApi } from '@/services/api'
-import { useStockCheckPoolStore, PoolMaterial } from '@/store/stockCheckPool'
+import { useStockCheckPoolStore, PoolMaterial, poolKey } from '@/store/stockCheckPool'
 
 interface MaterialCandidate {
   erp_material_id: number
@@ -11,6 +11,12 @@ interface MaterialCandidate {
   spec_model?: string | null
   unit?: string | null
   system_qty?: number | null
+  // wh_id === undefined 表示旧版池数据(整物料全仓库); null 表示未入库合成行
+  wh_id?: number | null
+  wh_code?: string | null
+  wh_name?: string | null
+  recent_checked_check_no?: string | null
+  recent_checked_date?: string | null
 }
 
 interface Props {
@@ -22,31 +28,42 @@ interface Props {
 
 type TabKey = 'search' | 'pool'
 
+function rowKey(row: Pick<MaterialCandidate, 'erp_material_id' | 'wh_id'>): string {
+  return poolKey(row)
+}
+
 export default function MaterialPickerModal({ open, onCancel, onConfirm, confirmLoading }: Props) {
   const [keyword, setKeyword] = useState('')
+  const [whFilter, setWhFilter] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [items, setItems] = useState<MaterialCandidate[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
-  const [selectedMap, setSelectedMap] = useState<Record<number, MaterialCandidate>>({})
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [selectedMap, setSelectedMap] = useState<Record<string, MaterialCandidate>>({})
 
   const [activeTab, setActiveTab] = useState<TabKey>('search')
-  const [poolSelectedIds, setPoolSelectedIds] = useState<number[]>([])
+  const [poolSelectedIds, setPoolSelectedIds] = useState<string[]>([])
+  const [poolKeyword, setPoolKeyword] = useState('')
 
   const poolItems = useStockCheckPoolStore((s) => s.items)
   const poolAdd = useStockCheckPoolStore((s) => s.add)
   const poolRemove = useStockCheckPoolStore((s) => s.remove)
   const poolClear = useStockCheckPoolStore((s) => s.clear)
-  const poolIdSet = useMemo(() => new Set(poolItems.map((p) => p.erp_material_id)), [poolItems])
+  const poolHas = useStockCheckPoolStore((s) => s.has)
 
   useEffect(() => {
     if (!open || activeTab !== 'search') return
     let cancelled = false
     setLoading(true)
     materialApi
-      .listMaterialCandidates({ keyword: keyword || undefined, page, page_size: pageSize })
+      .listMaterialCandidates({
+        keyword: keyword || undefined,
+        wh_id: whFilter || undefined,
+        page,
+        page_size: pageSize,
+      })
       .then((res: any) => {
         if (cancelled) return
         const data = res?.data || {}
@@ -56,8 +73,9 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
         // 搜索结果只有 1 条时自动勾选（累积，不覆盖已选），用户仍需手动点「确定」
         if (list.length === 1) {
           const only = list[0]
-          setSelectedIds((prev) => prev.has(only.erp_material_id) ? prev : new Set(prev).add(only.erp_material_id))
-          setSelectedMap((prev) => prev[only.erp_material_id] ? prev : { ...prev, [only.erp_material_id]: only })
+          const key = rowKey(only)
+          setSelectedIds((prev) => prev.has(key) ? prev : new Set(prev).add(key))
+          setSelectedMap((prev) => prev[key] ? prev : { ...prev, [key]: only })
         }
       })
       .catch((err: any) => {
@@ -69,53 +87,57 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
     return () => {
       cancelled = true
     }
-  }, [open, activeTab, keyword, page, pageSize])
+  }, [open, activeTab, keyword, whFilter, page, pageSize])
 
   useEffect(() => {
     if (!open) {
       setSelectedIds(new Set())
       setSelectedMap({})
       setKeyword('')
+      setWhFilter('')
       setPage(1)
       setActiveTab('search')
       setPoolSelectedIds([])
+      setPoolKeyword('')
     }
   }, [open])
 
   const toggleRow = (row: MaterialCandidate) => {
+    const key = rowKey(row)
     setSelectedIds((prev) => {
       const next = new Set(prev)
-      if (next.has(row.erp_material_id)) {
-        next.delete(row.erp_material_id)
+      if (next.has(key)) {
+        next.delete(key)
       } else {
-        next.add(row.erp_material_id)
+        next.add(key)
       }
       return next
     })
     setSelectedMap((prev) => {
       const next = { ...prev }
-      if (selectedIds.has(row.erp_material_id)) {
-        delete next[row.erp_material_id]
+      if (selectedIds.has(key)) {
+        delete next[key]
       } else {
-        next[row.erp_material_id] = row
+        next[key] = row
       }
       return next
     })
   }
 
   const togglePageAll = () => {
-    const allSelected = items.length > 0 && items.every((it) => selectedIds.has(it.erp_material_id))
+    const allSelected = items.length > 0 && items.every((it) => selectedIds.has(rowKey(it)))
     setSelectedIds((prev) => {
       const next = new Set(prev)
       setSelectedMap((prevMap) => {
         const nextMap = { ...prevMap }
         items.forEach((it) => {
+          const key = rowKey(it)
           if (allSelected) {
-            next.delete(it.erp_material_id)
-            delete nextMap[it.erp_material_id]
+            next.delete(key)
+            delete nextMap[key]
           } else {
-            next.add(it.erp_material_id)
-            nextMap[it.erp_material_id] = it
+            next.add(key)
+            nextMap[key] = it
           }
         })
         return nextMap
@@ -125,7 +147,7 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
   }
 
   const allOnPageSelected = useMemo(
-    () => items.length > 0 && items.every((it) => selectedIds.has(it.erp_material_id)),
+    () => items.length > 0 && items.every((it) => selectedIds.has(rowKey(it))),
     [items, selectedIds],
   )
 
@@ -146,6 +168,9 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       spec_model: r.spec_model ?? null,
       unit: r.unit ?? null,
       system_qty: r.system_qty ?? null,
+      wh_id: r.wh_id ?? null,
+      wh_code: r.wh_code ?? null,
+      wh_name: r.wh_name ?? null,
       added_at: new Date().toISOString(),
     }))
     poolAdd(poolMaterials)
@@ -171,18 +196,29 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       message.warning('一次最多创建 500 个物料的盘点单，请减少勾选数量')
       return
     }
-    const selected: MaterialCandidate[] = poolSelectedIds.map((id) => {
-      const row = poolItems.find((p) => p.erp_material_id === id)
+    const selected: MaterialCandidate[] = poolSelectedIds.map((key) => {
+      const row = poolItems.find((p) => poolKey(p) === key)
       return {
-        erp_material_id: id,
+        erp_material_id: row?.erp_material_id ?? 0,
         material_code: row?.material_code ?? null,
         material_name: row?.material_name ?? null,
         spec_model: row?.spec_model ?? null,
         unit: row?.unit ?? null,
         system_qty: row?.system_qty ?? null,
+        wh_id: row?.wh_id,
+        wh_code: row?.wh_code ?? null,
+        wh_name: row?.wh_name ?? null,
       }
-    })
+    }).filter((s) => s.erp_material_id > 0)
     onConfirm(selected, 'pool')
+  }
+
+  const renderWhName = (row: { wh_name?: string | null }) => {
+    const name = (row.wh_name ?? '').trim()
+    if (name === '(未入库)' || name === '未入库') {
+      return <span style={{ color: '#999' }}>(未入库)</span>
+    }
+    return name || '—'
   }
 
   const searchColumns = [
@@ -200,7 +236,7 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       render: (_: any, row: MaterialCandidate) => (
         <input
           type="checkbox"
-          checked={selectedIds.has(row.erp_material_id)}
+          checked={selectedIds.has(rowKey(row))}
           onChange={() => toggleRow(row)}
           style={{ cursor: 'pointer' }}
         />
@@ -209,6 +245,13 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
     { title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 140 },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 180, ellipsis: true },
     { title: '规格', dataIndex: 'spec_model', key: 'spec_model', width: 160, ellipsis: true },
+    {
+      title: '仓库',
+      dataIndex: 'wh_name',
+      key: 'wh_name',
+      width: 140,
+      render: (_: any, row: MaterialCandidate) => renderWhName(row),
+    },
     { title: '单位', dataIndex: 'unit', key: 'unit', width: 70 },
     {
       title: '即时库存',
@@ -219,12 +262,28 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       render: (v: number | null | undefined) => (v == null ? '—' : Number(v).toFixed(2)),
     },
     {
+      title: '最近盘点',
+      dataIndex: 'recent_checked_check_no',
+      key: 'recent_checked_check_no',
+      width: 110,
+      render: (_: any, row: MaterialCandidate) =>
+        row.recent_checked_check_no ? (
+          <Tooltip
+            title={`近期已盘 ${row.recent_checked_check_no}${row.recent_checked_date ? ` · ${row.recent_checked_date}` : ''}`}
+          >
+            <Tag color="default">近期已盘</Tag>
+          </Tooltip>
+        ) : (
+          '—'
+        ),
+    },
+    {
       title: '操作',
       key: 'action',
       width: 130,
       fixed: 'right' as const,
       render: (_: any, row: MaterialCandidate) => {
-        const inPool = poolIdSet.has(row.erp_material_id)
+        const inPool = poolHas({ erp_material_id: row.erp_material_id, wh_id: row.wh_id ?? null })
         return (
           <Button
             size="small"
@@ -244,6 +303,13 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
     { title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 140 },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 180, ellipsis: true },
     { title: '规格', dataIndex: 'spec_model', key: 'spec_model', width: 160, ellipsis: true },
+    {
+      title: '仓库',
+      dataIndex: 'wh_name',
+      key: 'wh_name',
+      width: 140,
+      render: (_: any, row: PoolMaterial) => renderWhName(row),
+    },
     { title: '单位', dataIndex: 'unit', key: 'unit', width: 70 },
     {
       title: '即时库存(快照)',
@@ -272,8 +338,8 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
           danger
           icon={<DeleteOutlined />}
           onClick={() => {
-            poolRemove([row.erp_material_id])
-            setPoolSelectedIds((prev) => prev.filter((id) => id !== row.erp_material_id))
+            poolRemove([{ erp_material_id: row.erp_material_id, wh_id: row.wh_id }])
+            setPoolSelectedIds((prev) => prev.filter((id) => id !== poolKey(row)))
           }}
         >
           移除
@@ -282,9 +348,20 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
     },
   ]
 
+  const filteredPoolItems = useMemo(() => {
+    if (!poolKeyword.trim()) return poolItems
+    const kw = poolKeyword.trim().toLowerCase()
+    return poolItems.filter(
+      (p) =>
+        (p.material_code ?? '').toLowerCase().includes(kw) ||
+        (p.material_name ?? '').toLowerCase().includes(kw) ||
+        (p.wh_name ?? '').toLowerCase().includes(kw),
+    )
+  }, [poolItems, poolKeyword])
+
   const searchTab = (
     <>
-      <Space style={{ marginBottom: 12 }} size="middle">
+      <Space style={{ marginBottom: 12 }} size="middle" wrap>
         <Input
           allowClear
           prefix={<SearchOutlined />}
@@ -294,20 +371,31 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
             setKeyword(e.target.value)
             setPage(1)
           }}
-          style={{ width: 280 }}
+          style={{ width: 260 }}
         />
-        <Button icon={<ClearOutlined />} onClick={() => { setKeyword(''); setPage(1) }}>
+        <Input.Search
+          allowClear
+          placeholder="仓库名称或ID"
+          value={whFilter}
+          onChange={(e) => setWhFilter(e.target.value)}
+          onSearch={(v) => {
+            setWhFilter(v)
+            setPage(1)
+          }}
+          style={{ width: 180 }}
+        />
+        <Button icon={<ClearOutlined />} onClick={() => { setKeyword(''); setWhFilter(''); setPage(1) }}>
           清空
         </Button>
       </Space>
       <Spin spinning={loading}>
         <Table
-          rowKey="erp_material_id"
+          rowKey={rowKey}
           size="small"
           dataSource={items}
           columns={searchColumns as any}
           pagination={false}
-          scroll={{ y: 360 }}
+          scroll={{ y: 360, x: 1100 }}
         />
       </Spin>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
@@ -328,19 +416,29 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
     poolItems.length === 0 ? (
       <Empty description="待盘点池为空，请到「搜索物料」标签添加物料" />
     ) : (
-      <Table
-        rowKey="erp_material_id"
-        size="small"
-        dataSource={poolItems}
-        columns={poolColumns as any}
-        pagination={false}
-        scroll={{ y: 360 }}
-        rowSelection={{
-          selectedRowKeys: poolSelectedIds,
-          onChange: (keys) => setPoolSelectedIds(keys as number[]),
-          preserveSelectedRowKeys: true,
-        }}
-      />
+      <>
+        <Input.Search
+          allowClear
+          prefix={<SearchOutlined />}
+          placeholder="筛选物料编码/名称/仓库"
+          value={poolKeyword}
+          onChange={(e) => setPoolKeyword(e.target.value)}
+          style={{ width: 260, marginBottom: 12 }}
+        />
+        <Table
+          rowKey={(row: PoolMaterial) => poolKey(row)}
+          size="small"
+          dataSource={filteredPoolItems}
+          columns={poolColumns as any}
+          pagination={false}
+          scroll={{ y: 360 }}
+          rowSelection={{
+            selectedRowKeys: poolSelectedIds,
+            onChange: (keys) => setPoolSelectedIds(keys as string[]),
+            preserveSelectedRowKeys: true,
+          }}
+        />
+      </>
     )
 
   const searchFooter = (
@@ -368,7 +466,10 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
         <Button
           disabled={poolSelectedIds.length === 0}
           onClick={() => {
-            poolRemove(poolSelectedIds)
+            poolRemove(poolSelectedIds.map((key) => {
+              const row = poolItems.find((p) => poolKey(p) === key)
+              return { erp_material_id: row?.erp_material_id ?? 0, wh_id: row?.wh_id }
+            }))
             setPoolSelectedIds([])
           }}
         >
@@ -398,7 +499,7 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       title="选择盘点物料"
       open={open}
       onCancel={onCancel}
-      width={900}
+      width={1100}
       destroyOnClose
       footer={activeTab === 'search' ? searchFooter : poolFooter}
     >

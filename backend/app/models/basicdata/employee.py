@@ -15,6 +15,7 @@ class Employee(Base):
     org_id = Column(BigInteger, nullable=True, comment="所属组织ID（主部门）")
     position_id = Column(BigInteger, nullable=True, comment="岗位ID")
     oa_user_id = Column(String(64), nullable=True, unique=True, comment="OA系统用户ID")
+    erp_user_id = Column(BigInteger, nullable=True, comment="ERP系统用户ID（通过姓名匹配回填）")
     manager_oa_user_id = Column(String(64), nullable=True, comment="上级人员OA用户ID")
     login_id = Column(String(64), nullable=True, comment="登录ID")
     position = Column(String(50), nullable=True, comment="岗位名称")

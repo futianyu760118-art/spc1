@@ -39,6 +39,8 @@ class PurchaseOrder(Base):
     arrival_hour_note = Column(String(256))
     inspection_date = Column(Date)
     is_closed = Column(Integer, nullable=False, server_default='0', default=0)
+    last_writeback_at = Column(DateTime, nullable=True, comment="最近一次成功回写时间")
+    last_writeback_status = Column(String(16), nullable=True, comment="success/failed,列表页展示用")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 

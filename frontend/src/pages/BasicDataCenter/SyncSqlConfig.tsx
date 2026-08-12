@@ -10,6 +10,8 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons'
 import api from '../../services/api'
+import PermButton from '../../components/PermButton'
+import { useAuthStore } from '../../store/auth'
 
 const { TextArea } = Input
 
@@ -74,6 +76,7 @@ const SYNC_TYPE_LABELS: Record<string, string> = {
   organizations: '组织',
   positions: '岗位',
   employees: '人员',
+  employee_organizations: '员工组织关系',
   purchase_invoices: '采购开票',
   quality_issues: '品质异常',
   mrp_plan_orders: 'MRP计划订单',
@@ -131,6 +134,11 @@ export default function SyncSqlConfig() {
 
   const syncTypeLabels: Record<string, string> = { ...SYNC_TYPE_LABELS }
   availableTypes.forEach(t => { if (t.label) syncTypeLabels[t.value] = t.label })
+
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canCreate = hasPermission('settings', 'create')
+  const canUpdate = hasPermission('settings', 'update')
+  const canDelete = hasPermission('settings', 'delete')
 
 
   /* ================================================================ */
@@ -555,9 +563,9 @@ export default function SyncSqlConfig() {
       render: (_: any, record: SyncSqlItem) => (
         <Space size="small">
           <Button size="small" icon={<PlayCircleOutlined />} loading={testingId === record.id} onClick={() => handleTest(record.id)}>测试</Button>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
-          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-            <Button size="small" icon={<DeleteOutlined />} danger />
+          <PermButton permResource="settings" permAction="update" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</PermButton>
+          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)} disabled={!canDelete}>
+            <PermButton permResource="settings" permAction="delete" size="small" icon={<DeleteOutlined />} danger />
           </Popconfirm>
         </Space>
       ),
@@ -582,7 +590,7 @@ export default function SyncSqlConfig() {
           <Col>
             <Space>
               <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加配置</Button>
+              <PermButton permResource="settings" permAction="create" type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加配置</PermButton>
             </Space>
           </Col>
         </Row>

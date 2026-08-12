@@ -182,6 +182,68 @@ def _strip_top_level_order_by(sql_text: str) -> str:
     return sql[:last_order_by].rstrip()
 
 
+def _strip_sql_comments(sql_text: str) -> str:
+    """剥离 SQL 注释（-- 行注释、/* */ 块注释），保留字符串字面量('...')、
+    双引号标识符("...")、T-SQL 方括号标识符([...])内的内容。
+
+    用于字段解析前的清洗：原始 SQL 中的行尾 -- 注释会与外层
+    `SELECT TOP 0 * FROM (...) AS __parse__` 的右括号粘连在同一行，
+    导致注释吞掉右括号而报语法错误。
+    """
+    result = []
+    i = 0
+    n = len(sql_text)
+    while i < n:
+        ch = sql_text[i]
+        nxt = sql_text[i + 1] if i + 1 < n else ""
+
+        if ch == "-" and nxt == "-":
+            j = i
+            while j < n and sql_text[j] != "\n":
+                j += 1
+            i = j
+            continue
+
+        if ch == "/" and nxt == "*":
+            j = i + 2
+            while j < n - 1 and not (sql_text[j] == "*" and sql_text[j + 1] == "/"):
+                j += 1
+            i = j + 2 if j < n - 1 else n
+            continue
+
+        if ch in ("'", '"'):
+            quote = ch
+            result.append(ch)
+            i += 1
+            while i < n:
+                result.append(sql_text[i])
+                if sql_text[i] == quote:
+                    if i + 1 < n and sql_text[i + 1] == quote:
+                        result.append(sql_text[i + 1])
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        if ch == "[":
+            result.append(ch)
+            i += 1
+            while i < n:
+                result.append(sql_text[i])
+                if sql_text[i] == "]":
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        result.append(ch)
+        i += 1
+
+    return "".join(result)
+
+
 def _run_erp_test(sql_text: str) -> dict:
     """同步执行 ERP SQL 并返回测试结果（在线程池中调用）"""
     from datetime import datetime, timedelta
@@ -226,8 +288,9 @@ def _run_erp_parse_fields(sql_text: str) -> list:
     try:
         with erp_engine.connect() as conn:
             since = datetime.now() - timedelta(days=30)
-            parse_sql = _strip_top_level_order_by(sql_text)
-            wrapped_sql = f"SELECT TOP 0 * FROM ({parse_sql}) AS __parse__"
+            cleaned = _strip_sql_comments(sql_text)
+            parse_sql = _strip_top_level_order_by(cleaned)
+            wrapped_sql = f"SELECT TOP 0 * FROM ({parse_sql}\n) AS __parse__"
             result = conn.execute(text(wrapped_sql), {"since": since})
             return list(result.keys())
     finally:
@@ -484,45 +547,59 @@ async def get_available_sync_types(
     current_user: dict = Depends(PermissionChecker("settings", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """返回所有已知同步类型（DB 配置 + 模型注册合并），前端用此列表动态渲染下拉/标签。"""
+    """返回所有已知同步类型（已注册同步处理器 ∪ DB 中已配置的类型），前端用此列表动态渲染下拉/标签。
+
+    不再自动枚举所有 ORM 模型生成的候选 key（如 scm_supplier / supplier / suppliers 三态），
+    那样会把数百个没有同步处理器的"无效"类型塞进下拉，污染选择体验。
+    仅暴露两类：
+      1. 同步处理器已注册的类型（同步任务真正可执行的类型）；
+      2. sync_sql_config 表中已配置的类型（保留历史/自定义类型，避免误删用户已配置项）。
+    两类合并后标注 has_model / has_sql，前端可据此提示该类型是否已具同步执行能力。
+    """
+    # 已注册同步处理器支持的 sync_type（与 app/api/v1/basicdata/sync.py VALID_SYNC_TYPES 保持一致，
+    # 排除聚合型 "all"）
+    supported_types = {
+        "orders", "order_details", "materials", "purchase_orders", "customers", "suppliers",
+        "materials_masterdata", "skus", "products", "boms", "bom_details", "warehouses", "locations", "processes",
+        "organizations", "positions", "employees", "employee_organizations", "purchase_invoices",
+        "payment_applies", "quality_issues", "mrp_plan_orders", "production_task_orders", "production_daily_reports",
+        "labor_price_audits", "inventory", "subcontract_orders", "subcontract_order_details", "subject_balances",
+    }
+
     model_map = _get_model_map()
     result_db = await db.execute(select(SyncSqlConfig))
     configs = {c.sync_type: c for c in result_db.scalars().all()}
 
     all_types: dict[str, dict] = {}
 
-    for sync_type, model in model_map.items():
-        if sync_type in ("all",):
-            continue
-        if sync_type in all_types:
-            all_types[sync_type]["has_model"] = True
-        else:
-            label = ""
-            cfg = configs.get(sync_type)
-            if cfg and cfg.description:
-                label = cfg.description.split("—")[0].strip()
-            all_types[sync_type] = {
-                "value": sync_type,
-                "label": label or _humanize_sync_type(sync_type),
-                "has_model": True,
-                "has_sql": bool(cfg and cfg.sql_text and cfg.sql_text.strip()),
-            }
+    for sync_type in supported_types:
+        cfg = configs.get(sync_type)
+        label = ""
+        if cfg and cfg.description:
+            label = cfg.description.split("—")[0].strip()
+        all_types[sync_type] = {
+            "value": sync_type,
+            "label": label or _humanize_sync_type(sync_type),
+            "has_model": sync_type in model_map,
+            "has_sql": bool(cfg and cfg.sql_text and cfg.sql_text.strip()),
+        }
 
+    # 加入 DB 中已配置、但不在 supported_types 的类型（历史/用户自定义），避免误删
     for sync_type, cfg in configs.items():
         if sync_type in all_types:
             all_types[sync_type]["has_sql"] = bool(cfg.sql_text and cfg.sql_text.strip())
             if not all_types[sync_type]["label"] and cfg.description:
                 all_types[sync_type]["label"] = cfg.description.split("—")[0].strip()
-        else:
-            label = ""
-            if cfg.description:
-                label = cfg.description.split("—")[0].strip()
-            all_types[sync_type] = {
-                "value": sync_type,
-                "label": label or _humanize_sync_type(sync_type),
-                "has_model": False,
-                "has_sql": bool(cfg.sql_text and cfg.sql_text.strip()),
-            }
+            continue
+        label = ""
+        if cfg.description:
+            label = cfg.description.split("—")[0].strip()
+        all_types[sync_type] = {
+            "value": sync_type,
+            "label": label or _humanize_sync_type(sync_type),
+            "has_model": sync_type in model_map,
+            "has_sql": bool(cfg.sql_text and cfg.sql_text.strip()),
+        }
 
     return ResponseModel(data=sorted(all_types.values(), key=lambda x: x["value"]))
 
@@ -534,7 +611,8 @@ def _humanize_sync_type(sync_type: str) -> str:
         "materials_masterdata": "物料", "skus": "SKU", "products": "产品",
         "warehouses": "仓库", "locations": "库位", "processes": "工序",
         "organizations": "组织", "positions": "岗位", "employees": "人员",
-        "employee_organizations": "员工组织关系", "purchase_invoices": "采购开票",
+        "employee_organizations": "员工组织关系",
+        "purchase_invoices": "采购开票",
         "payment_applies": "付款申请", "quality_issues": "品质异常",
         "mrp_plan_orders": "MRP计划订单", "production_task_orders": "生产任务单",
         "production_daily_reports": "生产日报表", "inventory": "即时库存",

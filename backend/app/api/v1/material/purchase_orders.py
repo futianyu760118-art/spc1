@@ -112,6 +112,31 @@ async def update_po_status(
     if data.remark:
         po.remark = data.remark
 
+    if po.data_source == "erp":
+        try:
+            from app.services.basicdata.writeback_service import enqueue_writeback
+            from app.services.basicdata.writeback_helpers import spc_status_to_k3, SPC_TO_K3_FSTATUS
+            k3_status = spc_status_to_k3(po.po_status)
+            if k3_status is None:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"writeback skipped: unknown status '{po.po_status}' for po {po.po_no}, "
+                    f"allowed: {list(SPC_TO_K3_FSTATUS.keys())}"
+                )
+            else:
+                await enqueue_writeback(
+                    db,
+                    writeback_type="po_status",
+                    business_table="purchase_order",
+                    business_pk=str(po.id),
+                    target_keys={"FBillNo": po.po_no, "FEntryID": po.detail_id},
+                    payload={"new_status": k3_status},
+                    enqueued_by="system:hook:po_status",
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"writeback enqueue failed for po {po.po_no}: {e}")
+
     await log_audit(db, "purchase_order", po.id, "update", field_name="po_status", old_value=old_status, new_value=data.po_status, operator=current_user["username"])
     await db.commit()
     await db.refresh(po)

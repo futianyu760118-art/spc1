@@ -32,6 +32,8 @@ class SaleOrder(Base):
     audit_date = Column(Date)
     owner = Column(String(64))
     status = Column(String(32), nullable=False, default="open")
+    erp_id = Column(Integer, comment="ERP订单主键ID")
+    erp_status = Column(Integer, comment="ERP订单状态(整型)")
     risk_level = Column(String(16))
     extra_data = Column(JSONB)
     data_source = Column(String(32))

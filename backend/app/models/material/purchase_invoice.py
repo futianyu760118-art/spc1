@@ -14,7 +14,7 @@ class PurchaseInvoice(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     line_no = Column(String(32), nullable=False, comment="发票行号")
-    invoice_no = Column(String(64), nullable=False, index=True, comment="发票号码")
+    invoice_no = Column(String(256), nullable=False, index=True, comment="发票号码")
     invoice_date = Column(Date, comment="开票日期")
     supplier_id = Column(String(64), comment="供应商ID（ERP内部ID）")
     supplier_code = Column(String(64), index=True, comment="供应商编号")

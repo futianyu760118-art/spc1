@@ -7,6 +7,8 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import api from '../../services/api'
+import PermButton from '../../components/PermButton'
+import { useAuthStore } from '../../store/auth'
 
 interface Supplier {
   id: number
@@ -73,6 +75,10 @@ export default function Suppliers() {
   const [editingItem, setEditingItem] = useState<Supplier | null>(null)
   const [form] = Form.useForm()
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canCreate = hasPermission('basicdata.data.suppliers', 'create')
+  const canUpdate = hasPermission('basicdata.data.suppliers', 'update')
+  const canDelete = hasPermission('basicdata.data.suppliers', 'delete')
 
   const fetchData = useCallback(async (page = 1, pageSize = 20) => {
     setLoading(true)
@@ -156,9 +162,9 @@ export default function Suppliers() {
       fixed: 'right' as const,
       render: (_: any, record: Supplier) => (
         <Space size="small">
-          <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
-          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)} okText="确认" cancelText="取消">
-            <Button size="small" danger icon={<DeleteOutlined />} />
+          <PermButton permResource="basicdata.data.suppliers" permAction="update" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
+          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)} okText="确认" cancelText="取消" disabled={!canDelete}>
+            <PermButton permResource="basicdata.data.suppliers" permAction="delete" size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
       ),
@@ -173,7 +179,7 @@ export default function Suppliers() {
           <Col>
             <Space>
               <Button icon={<ReloadOutlined />} onClick={() => fetchData()}>刷新</Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增</Button>
+              <PermButton permResource="basicdata.data.suppliers" permAction="create" type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增</PermButton>
             </Space>
           </Col>
         </Row>

@@ -71,6 +71,7 @@ def mk_material(erp_material_id, code):
     return SimpleNamespace(
         erp_material_id=erp_material_id, material_code=code, material_name=f"name-{code}",
         spec_model=None, unit_of_measure="PCS", material_type=None,
+        material_property=None,
     )
 
 
@@ -80,7 +81,13 @@ def mk_detail_id_row(bom_id):
 
 
 async def test_three_level_tree():
-    """ROOT -> A (subA, base_qty=2) -> A1 ; ROOT -> B (leaf)."""
+    """ROOT -> A (subA, base_qty=2) -> A1 ; ROOT -> B (leaf).
+
+    纯连乘公式（无 base_qty 除法）：
+      factor(root) = 订单数量 = 10
+      req(A)  = std(A)  × factor = 4 × 10 = 40
+      req(A1) = std(A1) × req(A) = 5 × 40 = 200
+    """
     db = FakeDB([
         # 1) Full BomDetail rows per level (3 calls expected: but detail-id queries
         #    also match "scm_bom_detail" — put DISTINCT first so it wins those)
@@ -112,10 +119,10 @@ async def test_three_level_tree():
     assert len(a_node.children) == 1
     a1 = a_node.children[0]
     assert a1.level == 2
-    assert a1.req_qty == 100.0, f"A1 req_qty should be 5*20=100, got {a1.req_qty}"
+    assert a1.req_qty == 200.0, f"A1 req_qty should be 5*40=200 (pure multiplication, no /base_qty), got {a1.req_qty}"
     assert a1.parent_material_id == 100
     assert a1.has_sub_bom is False
-    print("[PASS] 3-level tree: ROOT -> A(req=40) -> A1(req=100); B leaf")
+    print("[PASS] 3-level tree: ROOT -> A(req=40) -> A1(req=200); B leaf")
 
 
 async def test_cycle_protection():

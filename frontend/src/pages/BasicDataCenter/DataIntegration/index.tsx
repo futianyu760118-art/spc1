@@ -11,6 +11,8 @@ import {
   HistoryOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { importExportApi, dashboardApi, notificationApi } from '../../../services/api'
+import PermButton from '../../../components/PermButton'
+import { useAuthStore } from '../../../store/auth'
 import dayjs from 'dayjs'
 
 type SyncType = string
@@ -153,6 +155,8 @@ export default function DataImport() {
   const [ordersData, setOrdersData] = useState<any[]>([])
   const [ordersLoading, setOrdersLoading] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const hasPermission = useAuthStore(s => s.hasPermission)
+  const canImport = hasPermission('basicdata.import', 'import')
 
   const loadConfigStatus = useCallback(async () => {
     setConfigLoading(true)
@@ -563,7 +567,9 @@ export default function DataImport() {
           </div>
         )}
         <Space>
-          <Button
+          <PermButton
+            permResource="basicdata.import"
+            permAction="import"
             type="primary"
             icon={<SyncOutlined spin={syncLoading[type]} />}
             loading={syncLoading[type]}
@@ -571,7 +577,7 @@ export default function DataImport() {
             onClick={() => handleSync(type)}
           >
             {(isOrders || isMaterials) && selectedOrders.length > 0 ? '同步选中订单' : '从 ERP 同步'}
-          </Button>
+          </PermButton>
           {!canSync && cfg?.configured === false && (
             <span style={{ color: '#94a3b8', fontSize: 12 }}>需先配置同步SQL</span>
           )}
@@ -608,14 +614,16 @@ export default function DataImport() {
           />
         </div>
         <div className="filter-right">
-          <Button
+          <PermButton
+            permResource="basicdata.import"
+            permAction="import"
             type="primary"
             icon={<SyncOutlined spin={syncAllLoading} />}
             loading={syncAllLoading}
             onClick={handleSyncAll}
           >
             一键同步所有数据
-          </Button>
+          </PermButton>
           <Button icon={<DownloadOutlined />} onClick={handleExportWeekly}>
             导出周报
           </Button>
@@ -697,7 +705,7 @@ export default function DataImport() {
                   </p>
                   <Space>
                     <Upload {...uploadProps(selectedType)}>
-                      <Button icon={<UploadOutlined />}>选择 Excel/CSV 文件</Button>
+                      <PermButton permResource="basicdata.import" permAction="import" icon={<UploadOutlined />}>选择 Excel/CSV 文件</PermButton>
                     </Upload>
                     <Button icon={<FileExcelOutlined />} onClick={() => downloadTemplate(selectedType)}>下载模板</Button>
                   </Space>

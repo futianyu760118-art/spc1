@@ -47,3 +47,29 @@ async def get_read_only_db() -> AsyncSession:
         except Exception:
             await session.rollback()
             raise
+
+
+import threading
+
+_erp_write_lock = threading.Lock()
+_erp_write_engine = None
+
+
+def get_erp_write_engine():
+    """ERP 写权限的同步 SQLAlchemy engine (pyodbc/psycopg2).
+
+    Returns None if erp_db_url_write is not configured.
+    """
+    global _erp_write_engine
+    if _erp_write_engine is not None:
+        return _erp_write_engine
+    with _erp_write_lock:
+        if _erp_write_engine is not None:
+            return _erp_write_engine
+        from app.core.config import get_settings
+        url = get_settings().erp_db_url_write
+        if not url:
+            return None
+        from sqlalchemy import create_engine
+        _erp_write_engine = create_engine(url, pool_pre_ping=True, pool_recycle=3600)
+        return _erp_write_engine

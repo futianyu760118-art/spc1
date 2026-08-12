@@ -5,6 +5,8 @@ interface UiPreferencesState {
   preferences: Record<string, any>
   getColumnVisibility: (pageKey: string, defaultColumns: string[]) => string[]
   setColumnVisibility: (pageKey: string, visibleColumns: string[]) => void
+  getColumnOrder: (pageKey: string, defaultOrder: string[]) => string[]
+  setColumnOrder: (pageKey: string, order: string[]) => void
   loadFromUser: (user: any) => void
   getFlag: (key: string, defaultValue?: any) => any
   setFlag: (key: string, value: any) => void
@@ -46,6 +48,28 @@ export const useUiPreferencesStore = create<UiPreferencesState>((set, get) => {
 
       authApi.updatePreferences({ ui_preferences: next }).catch((err: Error) => {
         console.error('Failed to save column visibility preference:', err)
+      })
+    },
+
+    getColumnOrder: (pageKey, defaultOrder) => {
+      const prefs = get().preferences
+      const page = prefs[pageKey]
+      if (page && Array.isArray(page.columnOrder) && page.columnOrder.length > 0) {
+        return page.columnOrder
+      }
+      return defaultOrder
+    },
+
+    setColumnOrder: (pageKey, order) => {
+      const next = {
+        ...get().preferences,
+        [pageKey]: { ...get().preferences[pageKey], columnOrder: order },
+      }
+      set({ preferences: next })
+      localStorage.setItem(UI_PREFS_KEY, JSON.stringify(next))
+
+      authApi.updatePreferences({ ui_preferences: next }).catch((err: Error) => {
+        console.error('Failed to save column order preference:', err)
       })
     },
 

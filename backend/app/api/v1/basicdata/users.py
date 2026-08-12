@@ -4,9 +4,14 @@ from typing import Optional, Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import logging
+
 from sqlalchemy import select, func, or_, cast, String
 from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.services.basicdata.wecom.contact_service import list_wecom_users
+from app.services.basicdata.wecom.exceptions import WecomAPIError, WecomNotConfiguredError
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker, get_password_hash, verify_password
@@ -24,6 +29,7 @@ from app.services.basicdata.position_role_service import resolve_employee_role_b
 from app.services.common.export_service import ExportColumn, GenericExportService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 USER_EXPORT_COLUMNS = [
     ExportColumn("username", "用户名", 18),
@@ -50,6 +56,7 @@ class UserCreate(BaseModel):
     role_id: Optional[int] = None
     emp_code: Optional[str] = None
     supplier_name: Optional[str] = None
+    wecom_user_id: Optional[str] = None
     is_active: bool = True
 
 
@@ -58,6 +65,7 @@ class UserUpdate(BaseModel):
     role_id: Optional[int] = None
     emp_code: Optional[str] = None
     supplier_name: Optional[str] = None
+    wecom_user_id: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -237,6 +245,7 @@ async def list_users(
                 "role_code": role.role_code,
                 "role_name": role.role_name,
                 "supplier_name": user.supplier_name,
+                "wecom_user_id": user.wecom_user_id,
                 "is_active": user.is_active,
                 "is_default_password": verify_password(default_pwd, user.hashed_password),
                 "last_login_time": user.last_login_time.strftime("%Y-%m-%d %H:%M") if user.last_login_time else None,
@@ -677,6 +686,40 @@ async def delete_role(
     return ResponseModel(data={"deleted": role_id})
 
 
+async def _validate_wecom_user_id(
+    db: AsyncSession, wecom_user_id: Optional[str], exclude_user_id: Optional[int] = None
+) -> None:
+    """校验企业微信账号绑定：空值放行（允许解绑）；否则查唯一性 + 通讯录存在性。"""
+    if not wecom_user_id:
+        return
+    wecom_user_id = wecom_user_id.strip()
+    if not wecom_user_id:
+        return
+    # 1) 唯一性：每个 wecom userid 至多绑定一个系统用户
+    dup_q = select(SysUser.id, SysUser.username).where(SysUser.wecom_user_id == wecom_user_id)
+    if exclude_user_id is not None:
+        dup_q = dup_q.where(SysUser.id != exclude_user_id)
+    dup = (await db.execute(dup_q)).first()
+    if dup:
+        raise HTTPException(
+            status_code=400, detail=f"该企业微信账号已被用户「{dup.username}」绑定"
+        )
+    # 2) 存在性：所选 userid 必须在企业微信通讯录中
+    try:
+        wecom_users = await list_wecom_users()
+    except WecomNotConfiguredError:
+        logger.warning("企业微信未配置，跳过绑定存在性校验: %s", wecom_user_id)
+        return
+    except WecomAPIError as e:
+        raise HTTPException(
+            status_code=503, detail=f"企业微信通讯录获取失败，请稍后重试（{e.errmsg}）"
+        ) from e
+    if not any(u.get("userid") == wecom_user_id for u in wecom_users):
+        raise HTTPException(
+            status_code=400, detail=f"企业微信账号不存在: {wecom_user_id}"
+        )
+
+
 # ---------- 创建用户 ----------
 @router.post("", response_model=ResponseModel[dict])
 async def create_user(
@@ -690,6 +733,7 @@ async def create_user(
 
     role, employee, _ = await _resolve_user_role(body.role_id, body.emp_code, db)
     supplier_name = await _validate_supplier_binding(role, body.supplier_name, db)
+    await _validate_wecom_user_id(db, body.wecom_user_id)
 
     user = SysUser(
         username=body.username,
@@ -698,6 +742,7 @@ async def create_user(
         role_id=role.id,
         supplier_name=supplier_name,
         emp_code=employee.emp_code if employee else None,
+        wecom_user_id=body.wecom_user_id.strip() if body.wecom_user_id else None,
         is_active=body.is_active,
     )
     db.add(user)
@@ -739,6 +784,9 @@ async def update_user(
     elif body.supplier_name is not None:
         role = await _resolve_role(user.role_id, db)
         user.supplier_name = await _validate_supplier_binding(role, body.supplier_name, db)
+    # 企业微信绑定：前端始终回传当前值或 null，故无条件赋值（支持清空解绑）
+    await _validate_wecom_user_id(db, body.wecom_user_id, exclude_user_id=user_id)
+    user.wecom_user_id = body.wecom_user_id.strip() if body.wecom_user_id else None
     if body.is_active is not None:
         user.is_active = body.is_active
 
