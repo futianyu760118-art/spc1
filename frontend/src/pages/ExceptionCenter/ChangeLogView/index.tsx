@@ -28,7 +28,7 @@ export default function ChangeLogView() {
       setData(res.data.items)
       setTotal(res.data.total)
     } catch (e: any) {
-      message.error(e.message || '获取变更日志失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -42,7 +42,7 @@ export default function ChangeLogView() {
       message.success(`导入完成：新增 ${res.data.created}，跳过 ${res.data.skipped}`)
       load()
     } catch (e: any) {
-      message.error(`导入失败：${e.message}`)
+      // 错误已由全局拦截器提示
     }
     return false
   }
@@ -68,7 +68,7 @@ export default function ChangeLogView() {
       message.success('删除成功')
       load()
     } catch (e: any) {
-      message.error(`删除失败：${e.message}`)
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -91,9 +91,8 @@ export default function ChangeLogView() {
     } catch (e: any) {
       if (e.errorFields) {
         message.error('请填写必填字段')
-      } else {
-        message.error(e.message || '操作失败')
       }
+      // 请求失败已由全局拦截器提示
     }
   }
 

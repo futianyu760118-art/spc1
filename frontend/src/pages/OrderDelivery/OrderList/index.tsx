@@ -270,7 +270,7 @@ export default function OrderList() {
     packaging_status: [],
     procurement_status: [],
     delivery_completed: ['no'],
-    is_closed: ['0'],
+    is_closed: [],
     order_type: ['big'],
     promised_date_range: null,
     shipping_plan_range: null,
@@ -379,7 +379,7 @@ export default function OrderList() {
       }))
       message.success('保存成功')
     } catch {
-      message.error('保存失败')
+      // 错误已由全局拦截器提示
     } finally {
       savingCellRef.current = null
       setSavingCell(null)
@@ -641,7 +641,6 @@ export default function OrderList() {
     } catch (err: any) {
       const detail = err?.response?.data?.message || err?.response?.data?.detail || err?.message || '未知错误'
       console.error('[OrderList] fetchOrders failed:', err)
-      message.error(`获取订单列表失败: ${detail}`)
     } finally {
       setLoading(false)
     }
@@ -702,7 +701,7 @@ export default function OrderList() {
       message.success(`扫描完成: ${res.data.new_issues} 个新问题, ${res.data.updated_orders} 个订单更新`)
       fetchOrders()
     } catch {
-      message.error('风险扫描失败')
+      // 错误已由全局拦截器提示
     } finally {
       setScanning(false)
     }
@@ -883,7 +882,6 @@ export default function OrderList() {
       fetchOrders(pagination.current, pagination.pageSize)
     } catch (err: any) {
       if (err?.errorFields) return // form validation error
-      message.error('保存失败')
     } finally {
       setSaving(false)
     }
@@ -897,7 +895,7 @@ export default function OrderList() {
       const res: any = await orderApi.getDetail(orderNo, lineNo || undefined)
       setDetailCache(prev => ({ ...prev, [cacheKey]: res.data }))
     } catch {
-      message.error('获取订单详情失败')
+      // 错误已由全局拦截器提示
     } finally {
       setDetailLoading(prev => ({ ...prev, [cacheKey]: false }))
     }

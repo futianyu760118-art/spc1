@@ -319,15 +319,18 @@ export default function StockCheckPage() {
     },
   })
 
-  // 存在感:聚焦即声明编辑某行(立即广播 + 心跳续命);离开只停心跳,不发 null。
-  // 不发 null 的原因:Ant InputNumber 的 blur/focus 时序不稳定,blur 计时器会误触发,
-  // 把刚发出的 presence 立即清掉,导致对方看不到。改为靠 Redis TTL 60s 自然过期 +
-  // SSE 断开时服务端 finally 兜底清除(关页/导航立即清)。
+  // 存在感:聚焦即声明编辑某行(立即广播 + 心跳续命);离开停心跳并延迟清除 presence。
+  // 用 150ms 防抖避免 Ant InputNumber blur/focus 时序抖动导致误清:
+  // 若 blur 后 150ms 内又 focus 回同一行,取消清除。
+  const clearPresenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const handleEditingFocus = useCallback((itemId: number) => {
+    // 取消待发的 clear presence
+    if (clearPresenceTimer.current) { clearTimeout(clearPresenceTimer.current); clearPresenceTimer.current = null }
     setEditingItemId(itemId)
     const cid = activeCheck?.id
-    if (!cid) { console.log('[presence-debug] focus 跳过: 无 activeCheck'); return }
-    console.log('[presence-debug] focus → 发送 POST presence', { cid, itemId })
+    if (!cid) return
+    console.log('[presence-debug] focus → POST presence', { cid, itemId })
     materialApi.updateStockCheckPresence(cid, itemId)
       .then(() => console.log('[presence-debug] POST presence 成功', itemId))
       .catch((e) => console.log('[presence-debug] POST presence 失败', itemId, e?.response?.status, e?.response?.data))
@@ -339,15 +342,26 @@ export default function StockCheckPage() {
   }, [activeCheck?.id])
 
   const handleEditingBlur = useCallback(() => {
-    console.log('[presence-debug] blur → 停心跳(不发 null)')
+    console.log('[presence-debug] blur → 停心跳 + 延迟清 presence')
     setEditingItemId(null)
     if (presenceHeartbeat.current) { clearInterval(presenceHeartbeat.current); presenceHeartbeat.current = null }
-  }, [])
+    const cid = activeCheck?.id
+    if (!cid) return
+    // 防抖: 150ms 后才真正清除,避免 InputNumber 内部 focus/blur 抖动误清
+    clearPresenceTimer.current = setTimeout(() => {
+      clearPresenceTimer.current = null
+      console.log('[presence-debug] blur 防抖到期 → POST presence null')
+      materialApi.updateStockCheckPresence(cid, null)
+        .then(() => console.log('[presence-debug] POST presence null 成功'))
+        .catch((e) => console.log('[presence-debug] POST presence null 失败', e?.response?.status))
+    }, 150)
+  }, [activeCheck?.id])
 
-  // 卸载时清理心跳
+  // 卸载时清理心跳 + 清除计时器
   useEffect(() => {
     return () => {
       if (presenceHeartbeat.current) clearInterval(presenceHeartbeat.current)
+      if (clearPresenceTimer.current) clearTimeout(clearPresenceTimer.current)
     }
   }, [])
 
@@ -798,6 +812,8 @@ export default function StockCheckPage() {
     setActiveCheck(null)
     setItems([])
     setCheckIdParam(null)
+    setSearchText('')
+    setOrderNo('')
     setParams({})
   }, [setParams])
 
@@ -981,7 +997,14 @@ export default function StockCheckPage() {
               disabled={readonly || !!r.recent_checked_check_no}
               value={r.actual_qty != null ? Number(r.actual_qty) : null}
               onFocus={() => handleEditingFocus(r.id)}
-              onBlur={() => handleEditingBlur()}
+              ref={(el: any) => {
+                if (el) {
+                  const nativeEl = el.nativeElement || el
+                  if (nativeEl?.addEventListener) {
+                    nativeEl.addEventListener('blur', () => handleEditingBlur(), true)
+                  }
+                }
+              }}
               onChange={(v) => {
                 const actual = v == null ? null : Number(v)
                 const diff = actual != null && r.system_qty != null ? actual - Number(r.system_qty) : null

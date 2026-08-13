@@ -56,7 +56,7 @@ export default function RiskRules() {
       const res: any = await ruleApi.list()
       setData(res.data || [])
     } catch {
-      message.error('获取规则列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -130,7 +130,7 @@ export default function RiskRules() {
       setModalOpen(false)
       fetchData()
     } catch {
-      message.error('保存失败')
+      // 错误已由全局拦截器提示
     }
   }
 

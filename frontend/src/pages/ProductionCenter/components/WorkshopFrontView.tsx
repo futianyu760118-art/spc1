@@ -81,7 +81,7 @@ export default function WorkshopFrontView({ processType, workshopLabel }: Worksh
       })
       setTomorrowPlans(resTomorrow.data?.items || [])
     } catch (e: any) {
-      message.error(e.message || '加载失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

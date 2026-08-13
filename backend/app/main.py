@@ -136,8 +136,20 @@ async def lifespan(app: FastAPI):
     # 启动时：开启写回 Worker
     from app.services.basicdata.writeback_worker import writeback_worker
     writeback_worker.start()
+    # 启动时：初始化通知 SSE broker 的共享 Redis 客户端
+    try:
+        from app.services.notification.notification_broker import init_client
+        await init_client()
+    except Exception as e:
+        logger.warning(f"[启动] 通知 broker redis 初始化失败（将降级）: {e}")
     yield
     # 关闭时：停止调度器
+    # 关闭通知 broker 共享 Redis 客户端
+    try:
+        from app.services.notification.notification_broker import close_client
+        await close_client()
+    except Exception:
+        pass
     await writeback_worker.stop()
     capacity_sync_scheduler.stop()
     overdue_checker.stop()

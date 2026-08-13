@@ -22,7 +22,7 @@ from app.services.basicdata.wecom.contact_service import (
     list_wecom_departments,
     list_wecom_users,
 )
-from app.services.basicdata.wecom.exceptions import WecomNotConfiguredError
+from app.services.basicdata.wecom.exceptions import WecomAPIError, WecomError, WecomNotConfiguredError
 from app.services.basicdata.wecom.send_service import (
     RecipientSpec,
     WecomPushResult,
@@ -33,8 +33,16 @@ wecom_public_router = APIRouter()
 wecom_share_router = APIRouter()
 
 
-def _err(exc: WecomNotConfiguredError) -> HTTPException:
-    return HTTPException(status_code=501, detail={"code": 1001, "message": str(exc)})
+def _err(exc: WecomError) -> HTTPException:
+    """将企微异常映射为前端可读的 HTTP 错误（detail 为字符串，全局拦截器直接 toast）。"""
+    if isinstance(exc, WecomNotConfiguredError):
+        return HTTPException(status_code=501, detail=str(exc))
+    if isinstance(exc, WecomAPIError):
+        return HTTPException(
+            status_code=502,
+            detail=f"企业微信接口调用失败（errcode={exc.errcode}）：{exc.errmsg}",
+        )
+    return HTTPException(status_code=502, detail=str(exc))
 
 
 @wecom_public_router.get("/users", response_model=ResponseModel)
@@ -45,7 +53,7 @@ async def get_wecom_users(
 ):
     try:
         users = await list_wecom_users(keyword)
-    except WecomNotConfiguredError as e:
+    except WecomError as e:
         raise _err(e) from e
     return ResponseModel(data=users)
 
@@ -57,7 +65,7 @@ async def get_wecom_departments(
 ):
     try:
         departments = await list_wecom_departments()
-    except WecomNotConfiguredError as e:
+    except WecomError as e:
         raise _err(e) from e
     return ResponseModel(data=departments)
 
@@ -71,7 +79,7 @@ async def test_connection(
         raise HTTPException(status_code=403, detail={"code": 1003, "message": "仅管理员可调用"})
     try:
         users = await list_wecom_users()
-    except WecomNotConfiguredError as e:
+    except WecomError as e:
         raise _err(e) from e
     return ResponseModel(data={"user_count": len(users)})
 
@@ -108,7 +116,7 @@ async def send_share_to_wecom(
             r = await push_share_link(db, link, user_recipients, share_url)
             aggregated.success += r.success
             aggregated.failed.extend(r.failed)
-    except WecomNotConfiguredError as e:
+    except WecomError as e:
         raise _err(e) from e
 
     return ResponseModel(data=aggregated.to_dict())

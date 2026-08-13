@@ -127,7 +127,7 @@ export default function WritebackMonitor() {
       fetchStats()
       actionRef.current?.reload()
     } catch {
-      message.error('重试失败')
+      // 错误已由全局拦截器提示
     } finally {
       setRetryingId(null)
     }
@@ -140,7 +140,7 @@ export default function WritebackMonitor() {
       fetchStats()
       actionRef.current?.reload()
     } catch {
-      message.error('操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Table, Tag, Button, Modal, Form, Input, Select, Space, message, Popconfirm, Switch, Row, Col } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, ReloadOutlined, ExportOutlined, SyncOutlined, UserAddOutlined, SearchOutlined, TeamOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, ReloadOutlined, ExportOutlined, SyncOutlined, UserAddOutlined, SearchOutlined, TeamOutlined, LinkOutlined } from '@ant-design/icons'
 import api, { userApi, wecomApi, type WecomUser } from '../../services/api'
 import ExportColumnSelector, { type ExportColumnOption } from '../../components/ExportColumnSelector'
 import { useExport } from '../../hooks/useExport'
@@ -119,6 +119,7 @@ export default function UserManagement() {
   const isSupplierRole = selectedRole?.role_code === 'supplier'
   const selectedEmployee = employeeOptions.find(item => item.emp_code === selectedEmpCode)
   const hasPositionRole = !!selectedEmployee?.role_id
+  const canEditWecom = hasPermission('users', 'update')
 
   // ======== 批量开通员工 ========
   const [unprovLoading, setUnprovLoading] = useState(false)
@@ -134,6 +135,17 @@ export default function UserManagement() {
   const [unprovPosOptions, setUnprovPosOptions] = useState<string[]>([])
   const [provisionModalOpen, setProvisionModalOpen] = useState(false)
   const [provisioning, setProvisioning] = useState(false)
+
+  // ======== 批量绑定企业微信 ========
+  const [wecomMatchOpen, setWecomMatchOpen] = useState(false)
+  const [wecomMatchLoading, setWecomMatchLoading] = useState(false)
+  const [wecomMatchItems, setWecomMatchItems] = useState<any[]>([])
+  const [wecomMatchStats, setWecomMatchStats] = useState({ matched: 0, ambiguous: 0, unmatched: 0 })
+  const [wecomMatchSelected, setWecomMatchSelected] = useState<number[]>([])
+  const [wecomMatchValues, setWecomMatchValues] = useState<Record<number, string>>({})
+  const [wecomBindSaving, setWecomBindSaving] = useState(false)
+  const [editingWecomId, setEditingWecomId] = useState<number | null>(null)
+  const [savingWecomId, setSavingWecomId] = useState<number | null>(null)
 
   // ======== 批量操作 ========
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([])
@@ -243,6 +255,68 @@ export default function UserManagement() {
     }
   }
 
+  const handleOpenWecomMatch = async () => {
+    setWecomMatchOpen(true)
+    setWecomMatchLoading(true)
+    try {
+      const res: any = await userApi.wecomMatch()
+      const data = res?.data || {}
+      const items: any[] = data.items || []
+      setWecomMatchItems(items)
+      setWecomMatchStats(data.stats || { matched: 0, ambiguous: 0, unmatched: 0 })
+      setWecomMatchSelected(items.filter((it: any) => it.match_status === 'matched').map((it: any) => it.user_id))
+      const vals: Record<number, string> = {}
+      items.forEach((it: any) => { if (it.suggested_wecom_userid) vals[it.user_id] = it.suggested_wecom_userid })
+      setWecomMatchValues(vals)
+    } catch {
+      // 全局拦截器已 toast
+    } finally {
+      setWecomMatchLoading(false)
+    }
+  }
+
+  const handleBatchBindWecom = async () => {
+    const bindings = wecomMatchSelected
+      .map(uid => ({ user_id: uid, wecom_user_id: wecomMatchValues[uid] }))
+      .filter(b => b.wecom_user_id)
+    if (bindings.length === 0) {
+      message.warning('请勾选并选择企业微信账号')
+      return
+    }
+    setWecomBindSaving(true)
+    try {
+      const res: any = await userApi.batchBindWecom(bindings)
+      const data = res?.data || {}
+      const updated = data.updated || 0
+      const errs = data.errors || []
+      if (errs.length) {
+        message.warning(`成功绑定 ${updated} 个，${errs.length} 条失败：${errs[0]?.message || ''}`)
+      } else {
+        message.success(`成功绑定 ${updated} 个用户`)
+      }
+      setWecomMatchOpen(false)
+      fetchUsers()
+    } catch {
+      // 全局拦截器已 toast
+    } finally {
+      setWecomBindSaving(false)
+    }
+  }
+
+  const handleInlineWecomSave = async (userId: number, newValue: string | null) => {
+    setSavingWecomId(userId)
+    try {
+      await userApi.update(userId, { wecom_user_id: newValue ?? undefined })
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, wecom_user_id: newValue } : u))
+      message.success(newValue ? '企业微信已更新' : '已解绑企业微信')
+    } catch {
+      // 本地未变，关闭编辑器即恢复旧值；全局拦截器已 toast 错误
+    } finally {
+      setSavingWecomId(null)
+      setEditingWecomId(null)
+    }
+  }
+
   const fetchUsers = async (opts?: { page?: number; pageSize?: number; sortBy?: string; sortOrder?: string; filters?: Record<string, string[]>; keyword?: string }) => {
     const p = opts?.page ?? userPage
     const ps = opts?.pageSize ?? userPageSize
@@ -272,7 +346,7 @@ export default function UserManagement() {
         setUserTotal(payload?.total ?? 0)
       }
     } catch {
-      message.error('加载用户列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -288,7 +362,7 @@ export default function UserManagement() {
         setRoles(payload?.items || [])
       }
     } catch {
-      message.error('加载角色列表失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -300,7 +374,7 @@ export default function UserManagement() {
       const res: any = await userApi.employeeOptions(params)
       setEmployeeOptions(res.data || [])
     } catch {
-      message.error('加载员工列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setEmployeeLoading(false)
     }
@@ -351,7 +425,7 @@ export default function UserManagement() {
         setSuppliers(prev => keyword.trim() ? mergeSuppliers([...prev, ...items]) : mergeSuppliers(items))
       }
     } catch {
-      message.error('加载供应商列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       if (requestSeq === supplierRequestSeq.current) {
         setSupplierLoading(false)
@@ -468,7 +542,7 @@ export default function UserManagement() {
       setModalOpen(false)
       fetchUsers()
     } catch (e: any) {
-      if (e?.response?.data?.detail) message.error(e.response.data.detail)
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -478,7 +552,7 @@ export default function UserManagement() {
       message.success('已删除')
       fetchUsers()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -496,7 +570,7 @@ export default function UserManagement() {
       message.success(`已重置 ${pwdUser.username} 的密码`)
       setPwdModalOpen(false)
     } catch (e: any) {
-      if (e?.response?.data?.detail) message.error(e.response.data.detail)
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -506,7 +580,7 @@ export default function UserManagement() {
       message.success(record.is_active ? '已停用' : '已启用')
       fetchUsers({ sortBy: userQuery.sortBy, sortOrder: userQuery.sortOrder, filters: userQuery.filters })
     } catch {
-      message.error('操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -534,7 +608,7 @@ export default function UserManagement() {
       message.success(`同步完成：${parts.join('，')}`)
       fetchUsers()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '同步角色失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSyncingRoles(false)
     }
@@ -563,7 +637,7 @@ export default function UserManagement() {
       setIsSelectAllFiltered(false)
       fetchUsers({ sortBy: userQuery.sortBy, sortOrder: userQuery.sortOrder, filters: userQuery.filters })
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '操作失败')
+      // 错误已由全局拦截器提示
     } finally {
       setBatchLoading(false)
     }
@@ -591,7 +665,7 @@ export default function UserManagement() {
       setIsSelectAllFiltered(false)
       fetchUsers({ sortBy: userQuery.sortBy, sortOrder: userQuery.sortOrder, filters: userQuery.filters })
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '重置密码失败')
+      // 错误已由全局拦截器提示
     } finally {
       setBatchLoading(false)
     }
@@ -619,7 +693,7 @@ export default function UserManagement() {
       setIsSelectAllFiltered(false)
       fetchUsers({ sortBy: userQuery.sortBy, sortOrder: userQuery.sortOrder, filters: userQuery.filters })
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '删除失败')
+      // 错误已由全局拦截器提示
     } finally {
       setBatchLoading(false)
     }
@@ -679,13 +753,41 @@ export default function UserManagement() {
       render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
     },
     {
-      title: '企业微信', dataIndex: 'wecom_user_id', key: 'wecom_user_id', width: 150,
-      render: (v: string | null) => {
-        if (!v) return <span style={{ color: '#cbd5e1' }}>-</span>
-        const u = wecomUsers.find(item => item.userid === v)
-        return u
-          ? <span>{u.name} <span style={{ color: '#94a3b8' }}>({v})</span></span>
-          : <span>{v}</span>
+      title: '企业微信', dataIndex: 'wecom_user_id', key: 'wecom_user_id', width: 170,
+      render: (v: string | null, record: UserItem) => {
+        if (canEditWecom && editingWecomId === record.id) {
+          return (
+            <Select
+              autoFocus
+              defaultOpen
+              showSearch
+              allowClear
+              size="small"
+              style={{ width: '100%' }}
+              placeholder="搜索选择账号"
+              optionFilterProp="label"
+              defaultValue={v ?? undefined}
+              options={wecomUsers.map(u => ({ value: u.userid, label: `${u.name} (${u.userid})` }))}
+              loading={savingWecomId === record.id}
+              onBlur={() => { if (savingWecomId !== record.id) setEditingWecomId(null) }}
+              onChange={(nv) => handleInlineWecomSave(record.id, (nv as string) || null)}
+              notFoundContent="未加载到通讯录"
+            />
+          )
+        }
+        const readOnlyText = v
+          ? <span>{wecomUsers.find(item => item.userid === v)?.name ?? v} <span style={{ color: '#94a3b8' }}>({v})</span></span>
+          : <span style={{ color: '#cbd5e1' }}>-</span>
+        if (!canEditWecom) return readOnlyText
+        return (
+          <span
+            style={{ cursor: 'pointer', borderBottom: '1px dashed #b0bccf', padding: '0 2px' }}
+            title="点击修改"
+            onClick={() => setEditingWecomId(record.id)}
+          >
+            {readOnlyText}
+          </span>
+        )
       },
     },
     {
@@ -708,7 +810,7 @@ export default function UserManagement() {
       render: (_: any, record: UserItem) => (
         <Space size="small">
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
-          {hasPermission('users', 'reset_password') && <Button size="small" icon={<KeyOutlined />} onClick={() => openResetPwd(record)} title="重置密码" />}
+          {hasPermission('users.reset_password', 'reset_password') && <Button size="small" icon={<KeyOutlined />} onClick={() => openResetPwd(record)} title="重置密码" />}
           {isAdmin && (
             <Popconfirm title="确认删除该用户？" onConfirm={() => handleDelete(record.id)}>
               <Button size="small" icon={<DeleteOutlined />} danger />
@@ -747,7 +849,7 @@ export default function UserManagement() {
                   </span>
                   <Button size="small" loading={batchLoading} onClick={() => handleBatchToggleActive(true)}>批量启用</Button>
                   <Button size="small" loading={batchLoading} onClick={() => handleBatchToggleActive(false)}>批量停用</Button>
-                  {hasPermission('users', 'reset_password') && <Button size="small" icon={<KeyOutlined />} loading={batchLoading} onClick={() => openConfirmModal('reset_password')}>批量重置密码</Button>}
+                  {hasPermission('users.reset_password', 'reset_password') && <Button size="small" icon={<KeyOutlined />} loading={batchLoading} onClick={() => openConfirmModal('reset_password')}>批量重置密码</Button>}
                   {isAdmin && (
                     <Button size="small" danger icon={<DeleteOutlined />} loading={batchLoading} onClick={() => openConfirmModal('delete')}>批量删除</Button>
                   )}
@@ -761,6 +863,7 @@ export default function UserManagement() {
             <Button icon={<SyncOutlined />} loading={syncingRoles} onClick={handleSyncRoles}>同步角色</Button>
             <Button icon={<ExportOutlined />} loading={exporting} onClick={() => setExportColumnModalOpen(true)}>导出</Button>
             {hasPermission('users', 'create') && <Button icon={<TeamOutlined />} onClick={handleOpenProvision}>批量开通用户</Button>}
+            {hasPermission('users', 'update') && <Button icon={<LinkOutlined />} onClick={handleOpenWecomMatch}>批量绑定企业微信</Button>}
             {isAdmin && <Button type="primary" icon={<UserAddOutlined />} onClick={openAdd}>新增用户</Button>}
           </Space></Col>
         </Row>
@@ -1026,6 +1129,73 @@ export default function UserManagement() {
             onChange: (p: number, ps: number) => { setUnprovPage(p); setUnprovPageSize(ps); fetchUnprovisioned({ page: p, pageSize: ps }) },
             onShowSizeChange: (p: number, ps: number) => { setUnprovPage(1); setUnprovPageSize(ps); fetchUnprovisioned({ page: 1, pageSize: ps }) },
           }}
+        />
+      </Modal>
+
+      {/* 批量绑定企业微信 — 智能匹配 */}
+      <Modal
+        title="批量绑定企业微信"
+        open={wecomMatchOpen}
+        onOk={handleBatchBindWecom}
+        onCancel={() => setWecomMatchOpen(false)}
+        confirmLoading={wecomBindSaving}
+        okText={`绑定选中（${wecomMatchSelected.length}）`}
+        okButtonProps={{ disabled: wecomMatchSelected.length === 0 }}
+        cancelText="取消"
+        width={1000}
+        styles={{ body: { padding: '8px 24px 24px' } }}
+      >
+        <div style={{ margin: '8px 0 12px', display: 'flex', gap: 16, alignItems: 'center' }}>
+          <span style={{ color: '#16a34a' }}>已匹配 {wecomMatchStats.matched}</span>
+          <span style={{ color: '#ea580c' }}>待确认 {wecomMatchStats.ambiguous}</span>
+          <span style={{ color: '#94a3b8' }}>未匹配 {wecomMatchStats.unmatched}</span>
+          <span style={{ marginLeft: 'auto', color: '#6b7280', fontSize: 12 }}>
+            仅显示未绑定用户；下拉可搜索全量通讯录
+          </span>
+        </div>
+        <Table
+          rowKey="user_id"
+          size="small"
+          loading={wecomMatchLoading}
+          dataSource={wecomMatchItems}
+          scroll={{ y: 440 }}
+          rowSelection={{
+            type: 'checkbox',
+            selectedRowKeys: wecomMatchSelected,
+            onChange: (keys) => setWecomMatchSelected(keys as number[]),
+          }}
+          columns={[
+            { title: '用户', dataIndex: 'username', width: 180,
+              render: (_: any, r: any) => (
+                <span>{r.display_name || r.username} <span style={{ color: '#94a3b8' }}>({r.username})</span></span>
+              ) },
+            { title: '员工姓名', dataIndex: 'emp_name', width: 100,
+              render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span> },
+            { title: '匹配状态', dataIndex: 'match_status', width: 100,
+              render: (v: string) => {
+                const map: Record<string, { text: string; color: string }> = {
+                  matched: { text: '已匹配', color: 'green' },
+                  ambiguous: { text: '待确认', color: 'orange' },
+                  unmatched: { text: '未匹配', color: 'default' },
+                }
+                const info = map[v] || { text: v, color: 'default' }
+                return <Tag color={info.color}>{info.text}</Tag>
+              } },
+            { title: '企业微信账号', dataIndex: 'user_id', width: 280,
+              render: (_: any, r: any) => (
+                <Select
+                  showSearch
+                  allowClear
+                  style={{ width: '100%' }}
+                  placeholder="搜索并选择企业微信账号"
+                  optionFilterProp="label"
+                  value={wecomMatchValues[r.user_id]}
+                  onChange={(v) => setWecomMatchValues(prev => ({ ...prev, [r.user_id]: v }))}
+                  options={wecomUsers.map(u => ({ value: u.userid, label: `${u.name} (${u.userid})` }))}
+                  notFoundContent="未加载到企业微信通讯录"
+                />
+              ) },
+          ]}
         />
       </Modal>
 

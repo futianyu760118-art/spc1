@@ -129,7 +129,7 @@ export default function AnnouncementManagement() {
       fetchData()
     } catch (e: any) {
       if (e?.errorFields) return
-      message.error(e?.message || '操作失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSubmitting(false)
     }
@@ -141,7 +141,7 @@ export default function AnnouncementManagement() {
       message.success('公告已删除')
       fetchData()
     } catch (e: any) {
-      message.error(e?.message || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -152,7 +152,7 @@ export default function AnnouncementManagement() {
       message.success(`公告已发布，已通知 ${count} 位用户`)
       fetchData()
     } catch (e: any) {
-      message.error(e?.message || '发布失败')
+      // 错误已由全局拦截器提示
     }
   }
 

@@ -17,6 +17,7 @@ const roleColorMap: Record<string, string> = {
 interface PermTreeNode {
   key: string
   label: string
+  actions?: string[]
   children?: PermTreeNode[]
 }
 
@@ -25,6 +26,7 @@ function permNodeToTreeNode(nodes: PermNode[]): PermTreeNode[] {
   return nodes.map(node => ({
     key: node.code,
     label: node.name,
+    actions: node.actions?.length ? [...node.actions] : undefined,
     children: node.children?.length ? permNodeToTreeNode(node.children) : undefined,
   }))
 }
@@ -105,10 +107,10 @@ const FALLBACK_PERMISSION_TREE: PermTreeNode[] = [
     children: [
       { key: 'basicdata.import', label: '数据集成' },
       { key: 'basicdata.data', label: '基础数据管理' },
-      { key: 'basicdata.feedback', label: '问题反馈' },
+      { key: 'basicdata.feedback', label: '问题反馈', children: [{ key: 'basicdata.feedback.handle', label: '处理问题反馈', actions: ['handle'] }] },
       { key: 'basicdata.files', label: '文件管理' },
       { key: 'announcements', label: '公告管理' },
-      { key: 'users', label: '用户管理' },
+      { key: 'users', label: '用户管理', children: [{ key: 'users.reset_password', label: '重置密码', actions: ['reset_password'] }] },
       { key: 'roles', label: '角色管理' },
       { key: 'audit', label: '审计日志' },
       { key: 'settings', label: '同步SQL配置' },
@@ -148,23 +150,46 @@ function flattenAll(nodes: PermTreeNode[]): string[] {
 const ALL_PERM_KEYS = flattenAll(FALLBACK_PERMISSION_TREE)
 const ALL_LEAF_KEYS = flattenLeaves(FALLBACK_PERMISSION_TREE)
 
-function buildTreeData(nodes: PermTreeNode[]): any[] {
-  return nodes.map(n => ({
-    title: n.label,
-    key: n.key,
-    children: n.children && n.children.length > 0 ? buildTreeData(n.children) : undefined,
-  }))
-}
-const FALLBACK_PERM_TREE_DATA = buildTreeData(FALLBACK_PERMISSION_TREE)
-
+// 通用操作列：所有页面普遍具备的增删改查等能力
 const PERMISSION_ACTIONS = [
   { key: 'create', label: '新增' },
   { key: 'read', label: '查看' },
   { key: 'update', label: '编辑' },
   { key: 'delete', label: '删除' },
   { key: 'import', label: '导入' },
-  { key: 'reset_password', label: '重置密码' },
 ]
+const PERMISSION_ACTION_KEYS = PERMISSION_ACTIONS.map(a => a.key)
+// 页面专属子权限动作：仅存在于对应页面下（如 用户管理-重置密码、问题反馈-处理），不作为通用列
+const SPECIAL_ACTION_LABELS: Record<string, string> = {
+  reset_password: '重置密码',
+  handle: '处理',
+}
+
+// 收集定义中包含非通用动作的叶子节点（页面专属子权限）
+function collectSpecialLeafKeys(nodes: PermTreeNode[]): string[] {
+  const result: string[] = []
+  for (const n of nodes) {
+    if (n.children?.length) {
+      result.push(...collectSpecialLeafKeys(n.children))
+    } else if (n.actions?.some(a => !PERMISSION_ACTION_KEYS.includes(a))) {
+      result.push(n.key)
+    }
+  }
+  return result
+}
+
+function buildTreeData(nodes: PermTreeNode[]): any[] {
+  return nodes.map(n => {
+    const isSpecialLeaf = !n.children?.length && n.actions?.some(a => !PERMISSION_ACTION_KEYS.includes(a))
+    return {
+      title: isSpecialLeaf ? `${n.label}（子权限）` : n.label,
+      key: n.key,
+      disabled: isSpecialLeaf,
+      children: n.children && n.children.length > 0 ? buildTreeData(n.children) : undefined,
+    }
+  })
+}
+const FALLBACK_PERM_TREE_DATA = buildTreeData(FALLBACK_PERMISSION_TREE)
 
 interface RoleItem {
   id: number
@@ -181,6 +206,22 @@ interface RoleItem {
 function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<string, string[]>; onChange: (v: Record<string, string[]>) => void; permissionTree: PermTreeNode[] }) {
   const currentAllPermKeys = useMemo(() => flattenAll(permissionTree), [permissionTree])
   const currentAllLeafKeys = useMemo(() => flattenLeaves(permissionTree), [permissionTree])
+  // 父节点且自身持有动作（如 users、basicdata.feedback：既有自身动作又有子权限）→ 可独立勾选
+  const ownParentKeys = useMemo(() => {
+    const keys = new Set<string>()
+    const walk = (nodes: PermTreeNode[]) => {
+      for (const n of nodes) {
+        if (n.children && n.children.length > 0 && (value[n.key] || []).length > 0) keys.add(n.key)
+        if (n.children) walk(n.children)
+      }
+    }
+    walk(permissionTree)
+    return keys
+  }, [permissionTree, value])
+  const currentGrantableKeys = useMemo(() => {
+    const specialKeys = new Set(collectSpecialLeafKeys(permissionTree))
+    return [...new Set([...currentAllLeafKeys, ...Array.from(ownParentKeys)])].filter(k => !specialKeys.has(k))
+  }, [currentAllLeafKeys, ownParentKeys, permissionTree])
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {}
     permissionTree.forEach(n => { if (n.children) init[n.key] = true })
@@ -191,6 +232,8 @@ function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<s
 
   const getActions = (key: string, children?: PermTreeNode[]): string[] => {
     if (!children || children.length === 0) return value[key] || []
+    // 父节点自带动作：显示/编辑自身动作（不再由子节点派生）
+    if ((value[key] || []).length > 0) return value[key] || []
     return PERMISSION_ACTIONS.filter(a => children.every(c => (value[c.key] || []).includes(a.key))).map(a => a.key)
   }
   const getIndeterminate = (action: string, children?: PermTreeNode[]): boolean => {
@@ -213,37 +256,48 @@ function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<s
     onChange(next)
   }
 
-  const toggleRow = (key: string, checked: boolean, children?: PermTreeNode[]) => {
+  const toggleRow = (key: string, checked: boolean, children?: PermTreeNode[], node?: PermTreeNode) => {
     const next = { ...value }
     const allActs = PERMISSION_ACTIONS.map(a => a.key)
-    if (children && children.length > 0) {
+    const isOwnParent = Boolean(children && children.length > 0 && (value[key] || []).length > 0)
+    if (children && children.length > 0 && !isOwnParent) {
+      // 纯分组父节点：全选/全不选所有子节点
       children.forEach(c => { next[c.key] = checked ? [...allActs] : [] })
-      next[key] = checked ? [...allActs] : []
     } else {
-      next[key] = checked ? [...allActs] : []
+      // 叶子节点 或 自带动作的父节点：只动自身
+      const isLeaf = !children || children.length === 0
+      const specialActs = isLeaf && node ? (node.actions || []).filter(a => !PERMISSION_ACTION_KEYS.includes(a)) : []
+      next[key] = checked ? [...(specialActs.length > 0 ? specialActs : allActs)] : []
     }
     onChange(next)
   }
 
   const toggleCol = (action: string, checked: boolean) => {
     const next = { ...value }
-    currentAllLeafKeys.forEach(k => {
+    currentGrantableKeys.forEach(k => {
       next[k] = checked ? [...new Set([...(next[k] || []), action])] : (next[k] || []).filter(a => a !== action)
     })
     onChange(next)
   }
 
-  const colAllChecked = (action: string) => currentAllLeafKeys.every(k => (value[k] || []).includes(action))
-  const colSomeChecked = (action: string) => currentAllLeafKeys.some(k => (value[k] || []).includes(action))
+  const colAllChecked = (action: string) => currentGrantableKeys.every(k => (value[k] || []).includes(action))
+  const colSomeChecked = (action: string) => currentGrantableKeys.some(k => (value[k] || []).includes(action))
 
   const renderRow = (node: PermTreeNode, depth: number) => {
     const hasChildren = node.children && node.children.length > 0
     const isExpanded = expanded[node.key]
+    const isOwnParent = Boolean(hasChildren && (value[node.key] || []).length > 0)
     const actions = getActions(node.key, node.children)
-    const allChecked = PERMISSION_ACTIONS.every(a => actions.includes(a.key))
-    const rowIndeterminate = hasChildren
-      ? PERMISSION_ACTIONS.some(a => getIndeterminate(a.key, node.children) || (node.children!.some(c => (value[c.key] || []).includes(a.key)) && !node.children!.every(c => (value[c.key] || []).includes(a.key)))) && !allChecked
-      : (actions.length > 0 && !allChecked)
+    // 页面专属子权限（如 重置密码、处理）：不占用通用操作列，合并单元格单独展示
+    const specialActs = !hasChildren ? (node.actions || []).filter(a => !PERMISSION_ACTION_KEYS.includes(a)) : []
+    const allChecked = specialActs.length > 0
+      ? specialActs.every(a => actions.includes(a))
+      : PERMISSION_ACTIONS.every(a => actions.includes(a.key))
+    const rowIndeterminate = isOwnParent
+      ? (actions.length > 0 && !allChecked)
+      : (hasChildren
+          ? PERMISSION_ACTIONS.some(a => getIndeterminate(a.key, node.children) || (node.children!.some(c => (value[c.key] || []).includes(a.key)) && !node.children!.every(c => (value[c.key] || []).includes(a.key)))) && !allChecked
+          : (actions.length > 0 && !allChecked))
 
     const rows: React.ReactNode[] = []
     rows.push(
@@ -256,18 +310,26 @@ function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<s
           ) : (
             <span style={{ display: 'inline-block', width: 14, marginRight: 4 }} />
           )}
-          <Checkbox checked={allChecked} indeterminate={rowIndeterminate} onChange={e => toggleRow(node.key, e.target.checked, node.children)} />
+          <Checkbox checked={allChecked} indeterminate={rowIndeterminate} onChange={e => toggleRow(node.key, e.target.checked, node.children, node)} />
           <span style={{ marginLeft: 6 }}>{node.label}</span>
         </td>
-        {PERMISSION_ACTIONS.map(a => {
+        {specialActs.length > 0 ? (
+          <td colSpan={PERMISSION_ACTIONS.length} style={{ textAlign: 'center', padding: '6px 4px', borderBottom: '1px solid #f0f0f0' }}>
+            {specialActs.map(a => (
+              <Checkbox key={a} checked={actions.includes(a)} onChange={e => toggleLeaf(node.key, a)}>
+                {SPECIAL_ACTION_LABELS[a] || a}
+              </Checkbox>
+            ))}
+          </td>
+        ) : PERMISSION_ACTIONS.map(a => {
           const checked = actions.includes(a.key)
-          const indeterminate = hasChildren ? getIndeterminate(a.key, node.children) : false
+          const indeterminate = (hasChildren && !isOwnParent) ? getIndeterminate(a.key, node.children) : false
           return (
             <td key={a.key} style={{ textAlign: 'center', padding: '6px 4px', borderBottom: '1px solid #f0f0f0' }}>
               <Checkbox
                 checked={checked}
                 indeterminate={indeterminate}
-                onChange={e => hasChildren ? toggleParent(node.children!, a.key, e.target.checked) : toggleLeaf(node.key, a.key)}
+                onChange={e => hasChildren && !isOwnParent ? toggleParent(node.children!, a.key, e.target.checked) : toggleLeaf(node.key, a.key)}
               />
             </td>
           )
@@ -374,7 +436,7 @@ export default function RoleManagement() {
         setRoleTotal(payload?.total ?? 0)
       }
     } catch {
-      message.error('加载角色列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setRoleLoading(false)
     }
@@ -411,7 +473,7 @@ export default function RoleManagement() {
       setRoleModalOpen(false)
       fetchRoles()
     } catch (e: any) {
-      if (e?.response?.data?.detail) message.error(e.response.data.detail)
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -421,7 +483,7 @@ export default function RoleManagement() {
       message.success('角色已删除')
       fetchRoles()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -435,7 +497,8 @@ export default function RoleManagement() {
 
   const handleBatchGrant = async () => {
     const leafSet = new Set(currentAllLeafKeys)
-    const targetKeys = bgKeys.filter(k => leafSet.has(k))
+    const specialSet = new Set(collectSpecialLeafKeys(currentPermissionTree))
+    const targetKeys = bgKeys.filter(k => leafSet.has(k) && !specialSet.has(k))
     if (targetKeys.length === 0) {
       message.warning('请选择至少一个权限项（具体子菜单）'); return
     }
@@ -456,7 +519,7 @@ export default function RoleManagement() {
       setBgOpen(false)
       fetchRoles()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '批量授权失败')
+      // 错误已由全局拦截器提示
     } finally {
       setBgSubmitting(false)
     }
@@ -614,6 +677,7 @@ export default function RoleManagement() {
             <div style={{ fontSize: 13 }}>
               选择要分配的「权限项」+「操作」，再勾选「目标角色」，点击应用即可一次完成多角色赋权。<br />
               <b>追加</b>：在角色已有权限上并集合并；<b>撤销</b>：从角色权限中移除指定操作；<b>覆盖</b>：以本次操作集合替换这些权限项。<br />
+              重置密码、处理等页面专属子权限不参与批量授权，请在角色权限矩阵中单独配置。<br />
               admin 角色自动跳过（默认全权限）。
             </div>
           }

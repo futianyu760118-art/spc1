@@ -8,7 +8,7 @@
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
@@ -27,36 +27,35 @@ router = APIRouter()
 FRONT_WORKSHOPS = ["喷塑车间", "压铸车间"]
 
 # production_task_order.sale_order_id 存的是 ERP FOrderInterID（外部 ID），
-# 与 sale_order.id 不在同一 ID 空间，OA 同步也不填该列；故一律按订单号字符串关联。
+# 通过 sale_order.erp_id 关联获取订单头属性。
 #
 # 两层关联：
-#  1) _sale_order_header —— 取 sale_order 每个订单号的首行(line_no 最小)，提供
-#     订单头属性 customer/customer_code/order_date（同行一致，取首行即可）。
-#  2) _sale_order_product —— 取 sale_order_line 每个 (order_no, product_code) 的首行，
-#     提供行级属性 product_name/product_model/promised_date。任务单无 line_no，
-#     用 material_code ↔ product_code 命中订单下的具体产品行。
+#  1) _sale_order_header —— 通过 erp_id == sale_order_id 关联，取每个订单的
+#     首行(line_no 最小)，提供订单头属性 customer/customer_code/order_date。
+#  2) _sale_order_product —— 通过 order_no 从 header 子查询关联，取每个订单
+#     的首行(line_no 最小)，提供行级属性 product_name/product_model/promised_date。
 _sale_order_header = (
     select(
+        SaleOrder.erp_id.label("so_erp_id"),
         SaleOrder.order_no.label("so_order_no"),
         SaleOrder.customer_code.label("customer_code"),
         SaleOrder.customer.label("customer"),
         SaleOrder.order_date.label("order_date"),
     )
-    .distinct(SaleOrder.order_no)
-    .order_by(SaleOrder.order_no, SaleOrder.line_no)
+    .distinct(SaleOrder.erp_id)
+    .order_by(SaleOrder.erp_id, SaleOrder.line_no)
     .subquery()
 )
 
 _sale_order_product = (
     select(
         SaleOrderLine.order_no.label("sol_order_no"),
-        SaleOrderLine.product_code.label("sol_product_code"),
         SaleOrderLine.product_name.label("product_name"),
         SaleOrderLine.product_model.label("product_model"),
         SaleOrderLine.promised_date.label("promised_date"),
     )
-    .distinct(SaleOrderLine.order_no, SaleOrderLine.product_code)
-    .order_by(SaleOrderLine.order_no, SaleOrderLine.product_code, SaleOrderLine.line_no)
+    .distinct(SaleOrderLine.order_no)
+    .order_by(SaleOrderLine.order_no, SaleOrderLine.line_no)
     .subquery()
 )
 
@@ -88,7 +87,7 @@ async def list_front_process(
                 ProductionTaskOrder.task_no.ilike(like),
                 ProductionTaskOrder.material_code.ilike(like),
                 ProductionTaskOrder.material_name.ilike(like),
-                ProductionTaskOrder.sale_order_no.ilike(like),
+                _sale_order_header.c.so_order_no.ilike(like),
                 _sale_order_header.c.customer.ilike(like),
                 _sale_order_header.c.customer_code.ilike(like),
                 _sale_order_product.c.product_model.ilike(like),
@@ -100,13 +99,10 @@ async def list_front_process(
         select(func.count())
         .select_from(ProductionTaskOrder)
         .outerjoin(FrontProcessRecord, FrontProcessRecord.task_id == ProductionTaskOrder.task_id)
-        .outerjoin(_sale_order_header, _sale_order_header.c.so_order_no == ProductionTaskOrder.sale_order_no)
+        .outerjoin(_sale_order_header, _sale_order_header.c.so_erp_id == ProductionTaskOrder.sale_order_id)
         .outerjoin(
             _sale_order_product,
-            and_(
-                _sale_order_product.c.sol_order_no == ProductionTaskOrder.sale_order_no,
-                _sale_order_product.c.sol_product_code == ProductionTaskOrder.material_code,
-            ),
+            _sale_order_product.c.sol_order_no == _sale_order_header.c.so_order_no,
         )
         .where(*filters)
     )
@@ -119,7 +115,7 @@ async def list_front_process(
             ProductionTaskOrder.workshop.label("workshop"),
             ProductionTaskOrder.material_code.label("material_code"),
             ProductionTaskOrder.material_name.label("material_name"),
-            ProductionTaskOrder.sale_order_no.label("sale_order_no"),
+            _sale_order_header.c.so_order_no.label("sale_order_no"),
             ProductionTaskOrder.task_qty.label("task_qty"),
             ProductionTaskOrder.planned_start_date.label("planned_start_date"),
             ProductionTaskOrder.planned_end_date.label("planned_end_date"),
@@ -141,13 +137,10 @@ async def list_front_process(
         )
         .select_from(ProductionTaskOrder)
         .outerjoin(FrontProcessRecord, FrontProcessRecord.task_id == ProductionTaskOrder.task_id)
-        .outerjoin(_sale_order_header, _sale_order_header.c.so_order_no == ProductionTaskOrder.sale_order_no)
+        .outerjoin(_sale_order_header, _sale_order_header.c.so_erp_id == ProductionTaskOrder.sale_order_id)
         .outerjoin(
             _sale_order_product,
-            and_(
-                _sale_order_product.c.sol_order_no == ProductionTaskOrder.sale_order_no,
-                _sale_order_product.c.sol_product_code == ProductionTaskOrder.material_code,
-            ),
+            _sale_order_product.c.sol_order_no == _sale_order_header.c.so_order_no,
         )
         .where(*filters)
         .order_by(ProductionTaskOrder.planned_start_date.asc().nullslast(), ProductionTaskOrder.task_id.desc())

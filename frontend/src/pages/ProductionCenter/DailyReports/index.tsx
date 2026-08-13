@@ -228,7 +228,7 @@ function WorkshopReportList() {
       message.success('删除成功')
       load()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e?.message || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 

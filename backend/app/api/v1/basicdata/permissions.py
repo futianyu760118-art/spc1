@@ -15,8 +15,8 @@ from app.schemas.common import ResponseModel
 router = APIRouter()
 
 
-_PROTECTED_CODES = {"permissions", "roles", "users"}
-_STANDARD_ACTIONS = ["create", "read", "update", "delete", "import", "reset_password"]
+_PROTECTED_CODES = {"permissions", "roles", "users", "users.reset_password"}
+_STANDARD_ACTIONS = ["create", "read", "update", "delete", "import", "handle"]
 
 
 class PermissionCreate(BaseModel):

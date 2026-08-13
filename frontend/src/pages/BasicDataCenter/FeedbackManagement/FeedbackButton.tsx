@@ -37,7 +37,7 @@ export default function FeedbackButton() {
       onSuccess?.(res.data)
     } catch (e: any) {
       onError?.(e)
-      message.error(e?.response?.data?.detail || '上传失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -88,7 +88,7 @@ export default function FeedbackButton() {
         setFileList(prev => prev.map(f => (
           f.uid === uploadFile.uid ? { ...f, status: 'error' } : f
         )))
-        message.error(e?.response?.data?.detail || '粘贴图片上传失败')
+        // 错误已由全局拦截器提示
       }
     }))
   }
@@ -109,7 +109,7 @@ export default function FeedbackButton() {
       setOpen(false)
     } catch (e: any) {
       if (e?.errorFields) return
-      message.error(e?.response?.data?.detail || '提交失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSubmitting(false)
     }

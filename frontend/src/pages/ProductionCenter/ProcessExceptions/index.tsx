@@ -64,7 +64,7 @@ export default function ProcessExceptions() {
       setData(res.data.items)
       setTotal(res.data.total)
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -80,7 +80,7 @@ export default function ProcessExceptions() {
       form.resetFields()
       load()
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -97,7 +97,7 @@ export default function ProcessExceptions() {
       form.resetFields()
       load()
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -107,7 +107,7 @@ export default function ProcessExceptions() {
       message.success('删除成功')
       load()
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     }
   }
 

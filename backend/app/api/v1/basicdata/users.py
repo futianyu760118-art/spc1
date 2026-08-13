@@ -800,7 +800,7 @@ async def update_user(
 async def reset_password(
     user_id: int,
     body: PasswordReset,
-    current_user: dict = Depends(PermissionChecker("users", "reset_password")),
+    current_user: dict = Depends(PermissionChecker("users.reset_password", "reset_password")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(SysUser).where(SysUser.id == user_id))
@@ -969,7 +969,7 @@ async def batch_toggle_active(
 @router.put("/batch/reset-password", response_model=ResponseModel[dict])
 async def batch_reset_password(
     body: BatchResetPasswordBody,
-    current_user: dict = Depends(PermissionChecker("users", "reset_password")),
+    current_user: dict = Depends(PermissionChecker("users.reset_password", "reset_password")),
     db: AsyncSession = Depends(get_db),
 ):
     matched_ids = await _resolve_users_for_batch(db, body.user_ids, body.filter)
@@ -1285,3 +1285,175 @@ async def batch_provision_users(
         "default_password": default_pwd,
         "new_users": newly_created_users,
     })
+
+
+# ---------- 批量绑定企业微信：智能匹配 ----------
+class WecomBindingItem(BaseModel):
+    user_id: int
+    wecom_user_id: str
+
+
+class BatchBindWecomBody(BaseModel):
+    bindings: List[WecomBindingItem]
+
+
+@router.get("/wecom-match", response_model=ResponseModel[dict])
+async def wecom_bind_match(
+    current_user: dict = Depends(PermissionChecker("users", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """按姓名自动匹配未绑定用户 ↔ 企业微信账号，返回建议供管理员确认。"""
+    # 1. 取所有未绑定企微的用户 + emp_name
+    rows = (
+        await db.execute(
+            select(
+                SysUser.id, SysUser.username, SysUser.display_name, SysUser.emp_code, Employee.emp_name
+            )
+            .outerjoin(Employee, SysUser.emp_code == Employee.emp_code)
+            .where(SysUser.wecom_user_id.is_(None))
+            .order_by(SysUser.id)
+        )
+    ).all()
+
+    # 2. 取企微通讯录（一次）
+    try:
+        wecom_users = await list_wecom_users()
+    except WecomNotConfiguredError as e:
+        raise HTTPException(status_code=501, detail=str(e)) from e
+    except WecomAPIError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"企业微信接口调用失败（errcode={e.errcode}）：{e.errmsg}",
+        ) from e
+
+    # 3. 反向索引：name -> [{userid, name}]
+    name_to_ids: Dict[str, List[Dict[str, str]]] = {}
+    for w in wecom_users:
+        nm = (w.get("name") or "").strip()
+        if not nm:
+            continue
+        name_to_ids.setdefault(nm, []).append({"userid": w.get("userid", ""), "name": nm})
+
+    # 4. 逐用户匹配
+    items: List[Dict] = []
+    stats = {"matched": 0, "ambiguous": 0, "unmatched": 0}
+    for row in rows:
+        uid, username, display_name, _emp_code, emp_name = row[0], row[1], row[2], row[3], row[4]
+        key = (emp_name or "").strip() or (display_name or "").strip()
+        cands = name_to_ids.get(key, [])
+        if not key or not cands:
+            status = "unmatched"
+            stats["unmatched"] += 1
+        elif len(cands) == 1:
+            status = "matched"
+            stats["matched"] += 1
+        else:
+            status = "ambiguous"
+            stats["ambiguous"] += 1
+        items.append(
+            {
+                "user_id": uid,
+                "username": username,
+                "display_name": display_name,
+                "emp_name": emp_name,
+                "match_status": status,
+                "suggested_wecom_userid": cands[0]["userid"] if cands else None,
+                "suggested_wecom_name": cands[0]["name"] if cands else None,
+                "candidates": cands,
+            }
+        )
+
+    # 5. 多用户争同一企微账号 → 后到的 matched 降级为 ambiguous
+    seen_userid_owner: Dict[str, int] = {}
+    for it in items:
+        wid = it["suggested_wecom_userid"]
+        if not wid or it["match_status"] != "matched":
+            continue
+        if wid in seen_userid_owner:
+            it["match_status"] = "ambiguous"
+            stats["matched"] -= 1
+            stats["ambiguous"] += 1
+        else:
+            seen_userid_owner[wid] = it["user_id"]
+
+    return ResponseModel(data={"items": items, "stats": stats})
+
+
+@router.post("/batch-bind-wecom", response_model=ResponseModel[dict])
+async def batch_bind_wecom(
+    body: BatchBindWecomBody,
+    current_user: dict = Depends(PermissionChecker("users", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """批量绑定企业微信账号：批次内/对库内唯一性 + 通讯录存在性，容错写入。"""
+    if not body.bindings:
+        raise HTTPException(status_code=400, detail="请提交至少一条绑定")
+
+    # 清洗 + 批次内唯一性
+    errors: List[Dict] = []
+    seen: Dict[str, int] = {}
+    unique_bindings: List[tuple] = []
+    for b in body.bindings:
+        wid = (b.wecom_user_id or "").strip()
+        if not wid:
+            continue
+        if wid in seen:
+            errors.append({"user_id": b.user_id, "message": f"企业微信账号 {wid} 在提交中重复"})
+            continue
+        seen[wid] = b.user_id
+        unique_bindings.append((b.user_id, wid))
+    if not unique_bindings:
+        raise HTTPException(status_code=400, detail="企业微信账号不能为空")
+
+    # 通讯录存在性（一次拉取；未配置则跳过该校验）
+    try:
+        wecom_users = await list_wecom_users()
+        valid_ids = {w.get("userid") for w in wecom_users}
+    except WecomNotConfiguredError:
+        valid_ids = None
+        logger.warning("企业微信未配置，批量绑定跳过存在性校验")
+    except WecomAPIError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"企业微信接口调用失败（errcode={e.errcode}）：{e.errmsg}",
+        ) from e
+
+    # 对库内唯一性：查这些 wecom id 当前被谁占用
+    target_ids = [wid for _, wid in unique_bindings]
+    dup_users = (
+        await db.execute(select(SysUser).where(SysUser.wecom_user_id.in_(target_ids)))
+    ).scalars().all()
+    db_owner: Dict[str, tuple] = {u.wecom_user_id: (u.id, u.username) for u in dup_users}
+
+    # 取目标用户
+    user_ids = [uid for uid, _ in unique_bindings]
+    target_users = (
+        await db.execute(select(SysUser).where(SysUser.id.in_(user_ids)))
+    ).scalars().all()
+    users_map = {u.id: u for u in target_users}
+
+    # 逐条校验 + 应用
+    updated = 0
+    for uid, wid in unique_bindings:
+        user = users_map.get(uid)
+        if not user:
+            errors.append({"user_id": uid, "message": "用户不存在"})
+            continue
+        if valid_ids is not None and wid not in valid_ids:
+            errors.append({"user_id": uid, "message": f"企业微信账号不存在: {wid}"})
+            continue
+        owner = db_owner.get(wid)
+        if owner and owner[0] != uid:
+            errors.append(
+                {"user_id": uid, "message": f"该企业微信账号已被用户「{owner[1]}」绑定"}
+            )
+            continue
+        user.wecom_user_id = wid
+        updated += 1
+        await log_audit(
+            db, "sys_user", user.id, "update",
+            field_name="wecom_user_id", operator=current_user["username"],
+        )
+
+    await db.commit()
+    return ResponseModel(data={"updated": updated, "errors": errors})

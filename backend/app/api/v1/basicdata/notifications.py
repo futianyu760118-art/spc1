@@ -3,15 +3,20 @@
 from typing import Optional
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, update, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.dependencies import get_current_user
 from app.core.security import PermissionChecker
 from app.models.basicdata.announcement import Notification
 from app.schemas.common import ResponseModel
 from pydantic import BaseModel
+from app.services.notification.notification_broker import subscribe_stream, compute_unread_counts, publish_unread_update
 
 router = APIRouter()
 
@@ -24,7 +29,7 @@ class CreateNotificationRequest(BaseModel):
 
 
 def _get_user_id(current_user: dict) -> int:
-    return int(current_user["sub"])
+    return int(current_user.get("user_id") or current_user.get("sub"))
 
 
 # ---------- 创建通知 ----------
@@ -107,15 +112,8 @@ async def unread_count(
     db: AsyncSession = Depends(get_db),
 ):
     uid = _get_user_id(current_user)
-    q = (
-        select(Notification.type, func.count(Notification.id))
-        .where(and_(Notification.user_id == uid, Notification.is_read == False))  # noqa: E712
-        .group_by(Notification.type)
-    )
-    rows = (await db.execute(q)).all()
-    counts = {r[0]: r[1] for r in rows}
-    total = sum(counts.values())
-    return ResponseModel(data={"total": total, "by_type": counts})
+    counts = await compute_unread_counts(db, uid)
+    return ResponseModel(data=counts)
 
 
 # ---------- 标记单条已读 ----------
@@ -136,6 +134,7 @@ async def mark_read(
         notif.is_read = True
         notif.read_at = datetime.utcnow()
         await db.commit()
+    await publish_unread_update(db, uid)
     return ResponseModel(data={"id": notif_id})
 
 
@@ -157,4 +156,36 @@ async def mark_all_read(
         .values(is_read=True, read_at=now)
     )
     await db.commit()
+    await publish_unread_update(db, uid)
     return ResponseModel(data={"ok": True})
+
+
+# ---------- SSE 实时流 ----------
+@router.get("/stream")
+async def stream_notifications(
+    request: Request,
+    token: str = Query(..., description="JWT token (EventSource 无法设 header)"),
+    db: AsyncSession = Depends(get_db),
+):
+    """通知 SSE 实时流。首帧 snapshot(未读计数)，后续 unread 事件，15s 心跳。"""
+    current_user = await get_current_user(token=token, db=db)
+    uid = _get_user_id(current_user)
+
+    async def gen():
+        try:
+            async for chunk in subscribe_stream(uid, db):
+                if await request.is_disconnected():
+                    break
+                yield chunk
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

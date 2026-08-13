@@ -341,7 +341,7 @@ export default function DataSupply() {
       const res: any = await dataSupplyApi.listConfigs({ page: configPage, page_size: 20 })
       setConfigs(res.data?.items || [])
       setConfigTotal(res.data?.total || 0)
-    } catch { message.error('加载配置失败') }
+    } catch { /* 错误已由全局拦截器提示 */ }
     setLoading(false)
   }, [configPage])
 
@@ -351,7 +351,7 @@ export default function DataSupply() {
       const res: any = await dataSupplyApi.listApiKeys({ page: apiKeyPage, page_size: 20 })
       setApiKeys(res.data?.items || [])
       setApiKeyTotal(res.data?.total || 0)
-    } catch { message.error('加载 API Key 失败') }
+    } catch { /* 错误已由全局拦截器提示 */ }
     setLoading(false)
   }, [apiKeyPage])
 
@@ -367,7 +367,7 @@ export default function DataSupply() {
       const res: any = await dataSupplyApi.listCallLogs(params)
       setCallLogs(res.data?.items || [])
       setCallLogTotal(res.data?.total || 0)
-    } catch { message.error('加载调用日志失败') }
+    } catch { /* 错误已由全局拦截器提示 */ }
     setLoading(false)
   }, [callLogPage, logFilters])
 
@@ -442,7 +442,7 @@ export default function DataSupply() {
       fetchConfigs()
       fetchDataTypeOptions()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e.message || '操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -477,7 +477,7 @@ export default function DataSupply() {
       fetchDataTypeOptions()
     } catch (e: any) {
       if (e.errorFields) return // 表单校验失败
-      message.error(e?.response?.data?.detail || e.message || '保存失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -489,7 +489,7 @@ export default function DataSupply() {
       fetchAvailableTypes()
       fetchDataTypeOptions()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e.message || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -574,7 +574,7 @@ export default function DataSupply() {
       fetchApiKeys()
     } catch (e: any) {
       if (e.errorFields) return
-      message.error(e?.response?.data?.detail || e.message || '保存失败')
+      // 错误已由全局拦截器提示
     } finally {
       setApiKeySaving(false)
     }
@@ -586,7 +586,7 @@ export default function DataSupply() {
       message.success(key.is_active ? '已禁用' : '已启用')
       fetchApiKeys()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e.message || '操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -596,7 +596,7 @@ export default function DataSupply() {
       message.success('已删除')
       fetchApiKeys()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e.message || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 

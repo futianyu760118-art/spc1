@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, Form, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
@@ -19,6 +20,8 @@ from app.core.token_blacklist import add_token_to_blacklist
 from app.models.basicdata.user import SysUser, SysRole
 from app.models.basicdata.supplier import Supplier
 from app.models.basicdata.employee import Employee
+from app.services.basicdata.wecom.client import get_wecom_client
+from app.services.basicdata.wecom.exceptions import WecomAPIError, WecomNotConfiguredError
 from app.schemas.basicdata.schemas import TokenResponse, UserInfo
 from app.schemas.common import ResponseModel
 
@@ -35,6 +38,10 @@ class ChangePasswordRequest(BaseModel):
 class UpdatePreferencesRequest(BaseModel):
     font_size_scale: Optional[str] = None
     ui_preferences: Optional[dict] = None
+
+
+class WecomLoginRequest(BaseModel):
+    code: str
 
 
 @router.post("/login", response_model=ResponseModel[TokenResponse])
@@ -106,6 +113,94 @@ async def login(
     token = create_access_token(
         data=token_payload
     )
+
+    user.last_token_jti = new_jti
+    await db.commit()
+
+    if old_token_jti:
+        try:
+            await add_token_to_blacklist(old_token_jti)
+        except Exception:
+            pass
+
+    return ResponseModel(data=TokenResponse(access_token=token))
+
+
+def _build_wecom_oauth_url() -> str:
+    """构造企业微信静默授权 URL，回跳 /login?code=xxx"""
+    settings = get_settings()
+    corp_id = settings.wecom_corp_id
+    if not corp_id:
+        raise HTTPException(status_code=501, detail="企业微信未配置")
+    base_url = (settings.frontend_base_url or "http://localhost:3000").rstrip("/")
+    redirect_uri = quote(f"{base_url}/login", safe="")
+    return (
+        f"https://open.weixin.qq.com/connect/oauth2/authorize"
+        f"?appid={corp_id}"
+        f"&redirect_uri={redirect_uri}"
+        f"&response_type=code"
+        f"&scope=snsapi_base"
+        f"&state=sso#wechat_redirect"
+    )
+
+
+@router.get("/wecom-oauth-url", response_model=ResponseModel[dict])
+async def wecom_oauth_url():
+    """返回企业微信静默授权跳转地址（公开，登录前调用）。"""
+    return ResponseModel(data={"oauth_url": _build_wecom_oauth_url()})
+
+
+@router.post("/wecom-login", response_model=ResponseModel[TokenResponse])
+async def wecom_login(body: WecomLoginRequest, db: AsyncSession = Depends(get_db)):
+    """企业微信 OAuth 登录：code → userid → 绑定的系统用户 → 发 JWT。"""
+    client = get_wecom_client()
+    try:
+        userinfo = await client.get_userinfo_by_code(body.code)
+    except WecomNotConfiguredError as e:
+        raise HTTPException(status_code=501, detail=str(e)) from e
+    except WecomAPIError as e:
+        raise HTTPException(
+            status_code=401,
+            detail=f"企业微信登录失败（code 无效或已过期，errcode={e.errcode}）",
+        ) from e
+
+    wecom_userid = userinfo.get("UserId") or userinfo.get("userid")
+    if not wecom_userid:
+        raise HTTPException(status_code=401, detail="无法获取企业微信身份（可能非企业成员）")
+
+    result = await db.execute(
+        select(SysUser).where(SysUser.wecom_user_id == wecom_userid, SysUser.is_active == True)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=403,
+            detail="企业微信账号未绑定系统用户，请联系管理员在用户管理中绑定",
+        )
+
+    role_result = await db.execute(select(SysRole).where(SysRole.id == user.role_id))
+    role = role_result.scalar_one_or_none()
+    if not role:
+        raise HTTPException(status_code=500, detail="用户角色配置异常，请联系管理员")
+    if role.role_code == "supplier":
+        raise HTTPException(status_code=403, detail="供应商账号不支持企业微信登录")
+
+    # 复用密码登录的发 token 逻辑：bump login_version、轮换 jti、拉黑旧 jti
+    old_token_jti = user.last_token_jti
+    user.login_version = (user.login_version or 0) + 1
+    user.last_login_time = datetime.now()
+    new_jti = str(uuid.uuid4())
+
+    token_payload = {
+        "sub": str(user.id),
+        "username": user.username,
+        "role": role.role_code,
+        "login_type": "employee",
+        "supplier_name": None,
+        "login_version": user.login_version,
+        "jti": new_jti,
+    }
+    token = create_access_token(data=token_payload)
 
     user.last_token_jti = new_jti
     await db.commit()

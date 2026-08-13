@@ -83,7 +83,7 @@ export default function ProcessCrudPage<T extends { status: string }>({
       setData(res.data.items)
       setTotal(res.data.total)
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -98,7 +98,7 @@ export default function ProcessCrudPage<T extends { status: string }>({
       message.success(`导入完成：新增 ${res.data.created}，更新 ${res.data.updated}，跳过 ${res.data.skipped}`)
       load()
     } catch (e: any) {
-      message.error(`导入失败：${e.message}`)
+      // 错误已由全局拦截器提示
     }
     return false
   }
@@ -127,7 +127,7 @@ export default function ProcessCrudPage<T extends { status: string }>({
       setEditModal(false)
       load()
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     }
   }
 

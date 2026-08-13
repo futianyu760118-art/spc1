@@ -96,7 +96,7 @@ export default function OrderRiskPool() {
         avgScore,
       })
     } catch {
-      message.error('获取风险池数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -120,7 +120,7 @@ export default function OrderRiskPool() {
       message.success(`风险评估完成: 红${res.data.red_count}/黄${res.data.yellow_count}/蓝${res.data.blue_count || 0}/绿${res.data.green_count}`)
       fetchOrders()
     } catch {
-      message.error('风险评估失败')
+      // 错误已由全局拦截器提示
     } finally {
       setAssessing(false)
     }

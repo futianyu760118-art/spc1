@@ -59,7 +59,7 @@ export default function WorkshopDashboard({ processType, title }: { processType:
       const res: any = await productionApi.getWorkshopOverview({ process_type: processType })
       setData(res.data)
     } catch (e: any) {
-      message.error(e.message || '获取车间概况失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -85,7 +85,7 @@ export default function WorkshopDashboard({ processType, title }: { processType:
       setOrders(res.data?.items || [])
       setOrdersTotal(res.data?.total || 0)
     } catch (e: any) {
-      message.error(e.message || '获取订单列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setOrdersLoading(false)
     }

@@ -52,7 +52,7 @@ export default function FileManagement() {
       setData(res.data?.items || [])
       setPagination({ current: res.data?.page || 1, pageSize: res.data?.page_size || 20, total: res.data?.total || 0 })
     } catch {
-      message.error('获取文件列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -80,7 +80,7 @@ export default function FileManagement() {
       fetchData()
       fetchStats()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -93,7 +93,7 @@ export default function FileManagement() {
       fetchData()
       fetchStats()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '清理失败')
+      // 错误已由全局拦截器提示
     } finally {
       setCleaning(false)
     }

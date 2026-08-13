@@ -18,7 +18,7 @@ function RuleConfigCard() {
     try {
       const res: any = await api.get('/purchase/price-change/rule-config')
       setRules(res.data?.items || [])
-    } catch { message.error('规则加载失败') } finally { setLoading(false) }
+    } catch { /* 错误已由全局拦截器提示 */ } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
   const update = (k: string, v: string) => setRules(rs => rs.map(r => r.config_key === k ? { ...r, config_value: v } : r))
@@ -27,7 +27,7 @@ function RuleConfigCard() {
     try {
       await api.put('/purchase/price-change/rule-config', { items: rules.map(r => ({ config_key: r.config_key, config_value: r.config_value })) })
       message.success('规则阈值已保存')
-    } catch (e: any) { message.error(e.message || '保存失败') } finally { setSaving(false) }
+    } catch (e: any) { /* 错误已由全局拦截器提示 */ } finally { setSaving(false) }
   }
   const labelMap: Record<string, string> = {
     compare_over_max_high: '新价超历史最高价倍数 → high',
@@ -67,7 +67,7 @@ export default function ApprovalConfigCenter() {
 
   const load = async () => {
     setLoading(true)
-    try { const res: any = await api.get('/purchase/price-change/approval-configs'); setConfigs(res.data?.items || []) } catch { message.error('加载失败') } finally { setLoading(false) }
+    try { const res: any = await api.get('/purchase/price-change/approval-configs'); setConfigs(res.data?.items || []) } catch { /* 错误已由全局拦截器提示 */ } finally { setLoading(false) }
   }
   useEffect(() => { load(); (async () => { try { const r: any = await api.get('/basicdata/users/roles'); setRoles((r.data?.items || r.data || []).map((x: any) => ({ role_code: x.role_code || x.id || '', role_name: x.role_name || x.role_code || x.name || '' }))) } catch { } })() }, [])
 
@@ -123,10 +123,10 @@ export default function ApprovalConfigCenter() {
       })
       message.success('保存成功')
       setModalOpen(false); setEditing(null); load()
-    } catch (e: any) { message.error(e.message || '保存失败') } finally { setSaving(false) }
+    } catch (e: any) { /* 错误已由全局拦截器提示 */ } finally { setSaving(false) }
   }
 
-  const delConfig = async (bt: string) => { try { await api.delete(`/purchase/price-change/approval-configs/${bt}`); message.success('已删除'); load() } catch (e: any) { message.error(e.message || '删除失败') } }
+  const delConfig = async (bt: string) => { try { await api.delete(`/purchase/price-change/approval-configs/${bt}`); message.success('已删除'); load() } catch (e: any) { /* 错误已由全局拦截器提示 */ } }
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto' }}>

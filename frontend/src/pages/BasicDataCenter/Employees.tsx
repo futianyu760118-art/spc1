@@ -108,7 +108,7 @@ export default function Employees() {
       setData(res.data?.items || [])
       setPagination({ current: res.data?.page || 1, pageSize: res.data?.page_size || 20, total: res.data?.total || 0 })
     } catch (error) {
-      message.error('加载数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -124,7 +124,7 @@ export default function Employees() {
         const res: any = await api.get('/basicdata/positions', { params: { page: 1, page_size: 100, status: '1' } })
         setPositions(res.data?.items || [])
       } catch {
-        message.error('加载岗位列表失败')
+        // 错误已由全局拦截器提示
       }
     }
     fetchPositions()
@@ -148,7 +148,7 @@ export default function Employees() {
       message.success('删除成功')
       fetchData(pagination.current, pagination.pageSize)
     } catch (error) {
-      message.error('删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -166,7 +166,7 @@ export default function Employees() {
       form.resetFields()
       fetchData(pagination.current, pagination.pageSize)
     } catch (error) {
-      message.error('操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 

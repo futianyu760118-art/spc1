@@ -233,8 +233,8 @@ export default function QualityIssues() {
       setTotal(res.data.total)
       
     } catch (e: any) {
-message.error(e.message || '获取品质异常失败')
-      } finally {
+      // 错误已由全局拦截器提示
+    } finally {
         setLoading(false)
     }
   }, [page, pageSize, keyword, tableFilters, sorterState])
@@ -251,7 +251,7 @@ message.error(e.message || '获取品质异常失败')
       const res: any = await exceptionApi.getQualityStatistics(params)
       setStatistics(res.data)
     } catch (e: any) {
-      message.error(e.message || '获取品质异常统计失败')
+      // 错误已由全局拦截器提示
     }
   }, [keyword, tableFilters])
 
@@ -338,7 +338,7 @@ message.error(e.message || '获取品质异常失败')
       setModalOpen(false)
       load()
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -348,7 +348,7 @@ message.error(e.message || '获取品质异常失败')
       message.success('删除成功')
       load()
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     }
   }
 

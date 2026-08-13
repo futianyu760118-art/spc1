@@ -52,7 +52,7 @@ export default function PriceChangeList() {
         <Space>
           <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => navigate(`/purchase/price-change/${r.id}`)}>查看</Button>
           {(r.approval_status === 'draft' || r.approval_status === 'rejected' || r.approval_status === 'recalled' || (r.approval_status === 'approved' && canArchiveDelete)) && (
-            <Popconfirm title="确认删除？" onConfirm={async () => { try { await purchaseApi.delete(r.id); message.success('已删除'); actionRef.current?.reload() } catch (e: any) { message.error(e.message || '删除失败') } }}>
+            <Popconfirm title="确认删除？" onConfirm={async () => { try { await purchaseApi.delete(r.id); message.success('已删除'); actionRef.current?.reload() } catch (e: any) { /* 错误已由全局拦截器提示 */ } }}>
               <Button size="small" type="link" danger icon={<DeleteOutlined />} />
             </Popconfirm>
           )}

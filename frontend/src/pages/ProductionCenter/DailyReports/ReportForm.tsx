@@ -326,7 +326,7 @@ export default function WorkshopDailyReportForm({ mode }: Props) {
         setWorkRows((d.work_items || []).map((r: any) => ({ key: r.id, ...r })))
         setTaskRows((d.task_items || []).map((r: any) => ({ key: r.id, ...r })))
       } catch (e: any) {
-        message.error(e?.response?.data?.detail || '加载失败')
+        // 错误已由全局拦截器提示
         navigate('/daily-reports')
       } finally {
         setLoading(false)
@@ -471,7 +471,7 @@ export default function WorkshopDailyReportForm({ mode }: Props) {
       message.success('保存成功')
       navigate('/daily-reports')
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e?.message || '保存失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSaving(false)
     }

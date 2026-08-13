@@ -242,6 +242,7 @@ declare_permission("basicdata.data.positions", "岗位", module="basicdata", par
 declare_permission("basicdata.data.employees", "人员", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/employees", sort_order=11)
 declare_permission("basicdata.data.inventory", "库存", module="basicdata", parent_code="basicdata.data", route_path="/basicdata/inventory", sort_order=12)
 declare_permission("basicdata.feedback", "问题反馈", module="basicdata", parent_code="basicdata", route_path="/basicdata/feedback", sort_order=3)
+declare_permission("basicdata.feedback.handle", "处理问题反馈", module="basicdata", parent_code="basicdata.feedback", actions=["handle"], sort_order=1)
 declare_permission("basicdata.files", "文件管理", module="basicdata", parent_code="basicdata", route_path="/basicdata/files", sort_order=4)
 declare_permission("basicdata.data_supply", "数据供给", module="basicdata", parent_code="basicdata", route_path="/basicdata/data-supply", sort_order=10)
 declare_permission("announcements", "公告管理", module="basicdata", parent_code="basicdata", route_path="/announcements", sort_order=5)
@@ -250,10 +251,11 @@ declare_permission(
     name="用户管理",
     module="basicdata",
     parent_code="basicdata",
-    actions=["create", "read", "update", "delete", "reset_password"],
+    actions=["create", "read", "update", "delete"],
     route_path="/users",
     sort_order=6,
 )
+declare_permission("users.reset_password", "重置密码", module="basicdata", parent_code="users", actions=["reset_password"], sort_order=1)
 declare_permission("roles", "角色管理", module="basicdata", parent_code="basicdata", route_path="/roles", sort_order=7)
 declare_permission("audit", "审计日志", module="basicdata", parent_code="basicdata", actions=["read"], route_path="/audit", sort_order=8)
 declare_permission("settings", "同步SQL配置", module="basicdata", parent_code="basicdata", route_path="/sync-config", sort_order=9)

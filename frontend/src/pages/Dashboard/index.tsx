@@ -55,7 +55,7 @@ export default function Dashboard() {
       setTodayOverview(overviewRes.data)
       setTodayDueOrders(ordersRes.data.items || [])
     } catch {
-      message.error('获取今日总览失败')
+      // 错误已由全局拦截器提示
     } finally {
       setTodayLoading(false)
     }
@@ -67,7 +67,7 @@ export default function Dashboard() {
       const res: any = await dashboardApi.getRollingRisk()
       setRollingRisk(res.data)
     } catch {
-      message.error('获取滚动风险数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setRollingLoading(false)
     }
@@ -79,7 +79,7 @@ export default function Dashboard() {
       const res: any = await dashboardApi.getOrderRiskDistribution()
       setRiskDistribution(res.data)
     } catch {
-      message.error('获取风险分布数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setDistributionLoading(false)
     }
@@ -91,7 +91,7 @@ export default function Dashboard() {
       const res: any = await dashboardApi.getClosureAchievement()
       setClosureData(res.data)
     } catch {
-      message.error('获取闭环数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setClosureLoading(false)
     }
@@ -123,7 +123,7 @@ export default function Dashboard() {
           else if (activeTab === 'distribution') fetchRiskDistribution()
           else if (activeTab === 'closure') fetchClosureAchievement()
         } catch {
-          message.error('风险扫描失败')
+          // 错误已由全局拦截器提示
         } finally {
           setScanning(false)
         }

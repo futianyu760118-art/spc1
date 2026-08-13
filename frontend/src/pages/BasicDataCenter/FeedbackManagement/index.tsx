@@ -26,7 +26,7 @@ const statusMap: Record<string, { label: string; color: string }> = {
 
 export default function FeedbackManagement() {
   const hasPermission = useAuthStore(s => s.hasPermission)
-  const canHandle = hasPermission('basicdata.feedback', 'update')
+  const canHandle = hasPermission('basicdata.feedback.handle', 'handle') || hasPermission('basicdata.feedback', 'update')
   const canDelete = hasPermission('basicdata.feedback', 'delete')
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
@@ -66,7 +66,7 @@ export default function FeedbackManagement() {
       setStats(res.data?.stats || stats)
       setPagination({ current: res.data?.page || 1, pageSize: res.data?.page_size || 20, total: res.data?.total || 0 })
     } catch {
-      message.error('获取反馈列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -100,7 +100,7 @@ export default function FeedbackManagement() {
       fetchData()
     } catch (e: any) {
       if (e?.errorFields) return
-      message.error(e?.response?.data?.detail || '保存失败')
+      // 错误已由全局拦截器提示
     } finally {
       setReplying(false)
     }
@@ -114,7 +114,7 @@ export default function FeedbackManagement() {
       replyForm.setFieldsValue({ status: res.data?.status })
       fetchData()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '状态更新失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -124,7 +124,7 @@ export default function FeedbackManagement() {
       message.success('已删除')
       fetchData()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 

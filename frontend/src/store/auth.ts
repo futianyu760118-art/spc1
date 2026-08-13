@@ -143,15 +143,35 @@ export const useAuthStore = create<AuthState>((set, get) => {
     }
   }
   
+  const pathname = window.location.pathname
+  const isShareEntry = pathname.startsWith('/share/')
+  let isLegitShareContext = isShareEntry
+  if (!isShareEntry && shareUser && shareUser.share_target_path) {
+    const tp = shareUser.share_target_path
+    if (tp.includes(':')) {
+      isLegitShareContext = pathname.startsWith(tp.split('/:')[0])
+    } else {
+      isLegitShareContext = pathname === tp || pathname.startsWith(tp + '/')
+    }
+  }
+  let activeShareToken = shareToken
+  let activeShareUser = shareUser
+  if (!isLegitShareContext && (shareToken || shareUser)) {
+    localStorage.removeItem('shareToken')
+    localStorage.removeItem('shareUser')
+    activeShareToken = null
+    activeShareUser = null
+  }
+
   // 确定当前活跃的认证
-  let currentToken: string | null = shareToken || originalToken
-  let currentUser: (UserInfo | ShareUserInfo) | null = shareUser || originalUser
+  let currentToken: string | null = activeShareToken || originalToken
+  let currentUser: (UserInfo | ShareUserInfo) | null = activeShareUser || originalUser
   
   return {
     originalToken,
     originalUser,
-    shareToken,
-    shareUser,
+    shareToken: activeShareToken,
+    shareUser: activeShareUser,
     currentToken,
     currentUser,
     

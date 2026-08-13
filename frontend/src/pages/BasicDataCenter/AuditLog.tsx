@@ -25,7 +25,7 @@ export default function AuditLog() {
       setData(res.data?.items || [])
       setPagination({ current: res.data?.page || 1, pageSize: res.data?.page_size || 20, total: res.data?.total || 0 })
     } catch {
-      message.error('获取审计日志失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

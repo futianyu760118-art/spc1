@@ -84,7 +84,7 @@ export default function DeleteModal({ open, planData, onClose, onSuccess }: Dele
       setBackfillPreviewOpen(true)
       message.info(result.affected_count > 0 ? `已生成删除预览，并识别出 ${result.affected_count} 条候选补位计划` : '已生成删除预览，当前没有可补位计划')
     } catch (e: any) {
-      message.error(e.message || '获取删除预览失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -108,7 +108,7 @@ export default function DeleteModal({ open, planData, onClose, onSuccess }: Dele
       handleClose()
       onSuccess?.()
     } catch (e: any) {
-      message.error(e.message || (executeBackfill ? '删除并补位失败' : '删除失败'))
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

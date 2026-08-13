@@ -121,7 +121,7 @@ export default function BatchScheduleModal({ open, orderRows, onClose, onSuccess
       onClose()
       onSuccess?.()
     } catch (e: any) {
-      if (!e?.errorFields) message.error(e.message || '批量排产失败')
+      // 错误已由全局拦截器提示（表单校验错误由 antd 内联展示）
     } finally {
       setLoading(false)
     }

@@ -362,7 +362,7 @@ export default function OrderDetail() {
       const res: any = await materialApi.getOrderMaterials(orderNo, params)
       setKitMaterials(res.data || [])
     } catch {
-      message.error('获取齐套物料明细失败')
+      // 错误已由全局拦截器提示
     } finally {
       setKitMaterialsLoading(false)
     }
@@ -379,7 +379,7 @@ export default function OrderDetail() {
       setProductMaterials(materialRes.data || [])
       fetchKitAnalysis()
     } catch {
-      message.error('获取订单详情失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
       setProductMaterialsLoading(false)

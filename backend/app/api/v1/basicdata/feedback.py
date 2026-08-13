@@ -4,16 +4,18 @@
 - 普通用户仅能查看/编辑自己的反馈
 - admin 可查看全部、回复、删除
 """
+import logging
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.security import PermissionChecker
+from app.models.basicdata.announcement import Notification
 from app.models.basicdata.feedback import Feedback
 from app.schemas.common import ResponseModel
 from app.schemas.basicdata.feedback import (
@@ -25,6 +27,12 @@ from app.schemas.basicdata.feedback import (
     FeedbackUpdate,
 )
 from app.services.common.file_service import FileService
+from app.services.notification.notification_broker import publish_unread_update
+
+logger = logging.getLogger(__name__)
+
+_FEEDBACK_TYPE_LABELS = {"issue": "问题", "suggestion": "建议", "inquiry": "咨询"}
+_SEVERITY_LABELS = {"high": "高", "medium": "中", "low": "低"}
 
 router = APIRouter()
 
@@ -57,6 +65,26 @@ def _has_perm(user: dict, action: str) -> bool:
     return False
 
 
+def _can_handle(user: dict) -> bool:
+    """是否有「处理问题反馈」权限（admin 自动通过）。
+
+    优先判新权限 basicdata.feedback.handle 的 handle 动作；
+    兼容旧权限：basicdata.feedback 的 update 动作（避免自定义角色误伤）。
+    """
+    if not user:
+        return False
+    if _is_admin(user):
+        return True
+    perms = user.get("permissions") or {}
+    if not isinstance(perms, dict):
+        return False
+    for resource in ("basicdata.feedback.handle", "masterdata.feedback.handle"):
+        actions = perms.get(resource) or []
+        if isinstance(actions, list) and "handle" in actions:
+            return True
+    return _has_perm(user, "update")
+
+
 def _get_user_id(user: dict) -> int:
     return int(user.get("user_id") or user["sub"])
 
@@ -71,6 +99,57 @@ def _to_dicts(attachments) -> list[dict]:
         elif hasattr(a, "model_dump"):
             out.append(a.model_dump())
     return out
+
+
+async def _insert_handler_notifications(db: AsyncSession, fb: Feedback) -> list[int]:
+    """向所有「有反馈处理权限」的活跃用户插入 feedback_alert 通知行，返回被通知的 user_id 列表。
+
+    处理人按权限判定（镜像 _has_perm 'update'），不硬编码角色名：
+    - admin 自动通过；
+    - 其余角色在 sys_role.permissions JSONB 合并 ROLE_PERMISSION_ADDITIONS 后，
+      含 basicdata.feedback / masterdata.feedback / 父级 basicdata 的 update 动作即视为处理人。
+    这样在 RoleManagement 调整权限矩阵后，通知接收人自动跟随。
+    严重度 high → priority important（触发加载时 toast），其余 normal。排除提交人本人。
+    """
+    from app.core.permissions import merge_role_permission_additions
+    rows = await db.execute(text("""
+        SELECT u.id, r.role_code, r.permissions
+        FROM sys_user u
+        JOIN sys_role r ON u.role_id = r.id
+        WHERE u.is_active = TRUE
+    """))
+    handler_ids: list[int] = []
+    for uid, role_code, raw_perms in rows:
+        if uid is None:
+            continue
+        perms = merge_role_permission_additions(
+            role_code, raw_perms if isinstance(raw_perms, dict) else {}
+        )
+        if _can_handle({"role": role_code, "permissions": perms}):
+            handler_ids.append(int(uid))
+    if fb.submitter_id and fb.submitter_id in handler_ids:
+        handler_ids = [u for u in handler_ids if u != fb.submitter_id]
+    if not handler_ids:
+        return []
+
+    priority = "important" if fb.severity == "high" else "normal"
+    title = f"[问题反馈]{fb.title}"
+    content = fb.description or ""
+
+    for hid in handler_ids:
+        db.add(Notification(
+            user_id=hid,
+            type="feedback",
+            title=title,
+            content=content,
+            ref_type="feedback",
+            ref_id=fb.id,
+            priority=priority,
+            is_read=False,
+            created_at=datetime.utcnow(),
+        ))
+    await db.flush()
+    return handler_ids
 
 
 # ---------- 列表 ----------
@@ -100,7 +179,7 @@ async def list_feedback(
     }
 
     conds = []
-    if not _has_perm(current_user, "update"):
+    if not _can_handle(current_user):
         conds.append(Feedback.submitter_id == current_user.get("user_id"))
     if type:
         types = [t.strip() for t in type.split(",") if t.strip()]
@@ -150,7 +229,7 @@ async def list_feedback(
 
     # 统计卡
     stat_q = select(Feedback.status, func.count()).group_by(Feedback.status)
-    if not _has_perm(current_user, "update"):
+    if not _can_handle(current_user):
         stat_q = stat_q.where(Feedback.submitter_id == current_user.get("user_id"))
     stat_rows = (await db.execute(stat_q)).all()
     by_status = {s: int(c) for s, c in stat_rows}
@@ -183,7 +262,7 @@ async def get_feedback(
     )).scalar_one_or_none()
     if not fb:
         raise HTTPException(status_code=404, detail="反馈不存在")
-    if not _has_perm(current_user, "update") and fb.submitter_id != current_user.get("user_id"):
+    if not _can_handle(current_user) and fb.submitter_id != current_user.get("user_id"):
         raise HTTPException(status_code=403, detail="无权查看")
     return ResponseModel(data=FeedbackOut.model_validate(fb))
 
@@ -215,8 +294,24 @@ async def create_feedback(
         svc = FileService(db)
         await svc.attach([a.get("key") for a in attachments], "feedback", str(fb.id))
 
+    # 通知处理人（插 notification 行；失败只记日志，不影响反馈提交）
+    handler_ids: list[int] = []
+    try:
+        handler_ids = await _insert_handler_notifications(db, fb)
+    except Exception as e:
+        logger.warning(f"[feedback] 插入处理人通知失败 feedback_id={fb.id}: {e}")
+
     await db.commit()
     await db.refresh(fb)
+
+    # commit 后 SSE 推送未读计数（计数反映已提交数据；Redis 失败静默丢弃）
+    if handler_ids:
+        try:
+            for hid in handler_ids:
+                await publish_unread_update(db, hid)
+        except Exception as e:
+            logger.warning(f"[feedback] SSE 推送失败 feedback_id={fb.id}: {e}")
+
     return ResponseModel(data=FeedbackOut.model_validate(fb))
 
 
@@ -234,7 +329,7 @@ async def update_feedback(
     if not fb:
         raise HTTPException(status_code=404, detail="反馈不存在")
 
-    can_handle = _has_perm(current_user, "update")
+    can_handle = _can_handle(current_user)
     if not can_handle:
         if fb.submitter_id != current_user.get("user_id"):
             raise HTTPException(status_code=403, detail="无权编辑")
@@ -278,7 +373,7 @@ async def reply_feedback(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not _has_perm(current_user, "update"):
+    if not _can_handle(current_user):
         raise HTTPException(status_code=403, detail="无权处理反馈")
 
     fb = (await db.execute(
@@ -322,7 +417,7 @@ async def update_status(
     if not fb:
         raise HTTPException(status_code=404, detail="反馈不存在")
 
-    if _has_perm(current_user, "update"):
+    if _can_handle(current_user):
         fb.status = body.status
     else:
         # 提交人：仅可在 resolved 后 close，或 closed 后重开为 pending

@@ -86,7 +86,7 @@ export default function RunOrderList() {
         avgDays: stats.avg_days ? Math.round(stats.avg_days) : 0,
       })
     } catch {
-      message.error('获取跑单列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -164,7 +164,7 @@ export default function RunOrderList() {
           setEditModalOpen(true)
         }
       } catch {
-        message.error('同步失败')
+        // 错误已由全局拦截器提示
       } finally {
         setSyncingOrderNo(null)
       }
@@ -247,7 +247,7 @@ export default function RunOrderList() {
       )))
       message.success('保存成功')
     } catch {
-      message.error('保存失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSavingCell(null)
     }

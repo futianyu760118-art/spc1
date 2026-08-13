@@ -155,7 +155,7 @@ export default function SyncSqlConfig() {
       const res: any = await api.get('/basicdata/sync-sql', { params })
       setData(res.data || [])
     } catch {
-      message.error('加载失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -192,7 +192,7 @@ export default function SyncSqlConfig() {
       const res: any = await api.get(`/basicdata/sync-sql/spc-fields/${syncType}`)
       setSpcFields(res.data || [])
     } catch {
-      message.error('加载 SPC 字段失败')
+      // 错误已由全局拦截器提示
       setSpcFields([])
     } finally {
       setSpcFieldsLoading(false)
@@ -223,7 +223,7 @@ export default function SyncSqlConfig() {
       })
       message.success(`解析到 ${cols.length} 个 ERP 字段`)
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e?.message || 'SQL 字段解析失败')
+      // 错误已由全局拦截器提示
     } finally {
       setErpFieldsLoading(false)
     }
@@ -287,7 +287,7 @@ export default function SyncSqlConfig() {
         simpleAutoMatch()
         return
       }
-      message.error(detail)
+      // 错误已由全局拦截器提示
     } finally {
       setAiMatching(false)
     }
@@ -443,7 +443,7 @@ export default function SyncSqlConfig() {
       setModalOpen(false)
       fetchData()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '保存失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -453,7 +453,7 @@ export default function SyncSqlConfig() {
       message.success('已删除')
       fetchData()
     } catch {
-      message.error('删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -468,7 +468,7 @@ export default function SyncSqlConfig() {
       setTestModalOpen(true)
       message.success(`查询成功，共 ${result?.total_rows ?? 0} 条`)
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e?.message || 'SQL 测试失败')
+      // 错误已由全局拦截器提示
     } finally {
       setTestingId(null)
     }
@@ -489,7 +489,7 @@ export default function SyncSqlConfig() {
       setTestModalOpen(true)
       message.success(`查询成功，共 ${result?.total_rows ?? 0} 条`)
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e?.message || 'SQL 测试失败')
+      // 错误已由全局拦截器提示
     } finally {
       setTestingInModal(false)
     }

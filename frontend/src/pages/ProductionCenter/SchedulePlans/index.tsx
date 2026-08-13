@@ -464,7 +464,7 @@ export default function SchedulePlans() {
         },
         message: e?.message,
       })
-      message.error(e.message || '获取待处理列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -565,7 +565,7 @@ export default function SchedulePlans() {
         },
         message: e?.message,
       })
-      message.error(e.message || '获取排产结果失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -622,7 +622,7 @@ export default function SchedulePlans() {
       setEventTotal(total)
       setEventStats(stats)
     } catch (e: any) {
-      message.error(e.message || '获取变更事件失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -665,7 +665,7 @@ export default function SchedulePlans() {
       setSelectedOrderRows([])
       await refreshTodoWorkbenchPanel(true)
     } catch (e: any) {
-      message.error(e.message || '刷新待处理快照失败')
+      // 错误已由全局拦截器提示
     } finally {
       setRefreshingSnapshots(false)
     }
@@ -794,7 +794,7 @@ export default function SchedulePlans() {
           setSelectedPlanRowKeys([])
           loadPlanBoard(true)
         } catch (e: any) {
-          message.error(e.message || '批量删除失败')
+          // 错误已由全局拦截器提示
         } finally {
           setBatchDeleting(false)
         }
@@ -923,7 +923,7 @@ export default function SchedulePlans() {
       })
       setPlanHistoryData(res.data || [])
     } catch (e: any) {
-      message.error(e.message || '获取版本历史失败')
+      // 错误已由全局拦截器提示
     } finally {
       setPlanHistoryLoading(false)
     }
@@ -938,7 +938,7 @@ export default function SchedulePlans() {
       const res: any = await productionApi.listOperationLogs(params)
       setOperationLogData(res.data?.items || [])
     } catch (e: any) {
-      message.error(e.message || '获取操作日志失败')
+      // 错误已由全局拦截器提示
     } finally {
       setOperationLogLoading(false)
     }
@@ -1024,7 +1024,7 @@ export default function SchedulePlans() {
       loadPlanBoard()
       loadAlertCounts()
     } catch (e: any) {
-      if (!e?.errorFields) message.error(e.message || '保存失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -1101,7 +1101,7 @@ export default function SchedulePlans() {
         ),
       })
     } catch (e: any) {
-      message.error(e.message || '排产失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -1165,7 +1165,7 @@ export default function SchedulePlans() {
         message.warning(refreshError?.message ? `批量排产已完成，但刷新列表失败：${refreshError.message}` : '批量排产已完成，但刷新列表失败，请手动刷新页面')
       }
     } catch (e: any) {
-      if (!e?.errorFields) message.error(e.message || '批量排产失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -1184,7 +1184,7 @@ export default function SchedulePlans() {
       })
       setSimulateResult(res.data || null)
     } catch (e: any) {
-      if (!e?.errorFields) message.error(e.message || '试算失败')
+      // 错误已由全局拦截器提示（表单校验错误由 antd 内联展示）
     } finally {
       setSimulateSubmitting(false)
     }
@@ -1222,7 +1222,7 @@ export default function SchedulePlans() {
         totalMs: Number((performance.now() - requestStartedAt).toFixed(2)),
         message: e?.message,
       })
-      message.error(e.message || '获取删除预览失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -1314,7 +1314,7 @@ export default function SchedulePlans() {
         totalMs: Number((performance.now() - requestStartedAt).toFixed(2)),
         message: e?.message,
       })
-      message.error(e.message || (executeBackfill ? '删除并补位失败' : '删除失败'))
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -1328,7 +1328,7 @@ export default function SchedulePlans() {
       invalidatePageCaches()
       refreshAllViewsInBackground()
     } catch (e: any) {
-      message.error(e.message || '检测变更失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -1374,7 +1374,7 @@ export default function SchedulePlans() {
       invalidatePageCaches()
       refreshAllViewsInBackground()
     } catch (e: any) {
-      message.error(e.message || '批量重排失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -1412,7 +1412,7 @@ export default function SchedulePlans() {
       invalidatePageCaches()
       refreshAllViewsInBackground()
     } catch (e: any) {
-      message.error(e.message || `${statusLabelMap[processStatus]}失败`)
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
