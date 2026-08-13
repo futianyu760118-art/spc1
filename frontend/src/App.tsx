@@ -43,7 +43,8 @@ import {
     AnnouncementManagement,
     RoleManagement,
     PermissionManagement,
-    DataSupply
+    DataSupply,
+    ShareManagement
 } from './pages/BasicDataCenter'
 import WritebackConfig from './pages/BasicDataCenter/WritebackConfig'
 import WritebackMonitor from './pages/WritebackMonitor/index'
@@ -230,6 +231,7 @@ export default function App() {
                             <Route path="roles" element={<RoleManagement/>}/>
                             <Route path="permissions" element={<PermissionManagement/>}/>
                             <Route path="audit" element={<AuditLog/>}/>
+                            <Route path="share-management" element={<ShareManagement/>}/>
                             <Route path="sync-config" element={<SyncSqlConfig/>}/>
                             <Route path="writeback-config" element={<WritebackConfig/>}/>
                             <Route path="writeback-monitor" element={<WritebackMonitor/>}/>

@@ -902,6 +902,7 @@ class DatabaseInitializer:
                             "basicdata.feedback": ["create", "read", "update", "delete"],
                             "basicdata.files": ["read", "delete"],
                             "basicdata.data_supply": ["create", "read", "update", "delete"],
+                            "basicdata.share_management": ["create", "read", "update", "delete"],
                             "announcements": ["create", "read", "update", "delete"],
                             "users": ["create", "read", "update", "delete"],
                             "audit": ["read"],

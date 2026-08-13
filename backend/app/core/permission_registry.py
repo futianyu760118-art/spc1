@@ -244,6 +244,7 @@ declare_permission("basicdata.data.inventory", "库存", module="basicdata", par
 declare_permission("basicdata.feedback", "问题反馈", module="basicdata", parent_code="basicdata", route_path="/basicdata/feedback", sort_order=3)
 declare_permission("basicdata.files", "文件管理", module="basicdata", parent_code="basicdata", route_path="/basicdata/files", sort_order=4)
 declare_permission("basicdata.data_supply", "数据供给", module="basicdata", parent_code="basicdata", route_path="/basicdata/data-supply", sort_order=10)
+declare_permission("basicdata.share_management", "分享管理", module="basicdata", parent_code="basicdata", route_path="/share-management", sort_order=11)
 declare_permission("announcements", "公告管理", module="basicdata", parent_code="basicdata", route_path="/announcements", sort_order=5)
 declare_permission(
     code="users",
