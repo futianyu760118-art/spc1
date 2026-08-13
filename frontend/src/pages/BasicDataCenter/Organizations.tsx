@@ -195,7 +195,7 @@ export default function Organizations() {
       setTreeData(treeNodes)
     } catch (error) {
       console.error('加载组织树失败:', error)
-      message.error('加载组织树失败')
+      // 错误已由全局拦截器提示
     } finally {
       setTreeLoading(false)
     }
@@ -211,7 +211,7 @@ export default function Organizations() {
       const res: any = await api.get(`/basicdata/organizations/${orgId}/employees`)
       setEmployees(res.data?.items || [])
     } catch (error) {
-      message.error('加载员工列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setEmployeesLoading(false)
     }
@@ -231,7 +231,7 @@ export default function Organizations() {
         const res: any = await api.get('/basicdata/positions', { params: { page: 1, page_size: 100, status: '1' } })
         setPositions(res.data?.items || [])
       } catch {
-        message.error('加载岗位列表失败')
+        // 错误已由全局拦截器提示
       }
     }
     fetchPositions()
@@ -298,7 +298,7 @@ export default function Organizations() {
         setEmployees([])
       }
     } catch (error) {
-      message.error('删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -316,7 +316,7 @@ export default function Organizations() {
       orgForm.resetFields()
       fetchTreeData()
     } catch (error) {
-      message.error('操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -341,7 +341,7 @@ export default function Organizations() {
       message.success('删除成功')
       fetchEmployees(getOrgEmployeeQueryId(selectedOrg, selectedOrgId))
     } catch (error) {
-      message.error('删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -359,7 +359,7 @@ export default function Organizations() {
       empForm.resetFields()
       fetchEmployees(getOrgEmployeeQueryId(selectedOrg, selectedOrgId))
     } catch (error) {
-      message.error('操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 

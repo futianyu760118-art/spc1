@@ -115,7 +115,7 @@ export default function RescheduleModal({ open, planData, onClose, onSuccess }: 
         }
       } catch (e: any) {
         if (!cancelled) {
-          message.error(e.message || '获取预览失败')
+          // 错误已由全局拦截器提示
           setPreview(null)
         }
       } finally {
@@ -159,7 +159,7 @@ export default function RescheduleModal({ open, planData, onClose, onSuccess }: 
       handleClose()
       onSuccess?.()
     } catch (e: any) {
-      message.error(e.message || '重排失败')
+      // 错误已由全局拦截器提示
     } finally {
       setApplying(false)
     }

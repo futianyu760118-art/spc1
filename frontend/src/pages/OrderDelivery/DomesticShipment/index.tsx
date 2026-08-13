@@ -72,7 +72,7 @@ export default function DomesticShipment() {
         pending: stats.pending_count || 0,
       })
     } catch {
-      message.error('获取内销出货数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

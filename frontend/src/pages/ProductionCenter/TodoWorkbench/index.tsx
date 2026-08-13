@@ -103,7 +103,7 @@ export default function TodoWorkbench() {
         bucket_counts: res.data?.stats?.bucket_counts,
       })
     } catch (e: any) {
-      message.error(e.message || '获取待处理列表失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

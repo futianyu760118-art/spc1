@@ -236,7 +236,7 @@ export default function DataImport() {
       setImportResult({ ...res.data, type })
       message.success('导入完成')
     } catch {
-      message.error('导入失败')
+      // 错误已由全局拦截器提示
     }
     return false
   }
@@ -250,7 +250,7 @@ export default function DataImport() {
       link.download = 'weekly_report.xlsx'
       link.click()
     } catch {
-      message.error('导出失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -264,7 +264,7 @@ export default function DataImport() {
       const res: any = await importExportApi.listSyncTasks({ limit: 30, sync_type: syncLogFilter || undefined, status: undefined })
       setSyncLogs(res.data || [])
     } catch {
-      message.error('加载同步日志失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSyncLogsLoading(false)
     }
@@ -381,7 +381,7 @@ export default function DataImport() {
             })
           }
         } catch {
-          message.error('查询同步任务状态失败')
+          // 错误已由全局拦截器提示
         } finally {
           setSyncLoading(prev => ({ ...prev, [type]: false }))
         }
@@ -389,7 +389,6 @@ export default function DataImport() {
       setTimeout(pollTask, 1500)
     } catch (e: any) {
       const detail = e?.response?.data?.message || e?.response?.data?.detail || e?.message || '同步失败，请检查 ERP 连接和 SQL 配置'
-      message.error(detail)
       setSyncLoading(prev => ({ ...prev, [type]: false }))
     }
   }
@@ -436,7 +435,6 @@ export default function DataImport() {
             }
           }
         } catch {
-          message.error('查询同步任务状态失败')
           allTypes.forEach(t => setSyncLoading(prev => ({ ...prev, [t]: false })))
         } finally {
           setSyncAllLoading(false)
@@ -445,7 +443,6 @@ export default function DataImport() {
       setTimeout(pollTask, 2000)
     } catch (e: any) {
       const detail = e?.response?.data?.message || e?.response?.data?.detail || e?.message || '全量同步失败'
-      message.error(detail)
       setSyncAllLoading(false)
     }
   }

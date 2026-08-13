@@ -57,7 +57,7 @@ export default function PriceChangeDetail() {
       const res: any = await purchaseApi.get(parseInt(id))
       setR(res.data)
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -102,7 +102,7 @@ export default function PriceChangeDetail() {
         message.warning(apiData.message || '自检未通过，请上传支撑凭证')
         return
       }
-      message.error(e.message || '操作失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSubmitting(false)
     }
@@ -116,7 +116,7 @@ export default function PriceChangeDetail() {
       message.success(res?.message || 'AI 分析已刷新')
       load()
     } catch (e: any) {
-      message.error(e.message || '刷新失败')
+      // 错误已由全局拦截器提示
     } finally {
       setRefreshingAi(false)
     }
@@ -197,7 +197,7 @@ export default function PriceChangeDetail() {
         setScSaving(false)
         return
       }
-      message.error(e.message || '提交失败')
+      // 错误已由全局拦截器提示
     } finally {
       setScSaving(false)
     }
@@ -225,7 +225,7 @@ export default function PriceChangeDetail() {
           message.success('已删除')
           navigate('/purchase/price-change')
         } catch (e: any) {
-          message.error(e.message || '删除失败')
+          // 错误已由全局拦截器提示
         }
       },
     })

@@ -51,7 +51,7 @@ export default function ExceptionPool() {
       setData(res.data.items)
       setTotal(res.data.total)
     } catch (e: any) {
-      message.error(e.message || '获取异常总池失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -66,7 +66,7 @@ export default function ExceptionPool() {
       message.success(`风险扫描完成：新增 ${res.data.new_issues_count} 条风险问题`)
       load()
     } catch (e: any) {
-      message.error(e.message || '风险扫描失败')
+      // 错误已由全局拦截器提示
     } finally {
       setScanning(false)
     }

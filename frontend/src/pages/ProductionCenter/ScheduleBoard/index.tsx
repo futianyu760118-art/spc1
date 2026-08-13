@@ -256,7 +256,7 @@ export default function ScheduleBoard() {
         setCellMap({})
       }
     } catch (e: any) {
-      message.error(e.message || '加载排产看板失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

@@ -95,7 +95,7 @@ export default function SubjectBalances() {
       const items: SubjectNode[] = res.data?.items || []
       setTreeData(items.map(nodeToDataNode))
     } catch (e) {
-      message.error('加载根科目失败')
+      // 错误已由全局拦截器提示
     } finally {
       setTreeLoading(false)
     }
@@ -112,7 +112,7 @@ export default function SubjectBalances() {
       const items: SubjectNode[] = res.data?.items || []
       setTreeData((prev) => updateChildren(prev, treeNode.key, items.map(nodeToDataNode)))
     } catch (e) {
-      message.error('加载子科目失败')
+      // 错误已由全局拦截器提示
     }
   }, [buildParams])
 
@@ -144,7 +144,7 @@ export default function SubjectBalances() {
         total: res.data?.total || 0,
       })
     } catch (e) {
-      message.error('加载期间明细失败')
+      // 错误已由全局拦截器提示
     } finally {
       setPeriodLoading(false)
     }

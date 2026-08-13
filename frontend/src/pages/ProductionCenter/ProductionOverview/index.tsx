@@ -65,7 +65,7 @@ export default function ProductionOverview() {
       const res: any = await productionApi.getOverview()
       setData(res.data)
     } catch (e: any) {
-      message.error(e.message)
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

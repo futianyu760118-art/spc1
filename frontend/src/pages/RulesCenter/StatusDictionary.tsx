@@ -42,7 +42,7 @@ export default function StatusDictionary() {
       const res: any = await statusDictApi.list(params)
       setData(res.data || [])
     } catch {
-      message.error('获取状态字典失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -76,7 +76,7 @@ export default function StatusDictionary() {
       setModalOpen(false)
       fetchData()
     } catch {
-      message.error('保存失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -86,7 +86,7 @@ export default function StatusDictionary() {
       message.success('删除成功')
       fetchData()
     } catch {
-      message.error('删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 

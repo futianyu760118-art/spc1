@@ -2,6 +2,12 @@ import axios from 'axios'
 import { useAuthStore } from '../store/auth'
 import { getGlobalMessageApi } from '../utils/antdMessage'
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipErrorToast?: boolean
+  }
+}
+
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
@@ -22,6 +28,11 @@ api.interceptors.response.use(
       const err: any = new Error(data.message || '请求失败')
       err._apiData = data
       err._apiResponse = response
+      // 业务错误（HTTP 200 但 code !== 0）统一由拦截器兜底提示，
+      // 避免组件层重复弹窗。可由请求级 skipErrorToast 关闭。
+      if (!response.config?.skipErrorToast) {
+        getGlobalMessageApi()?.error(data.message || '请求失败')
+      }
       return Promise.reject(err)
     }
     if (data && typeof data === 'object') {
@@ -38,13 +49,15 @@ api.interceptors.response.use(
     const messageApi = getGlobalMessageApi()
     const status = error.response?.status
     const forceLogout = error.response?.headers?.['x-force-logout']
+    const skipToast = error.config?.skipErrorToast
     if (status === 401) {
       const detail = error.response?.data?.detail || '登录已过期'
       error.message = detail
       // 登录接口自身的 401（用户名/密码错误等）由 Login 页面 catch 自行提示，
       // 不要再走全局 toast + 登出 + window.location.href 全页刷新逻辑，
       // 否则会立刻把刚排队的错误提示 toast 销毁。
-      if (error.config?.url?.includes('/basicdata/auth/login')) {
+      // 通过请求级 skipErrorToast 开关控制（登录接口在 authApi.login 中显式开启）。
+      if (skipToast) {
         return Promise.reject(error)
       }
       const { isShareUser, exitShare, logout } = useAuthStore.getState()
@@ -66,18 +79,17 @@ api.interceptors.response.use(
         window.location.href = '/login'
       }
     } else if (status === 403) {
-      const detail = error.response?.data?.detail || '权限不足，无法执行此操作'
-      error.message = detail
-      messageApi?.error(detail)
+      error.message = error.response?.data?.detail || '权限不足，无法执行此操作'
+      if (!skipToast) messageApi?.error(error.message)
     } else if (status === 404) {
       error.message = error.response?.data?.detail || '请求的资源不存在'
-      messageApi?.error(error.message)
+      if (!skipToast) messageApi?.error(error.message)
     } else if (status && status >= 500) {
       error.message = error.response?.data?.detail || '服务器错误，请稍后重试'
-      messageApi?.error(error.message)
+      if (!skipToast) messageApi?.error(error.message)
     } else if (!error.response) {
       error.message = '网络连接失败，请检查网络连接后重试'
-      messageApi?.error(error.message)
+      if (!skipToast) messageApi?.error(error.message)
     }
     return Promise.reject(error)
   },
@@ -94,9 +106,12 @@ export const authApi = {
     formData.append('login_type', loginType)
     return api.post('/basicdata/auth/login', formData, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      skipErrorToast: true,
     })
   },
   getMe: () => api.get('/basicdata/auth/me'),
+  wecomOauthUrl: () => api.get('/basicdata/auth/wecom-oauth-url'),
+  wecomLogin: (code: string) => api.post('/basicdata/auth/wecom-login', { code }),
   changePassword: (old_password: string, new_password: string) =>
     api.put('/basicdata/auth/change-password', { old_password, new_password }),
   updatePreferences: (data: { font_size_scale?: string; ui_preferences?: Record<string, any> }) =>
@@ -685,6 +700,9 @@ export const userApi = {
     api.put('/basicdata/users/batch/reset-password', data),
   batchDelete: (data: { user_ids?: number[]; filter?: { role_code?: string; is_active?: boolean; keyword?: string; org_name?: string; position_name?: string; supplier_name?: string } }) =>
     api.post('/basicdata/users/batch/delete', data),
+  wecomMatch: () => api.get('/basicdata/users/wecom-match'),
+  batchBindWecom: (bindings: { user_id: number; wecom_user_id: string }[]) =>
+    api.post('/basicdata/users/batch-bind-wecom', { bindings }),
 }
 
 // ============ 页面分享 ============

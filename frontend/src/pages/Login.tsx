@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, type ReactNode } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Form, Input, Button, message } from 'antd'
 import { UserOutlined, LockOutlined, ShopOutlined, TeamOutlined } from '@ant-design/icons'
 import { authApi } from '../services/api'
@@ -46,6 +46,52 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const setAuth = useAuthStore((s) => s.setAuth)
+  const [searchParams] = useSearchParams()
+  const code = searchParams.get('code')
+
+  const handleWecomLogin = async () => {
+    try {
+      const res: any = await authApi.wecomOauthUrl()
+      const url = res?.data?.oauth_url
+      if (url) window.location.href = url
+    } catch {
+      // 全局拦截器已 toast
+    }
+  }
+
+  useEffect(() => {
+    if (code) {
+      // SSO 回调：用 code 登录
+      ;(async () => {
+        try {
+          const res: any = await authApi.wecomLogin(code)
+          const token = res.data.access_token
+          useAuthStore.getState().setAuth(token, null)
+          const meRes: any = await authApi.getMe()
+          setAuth(token, meRes.data)
+          message.success('登录成功')
+          window.history.replaceState({}, '', window.location.pathname)
+          navigate('/dashboard')
+        } catch {
+          // 清掉 code，保留账密表单兜底；全局拦截器已 toast 错误
+          window.history.replaceState({}, '', window.location.pathname)
+        }
+      })()
+      return
+    }
+    // 无 code 且在企业微信客户端 → 静默跳转 OAuth
+    if (navigator.userAgent.toLowerCase().includes('wxwork')) {
+      ;(async () => {
+        try {
+          const res: any = await authApi.wecomOauthUrl()
+          const url = res?.data?.oauth_url
+          if (url) window.location.href = url
+        } catch {
+          // 企微未配置等：静默，保留账密表单
+        }
+      })()
+    }
+  }, [code])
 
   const onFinish = async (values: LoginFormValues) => {
     setLoading(true)
@@ -167,6 +213,9 @@ export default function Login() {
             </Button>
           </Form.Item>
         </Form>
+        <div style={{ marginTop: 12, textAlign: 'center' }}>
+          <Button type="link" size="small" onClick={handleWecomLogin}>企业微信登录</Button>
+        </div>
       </div>
     </div>
   )

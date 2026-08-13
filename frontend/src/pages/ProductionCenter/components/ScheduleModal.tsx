@@ -215,7 +215,7 @@ export default function ScheduleModal({ open, orderData, onClose, onSuccess }: S
         message.info(descriptionParts.join('；'), 5)
       }
     } catch (e: any) {
-      if (!e?.errorFields) message.error(e.message || '排产失败')
+      // 错误已由全局拦截器提示（表单校验错误由 antd 内联展示）
     } finally {
       setLoading(false)
     }

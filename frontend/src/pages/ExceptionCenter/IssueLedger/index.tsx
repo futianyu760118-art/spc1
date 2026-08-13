@@ -44,7 +44,7 @@ export default function IssueLedger() {
       setData(res.data.items)
       setPagination({ current: res.data.page, pageSize: res.data.page_size, total: res.data.total })
     } catch {
-      message.error('获取异常台账失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -79,7 +79,7 @@ export default function IssueLedger() {
       fetchData(pagination.current, pagination.pageSize)
       fetchStats()
     } catch {
-      message.error('更新失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -93,7 +93,7 @@ export default function IssueLedger() {
       fetchData(1, pagination.pageSize)
       fetchStats()
     } catch {
-      message.error('创建失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -106,7 +106,7 @@ export default function IssueLedger() {
       link.download = 'issues.xlsx'
       link.click()
     } catch {
-      message.error('导出失败')
+      // 错误已由全局拦截器提示
     }
   }
 

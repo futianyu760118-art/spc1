@@ -56,7 +56,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       setData(res.data.items || [])
       setTotal(res.data.total || 0)
     } catch (e: any) {
-      message.error(e.message || `获取${title}失败`)
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -143,7 +143,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       const res = await api.versions(row.id)
       setVersions(res.data || [])
     } catch (e: any) {
-      message.error(e.message || '获取版本历史失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -156,7 +156,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       const res = await api.versions(row.id)
       setVersions(res.data || [])
     } catch (e: any) {
-      message.error(e.message || '获取详情失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -166,7 +166,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       message.success('已删除')
       load()
     } catch (e: any) {
-      message.error(e.message || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -176,7 +176,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       message.success('已发布')
       load()
     } catch (e: any) {
-      message.error(e.message || '发布失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -186,7 +186,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       message.success('已归档')
       load()
     } catch (e: any) {
-      message.error(e.message || '归档失败')
+      // 错误已由全局拦截器提示
     }
   }
 

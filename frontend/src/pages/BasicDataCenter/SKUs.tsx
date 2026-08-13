@@ -71,7 +71,7 @@ export default function SKUs() {
       setData(res.data?.items || [])
       setPagination({ current: res.data?.page || 1, pageSize: res.data?.page_size || 20, total: res.data?.total || 0 })
     } catch (error) {
-      message.error('加载数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -99,7 +99,7 @@ export default function SKUs() {
       message.success('删除成功')
       fetchData(pagination.current, pagination.pageSize)
     } catch (error) {
-      message.error('删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -117,7 +117,7 @@ export default function SKUs() {
       form.resetFields()
       fetchData(pagination.current, pagination.pageSize)
     } catch (error) {
-      message.error('操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 

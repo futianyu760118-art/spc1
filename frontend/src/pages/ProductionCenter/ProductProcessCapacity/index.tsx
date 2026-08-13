@@ -104,7 +104,7 @@ const ProductProcessCapacity: React.FC = () => {
       setTotal(res.data.total)
       setStats(res.data.stats || { all: 0, lean: 0, assembly: 0, packaging: 0, others: 0 })
     } catch (error: any) {
-      message.error(error.message || '获取产能数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -116,7 +116,7 @@ const ProductProcessCapacity: React.FC = () => {
       const res = await productionApi.listUpphFormulaConfigs()
       setConfigData(res.data || [])
     } catch (error: any) {
-      message.error(error.message || '获取UPPH配置失败')
+      // 错误已由全局拦截器提示
     } finally {
       setConfigLoading(false)
     }
@@ -197,7 +197,7 @@ const ProductProcessCapacity: React.FC = () => {
         fetchCapacities()
       }
     } catch (error: any) {
-      message.error(error.message || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -216,7 +216,7 @@ const ProductProcessCapacity: React.FC = () => {
       }
       fetchConfigs()
     } catch (error: any) {
-      message.error(error.message || 'OA 同步失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSyncLoading(false)
     }
@@ -240,7 +240,7 @@ const ProductProcessCapacity: React.FC = () => {
         fetchCapacities()
       }
     } catch (error: any) {
-      message.error(error.message || '操作失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSubmitLoading(false)
     }
@@ -261,7 +261,7 @@ const ProductProcessCapacity: React.FC = () => {
       fetchConfigs()
       fetchCapacities()
     } catch (error: any) {
-      message.error(error.message || '配置保存失败')
+      // 错误已由全局拦截器提示
     } finally {
       setConfigSubmitLoading(false)
     }
@@ -274,7 +274,7 @@ const ProductProcessCapacity: React.FC = () => {
       fetchConfigs()
       fetchCapacities()
     } catch (error: any) {
-      message.error(error.message || '配置删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 

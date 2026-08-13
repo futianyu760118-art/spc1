@@ -53,7 +53,7 @@ export default function PriceChangeNew() {
         setSupName(d.supplier_name || '')
         setItems((d.items || []).map((i: any) => ({ ...i, key: i.id || Date.now() + Math.random() })))
         setFormKey(k => k + 1)
-      } catch (e: any) { message.error('加载失败: ' + (e.message || '')) }
+      } catch (e: any) { /* 错误已由全局拦截器提示 */ }
       finally { setLoadingData(false) }
     })()
   }, [editId])
@@ -289,7 +289,7 @@ export default function PriceChangeNew() {
         message.warning(apiData.message || '自检未通过，请上传支撑凭证')
         return
       }
-      if (!e?.errorFields) message.error(e.message || '保存失败')
+      // 错误已由全局拦截器提示
     } finally { setSaving(false) }
   }
 
@@ -469,7 +469,7 @@ export default function PriceChangeNew() {
         setScSaving(false)
         return
       }
-      message.error(e.message || '提交失败')
+      // 错误已由全局拦截器提示
     } finally {
       if (!document.querySelector('.ant-modal-open')) setScSaving(false)
     }

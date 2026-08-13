@@ -39,7 +39,7 @@ export default function Positions() {
         total: res.data?.total || 0,
       })
     } catch {
-      message.error('加载岗位数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

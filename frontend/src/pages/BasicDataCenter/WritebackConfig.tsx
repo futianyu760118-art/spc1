@@ -43,7 +43,7 @@ export default function WritebackConfig() {
       const res: any = await api.get('/writeback/config')
       setData(res.data || [])
     } catch {
-      message.error('加载失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -121,7 +121,7 @@ export default function WritebackConfig() {
       message.success(record.enabled ? '已禁用' : '已启用')
       fetchData()
     } catch {
-      message.error('操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -133,7 +133,7 @@ export default function WritebackConfig() {
       setTestResult(res.data || res)
       setTestModalOpen(true)
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || e?.message || '测试失败')
+      // 错误已由全局拦截器提示
     } finally {
       setTestingType(null)
     }

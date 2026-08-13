@@ -22,7 +22,7 @@ export default function PriceChangePending() {
       const payload = res.data
       setData(Array.isArray(payload) ? payload : (payload?.items || []))
     } catch (e: any) {
-      message.error(e.message || '加载失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -99,7 +99,7 @@ export default function PriceChangePending() {
       message.success(action === 'approve' ? '已通过' : '已驳回')
       load()
     } catch (e: any) {
-      message.error(e.message || '操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 

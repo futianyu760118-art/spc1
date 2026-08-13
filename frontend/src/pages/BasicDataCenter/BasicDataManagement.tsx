@@ -181,7 +181,7 @@ function BasicDataTable<T extends { id: number }>({
         setPagination(prev => ({ ...prev, total: (resData || []).length }))
       }
     } catch (error) {
-      message.error('加载数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -226,7 +226,7 @@ function BasicDataTable<T extends { id: number }>({
       message.success('删除成功')
       fetchData()
     } catch (error) {
-      message.error('删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -244,7 +244,7 @@ function BasicDataTable<T extends { id: number }>({
       form.resetFields()
       fetchData()
     } catch (error) {
-      message.error('操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 

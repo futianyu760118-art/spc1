@@ -43,7 +43,7 @@ export default function InspectionRules() {
       const res: any = await inspectionRuleApi.list(params)
       setData(res.data || [])
     } catch {
-      message.error('获取点检规则失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -77,7 +77,7 @@ export default function InspectionRules() {
       setModalOpen(false)
       fetchData()
     } catch {
-      message.error('保存失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -87,7 +87,7 @@ export default function InspectionRules() {
       message.success('删除成功')
       fetchData()
     } catch {
-      message.error('删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 

@@ -29,6 +29,7 @@ from app.models.basicdata import (
     Warehouse, Location, Process, Organization, Employee, Position,
     Inventory,
 )
+from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.basicdata.position_role_service import sync_user_role_from_employee
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -46,6 +47,21 @@ def _apply_sort(query, model, sort_by: Optional[str], sort_order: Optional[str],
     if not order_clauses:
         order_clauses = [model.id.desc()]
     return query.order_by(*order_clauses)
+
+
+def _inventory_checked_exists():
+    """已盘物料判定条件：存在 actual_qty 非空且盘点单未取消的盘点记录。"""
+    return (
+        select(1)
+        .select_from(StockCheckItem)
+        .join(StockCheck, StockCheck.id == StockCheckItem.check_id)
+        .where(
+            StockCheckItem.material_id == Inventory.material_id,
+            StockCheckItem.actual_qty.isnot(None),
+            StockCheck.status != "cancelled",
+        )
+        .exists()
+    )
 
 
 def _employee_out(employee: Employee, position_name: Optional[str] = None, manager_name: Optional[str] = None) -> EmployeeOut:
@@ -1369,6 +1385,8 @@ async def list_inventory(
         func.coalesce(func.sum(Inventory.qty_in_transit), 0),
         func.coalesce(func.sum(Inventory.ending_balance), 0),
     )
+    total_materials_query = select(func.count(func.distinct(Inventory.material_id)))
+    counted_materials_query = select(func.count(func.distinct(Inventory.material_id))).where(_inventory_checked_exists())
 
     if keyword:
         like = f"%{keyword}%"
@@ -1380,21 +1398,31 @@ async def list_inventory(
         query = query.where(filter_cond)
         count_query = count_query.where(filter_cond)
         sums_query = sums_query.where(filter_cond)
+        total_materials_query = total_materials_query.where(filter_cond)
+        counted_materials_query = counted_materials_query.where(filter_cond)
     if material_code:
         query = query.where(Inventory.material_code == material_code)
         count_query = count_query.where(Inventory.material_code == material_code)
         sums_query = sums_query.where(Inventory.material_code == material_code)
+        total_materials_query = total_materials_query.where(Inventory.material_code == material_code)
+        counted_materials_query = counted_materials_query.where(Inventory.material_code == material_code)
     if wh_code:
         query = query.where(Inventory.wh_code == wh_code)
         count_query = count_query.where(Inventory.wh_code == wh_code)
         sums_query = sums_query.where(Inventory.wh_code == wh_code)
+        total_materials_query = total_materials_query.where(Inventory.wh_code == wh_code)
+        counted_materials_query = counted_materials_query.where(Inventory.wh_code == wh_code)
     if batch_no:
         query = query.where(Inventory.batch_no == batch_no)
         count_query = count_query.where(Inventory.batch_no == batch_no)
         sums_query = sums_query.where(Inventory.batch_no == batch_no)
+        total_materials_query = total_materials_query.where(Inventory.batch_no == batch_no)
+        counted_materials_query = counted_materials_query.where(Inventory.batch_no == batch_no)
 
     total = (await db.execute(count_query)).scalar() or 0
     sum_on_hand, sum_locked, sum_balance, sum_in_transit, sum_ending = (await db.execute(sums_query)).one()
+    total_materials = (await db.execute(total_materials_query)).scalar() or 0
+    counted_materials = (await db.execute(counted_materials_query)).scalar() or 0
 
     query = _apply_sort(query, Inventory, sort_by, sort_order, SORTABLE_INVENTORY)
     query = query.offset((page - 1) * page_size).limit(page_size)
@@ -1434,5 +1462,136 @@ async def list_inventory(
             "balance_qty": float(sum_balance or 0),
             "qty_in_transit": float(sum_in_transit or 0),
             "ending_balance": float(sum_ending or 0),
+        },
+        "stats": {
+            "total_materials": int(total_materials or 0),
+            "counted_materials": int(counted_materials or 0),
+        },
+    })
+
+
+@router.get("/inventory/by-warehouse", response_model=ResponseModel[dict])
+async def list_inventory_by_warehouse(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: Optional[str] = Query(None, description="模糊搜索物料编码/名称/仓库名称"),
+    material_code: Optional[str] = Query(None, description="物料编码精确筛选"),
+    wh_code: Optional[str] = Query(None, description="仓库编码精确筛选"),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query("asc"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.inventory", "read")),
+):
+    """按 物料 x 仓库 聚合的即时库存视图（合并库位维度）。"""
+    filters = []
+    if keyword:
+        like = f"%{keyword}%"
+        filters.append(or_(
+            Inventory.material_code.ilike(like),
+            Inventory.material_name.ilike(like),
+            Inventory.wh_name.ilike(like),
+        ))
+    if material_code:
+        filters.append(Inventory.material_code == material_code)
+    if wh_code:
+        filters.append(Inventory.wh_code == wh_code)
+
+    sum_qty = func.coalesce(func.sum(Inventory.qty_on_hand), 0).label("qty_on_hand")
+    sum_locked = func.coalesce(func.sum(Inventory.locked_qty), 0).label("locked_qty")
+    sum_balance = func.coalesce(func.sum(Inventory.balance_qty), 0).label("balance_qty")
+    sum_transit = func.coalesce(func.sum(Inventory.qty_in_transit), 0).label("qty_in_transit")
+    sum_ending = func.coalesce(func.sum(Inventory.ending_balance), 0).label("ending_balance")
+    cnt_locations = func.count(Inventory.id).label("location_count")
+
+    group_cols = [
+        Inventory.material_id, Inventory.material_code, Inventory.material_name,
+        Inventory.wh_id, Inventory.wh_code, Inventory.wh_name,
+    ]
+
+    query = select(*group_cols, sum_qty, sum_locked, sum_balance, sum_transit, sum_ending, cnt_locations).group_by(*group_cols)
+    for f in filters:
+        query = query.where(f)
+
+    sortable = {
+        "material_code": Inventory.material_code,
+        "wh_code": Inventory.wh_code,
+        "qty_on_hand": sum_qty,
+        "locked_qty": sum_locked,
+        "balance_qty": sum_balance,
+        "qty_in_transit": sum_transit,
+        "ending_balance": sum_ending,
+    }
+    if sort_by in sortable:
+        col = sortable[sort_by]
+        query = query.order_by(col.desc() if sort_order == "desc" else col.asc())
+    else:
+        query = query.order_by(Inventory.material_code.asc(), Inventory.wh_code.asc())
+
+    count_subq = select(Inventory.material_id, Inventory.wh_id).group_by(Inventory.material_id, Inventory.wh_id)
+    for f in filters:
+        count_subq = count_subq.where(f)
+    count_query = select(func.count()).select_from(count_subq.subquery())
+    total = (await db.execute(count_query)).scalar() or 0
+
+    sums_query = select(
+        func.coalesce(func.sum(Inventory.qty_on_hand), 0),
+        func.coalesce(func.sum(Inventory.locked_qty), 0),
+        func.coalesce(func.sum(Inventory.balance_qty), 0),
+        func.coalesce(func.sum(Inventory.qty_in_transit), 0),
+        func.coalesce(func.sum(Inventory.ending_balance), 0),
+    )
+    for f in filters:
+        sums_query = sums_query.where(f)
+    sum_on_hand, sum_locked, sum_balance, sum_in_transit, sum_ending = (await db.execute(sums_query)).one()
+
+    total_materials_query = select(func.count(func.distinct(Inventory.material_id)))
+    counted_materials_query = select(func.count(func.distinct(Inventory.material_id))).where(_inventory_checked_exists())
+    for f in filters:
+        total_materials_query = total_materials_query.where(f)
+        counted_materials_query = counted_materials_query.where(f)
+    total_materials = (await db.execute(total_materials_query)).scalar() or 0
+    counted_materials = (await db.execute(counted_materials_query)).scalar() or 0
+
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    rows = result.all()
+
+    items = []
+    for row in rows:
+        (mat_id, mat_code, mat_name, wh_id, w_code, w_name,
+         qty, locked, balance, transit, ending, loc_cnt) = row
+        qty_f = float(qty or 0)
+        ending_f = float(ending or 0)
+        items.append({
+            "material_id": mat_id,
+            "material_code": mat_code,
+            "material_name": mat_name,
+            "wh_id": wh_id,
+            "wh_code": w_code,
+            "wh_name": w_name,
+            "qty_on_hand": qty_f,
+            "locked_qty": float(locked or 0),
+            "balance_qty": float(balance or 0),
+            "qty_in_transit": float(transit or 0),
+            "unit_price": (ending_f / qty_f) if qty_f else 0,
+            "ending_balance": ending_f,
+            "location_count": int(loc_cnt or 0),
+        })
+
+    return ResponseModel(data={
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "sums": {
+            "qty_on_hand": float(sum_on_hand or 0),
+            "locked_qty": float(sum_locked or 0),
+            "balance_qty": float(sum_balance or 0),
+            "qty_in_transit": float(sum_in_transit or 0),
+            "ending_balance": float(sum_ending or 0),
+        },
+        "stats": {
+            "total_materials": int(total_materials or 0),
+            "counted_materials": int(counted_materials or 0),
         },
     })

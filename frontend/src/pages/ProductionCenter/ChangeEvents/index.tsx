@@ -87,7 +87,7 @@ export default function ChangeEvents() {
         resolved: res.data?.stats?.resolved || 0,
       })
     } catch (e: any) {
-      message.error(e.message || '获取变更事件失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -122,7 +122,7 @@ export default function ChangeEvents() {
       setSelectedPlanIds([])
       await load()
     } catch (e: any) {
-      message.error(e.message || `${statusLabelMap[processStatus]}失败`)
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

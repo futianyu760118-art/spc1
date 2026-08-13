@@ -140,17 +140,25 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   npi: <ProjectOutlined />,
 }
 
+// 判断节点是否为可进入的菜单页面：自身有路由，或子树中存在有路由的页面。
+// 无路由的叶子（如 users.reset_password、basicdata.feedback.handle）是页面子权限，不作为菜单项。
+function isMenuPage(node: PermNode): boolean {
+  if (node.route_path) return true
+  if (node.children && node.children.length > 0) return node.children.some(isMenuPage)
+  return false
+}
+
 // 从权限树动态生成菜单项
 function buildMenuItemsFromTree(nodes: PermNode[]): PermissionAwareItem[] {
   return nodes
     .filter(node => node.code !== 'topbar') // 顶栏功能不在侧边栏显示
     .map(node => {
-      const hasChildren = node.children && node.children.length > 0
+      const hasPageChildren = (node.children || []).some(isMenuPage)
       const icon = PERMISSION_ICON_MAP[node.code] || MODULE_ICON_MAP[node.module] || <AppstoreOutlined />
       const key = node.route_path || node.code
 
-      if (hasChildren) {
-        const children = buildMenuItemsFromTree(node.children!)
+      if (hasPageChildren) {
+        const children = buildMenuItemsFromTree((node.children || []).filter(isMenuPage))
         return {
           key,
           icon: MODULE_ICON_MAP[node.code] || MODULE_ICON_MAP[node.module] || icon,
@@ -160,6 +168,9 @@ function buildMenuItemsFromTree(nodes: PermNode[]): PermissionAwareItem[] {
         }
       }
 
+      // 无页面子节点：仅自身有路由时才是可进入的页面；否则是页面子权限，不进菜单
+      if (!node.route_path) return null
+
       return {
         key,
         icon,
@@ -167,6 +178,7 @@ function buildMenuItemsFromTree(nodes: PermNode[]): PermissionAwareItem[] {
         permission: node.code,
       }
     })
+    .filter(Boolean) as PermissionAwareItem[]
 }
 
 // 保留硬编码菜单作为 fallback（权限 API 不可用时使用）
@@ -671,9 +683,58 @@ export default function MainLayout() {
 
   useEffect(() => {
     if (!originalToken || isShareUser() || !canUseTopbar.notifications) return
-    fetchUnreadCount()
-    const timer = setInterval(fetchUnreadCount, 60000)
-    return () => clearInterval(timer)
+
+    let es: EventSource | null = null
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let closed = false
+
+    const stopPolling = () => {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+    }
+    const startPolling = () => {
+      if (pollTimer) return
+      fetchUnreadCount()
+      pollTimer = setInterval(fetchUnreadCount, 60000)
+    }
+
+    const connect = () => {
+      if (closed) return
+      try {
+        es = new EventSource(`/api/v1/notifications/stream?token=${encodeURIComponent(originalToken)}`)
+      } catch {
+        startPolling()
+        return
+      }
+      es.addEventListener('open', () => {
+        // SSE 连上：停掉降级轮询
+        stopPolling()
+      })
+      es.addEventListener('unread', (ev: MessageEvent) => {
+        try {
+          const data = JSON.parse(ev.data)
+          setUnreadTotal(data.total || 0)
+          setUnreadByType(data.by_type || {})
+        } catch { /* silent */ }
+      })
+      es.addEventListener('error', () => {
+        // 断开/Redis 故障：关 SSE → 启动降级轮询；30s 后尝试恢复实时
+        try { es?.close() } catch { /* silent */ }
+        es = null
+        startPolling()
+        if (reconnectTimer) clearTimeout(reconnectTimer)
+        reconnectTimer = setTimeout(() => { if (!closed) connect() }, 30000)
+      })
+    }
+
+    connect()
+
+    return () => {
+      closed = true
+      try { es?.close() } catch { /* silent */ }
+      stopPolling()
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+    }
   }, [originalToken, isShareUser, canUseTopbar.notifications, fetchUnreadCount])
 
   useEffect(() => {
@@ -742,7 +803,7 @@ export default function MainLayout() {
         useAuthStore.getState().setAuth(useAuthStore.getState().originalToken!, { ...user, is_default_password: false } as any)
       }
     } catch (e: any) {
-      if (e?.response?.data?.detail) message.error(e.response.data.detail)
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -760,7 +821,7 @@ export default function MainLayout() {
       logout()
       navigate('/login')
     } catch (e: any) {
-      if (e?.response?.data?.detail) message.error(e.response.data.detail)
+      // 错误已由全局拦截器提示
     }
   }
 

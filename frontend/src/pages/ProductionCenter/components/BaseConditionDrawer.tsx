@@ -56,7 +56,7 @@ export default function BaseConditionDrawer({ open, onClose, onSaved }: BaseCond
       onClose()
     } catch (e: any) {
       if (e?.errorFields) return
-      message.error(e?.message || '保存失败')
+      // 错误已由全局拦截器提示
     } finally {
       setSaving(false)
     }

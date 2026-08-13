@@ -88,7 +88,7 @@ export default function DomesticOrders() {
       setOrders(res.data.items || [])
       setPagination({ current: res.data.page, pageSize: res.data.page_size, total: res.data.total })
     } catch {
-      message.error('获取内销订单失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }

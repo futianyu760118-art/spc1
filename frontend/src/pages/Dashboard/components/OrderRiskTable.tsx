@@ -34,7 +34,7 @@ export default function OrderRiskTable({ orders, loading, pagination, onPageChan
       setEditingKey('')
       message.success('更新成功')
     } catch {
-      message.error('更新失败')
+      // 错误已由全局拦截器提示
     }
   }
 

@@ -98,7 +98,7 @@ export default function ShareButton() {
         message.success('分享链接已生成')
       }
     } catch (e: any) {
-      message.error(e?.response?.data?.message || e?.message || '操作失败')
+      // 错误已由全局拦截器提示
     }
     setLoading(false)
   }

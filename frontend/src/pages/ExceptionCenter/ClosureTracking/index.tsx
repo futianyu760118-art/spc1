@@ -73,7 +73,7 @@ export default function ClosureTracking() {
       const res: any = await exceptionApi.getClosureTracking(params)
       setData(res.data)
     } catch (e: any) {
-      message.error(e.message || '获取闭环跟踪数据失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -170,7 +170,7 @@ export default function ClosureTracking() {
       })
       setPersonDetailMap(prev => ({ ...prev, [detailKey]: res.data || [] }))
     } catch (e: any) {
-      message.error(e.message || '加载异常明细失败')
+      // 错误已由全局拦截器提示
     } finally {
       setPersonDetailLoadingMap(prev => ({ ...prev, [detailKey]: false }))
     }

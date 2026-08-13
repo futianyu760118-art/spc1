@@ -23,7 +23,7 @@ interface PermNode {
 }
 
 const PROTECTED_CODES = ['permissions', 'roles', 'users']
-const STANDARD_ACTIONS = ['create', 'read', 'update', 'delete', 'import', 'reset_password']
+const STANDARD_ACTIONS = ['create', 'read', 'update', 'delete', 'import', 'handle']
 
 function flatten(nodes: PermNode[], acc: PermNode[] = []): PermNode[] {
   for (const n of nodes) {
@@ -58,7 +58,7 @@ export default function PermissionManagement() {
       const res: any = await permissionApi.tree(true)
       setTree(res?.data || [])
     } catch {
-      message.error('加载权限树失败')
+      // 错误已由全局拦截器提示
     } finally {
       setLoading(false)
     }
@@ -124,7 +124,7 @@ export default function PermissionManagement() {
       fetchTree()
     } catch (e: any) {
       if (e?.errorFields) return
-      message.error(e?.response?.data?.detail || '操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -134,7 +134,7 @@ export default function PermissionManagement() {
       message.success('删除成功')
       fetchTree()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '删除失败')
+      // 错误已由全局拦截器提示
     }
   }
 
@@ -144,7 +144,7 @@ export default function PermissionManagement() {
       message.success(active ? '已启用' : '已停用')
       fetchTree()
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || '操作失败')
+      // 错误已由全局拦截器提示
     }
   }
 
