@@ -32,6 +32,7 @@ import {
   FolderOpenOutlined,
   NotificationOutlined,
   CheckOutlined,
+  CheckCircleOutlined,
   SoundOutlined,
   IdcardOutlined,
   SafetyOutlined,
@@ -487,6 +488,7 @@ const pathToPermission: Record<string, string> = {
   '/todo-workbench': 'production.schedule_plans',
   '/change-events': 'production.schedule_plans',
   '/schedule-board': 'production.schedule_plans',
+  '/production-reports': 'production.daily_report',
   '/production-overview': 'production.overview',
   '/schedule-plans': 'production.schedule_plans',
   '/product-process-capacities': 'production.product_process_capacities',
@@ -582,6 +584,7 @@ export default function MainLayout() {
         { key: '/schedule-board', icon: <ScheduleOutlined />, label: '排产看板', permission: 'production.schedule_plans' },
         { key: '/lean-today', icon: <AuditOutlined />, label: '精益今日看板', permission: 'production.lean' },
         { key: '/lean-management', icon: <AuditOutlined />, label: '精益管理', permission: 'production.lean' },
+        { key: '/production-reports', icon: <CheckCircleOutlined />, label: '报工管理', permission: 'production.daily_report' },
       ]
       const merged = items.map(item =>
         item.permission === 'production'
