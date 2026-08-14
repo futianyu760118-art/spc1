@@ -78,6 +78,7 @@ import WorkshopDailyReportForm from './pages/ProductionCenter/DailyReports/Repor
 import MeetingCenter from './pages/MeetingCenter/index'
 import NPICenter from './pages/NPICenter/index'
 import Login from './pages/Login'
+import Profile from './pages/Profile'
 import ShareAccess from './pages/ShareAccess'
 import PriceChangeList from './pages/Purchase/PriceChange/list'
 import PriceChangeNew from './pages/Purchase/PriceChange/new'
@@ -174,6 +175,7 @@ export default function App() {
                             }
                         >
                             <Route index element={<Navigate to="/dashboard" replace/>}/>
+                            <Route path="profile" element={<Profile/>}/>
                             <Route path="dashboard" element={<Dashboard/>}/>
                             <Route path="orders" element={<OrderList/>}/>
                             <Route path="run-orders" element={<RunOrderList/>}/>
