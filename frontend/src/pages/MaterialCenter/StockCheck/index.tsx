@@ -20,7 +20,7 @@ import CoCheckerPickerModal from './CoCheckerPickerModal'
 import SearchableColumnFilter from './SearchableColumnFilter'
 import { textColumnFilter, textFilterIcon } from './TextColumnFilter'
 import StatsCharts from './components/StatsCharts'
-import { useStockCheckSync } from './useStockCheckSync'
+import { useStockCheckSync } from '@/hooks/useStockCheckSync'
 import ConflictModal, { ConflictDraft } from './ConflictModal'
 import { useAuthStore } from '@/store/auth'
 
