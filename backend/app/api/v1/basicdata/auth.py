@@ -163,11 +163,17 @@ def _build_wecom_oauth_url(redirect_path: str = "/login", state: str = "sso") ->
     )
 
 
+WECOM_OAUTH_REDIRECT_WHITELIST = ("/login", "/profile", "/m/")
+
+
 @router.get("/wecom-oauth-url", response_model=ResponseModel[dict])
-async def wecom_oauth_url(state: Optional[str] = None):
+async def wecom_oauth_url(state: Optional[str] = None, redirect_path: str = "/login"):
     """返回企业微信静默授权跳转地址（公开，登录前调用）。
-    state 可由前端传入随机 nonce，回跳时原样带回以校验 CSRF。"""
-    return ResponseModel(data={"oauth_url": _build_wecom_oauth_url(state=state or "sso")})
+    state 可由前端传入随机 nonce，回跳时原样带回以校验 CSRF。
+    redirect_path 仅允许白名单内的前端路径。"""
+    if redirect_path not in WECOM_OAUTH_REDIRECT_WHITELIST:
+        raise HTTPException(status_code=400, detail=f"redirect_path 仅允许 {'/'.join(WECOM_OAUTH_REDIRECT_WHITELIST)}")
+    return ResponseModel(data={"oauth_url": _build_wecom_oauth_url(redirect_path=redirect_path, state=state or "sso")})
 
 
 @router.post("/wecom-login", response_model=ResponseModel[TokenResponse])
