@@ -93,6 +93,8 @@ class StockCheckCountedItemOut(BaseModel):
     counted_at: Optional[datetime] = None
     checked_at: Optional[datetime] = None
     live_qty: Optional[Decimal] = None
+    # 运行时计算: 未入库行(wh_id=NULL)物料现已入库时的实时仓库名(顿号分隔)
+    live_wh_names: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -145,6 +147,12 @@ class StockCheckItemOut(BaseModel):
     warehouses: Optional[str] = None
     # 运行时计算(读详情时实时查 scm_inventory,不落库)
     live_qty: Optional[Decimal] = None
+    # 运行时计算: 未入库行(wh_id=NULL)物料现已入库时的实时仓库名(顿号分隔)
+    live_wh_names: Optional[str] = None
+    # 运行时计算: True=未盘点,快照库存展示为实时值;录入盘点数时冻结
+    snapshot_live: Optional[bool] = None
+    # 运行时计算: 仓库展示名(含实时仓库),供前端筛选/排序/展示
+    warehouse_display: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

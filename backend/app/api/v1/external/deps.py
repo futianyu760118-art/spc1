@@ -9,6 +9,8 @@ from app.services.basicdata.data_supply_service import (
     validate_signature_for_endpoint,
     check_ip_whitelist,
 )
+from app.services.basicdata.rate_limiter import check_rate_limit, RATE_LIMITED_MARK
+from app.services.basicdata.data_supply_service import log_call
 
 
 def external_auth(endpoint_code: str):
@@ -41,6 +43,23 @@ def external_auth(endpoint_code: str):
         if client_ip and not check_ip_whitelist(key_obj, client_ip):
             raise HTTPException(status_code=403, detail=f"IP {client_ip} 不在白名单内")
 
+        allowed, retry_after = await check_rate_limit(key_obj.id, key_obj.rate_limit)
+        if not allowed:
+            await log_call(
+                db=db, api_key_id=key_obj.id, api_key_name=key_obj.key_name,
+                data_type=endpoint_code, request_params=dict(request.query_params),
+                response_status=429, response_count=0,
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                duration_ms=0.0, error_message=RATE_LIMITED_MARK,
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=f"请求超过每分钟限额 {key_obj.rate_limit} 次，请 {retry_after} 秒后重试",
+                headers={"Retry-After": str(retry_after)},
+            )
+
         return key_obj
 
     return dependency
+

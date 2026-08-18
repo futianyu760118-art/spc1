@@ -13,6 +13,20 @@ const api = axios.create({
   timeout: 30000,
 })
 
+export const REDIRECT_AFTER_LOGIN_KEY = 'redirect_after_login'
+
+// 在跳转登录前记住当前路径，便于登录成功后回跳（应对 401 全页刷新丢失路由 state 的场景）
+function rememberRedirectBeforeLogin() {
+  try {
+    const { pathname, search } = window.location
+    if (pathname && pathname !== '/login') {
+      sessionStorage.setItem(REDIRECT_AFTER_LOGIN_KEY, pathname + search)
+    }
+  } catch {
+    // ignore
+  }
+}
+
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().currentToken
   if (token) {
@@ -65,17 +79,20 @@ api.interceptors.response.use(
         messageApi?.warning({ content: detail, duration: 2 })
         setTimeout(() => {
           exitShare()
+          rememberRedirectBeforeLogin()
           window.location.href = '/login'
         }, 1500)
       } else if (forceLogout === 'true') {
         messageApi?.warning({ content: detail, duration: 2 })
         setTimeout(() => {
           logout()
+          rememberRedirectBeforeLogin()
           window.location.href = '/login'
         }, 1500)
       } else {
         messageApi?.error(detail)
         logout()
+        rememberRedirectBeforeLogin()
         window.location.href = '/login'
       }
     } else if (status === 403) {
@@ -99,11 +116,12 @@ export default api
 
 // ============ Auth (基础数据与集成中心) ============
 export const authApi = {
-  login: (username: string, password: string, loginType: 'employee' | 'supplier' = 'employee') => {
+  login: (username: string, password: string, loginType: 'employee' | 'supplier' = 'employee', channel?: string) => {
     const formData = new URLSearchParams()
     formData.append('username', username)
     formData.append('password', password)
     formData.append('login_type', loginType)
+    if (channel) formData.append('channel', channel)
     return api.post('/basicdata/auth/login', formData, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       skipErrorToast: true,
@@ -111,7 +129,7 @@ export const authApi = {
   },
   getMe: () => api.get('/basicdata/auth/me'),
   wecomOauthUrl: (state?: string) => api.get('/basicdata/auth/wecom-oauth-url', { params: state ? { state } : {} }),
-  wecomLogin: (code: string) => api.post('/basicdata/auth/wecom-login', { code }),
+  wecomLogin: (code: string, channel?: string) => api.post('/basicdata/auth/wecom-login', channel ? { code, channel } : { code }),
   wecomQrConfig: () => api.get('/basicdata/auth/wecom-qr-config'),
   changePassword: (old_password: string, new_password: string) =>
     api.put('/basicdata/auth/change-password', { old_password, new_password }),
@@ -313,6 +331,8 @@ export const materialApi = {
     api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids, expected_version }),
   refreshStockCheckBom: (checkId: number) =>
     api.post(`/materials/stock-check/${checkId}/refresh-bom`),
+  refreshStockCheckWarehouses: (checkId: number) =>
+    api.post(`/materials/stock-check/${checkId}/refresh-warehouses`),
   getCoCheckerCandidates: () =>
     api.get('/materials/stock-check/co-checker-candidates'),
   updateStockCheckPresence: (checkId: number, itemId: number | null) =>
@@ -512,13 +532,6 @@ export const importExportApi = {
 }
 
 export const dataSupplyApi = {
-  listAvailableTypes: () => api.get('/basicdata/data-supply/configs/available-types'),
-  dataTypeOptions: () => api.get('/basicdata/data-supply/data-type-options'),
-  listConfigs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/configs', { params }),
-  createConfig: (data: Record<string, any>) => api.post('/basicdata/data-supply/configs', data),
-  updateConfig: (configId: number, data: Record<string, any>) =>
-    api.put(`/basicdata/data-supply/configs/${configId}`, data),
-  deleteConfig: (configId: number) => api.delete(`/basicdata/data-supply/configs/${configId}`),
   listApiKeys: (params?: Record<string, any>) => api.get('/basicdata/data-supply/api-keys', { params }),
   createApiKey: (data: Record<string, any>) => api.post('/basicdata/data-supply/api-keys', data),
   updateApiKey: (keyId: number, data: Record<string, any>) =>
@@ -755,5 +768,6 @@ export const wecomApi = {
     api.get<WecomDepartment[], WecomDepartment[]>('/wecom/departments'),
   testConnection: () => api.post('/wecom/test-connection'),
 }
+
 
 

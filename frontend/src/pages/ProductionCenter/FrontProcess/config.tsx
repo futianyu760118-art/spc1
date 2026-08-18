@@ -73,3 +73,4 @@ export const frontProcessConfig: ProcessCrudConfig<FrontRow> = {
     { name: 'remark', label: '备注', type: 'text', span: 24 },
   ],
 }
+

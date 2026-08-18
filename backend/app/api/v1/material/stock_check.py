@@ -45,6 +45,7 @@ from app.services.material.stock_check_service import (
     cancel_stock_check,
     set_co_checkers,
     refresh_order_bom,
+    refresh_check_warehouses,
     add_items_to_check,
     remove_item_from_check,
     get_stock_check_with_items,
@@ -421,7 +422,7 @@ async def stream_check_events(
     """共同盘点 SSE 实时同步流。
 
     客户端用 EventSource 连接,首帧 snapshot,后续 item_updated/status_changed/
-    co_checkers_changed/bom_refreshed。每 15s 发心跳注释行。
+    co_checkers_changed/bom_refreshed/warehouses_refreshed。每 15s 发心跳注释行。
     """
     current_user = await get_current_user(token=token, db=db)
     head = await get_stock_check_with_items(db, check_id)
@@ -747,6 +748,26 @@ async def export_stock_check(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=stock_check_{check_id}.xlsx"},
     )
+
+
+@router.post("/stock-check/{check_id}/refresh-warehouses", response_model=ResponseModel[dict])
+async def refresh_warehouses(
+    check_id: int,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """将"(未入库)"明细行按当前库存更新/拆分为具体仓库行（订单/手动盘点单均可用，仅 open/in_progress）。
+
+    仅处理未录入数据的"(未入库)"行；已录入数据的行不动。
+    返回统计 {pending, updated, split, inserted, no_stock, skipped_existing, guard_skip}。
+    权限不足或状态不允许时返回 403/400。"""
+    try:
+        stats = await refresh_check_warehouses(db, check_id, current_user)
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ResponseModel(data=stats)
 
 
 @router.post("/stock-check/{check_id}/refresh-bom", response_model=ResponseModel[StockCheckOut])

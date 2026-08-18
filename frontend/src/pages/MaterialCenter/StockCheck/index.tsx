@@ -46,6 +46,9 @@ interface StockCheckItem {
   system_qty?: number | null
   system_qty_time?: string | null
   live_qty?: number | null
+  live_wh_names?: string | null
+  snapshot_live?: boolean | null
+  warehouse_display?: string | null
   actual_qty?: number | null
   diff_qty?: number | null
   is_checked?: number | null
@@ -240,7 +243,8 @@ export default function StockCheckPage() {
   const { connected: syncConnected, lastEventAt: syncLastEventAt } = useStockCheckSync({
     checkId: activeCheck?.id ?? null,
     onSnapshot: (p) => {
-      setActiveCheck((prev) => (prev ? { ...prev, ...p } : prev))
+      // can_edit 为空时保留原值,防止旧版 snapshot 的 null 覆盖 REST 返回的 can_edit=false
+      setActiveCheck((prev) => (prev ? { ...prev, ...p, can_edit: p.can_edit ?? prev.can_edit } : prev))
       setItems(p.items || [])
       const map: Record<number, { user_id: number; name: string; isSelf: boolean }[]> = {}
       const me = useAuthStore.getState().currentUser?.id
@@ -302,6 +306,10 @@ export default function StockCheckPage() {
     onBomRefreshed: () => {
       if (activeCheck?.id) loadCheck(activeCheck.id)
       setSyncBanner('BOM 已被刷新,行已重载')
+    },
+    onWarehousesRefreshed: () => {
+      if (activeCheck?.id) loadCheck(activeCheck.id)
+      setSyncBanner('仓库已被刷新,行已重载')
     },
     onPresence: (p) => {
       const me = useAuthStore.getState().currentUser?.id
@@ -841,6 +849,26 @@ export default function StockCheckPage() {
     })
   }, [activeCheck, loadCheck])
 
+  const handleRefreshWarehouses = useCallback(async () => {
+    if (!activeCheck) return
+    Modal.confirm({
+      title: '刷新"(未入库)"行为具体仓库',
+      content: '将按当前即时库存，把本单中未录入数据的"(未入库)"行更新/拆分为具体仓库行：物料现处于多个仓库时拆为多行，各行快照库存取刷新时点数量。已录入数据的行不会被改动。是否继续？',
+      okText: '刷新仓库',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res: any = await materialApi.refreshStockCheckWarehouses(activeCheck.id)
+          await loadCheck(activeCheck.id)
+          const s = res?.data || {}
+          message.success(`仓库已刷新：更新 ${s.updated ?? 0} 行、拆分新增 ${s.inserted ?? 0} 行`)
+        } catch (e: any) {
+          message.error(e?.response?.data?.detail || e.message || '刷新失败')
+        }
+      },
+    })
+  }, [activeCheck, loadCheck])
+
   const handleSaveCoCheckers = useCallback(async (ids: number[]) => {
     if (!activeCheck) return
     setCoSaving(true)
@@ -954,9 +982,17 @@ export default function StockCheckPage() {
       { title: '属性', dataIndex: 'material_property_label', width: 90, ...stringCol('material_property_label', 90), ...resizeCol('material_property_label', 90) },
       { title: '单位', dataIndex: 'unit', width: 60, ...stringCol('unit', 60), ...resizeCol('unit', 60) },
       {
-        title: '快照库存', dataIndex: 'system_qty', width: 110, align: 'right' as const,
+        title: '快照库存', dataIndex: 'system_qty', width: 130, align: 'right' as const,
         ...numCol('system_qty'),
         render: (v: any, r: StockCheckItem) => {
+          if (r.snapshot_live) {
+            return (
+              <div style={{ lineHeight: 1.2 }}>
+                <div style={{ color: '#1677ff', fontWeight: 500 }}>{v != null ? Number(v).toFixed(2) : '-'}</div>
+                <Tag color="blue" style={{ margin: '2px 0 0', fontSize: 11, lineHeight: '16px' }}>实时</Tag>
+              </div>
+            )
+          }
           const snapTime = r.system_qty_time || activeCheck?.created_at
           return (
             <div style={{ lineHeight: 1.2 }}>
@@ -967,7 +1003,7 @@ export default function StockCheckPage() {
             </div>
           )
         },
-        ...resizeCol('system_qty', 110),
+        ...resizeCol('system_qty', 130),
       },
       {
         title: '即时库存', dataIndex: 'live_qty', width: 90, align: 'right' as const,
@@ -980,9 +1016,18 @@ export default function StockCheckPage() {
         dataIndex: 'wh_name',
         width: 160,
         ellipsis: true,
-        ...stringCol('wh_name', 160),
+        ...stringCol('warehouse_display', 160),
         ...resizeCol('wh_name', 160),
-        render: (v: any) => v || '—',
+        render: (v: any, r: StockCheckItem) => {
+          if (r.wh_id == null && r.live_wh_names) {
+            return (
+              <Tooltip title={`建单时未入库，现已入库：${r.live_wh_names}`}>
+                <span style={{ color: '#1677ff' }}>{r.live_wh_names}</span>
+              </Tooltip>
+            )
+          }
+          return v || '—'
+        },
       },
       {
         title: '盘点数', dataIndex: 'actual_qty', width: 220, align: 'right' as const,
@@ -1008,7 +1053,7 @@ export default function StockCheckPage() {
               onChange={(v) => {
                 const actual = v == null ? null : Number(v)
                 const diff = actual != null && r.system_qty != null ? actual - Number(r.system_qty) : null
-                updateItem(r.id, { actual_qty: actual, diff_qty: diff })
+                updateItem(r.id, { actual_qty: actual, diff_qty: diff, is_checked: actual != null ? 1 : 0 })
               }}
             />
             {r.recent_checked_check_no && !readonly && (
@@ -1493,6 +1538,9 @@ export default function StockCheckPage() {
               )}
               {!readonly && activeCheck.check_type === 'order' && (activeCheck.status === 'in_progress' || activeCheck.status === 'open') && (
                 <Button type="link" size="small" onClick={handleRefreshBom}>补入子BOM物料</Button>
+              )}
+              {!readonly && (activeCheck.status === 'in_progress' || activeCheck.status === 'open') && items.some((it) => it.wh_id == null) && (
+                <Button type="link" size="small" onClick={handleRefreshWarehouses}>刷新仓库</Button>
               )}
               {!readonly && activeCheck.check_type === 'manual' && (activeCheck.status === 'in_progress' || activeCheck.status === 'open') && (
                 <Button type="link" size="small" icon={<PlusOutlined />} onClick={() => setAddPickerOpen(true)}>添加物料</Button>

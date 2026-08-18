@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     wecom_corp_secret: Optional[str] = None
     wecom_contact_secret: Optional[str] = None
     frontend_base_url: Optional[str] = None
+    data_supply_alert_wecom_uids: str = ""  # 逗号分隔的企微 userid，空则告警只记日志
 
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 

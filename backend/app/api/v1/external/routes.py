@@ -8,7 +8,7 @@ from . import endpoints  # noqa: F401
 from .endpoints import (
     bom, bom_detail, bom_tree, human_resources, inventory,
     masterdata, orders, production, production_task_orders,
-    purchase, warehouse,
+    process_data, purchase, warehouse,
 )
 
 external_router = APIRouter()
@@ -18,9 +18,11 @@ for r in (
     bom.router, bom_detail.router, bom_tree.router,
     human_resources.org_router, human_resources.pos_router, human_resources.emp_router,
     production.router, production_task_orders.router,
+    process_data.router,
     purchase.router, inventory.router,
     warehouse.wh_router, warehouse.loc_router,
 ):
     external_router.include_router(r)
 
 check_registry_matches_router(external_router)
+

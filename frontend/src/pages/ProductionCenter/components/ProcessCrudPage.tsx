@@ -241,3 +241,4 @@ export default function ProcessCrudPage<T extends { status: string }>({
     </div>
   )
 }
+

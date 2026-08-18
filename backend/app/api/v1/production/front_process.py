@@ -8,7 +8,7 @@
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
@@ -87,7 +87,7 @@ async def list_front_process(
                 ProductionTaskOrder.task_no.ilike(like),
                 ProductionTaskOrder.material_code.ilike(like),
                 ProductionTaskOrder.material_name.ilike(like),
-                _sale_order_header.c.so_order_no.ilike(like),
+                ProductionTaskOrder.sale_order_no.ilike(like),
                 _sale_order_header.c.customer.ilike(like),
                 _sale_order_header.c.customer_code.ilike(like),
                 _sale_order_product.c.product_model.ilike(like),
@@ -115,7 +115,7 @@ async def list_front_process(
             ProductionTaskOrder.workshop.label("workshop"),
             ProductionTaskOrder.material_code.label("material_code"),
             ProductionTaskOrder.material_name.label("material_name"),
-            _sale_order_header.c.so_order_no.label("sale_order_no"),
+            ProductionTaskOrder.sale_order_no.label("sale_order_no"),
             ProductionTaskOrder.task_qty.label("task_qty"),
             ProductionTaskOrder.planned_start_date.label("planned_start_date"),
             ProductionTaskOrder.planned_end_date.label("planned_end_date"),
@@ -194,3 +194,4 @@ async def update_front_process(
     await db.commit()
     await db.refresh(rec)
     return ResponseModel(data={"task_id": task_id, "id": rec.id, "status": rec.status})
+
