@@ -4,21 +4,6 @@ import { PullToRefresh, Tag, ErrorBlock, SpinLoading } from 'antd-mobile'
 import { dashboardApi } from '@/services/api'
 import { useAuthStore } from '@/store/auth'
 
-interface TodayOverview {
-  due_today: number
-  due_today_red: number
-  shortage_orders: number
-  pending_close_issues: number
-  overdue_tasks: number
-  in_transit_po: number
-  eta_overdue_po: number
-  total_orders: number
-  red_orders: number
-  yellow_orders: number
-  blue_orders: number
-  green_orders: number
-}
-
 interface Summary { total_orders: number; red_count: number; yellow_count: number; blue_count: number; green_count: number }
 
 interface RollingDay { date: string; due_count: number; red_count: number; yellow_count: number; blue_count: number }
@@ -78,7 +63,6 @@ function AppGrid() {
 }
 
 export default function WorkbenchPage() {
-  const [overview, setOverview] = useState<TodayOverview | null>(null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [rolling, setRolling] = useState<RollingDay[]>([])
   const [dueOrders, setDueOrders] = useState<DueOrder[]>([])
@@ -88,13 +72,11 @@ export default function WorkbenchPage() {
   const load = useCallback(async () => {
     setFailed(false)
     try {
-      const [o, s, r, d] = await Promise.all([
-        dashboardApi.getTodayOverview(),
+      const [s, r, d] = await Promise.all([
         dashboardApi.getSummary(),
         dashboardApi.getRollingRisk(),
         dashboardApi.getTodayDueOrders({ page: 1, page_size: 50 }),
       ])
-      setOverview((o as any).data)
       setSummary((s as any).data)
       setRolling(((r as any).data?.days || []) as RollingDay[])
       setDueOrders(((d as any).data?.items || (d as any).data || []) as DueOrder[])
@@ -116,20 +98,6 @@ export default function WorkbenchPage() {
 
         {loading && <div style={{ textAlign: 'center', padding: 40 }}><SpinLoading color="primary" /></div>}
         {failed && <ErrorBlock status="empty" title="加载失败" description="下拉重试" />}
-
-        {overview && (
-          <div className="mobile-card">
-            <h3 className="mobile-card__title">今日概览</h3>
-            <div className="mobile-kpi-grid">
-              <div className="mobile-kpi"><div className="mobile-kpi__value">{overview.total_orders}</div><div className="mobile-kpi__label">总订单</div></div>
-              <div className="mobile-kpi"><div className="mobile-kpi__value" style={{ color: '#e11d48' }}>{overview.red_orders}</div><div className="mobile-kpi__label">高风险</div></div>
-              <div className="mobile-kpi"><div className="mobile-kpi__value" style={{ color: '#d97706' }}>{overview.yellow_orders}</div><div className="mobile-kpi__label">中风险</div></div>
-              <div className="mobile-kpi"><div className="mobile-kpi__value">{overview.due_today}</div><div className="mobile-kpi__label">今日到期</div></div>
-              <div className="mobile-kpi"><div className="mobile-kpi__value">{overview.shortage_orders}</div><div className="mobile-kpi__label">欠料订单</div></div>
-              <div className="mobile-kpi"><div className="mobile-kpi__value">{overview.pending_close_issues}</div><div className="mobile-kpi__label">待闭环问题</div></div>
-            </div>
-          </div>
-        )}
 
         <AppGrid />
 
