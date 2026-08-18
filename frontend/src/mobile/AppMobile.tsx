@@ -1,10 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { TabBar } from 'antd-mobile'
-import { AppOutline, SetOutline, UserOutline } from 'antd-mobile-icons'
+import { AppOutline, UserOutline } from 'antd-mobile-icons'
 import { useAuthStore } from '@/store/auth'
 import MobileLoginPage from './pages/MobileLoginPage'
 import WorkbenchPage from './pages/WorkbenchPage'
-import AppsPage from './pages/AppsPage'
 import MePage from './pages/MePage'
 import StockCheckListPage from './pages/stock/StockCheckListPage'
 import StockCheckCreatePage from './pages/stock/StockCheckCreatePage'
@@ -21,7 +20,6 @@ function AuthGuard() {
 
 const TABS = [
   { key: '/', title: '工作台', icon: <AppOutline /> },
-  { key: '/apps', title: '应用', icon: <SetOutline /> },
   { key: '/me', title: '我的', icon: <UserOutline /> },
 ]
 
@@ -53,7 +51,6 @@ export default function AppMobile() {
         <Route element={<AuthGuard />}>
           <Route element={<TabLayout />}>
             <Route path="/" element={<WorkbenchPage />} />
-            <Route path="/apps" element={<AppsPage />} />
             <Route path="/me" element={<MePage />} />
           </Route>
           <Route path="/stock-check" element={<StockCheckListPage />} />

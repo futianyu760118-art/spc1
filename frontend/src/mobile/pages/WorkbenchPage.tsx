@@ -36,28 +36,43 @@ interface DueOrder {
 const RISK_COLORS: Record<string, string> = { red: '#e11d48', yellow: '#d97706', blue: '#3b82f6', green: '#059669' }
 const RISK_LABELS: Record<string, string> = { red: '高', yellow: '中', blue: '低', green: '正常' }
 
-function AppEntries() {
+const APP_GROUPS = [
+  {
+    group: '智能仓储',
+    items: [
+      { key: 'stock-check', title: '物料盘点', path: '/stock-check', perm: ['materials.stock_check', 'read'] as const },
+    ],
+  },
+]
+
+function AppGrid() {
   const navigate = useNavigate()
   const hasPermission = useAuthStore((s) => s.hasPermission)
-  const entries = [
-    { key: 'stock-check', title: '物料盘点', path: '/stock-check', perm: ['materials.stock_check', 'read'] as const },
-  ].filter((e) => hasPermission(e.perm[0], e.perm[1]))
-  if (entries.length === 0) return null
+  const groups = APP_GROUPS
+    .map((g) => ({ ...g, items: g.items.filter((e) => hasPermission(e.perm[0], e.perm[1])) }))
+    .filter((g) => g.items.length > 0)
+  if (groups.length === 0) return null
   return (
     <div className="mobile-card">
-      <h3 className="mobile-card__title">常用应用</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-        {entries.map((e) => (
-          <div
-            key={e.key}
-            onClick={() => navigate(e.path)}
-            style={{ textAlign: 'center', padding: '8px 0', borderRadius: 10, background: '#f1f2f8' }}
-          >
-            <div style={{ fontSize: 22 }}>📋</div>
-            <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>{e.title}</div>
+      {groups.map((g, gi) => (
+        <div key={g.group}>
+          {(gi > 0 || groups.length > 1) && (
+            <div style={{ fontSize: 12, color: '#94a3b8', margin: gi > 0 ? '12px 0 8px' : '0 0 8px' }}>{g.group}</div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+            {g.items.map((e) => (
+              <div
+                key={e.key}
+                onClick={() => navigate(e.path)}
+                style={{ textAlign: 'center', padding: '8px 0', borderRadius: 10, background: '#f1f2f8' }}
+              >
+                <div style={{ fontSize: 22 }}>📋</div>
+                <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>{e.title}</div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -116,7 +131,7 @@ export default function WorkbenchPage() {
           </div>
         )}
 
-        <AppEntries />
+        <AppGrid />
 
         {summary && summary.total_orders > 0 && (
           <div className="mobile-card">
