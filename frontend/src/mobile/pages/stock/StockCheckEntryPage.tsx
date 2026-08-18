@@ -51,6 +51,20 @@ export default function StockCheckEntryPage() {
 
   useEffect(() => { load() }, [load])
 
+  // 存在感：进入录入页即声明正在盘该物料（立即 + 30s 心跳续命），离开时清除
+  useEffect(() => {
+    const itemIdNum = Number(itemId)
+    if (!itemIdNum || Number.isNaN(itemIdNum)) return
+    materialApi.updateStockCheckPresence(id, itemIdNum).catch(() => {})
+    const t = setInterval(() => {
+      materialApi.updateStockCheckPresence(id, itemIdNum).catch(() => {})
+    }, 30000)
+    return () => {
+      clearInterval(t)
+      materialApi.updateStockCheckPresence(id, null).catch(() => {})
+    }
+  }, [id, itemId])
+
   const diff = useMemo(() => {
     if (!item || item.system_qty == null || value === '' || isNaN(Number(value))) return null
     return Number(value) - Number(item.system_qty)
@@ -76,10 +90,15 @@ export default function StockCheckEntryPage() {
     } catch (e: any) {
       const status = e?.response?.status
       const msg = String(e?.response?.data?.detail || e?.message || '')
-      if (status === 409 || msg.includes('版本') || msg.includes('冲突') || msg.includes('已被')) {
-        const res: any = await materialApi.getStockCheck(id)
-        const serverItem = (res.data?.items || []).find((i: CheckItem) => i.id === item.id)
-        if (serverItem) setConflict({ serverItem })
+      if (status === 409 || msg.includes('版本') || msg.includes('冲突')) {
+        try {
+          const res: any = await materialApi.getStockCheck(id)
+          const serverItem = (res.data?.items || []).find((i: CheckItem) => i.id === item.id)
+          if (serverItem) setConflict({ serverItem })
+          else Toast.show({ icon: 'fail', content: msg || '保存失败' })
+        } catch {
+          Toast.show({ icon: 'fail', content: msg || '保存失败' })
+        }
       } else {
         Toast.show({ icon: 'fail', content: msg || '保存失败' })
       }
@@ -150,7 +169,7 @@ export default function StockCheckEntryPage() {
                 <button className="adm-button adm-button-default adm-button-large" style={{ flex: 1, borderRadius: 10 }}
                   onClick={() => {
                     setValue(conflict.serverItem.actual_qty != null ? String(conflict.serverItem.actual_qty) : '')
-                    setItem({ ...item, version: conflict.serverItem.version })
+                    setItem({ ...item, version: conflict.serverItem.version, is_checked: conflict.serverItem.is_checked ?? item.is_checked })
                     setConflict(null)
                   }}>改用服务器值</button>
                 <button className="adm-button adm-button-primary adm-button-large" style={{ flex: 1, borderRadius: 10 }}

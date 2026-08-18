@@ -64,20 +64,13 @@ export default function StockCheckDetailPage() {
 
   useEffect(() => { load() }, [load])
 
-  // 心跳 presence + 实时同步
-  useEffect(() => {
-    if (!head || head.status === 'completed' || head.status === 'cancelled') return
-    const t = setInterval(() => {
-      materialApi.updateStockCheckPresence(id, null).catch(() => {})
-    }, 30000)
-    materialApi.updateStockCheckPresence(id, null).catch(() => {})
-    return () => clearInterval(t)
-  }, [head, id])
-
   useStockCheckSync({
     checkId: head && head.status !== 'completed' && head.status !== 'cancelled' ? id : null,
     onSnapshot: (p: any) => {
       if (Array.isArray(p?.items)) setItems(p.items)
+      if (Array.isArray(p?.presence)) {
+        setPresenceUsers(p.presence.map((pr: any) => ({ user_id: pr.user_id, name: pr.name || `用户${pr.user_id}` })))
+      }
     },
     onItemUpdated: (p: any) => {
       setItems((prev) => prev.map((it) => (it.id === p?.item?.id ? { ...it, ...p.item } : it)))
@@ -86,10 +79,11 @@ export default function StockCheckDetailPage() {
     onCoCheckersChanged: () => load(),
     onBomRefreshed: () => load(),
     onWarehousesRefreshed: () => load(),
-    onPresence: (p: { user_id: number; name: string | null }) => {
+    onPresence: (p: { user_id: number; name: string | null; item_id: number | null }) => {
       setPresenceUsers((prev) => {
-        const next = prev.filter((u) => u.user_id !== p.user_id)
-        return [...next, { user_id: p.user_id, name: p.name || `用户${p.user_id}` }]
+        const rest = prev.filter((u) => u.user_id !== p.user_id)
+        // item_id == null 表示对方离开/结束编辑，从在线列表移除
+        return p.item_id == null ? rest : [...rest, { user_id: p.user_id, name: p.name || `用户${p.user_id}` }]
       })
     },
   })

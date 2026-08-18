@@ -15,6 +15,15 @@ const api = axios.create({
 
 export const REDIRECT_AFTER_LOGIN_KEY = 'redirect_after_login'
 
+// 401 登出后的回跳目标：移动端入口（/m/）回到移动端登录页，桌面端回到 /login
+function loginPathForCurrentEntry(): string {
+  try {
+    return window.location.pathname.startsWith('/m/') ? '/m/login' : '/login'
+  } catch {
+    return '/login'
+  }
+}
+
 // 在跳转登录前记住当前路径，便于登录成功后回跳（应对 401 全页刷新丢失路由 state 的场景）
 function rememberRedirectBeforeLogin() {
   try {
@@ -80,20 +89,20 @@ api.interceptors.response.use(
         setTimeout(() => {
           exitShare()
           rememberRedirectBeforeLogin()
-          window.location.href = '/login'
+          window.location.href = loginPathForCurrentEntry()
         }, 1500)
       } else if (forceLogout === 'true') {
         messageApi?.warning({ content: detail, duration: 2 })
         setTimeout(() => {
           logout()
           rememberRedirectBeforeLogin()
-          window.location.href = '/login'
+          window.location.href = loginPathForCurrentEntry()
         }, 1500)
       } else {
         messageApi?.error(detail)
         logout()
         rememberRedirectBeforeLogin()
-        window.location.href = '/login'
+        window.location.href = loginPathForCurrentEntry()
       }
     } else if (status === 403) {
       error.message = error.response?.data?.detail || '权限不足，无法执行此操作'
