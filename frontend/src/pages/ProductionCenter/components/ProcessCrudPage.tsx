@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Col, DatePicker, Form, Input, message, Modal, Row, Space, Table, Tag, Upload } from 'antd'
+import { Button, Col, DatePicker, Form, Input, message, Modal, Row, Select, Space, Table, Tag, Upload } from 'antd'
 import type { ColumnsType, TableProps } from 'antd/es/table'
 import { EditOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -23,7 +23,9 @@ export interface ProcessCrudApi {
 export interface ProcessExtraFilter {
   name: string
   placeholder: string
+  type?: 'text' | 'select' | 'year'
   width?: number
+  options?: Array<{ label: string; value: string }>
 }
 
 export interface ProcessCrudConfig<T> {
@@ -65,7 +67,7 @@ export default function ProcessCrudPage<T extends { status: string }>({
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
-  const [extraValues, setExtraValues] = useState<Record<string, string>>({})
+  const [extraValues, setExtraValues] = useState<Record<string, any>>({})
   const [editModal, setEditModal] = useState(false)
   const [editRecord, setEditRecord] = useState<T | null>(null)
   const [form] = Form.useForm()
@@ -77,7 +79,9 @@ export default function ProcessCrudPage<T extends { status: string }>({
       if (keyword) params.keyword = keyword
       for (const f of extraFilters || []) {
         const v = extraValues[f.name]
-        if (v) params[f.name] = v
+        if (v !== undefined && v !== null && v !== '') {
+          params[f.name] = f.type === 'year' ? dayjs(v).format('YYYY') : v
+        }
       }
       const res: any = await api.list(params)
       setData(res.data.items)
@@ -186,13 +190,33 @@ export default function ProcessCrudPage<T extends { status: string }>({
           </Col>
           {(extraFilters || []).map(f => (
             <Col key={f.name}>
-              <Input
-                placeholder={f.placeholder}
-                value={extraValues[f.name] || ''}
-                onChange={e => { setExtraValues(v => ({ ...v, [f.name]: e.target.value })); setPage(1) }}
-                style={{ width: f.width ?? 120 }}
-                allowClear
-              />
+              {f.type === 'select' ? (
+                <Select
+                  placeholder={f.placeholder}
+                  value={extraValues[f.name] || undefined}
+                  options={f.options}
+                  onChange={(v) => { setExtraValues(ev => ({ ...ev, [f.name]: v })); setPage(1) }}
+                  style={{ width: f.width ?? 120 }}
+                  allowClear
+                />
+              ) : f.type === 'year' ? (
+                <DatePicker
+                  picker="year"
+                  placeholder={f.placeholder}
+                  value={extraValues[f.name] || null}
+                  onChange={(v) => { setExtraValues(ev => ({ ...ev, [f.name]: v })); setPage(1) }}
+                  style={{ width: f.width ?? 120 }}
+                  allowClear
+                />
+              ) : (
+                <Input
+                  placeholder={f.placeholder}
+                  value={extraValues[f.name] || ''}
+                  onChange={e => { setExtraValues(v => ({ ...v, [f.name]: e.target.value })); setPage(1) }}
+                  style={{ width: f.width ?? 120 }}
+                  allowClear
+                />
+              )}
             </Col>
           ))}
           <Col flex="auto" />

@@ -7,6 +7,8 @@
 不会触及 front_process_record。
 """
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy import select, func, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,6 +75,7 @@ async def list_front_process(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     workshop: Optional[str] = Query(None, description="车间筛选"),
+    year: Optional[int] = Query(None, ge=2000, le=2100, description="计划开工年份筛选"),
     keyword: Optional[str] = Query(None),
     current_user: dict = Depends(PermissionChecker("production.front_process", "read")),
     db: AsyncSession = Depends(get_db),
@@ -80,6 +83,9 @@ async def list_front_process(
     filters = _base_filters()
     if workshop:
         filters.append(ProductionTaskOrder.workshop == workshop)
+    if year:
+        filters.append(ProductionTaskOrder.planned_start_date >= date(year, 1, 1))
+        filters.append(ProductionTaskOrder.planned_start_date < date(year + 1, 1, 1))
     if keyword:
         like = f"%{keyword}%"
         filters.append(
