@@ -14,7 +14,10 @@ import StockCheckManagePage from './pages/stock/StockCheckManagePage'
 function AuthGuard() {
   const token = useAuthStore((s) => s.currentToken)
   const location = useLocation()
-  if (!token) return <Navigate to="/login" replace state={{ from: location.pathname }} />
+  if (!token) {
+    // 保留查询参数（如企微 OAuth 的 ?code=），否则回跳 /m/ 时 code 丢失造成免登死循环
+    return <Navigate to={`/login${location.search}`} replace state={{ from: location.pathname }} />
+  }
   return <Outlet />
 }
 

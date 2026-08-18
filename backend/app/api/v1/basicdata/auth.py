@@ -188,7 +188,7 @@ def _build_wecom_oauth_url(redirect_path: str = "/login", state: str = "sso") ->
     )
 
 
-WECOM_OAUTH_REDIRECT_WHITELIST = ("/login", "/profile", "/m/")
+WECOM_OAUTH_REDIRECT_WHITELIST = ("/login", "/profile", "/m/", "/m/login")
 
 
 @router.get("/wecom-oauth-url", response_model=ResponseModel[dict])
