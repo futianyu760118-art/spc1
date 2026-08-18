@@ -128,7 +128,10 @@ export const authApi = {
     })
   },
   getMe: () => api.get('/basicdata/auth/me'),
-  wecomOauthUrl: (state?: string) => api.get('/basicdata/auth/wecom-oauth-url', { params: state ? { state } : {} }),
+  wecomOauthUrl: (state?: string, redirectPath?: string) =>
+    api.get('/basicdata/auth/wecom-oauth-url', {
+      params: { ...(state ? { state } : {}), ...(redirectPath ? { redirect_path: redirectPath } : {}) },
+    }),
   wecomLogin: (code: string, channel?: string) => api.post('/basicdata/auth/wecom-login', channel ? { code, channel } : { code }),
   wecomQrConfig: () => api.get('/basicdata/auth/wecom-qr-config'),
   changePassword: (old_password: string, new_password: string) =>
