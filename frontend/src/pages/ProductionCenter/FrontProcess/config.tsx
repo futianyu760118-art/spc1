@@ -64,7 +64,9 @@ export const frontProcessConfig: ProcessCrudConfig<FrontRow> = {
     update: productionApi.updateFrontProcess,
   },
   columns,
+  checkFields: ['shell_status', 'frame_status', 'handle_status', 'bracket_status'],
   extraFilters: [
+    { name: 'sale_order_no', placeholder: '销售订单号', type: 'text', width: 150 },
     { name: 'year', placeholder: '计划开工年份', type: 'year', width: 130 },
     {
       name: 'workshop',
@@ -79,10 +81,10 @@ export const frontProcessConfig: ProcessCrudConfig<FrontRow> = {
   ],
   rowClassName: (row) => row.status === 'overdue' ? 'ant-table-row-danger' : row.status === 'abnormal' ? 'ant-table-row-warning' : '',
   formFields: [
-    { name: 'shell_status', label: '壳体', type: 'text', span: 6 },
-    { name: 'frame_status', label: '框', type: 'text', span: 6 },
-    { name: 'handle_status', label: '手杆', type: 'text', span: 6 },
-    { name: 'bracket_status', label: '支架圆盘', type: 'text', span: 6 },
+    { name: 'shell_status', label: '壳体', type: 'checkbox', span: 6 },
+    { name: 'frame_status', label: '框', type: 'checkbox', span: 6 },
+    { name: 'handle_status', label: '手杆', type: 'checkbox', span: 6 },
+    { name: 'bracket_status', label: '支架圆盘', type: 'checkbox', span: 6 },
     { name: 'remark', label: '备注', type: 'text', span: 24 },
   ],
 }

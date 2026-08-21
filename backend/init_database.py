@@ -339,6 +339,9 @@ class DatabaseInitializer:
                 "co_checker_user_ids": "JSONB",
                 "created_by_user_id": "BIGINT",
                 "version": "INTEGER NOT NULL DEFAULT 0",
+                "source": "VARCHAR(16) NOT NULL DEFAULT 'manual'",
+                "erp_bill_no": "VARCHAR(64)",
+                "erp_inter_id": "BIGINT",
             },
             "scm_inventory_check_item": {
                 "level": "INTEGER",
@@ -607,6 +610,14 @@ class DatabaseInitializer:
                 print("  scm_inventory_check_item.ix_sci_counted_by_date index ensured")
             except Exception as e:
                 print(f"  scm_inventory_check_item.ix_sci_counted_by_date index skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_inventory_check_erp_bill_no "
+                    "ON scm_inventory_check (erp_bill_no) WHERE erp_bill_no IS NOT NULL"
+                ))
+                print("  scm_inventory_check.erp_bill_no unique index ensured")
+            except Exception as e:
+                print(f"  scm_inventory_check.erp_bill_no index skipped: {e}")
 
     async def migrate_production_daily_report_index(self):
         """将 production_daily_report 的唯一索引由 (oa_id) 改为 (oa_id, oa_detail_id)，

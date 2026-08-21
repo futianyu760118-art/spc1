@@ -215,11 +215,17 @@ async def build_snapshot_payload(check_id: int, db, current_user: dict) -> Optio
 
 async def subscribe_stream(
     check_id: int,
-    db,
     current_user: dict,
 ) -> AsyncGenerator[str, None]:
-    """SSE 端点生成器。yield 形如 'event: <type>\\ndata: {...}\\n\\n'。"""
-    snapshot = await build_snapshot_payload(check_id, db, current_user)
+    """SSE 端点生成器。yield 形如 'event: <type>\\ndata: {...}\\n\\n'。
+
+    快照用短命会话构建后立刻归还,订阅循环只走 Redis:流可活几小时,
+    持有 db 会话会占住连接池的一条连接。
+    """
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        snapshot = await build_snapshot_payload(check_id, db, current_user)
     if snapshot is None:
         return
     yield _sse_chunk("snapshot", snapshot)

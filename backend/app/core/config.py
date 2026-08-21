@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://root:123456@192.168.0.127:5432/spc_db"
     DATABASE_URL_SYNC: str = "postgresql+psycopg2://root:123456@192.168.0.127:5432/spc_db"
+    # 远程 DB 空闲连接会被防火墙/NAT 静默掐断(无 RST),必须 recycle+pre_ping 双保险
+    DB_POOL_RECYCLE: int = 180
 
     # ERP 中间库连接（只读）
     ERP_DB_URL: str = ""  # e.g. "mssql+pyodbc://user:pass@host/erp_db?driver=ODBC+Driver+17+for+SQL+Server"

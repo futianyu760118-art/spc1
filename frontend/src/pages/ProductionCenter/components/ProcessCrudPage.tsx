@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Col, DatePicker, Form, Input, message, Modal, Row, Select, Space, Table, Tag, Upload } from 'antd'
+import { Button, Checkbox, Col, DatePicker, Form, Input, message, Modal, Row, Select, Space, Table, Tag, Upload } from 'antd'
 import type { ColumnsType, TableProps } from 'antd/es/table'
-import { EditOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
+import { CheckOutlined, EditOutlined, ReloadOutlined, SearchOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { PROCESS_STATUS_MAP } from '../constants'
 
-export type ProcessFieldType = 'text' | 'number' | 'date'
+export type ProcessFieldType = 'text' | 'number' | 'date' | 'checkbox'
 
 export interface ProcessFormField {
   name: string
@@ -36,6 +36,8 @@ export interface ProcessCrudConfig<T> {
   api: ProcessCrudApi
   columns: ColumnsType<T>
   formFields: ProcessFormField[]
+  /** dataIndex 列表：这些列在表格中渲染为可点击勾选框，点击即保存 */
+  checkFields?: string[]
   rowClassName?: (record: T) => string
   extraFilters?: ProcessExtraFilter[]
   showImport?: boolean
@@ -55,6 +57,7 @@ export default function ProcessCrudPage<T extends { status: string }>({
     api,
     columns,
     formFields,
+    checkFields,
     rowClassName,
     extraFilters,
     showImport = true,
@@ -67,7 +70,13 @@ export default function ProcessCrudPage<T extends { status: string }>({
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
-  const [extraValues, setExtraValues] = useState<Record<string, any>>({})
+  const [extraValues, setExtraValues] = useState<Record<string, any>>(() => {
+    const init: Record<string, any> = {}
+    for (const f of extraFilters || []) {
+      if (f.type === 'year') init[f.name] = dayjs()
+    }
+    return init
+  })
   const [editModal, setEditModal] = useState(false)
   const [editRecord, setEditRecord] = useState<T | null>(null)
   const [form] = Form.useForm()
@@ -112,7 +121,7 @@ export default function ProcessCrudPage<T extends { status: string }>({
     const values: Record<string, any> = {}
     for (const f of formFields) {
       const v = (row as any)[f.name]
-      values[f.name] = f.type === 'date' ? (v ? dayjs(v) : null) : v
+      values[f.name] = f.type === 'date' ? (v ? dayjs(v) : null) : f.type === 'checkbox' ? !!v : v
     }
     form.setFieldsValue(values)
     setEditModal(true)
@@ -124,7 +133,7 @@ export default function ProcessCrudPage<T extends { status: string }>({
       const payload: Record<string, any> = {}
       for (const f of formFields) {
         const v = values[f.name]
-        payload[f.name] = f.type === 'date' ? (v ? dayjs(v).format('YYYY-MM-DD') : null) : v
+        payload[f.name] = f.type === 'date' ? (v ? dayjs(v).format('YYYY-MM-DD') : null) : f.type === 'checkbox' ? (v ? '✓' : '') : v
       }
       await api.update((editRecord as any)[keyField], payload)
       message.success('保存成功')
@@ -135,8 +144,62 @@ export default function ProcessCrudPage<T extends { status: string }>({
     }
   }
 
+  const toggleCheck = async (row: T, field: string, checked: boolean) => {
+    const value = checked ? '✓' : ''
+    const key = (row as any)[keyField]
+    // 乐观更新，失败时重新加载回滚
+    setData(prev => prev.map(r => ((r as any)[keyField] === key ? { ...r, [field]: value } : r)))
+    try {
+      await api.update(key, { [field]: value })
+    } catch (e: any) {
+      load()
+    }
+  }
+
   const finalColumns: ColumnsType<T> = [
-    ...columns,
+    ...columns.map(col => {
+      const di = (col as any).dataIndex
+      if (di && checkFields?.includes(di)) {
+        return {
+          ...col,
+          onCell: () => ({ style: { padding: 0 } }),
+          render: (v: any, row: T) => (
+            <div
+              onClick={() => toggleCheck(row, di, !v)}
+              title={v ? '点击取消' : '点击标记完成'}
+              style={{
+                minHeight: 38,
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <span
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 22,
+                  height: 22,
+                  borderRadius: 4,
+                  border: v ? 'none' : '2px solid #d9d9d9',
+                  background: v ? '#52c41a' : '#fff',
+                  color: '#fff',
+                  transition: 'all 0.2s ease',
+                  boxShadow: v ? '0 1px 2px rgba(82,196,26,0.3)' : 'none',
+                }}
+              >
+                {v && <CheckOutlined style={{ fontSize: 13 }} />}
+              </span>
+            </div>
+          ),
+        }
+      }
+      return col
+    }),
     {
       title: '状态',
       dataIndex: 'status',
@@ -248,11 +311,17 @@ export default function ProcessCrudPage<T extends { status: string }>({
           <Row gutter={16}>
             {formFields.map(f => (
               <Col key={f.name} span={f.span ?? 8}>
-                <Form.Item name={f.name} label={f.label}>
+                <Form.Item
+                  name={f.name}
+                  label={f.label}
+                  valuePropName={f.type === 'checkbox' ? 'checked' : 'value'}
+                >
                   {f.type === 'date' ? (
                     <DatePicker style={{ width: '100%' }} />
                   ) : f.type === 'number' ? (
                     <Input type="number" />
+                  ) : f.type === 'checkbox' ? (
+                    <Checkbox />
                   ) : (
                     <Input />
                   )}

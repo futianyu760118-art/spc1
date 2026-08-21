@@ -76,6 +76,7 @@ async def list_front_process(
     page_size: int = Query(20, ge=1, le=200),
     workshop: Optional[str] = Query(None, description="车间筛选"),
     year: Optional[int] = Query(None, ge=2000, le=2100, description="计划开工年份筛选"),
+    sale_order_no: Optional[str] = Query(None, description="销售订单号筛选"),
     keyword: Optional[str] = Query(None),
     current_user: dict = Depends(PermissionChecker("production.front_process", "read")),
     db: AsyncSession = Depends(get_db),
@@ -86,6 +87,13 @@ async def list_front_process(
     if year:
         filters.append(ProductionTaskOrder.planned_start_date >= date(year, 1, 1))
         filters.append(ProductionTaskOrder.planned_start_date < date(year + 1, 1, 1))
+    if sale_order_no:
+        filters.append(
+            or_(
+                ProductionTaskOrder.sale_order_no.ilike(f"%{sale_order_no}%"),
+                _sale_order_header.c.so_order_no.ilike(f"%{sale_order_no}%"),
+            )
+        )
     if keyword:
         like = f"%{keyword}%"
         filters.append(
@@ -94,6 +102,7 @@ async def list_front_process(
                 ProductionTaskOrder.material_code.ilike(like),
                 ProductionTaskOrder.material_name.ilike(like),
                 ProductionTaskOrder.sale_order_no.ilike(like),
+                _sale_order_header.c.so_order_no.ilike(like),
                 _sale_order_header.c.customer.ilike(like),
                 _sale_order_header.c.customer_code.ilike(like),
                 _sale_order_product.c.product_model.ilike(like),
@@ -121,7 +130,7 @@ async def list_front_process(
             ProductionTaskOrder.workshop.label("workshop"),
             ProductionTaskOrder.material_code.label("material_code"),
             ProductionTaskOrder.material_name.label("material_name"),
-            ProductionTaskOrder.sale_order_no.label("sale_order_no"),
+            func.coalesce(ProductionTaskOrder.sale_order_no, _sale_order_header.c.so_order_no).label("sale_order_no"),
             ProductionTaskOrder.task_qty.label("task_qty"),
             ProductionTaskOrder.planned_start_date.label("planned_start_date"),
             ProductionTaskOrder.planned_end_date.label("planned_end_date"),

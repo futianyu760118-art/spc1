@@ -355,6 +355,11 @@ export const materialApi = {
   }) => api.post(`/materials/stock-check/${checkId}/items`, data),
   removeStockCheckItem: (itemId: number) =>
     api.delete(`/materials/stock-check/items/${itemId}`),
+  // K3 盘盈盘亏单导入
+  listK3GainLossBills: (params: { date_from?: string; date_to?: string; tran_type?: string }) =>
+    api.get('/materials/stock-check/k3/bills', { params }),
+  importK3Bills: (bill_nos: string[]) =>
+    api.post('/materials/stock-check/k3/import', { bill_nos }),
   // 供应商风险
   getSupplierRisk: (params: Record<string, any>) =>
     api.get('/materials/supplier-risk', { params }),

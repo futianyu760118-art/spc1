@@ -1847,6 +1847,7 @@ async def list_recent_stock_checks(
     keyword: Optional[str] = None,
     status: Optional[List[str]] = None,
     check_type: Optional[str] = None,
+    source: Optional[str] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     sort_by: Optional[str] = None,
@@ -1875,6 +1876,8 @@ async def list_recent_stock_checks(
             query = query.where(StockCheck.status.in_(statuses))
     if check_type:
         query = query.where(StockCheck.check_type == check_type)
+    if source:
+        query = query.where(StockCheck.source == source)
     if date_from:
         query = query.where(StockCheck.check_date >= date_from)
     if date_to:

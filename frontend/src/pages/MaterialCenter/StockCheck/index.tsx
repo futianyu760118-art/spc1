@@ -4,7 +4,7 @@ import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
   InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select, Dropdown, Tabs, Typography,
 } from 'antd'
-import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined, DownloadOutlined, BarChartOutlined, DeleteOutlined } from '@ant-design/icons'
+import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, CloudDownloadOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined, DownloadOutlined, BarChartOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
 import { useExport } from '@/hooks/useExport'
 import { materialApi, orderApi } from '@/services/api'
@@ -22,6 +22,7 @@ import { textColumnFilter, textFilterIcon } from './TextColumnFilter'
 import StatsCharts from './components/StatsCharts'
 import { useStockCheckSync } from '@/hooks/useStockCheckSync'
 import ConflictModal, { ConflictDraft } from './ConflictModal'
+import K3ImportModal from './K3ImportModal'
 import { useAuthStore } from '@/store/auth'
 
 interface StockCheckItem {
@@ -221,6 +222,7 @@ export default function StockCheckPage() {
   const [productFilter, setProductFilter] = useState<string>('all')
   const [colWidths, setColWidths] = useState<Record<string, number>>({})
   const [statsOpen, setStatsOpen] = useState(false)
+  const [k3ModalOpen, setK3ModalOpen] = useState(false)
 
   const { exporting, exportData } = useExport()
   const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx')
@@ -330,6 +332,9 @@ export default function StockCheckPage() {
   // 存在感:聚焦即声明编辑某行(立即广播 + 心跳续命);离开停心跳并延迟清除 presence。
   // 用 150ms 防抖避免 Ant InputNumber blur/focus 时序抖动导致误清:
   // 若 blur 后 150ms 内又 focus 回同一行,取消清除。
+  // 注意: blur 必须走 InputNumber 的 onBlur props(React 管理监听器生命周期),
+  // 不要用 ref + addEventListener 挂原生监听 —— 内联 ref 每次渲染都重挂且不清理,
+  // 监听器会无限累积,一次 blur 触发 N 次清除请求。
   const clearPresenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleEditingFocus = useCallback((itemId: number) => {
@@ -355,7 +360,8 @@ export default function StockCheckPage() {
     if (presenceHeartbeat.current) { clearInterval(presenceHeartbeat.current); presenceHeartbeat.current = null }
     const cid = activeCheck?.id
     if (!cid) return
-    // 防抖: 150ms 后才真正清除,避免 InputNumber 内部 focus/blur 抖动误清
+    // 防抖: 先取消旧定时器再挂新的,保证连续 blur 只发一次清除
+    if (clearPresenceTimer.current) { clearTimeout(clearPresenceTimer.current); clearPresenceTimer.current = null }
     clearPresenceTimer.current = setTimeout(() => {
       clearPresenceTimer.current = null
       console.log('[presence-debug] blur 防抖到期 → POST presence null')
@@ -402,6 +408,7 @@ export default function StockCheckPage() {
         sort_order: params.sort_order,
         status: params.status,
         check_type: checkTypeFilter === 'all' ? undefined : checkTypeFilter,
+        source: params.source,
         date_from: params.date_from,
         date_to: params.date_to,
       })
@@ -409,6 +416,7 @@ export default function StockCheckPage() {
     },
     filterToQuery: (filters) => ({
       status: (filters.status as string[] | undefined)?.join(','),
+      source: (filters.source as string[] | undefined)?.[0],
       date_from: dateFrom,
       date_to: dateTo,
     }),
@@ -1042,14 +1050,7 @@ export default function StockCheckPage() {
               disabled={readonly || !!r.recent_checked_check_no}
               value={r.actual_qty != null ? Number(r.actual_qty) : null}
               onFocus={() => handleEditingFocus(r.id)}
-              ref={(el: any) => {
-                if (el) {
-                  const nativeEl = el.nativeElement || el
-                  if (nativeEl?.addEventListener) {
-                    nativeEl.addEventListener('blur', () => handleEditingBlur(), true)
-                  }
-                }
-              }}
+              onBlur={handleEditingBlur}
               onChange={(v) => {
                 const actual = v == null ? null : Number(v)
                 const diff = actual != null && r.system_qty != null ? actual - Number(r.system_qty) : null
@@ -1245,6 +1246,10 @@ export default function StockCheckPage() {
           </span>
         </span>
         <Button
+          icon={<CloudDownloadOutlined />}
+          onClick={() => setK3ModalOpen(true)}
+        >从 K3 导入</Button>
+        <Button
           type={statsOpen ? 'primary' : 'default'}
           icon={<BarChartOutlined />}
           onClick={() => setStatsOpen((v) => !v)}
@@ -1395,13 +1400,35 @@ export default function StockCheckPage() {
                     : <Tag color="blue">订单</Tag>,
                 },
                 { title: '订单号', dataIndex: 'order_no', width: 180, sorter: true, render: (v: any) => v || '—' },
-                { title: '标题', dataIndex: 'title', ellipsis: true },
+                {
+                  title: '标题', dataIndex: 'title', ellipsis: true,
+                  render: (v: any, r: any) => (
+                    <Space size={4}>
+                      {r.source === 'k3' && <Tag color="geekblue">K3</Tag>}
+                      {v || '-'}
+                    </Space>
+                  ),
+                },
                 {
                   title: '状态', dataIndex: 'status', width: 100,
                   filters: STATUS_OPTIONS,
                   filteredValue: (recentFilters.status as string[] | undefined) ?? null,
                   filterMultiple: true,
                   render: (v: any) => <Tag color={STATUS_MAP[v]?.color || 'default'}>{STATUS_MAP[v]?.label || v}</Tag>,
+                },
+                {
+                  title: '来源', dataIndex: 'source', width: 90,
+                  filters: [
+                    { text: 'K3导入', value: 'k3' },
+                    { text: '本系统', value: 'manual' },
+                  ],
+                  filteredValue: (recentFilters.source as string[] | undefined) ?? null,
+                  filterMultiple: false,
+                  render: (v: any) => v === 'k3'
+                    ? <Tag color="geekblue">K3</Tag>
+                    : v === 'manual'
+                      ? <Tag>本系统</Tag>
+                      : '-',
                 },
                 { title: '盘点日期', dataIndex: 'check_date', width: 120, sorter: true },
                 { title: '应盘', dataIndex: 'total_materials', width: 70, align: 'right' as const, sorter: true },
@@ -1693,6 +1720,13 @@ export default function StockCheckPage() {
         onSave={handleSaveCoCheckers}
         saveLoading={coSaving}
       />
+      {k3ModalOpen && (
+        <K3ImportModal
+          open
+          onClose={() => setK3ModalOpen(false)}
+          onImported={() => reloadRecentList()}
+        />
+      )}
       <ConflictModal
         open={!!conflict}
         myDraft={conflict?.myDraft ?? null}
