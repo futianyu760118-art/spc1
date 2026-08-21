@@ -81,10 +81,10 @@ export const frontProcessConfig: ProcessCrudConfig<FrontRow> = {
   ],
   rowClassName: (row) => row.status === 'overdue' ? 'ant-table-row-danger' : row.status === 'abnormal' ? 'ant-table-row-warning' : '',
   formFields: [
-    { name: 'shell_status', label: '壳体', type: 'checkbox', span: 6 },
-    { name: 'frame_status', label: '框', type: 'checkbox', span: 6 },
-    { name: 'handle_status', label: '手杆', type: 'checkbox', span: 6 },
-    { name: 'bracket_status', label: '支架圆盘', type: 'checkbox', span: 6 },
+    { name: 'shell_status', label: '壳体', type: 'number', span: 6 },
+    { name: 'frame_status', label: '框', type: 'number', span: 6 },
+    { name: 'handle_status', label: '手杆', type: 'number', span: 6 },
+    { name: 'bracket_status', label: '支架圆盘', type: 'number', span: 6 },
     { name: 'remark', label: '备注', type: 'text', span: 24 },
   ],
 }

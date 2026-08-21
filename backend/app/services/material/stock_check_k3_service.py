@@ -8,6 +8,9 @@
   业务上不用盘亏毁损单(43/KADJ, 已于 2025-12 停用), 盘亏量=调拨数量 FQty;
   SQL 层统一表达为 账面=FQty/实盘=0, diff 自算为 -FQty(负=盘亏), 仓库取源仓库 FSCStockID
 - ID 映射: material_id=t_ICItem.FItemID, wh_id=t_Stock.FItemID, 单位 FUnitID->t_MeasureUnit.FMeasureUnitID
+- 盘点人/标记人: 取单据保管人 ICStockBill.FFManagerID(发料保管人)->t_Emp.FName, FSManagerID(收料保管人)兜底,
+  均缺失时回退「K3」(生产库实证 2026-08-21: 盘盈单 FFManagerID 46/46 有值、FSManagerID 恒空;
+  盘亏调拨单两者 177/177 均有值且同人)
 - 只导已审核(FCheckerID>0)且未作废(FCancellation=0)的单据
 - 注: 仓库 ID 在行表 e.FDCStockID/e.FSCStockID(生产库头表 FDCStockID 恒为 NULL)
 """
@@ -95,12 +98,15 @@ SELECT b.FBillNo AS erp_bill_no,
        mu.FName AS unit_name,
        st.FItemID AS wh_id,
        st.FNumber AS wh_code,
-       st.FName AS wh_name
+       st.FName AS wh_name,
+       COALESCE(kf.FName, ks.FName) AS keeper_name
 FROM {K3_DB}.dbo.ICStockBill b
 JOIN {K3_DB}.dbo.ICStockBillEntry e ON e.FInterID = b.FInterID
 LEFT JOIN {K3_DB}.dbo.t_ICItem i ON i.FItemID = e.FItemID
 LEFT JOIN {K3_DB}.dbo.t_MeasureUnit mu ON mu.FMeasureUnitID = e.FUnitID
 LEFT JOIN {K3_DB}.dbo.t_Stock st ON st.FItemID = e.FDCStockID
+LEFT JOIN {K3_DB}.dbo.t_Emp kf ON kf.FItemID = b.FFManagerID
+LEFT JOIN {K3_DB}.dbo.t_Emp ks ON ks.FItemID = b.FSManagerID
 WHERE b.FBillNo = :bill_no
   AND b.FTranType = 40
   AND b.FCheckerID > 0
@@ -128,13 +134,16 @@ SELECT b.FBillNo AS erp_bill_no,
        mu.FName AS unit_name,
        st.FItemID AS wh_id,
        st.FNumber AS wh_code,
-       st.FName AS wh_name
+       st.FName AS wh_name,
+       COALESCE(kf.FName, ks.FName) AS keeper_name
 FROM {K3_DB}.dbo.ICStockBill b
 JOIN {K3_DB}.dbo.ICStockBillEntry e
      ON e.FInterID = b.FInterID AND e.FDCStockID = {BAD_STOCK_WH_ID}
 LEFT JOIN {K3_DB}.dbo.t_ICItem i ON i.FItemID = e.FItemID
 LEFT JOIN {K3_DB}.dbo.t_MeasureUnit mu ON mu.FMeasureUnitID = e.FUnitID
 LEFT JOIN {K3_DB}.dbo.t_Stock st ON st.FItemID = e.FSCStockID
+LEFT JOIN {K3_DB}.dbo.t_Emp kf ON kf.FItemID = b.FFManagerID
+LEFT JOIN {K3_DB}.dbo.t_Emp ks ON ks.FItemID = b.FSManagerID
 WHERE b.FBillNo = :bill_no
   AND b.FTranType = 41
   AND b.FCheckerID > 0
@@ -265,6 +274,7 @@ async def _build_check_from_rows(
     bill_date = _to_date(first["bill_date"])
     bill_dt = first["bill_date"] if isinstance(first["bill_date"], datetime) else None
     notes = [n for n in (_clean_str(first.get("head_note")), _clean_str(first.get("head_explanation"))) if n]
+    keeper = _clean_str(first.get("keeper_name")) or "K3"
 
     items: List[StockCheckItem] = []
     for r in rows:
@@ -285,8 +295,8 @@ async def _build_check_from_rows(
             diff_qty=qty_actual - qty_must,
             is_checked=1,
             checked_at=bill_dt,
-            checked_by="K3",
-            counted_by="K3",
+            checked_by=keeper,
+            counted_by=keeper,
             counted_at=bill_dt,
             wh_id=int(r["wh_id"]),
             wh_code=_clean_str(r["wh_code"]),
