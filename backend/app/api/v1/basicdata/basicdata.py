@@ -33,7 +33,10 @@ from app.models.basicdata import (
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.basicdata.position_role_service import sync_user_role_from_employee
-from app.services.material.stock_check_service import _get_recent_checked_by_warehouse
+from app.services.material.stock_check_service import (
+    _get_recent_checked_by_warehouse,
+    _resolve_recent_days,
+)
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -67,15 +70,16 @@ def _inventory_checked_exists():
     )
 
 
-async def _enrich_recent_checked(db: AsyncSession, keys):
+async def _enrich_recent_checked(db: AsyncSession, keys, recent_days: Optional[int] = None):
     """对 (material_id, wh_id) 列表，返回 {(mid, wh_id): {"checked","date","check_no"}}。
 
     "近期已盘" 口径与盘点建单预填补一致：最近一条 actual_qty 非空且未取消的盘点行，
-    且 check_date 距今天不超过 STOCK_CHECK_RECENT_SKIP_DAYS（默认 7 天）。
+    且 check_date 距今天不超过 recent_days（省略时用 STOCK_CHECK_RECENT_SKIP_DAYS，默认 7 天；
+    recent_days < 0 = 不限，全部历史）。
     """
     if not keys:
         return {}
-    skip_days = int(get_settings().STOCK_CHECK_RECENT_SKIP_DAYS)
+    skip_days = _resolve_recent_days(recent_days)
     today = date.today()
     raw = await _get_recent_checked_by_warehouse(db, keys)
     out: Dict = {}
@@ -89,10 +93,11 @@ async def _enrich_recent_checked(db: AsyncSession, keys):
     return out
 
 
-def _recent_checked_exists_cond():
-    """EXISTS 条件：该 (material_id, wh_id) 近 STOCK_CHECK_RECENT_SKIP_DAYS 天内
-    存在 actual_qty 非空且未取消的盘点行。与 _enrich_recent_checked 的「近期已盘」口径一致。"""
-    skip_days = int(get_settings().STOCK_CHECK_RECENT_SKIP_DAYS)
+def _recent_checked_exists_cond(recent_days: Optional[int] = None):
+    """EXISTS 条件：该 (material_id, wh_id) 近 N 天(recent_days,省略用配置默认,
+    负数=不限全部历史)存在 actual_qty 非空且未取消的盘点行。
+    与 _enrich_recent_checked 的「近期已盘」口径一致。"""
+    skip_days = _resolve_recent_days(recent_days)
     cutoff = date.today() - timedelta(days=skip_days)
     return (
         select(1)
@@ -1434,6 +1439,7 @@ async def list_inventory(
     wh_name: Optional[str] = Query(None, description="仓库名称精确筛选"),
     batch_no: Optional[str] = Query(None, description="批次号精确筛选"),
     recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
+    recent_days: Optional[int] = Query(None, ge=-1, le=3650, description="近 N 天内已盘算近期已盘;-1=不限(全部历史);省略=服务端配置默认"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
@@ -1503,7 +1509,7 @@ async def list_inventory(
         total_materials_query = total_materials_query.where(cond)
         counted_materials_query = counted_materials_query.where(cond)
     if recent_checked is not None and recent_checked.strip().lower() in ("true", "1", "yes", "false", "0", "no"):
-        rc_exists = _recent_checked_exists_cond()
+        rc_exists = _recent_checked_exists_cond(recent_days)
         rc_cond = rc_exists if recent_checked.strip().lower() in ("true", "1", "yes") else not_(rc_exists)
         query = query.where(rc_cond)
         count_query = count_query.where(rc_cond)
@@ -1521,7 +1527,9 @@ async def list_inventory(
     result = await db.execute(query)
     items = result.scalars().all()
 
-    recent_meta = await _enrich_recent_checked(db, [(inv.material_id, inv.wh_id) for inv in items])
+    recent_meta = await _enrich_recent_checked(
+        db, [(inv.material_id, inv.wh_id) for inv in items], recent_days
+    )
 
     out_items = []
     for inv in items:
@@ -1578,6 +1586,7 @@ async def list_inventory_by_warehouse(
     wh_code: Optional[str] = Query(None, description="仓库编码精确筛选"),
     wh_name: Optional[str] = Query(None, description="仓库名称精确筛选"),
     recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
+    recent_days: Optional[int] = Query(None, ge=-1, le=3650, description="近 N 天内已盘算近期已盘;-1=不限(全部历史);省略=服务端配置默认"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
@@ -1602,7 +1611,7 @@ async def list_inventory_by_warehouse(
         vals = [v.strip() for v in wh_name.split(",") if v.strip()]
         filters.append(Inventory.wh_name.in_(vals))
     if recent_checked is not None and recent_checked.strip().lower() in ("true", "1", "yes", "false", "0", "no"):
-        rc_exists = _recent_checked_exists_cond()
+        rc_exists = _recent_checked_exists_cond(recent_days)
         filters.append(rc_exists if recent_checked.strip().lower() in ("true", "1", "yes") else not_(rc_exists))
 
     sum_qty = func.coalesce(func.sum(Inventory.qty_on_hand), 0).label("qty_on_hand")
@@ -1666,7 +1675,7 @@ async def list_inventory_by_warehouse(
     result = await db.execute(query)
     rows = result.all()
 
-    recent_meta = await _enrich_recent_checked(db, [(r[0], r[3]) for r in rows])  # (material_id, wh_id)
+    recent_meta = await _enrich_recent_checked(db, [(r[0], r[3]) for r in rows], recent_days)  # (material_id, wh_id)
 
     items = []
     for row in rows:

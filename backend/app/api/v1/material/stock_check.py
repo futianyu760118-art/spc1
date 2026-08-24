@@ -23,6 +23,7 @@ from app.schemas.material.stock_check import (
     StockCheckItemUpdate,
     StockCheckItemBatchUpdate,
     CoCheckersUpdate,
+    QuickCountIn,
     PresenceUpdate,
     MaterialHistoryItem,
     MaterialCandidateOut,
@@ -50,6 +51,8 @@ from app.services.material.stock_check_service import (
     refresh_order_bom,
     refresh_check_warehouses,
     add_items_to_check,
+    quick_count_material,
+    get_today_quick_check,
     remove_item_from_check,
     get_stock_check_with_items,
     list_recent_stock_checks,
@@ -137,6 +140,7 @@ async def create_from_order(
                 if body.selected_products else None
             ),
             co_checker_user_ids=body.co_checker_user_ids,
+            recent_days=body.recent_days,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -166,6 +170,7 @@ async def create_from_materials(
             check_date=body.check_date,
             remark=body.remark,
             co_checker_user_ids=body.co_checker_user_ids,
+            recent_days=body.recent_days,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -662,6 +667,73 @@ async def update_co_checkers(
     return ResponseModel(data=await _to_check_out(db, head_out, current_user))
 
 
+@router.post("/stock-check/quick-count", response_model=ResponseModel[dict])
+async def quick_count(
+    body: QuickCountIn,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """快捷盘点: 搜索物料直接录入实盘数,自动写入当前用户当日的「快捷盘点」单。"""
+    try:
+        head, item = await quick_count_material(
+            db,
+            current_user,
+            material_id=body.material_id,
+            wh_id=body.wh_id,
+            actual_qty=body.actual_qty,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ResponseModel(data={
+        "check_id": head.id,
+        "check_no": head.check_no,
+        "item": {
+            "id": item.id,
+            "material_code": item.material_code,
+            "material_name": item.material_name,
+            "wh_name": item.wh_name,
+            "system_qty": float(item.system_qty or 0),
+            "actual_qty": float(item.actual_qty or 0),
+            "diff_qty": float(item.diff_qty or 0),
+        },
+    })
+
+
+@router.get("/stock-check/quick-count/today", response_model=ResponseModel[dict])
+async def quick_count_today(
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """当前用户当日快捷盘点单(含明细);无则 data 为 null。"""
+    found = await get_today_quick_check(db, current_user)
+    if found is None:
+        return ResponseModel(data=None)
+    head, items = found
+    return ResponseModel(data={
+        "check_id": head.id,
+        "check_no": head.check_no,
+        "title": head.title,
+        "items": [
+            {
+                "id": it.id,
+                "material_id": it.material_id,
+                "material_code": it.material_code,
+                "material_name": it.material_name,
+                "spec_model": it.spec_model,
+                "unit": it.unit,
+                "wh_id": it.wh_id,
+                "wh_name": it.wh_name,
+                "system_qty": float(it.system_qty or 0),
+                "actual_qty": float(it.actual_qty) if it.actual_qty is not None else None,
+                "diff_qty": float(it.diff_qty or 0),
+                "counted_by": it.counted_by,
+                "counted_at": it.counted_at.isoformat() if it.counted_at else None,
+            }
+            for it in items
+        ],
+    })
+
+
 @router.post("/stock-check/{check_id}/items", response_model=ResponseModel[dict])
 async def add_items(
     check_id: int,
@@ -669,7 +741,8 @@ async def add_items(
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    """为进行中的手动盘点单追加物料明细(仅 check_type=manual、open/in_progress)。"""
+    """为进行中的手动盘点单追加物料明细(仅 check_type=manual、open/in_progress)。
+    recent_days: 省略=不标记近期已盘;>=0=窗口天数;-1=不限。"""
     try:
         rows = await add_items_to_check(
             db,
@@ -677,6 +750,7 @@ async def add_items(
             material_ids=body.material_ids,
             items=[(it.material_id, it.wh_id) for it in body.items] if body.items else None,
             current_user=current_user,
+            recent_days=body.recent_days,
         )
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -785,13 +859,14 @@ async def refresh_warehouses(
 @router.post("/stock-check/{check_id}/refresh-bom", response_model=ResponseModel[StockCheckOut])
 async def refresh_bom(
     check_id: int,
+    recent_days: Optional[int] = Query(None, ge=-1, le=3650, description="近 N 天内已盘视为近期已盘(免盘);-1=不限(全部历史);省略=服务端配置默认"),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     """补入订单盘点单缺失的子BOM物料（仅订单类、仅 open/in_progress）。
     已有明细及已录入数据保留；权限不足或状态不允许时返回 403/400。"""
     try:
-        await refresh_order_bom(db, check_id, current_user)
+        await refresh_order_bom(db, check_id, current_user, recent_days=recent_days)
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:

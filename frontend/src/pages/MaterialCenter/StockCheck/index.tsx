@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   Table, Input, Button, Space, Tag, message, Modal, Card, Row, Col,
   InputNumber, Checkbox, Spin, Popover, Tour, Drawer, Empty, Tooltip, DatePicker, Segmented, Badge, Select, Dropdown, Tabs, Typography,
 } from 'antd'
-import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, CloudDownloadOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined, DownloadOutlined, BarChartOutlined, DeleteOutlined } from '@ant-design/icons'
+import { SearchOutlined, ReloadOutlined, CheckCircleOutlined, CloudDownloadOutlined, StopOutlined, ArrowLeftOutlined, SaveOutlined, QuestionCircleOutlined, HistoryOutlined, PlusOutlined, RightOutlined, DownOutlined, DownloadOutlined, BarChartOutlined, DeleteOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useAntTableQuery } from '@/hooks/useAntTableQuery'
 import { useExport } from '@/hooks/useExport'
 import { materialApi, orderApi } from '@/services/api'
@@ -137,6 +137,8 @@ interface MaterialCandidate {
   wh_id?: number | null
   wh_code?: string | null
   wh_name?: string | null
+  recent_checked_check_no?: string | null
+  recent_checked_date?: string | null
 }
 
 interface MaterialHistoryItem {
@@ -179,6 +181,7 @@ const STOCK_CHECK_EXPORT_OPTIONS: ExportColumnOption[] = [
 ]
 
 export default function StockCheckPage() {
+  const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const poolCount = useStockCheckPoolStore((s) => s.items.length)
   const poolRemove = useStockCheckPoolStore((s) => s.remove)
@@ -492,12 +495,15 @@ export default function StockCheckPage() {
     }
   }, [])
 
-  const handleCreate = useCallback(async (no: string, selected?: OrderProductSelection[]) => {
+  const handleCreate = useCallback(async (no: string, selected?: OrderProductSelection[], recentDays?: number) => {
     setLoading(true)
     try {
       const res: any = await materialApi.createStockCheckFromOrder(
         no,
-        selected && selected.length ? { selected_products: selected } : {},
+        {
+          ...(selected && selected.length ? { selected_products: selected } : {}),
+          ...(recentDays != null ? { recent_days: recentDays } : {}),
+        },
       )
       const c: StockCheck = res.data
       message.success(`已创建盘点单 ${c.check_no}`)
@@ -516,7 +522,7 @@ export default function StockCheckPage() {
     }
   }, [reloadRecentList, setParams, loadOrderOverview])
 
-  const handleCreateFromMaterials = useCallback(async (selected: MaterialCandidate[], source: 'search' | 'pool') => {
+  const handleCreateFromMaterials = useCallback(async (selected: MaterialCandidate[], source: 'search' | 'pool', recentDays?: number | null) => {
     setCreating(true)
     try {
       // 带仓库信息的行走 items(按物料+仓库精确创建); 旧版无仓库信息的池数据走 material_ids 兜底(全仓库)
@@ -527,6 +533,7 @@ export default function StockCheckPage() {
       const res: any = await materialApi.createStockCheckFromMaterials({
         ...(items.length ? { items } : {}),
         ...(legacyIds.length ? { material_ids: legacyIds } : {}),
+        ...(recentDays != null ? { recent_days: recentDays } : {}),
       })
       const c: StockCheck = res.data
       message.success(`已创建手动盘点单 ${c.check_no}`)
@@ -547,7 +554,7 @@ export default function StockCheckPage() {
     }
   }, [reloadRecentList, setParams, poolRemove])
 
-  const handleAddItemsToCheck = useCallback(async (selected: MaterialCandidate[], source: 'search' | 'pool') => {
+  const handleAddItemsToCheck = useCallback(async (selected: MaterialCandidate[], _source: 'search' | 'pool', recentDays?: number | null) => {
     if (!activeCheck?.id) return
     setCreating(true)
     try {
@@ -558,6 +565,7 @@ export default function StockCheckPage() {
       await materialApi.addStockCheckItems(activeCheck.id, {
         ...(items.length ? { items } : {}),
         ...(legacyIds.length ? { material_ids: legacyIds } : {}),
+        ...(recentDays != null ? { recent_days: recentDays } : {}),
       })
       message.success(`已添加 ${selected.length} 条物料`)
       setAddPickerOpen(false)
@@ -590,6 +598,17 @@ export default function StockCheckPage() {
       setItems([])
     }
   }, [searchText, setParams])
+
+  // 订单搜索自动化: 输入防抖 500ms 触发,空值即重置(替代原「搜索订单/清空」按钮)。
+  // 跳过首跑: 挂载时不清 URL 恢复的 checkId/orderNo 状态
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const searchFirstRun = useRef(true)
+  useEffect(() => {
+    if (searchFirstRun.current) { searchFirstRun.current = false; return }
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    searchDebounceRef.current = setTimeout(() => handleSearch(), 500)
+    return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current) }
+  }, [searchText]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 概览(BOM 树 + 该订单盘点单)的触发：搜索态用 orderNo，查看盘点单态用 activeCheck.order_no
   const overviewOrderNo = activeCheck?.order_no || orderNo || ''
@@ -731,6 +750,15 @@ export default function StockCheckPage() {
     }
   }, [])
 
+  // 盘平快捷录入: 实盘=快照库存,差异=0,已盘=1;复用 saveItem(含乐观锁/冲突弹窗/头表刷新)
+  const handleMarkEven = useCallback((r: StockCheckItem) => {
+    if (r.system_qty == null) {
+      message.warning('该行无库存快照,无法盘平')
+      return
+    }
+    saveItem({ ...r, actual_qty: Number(r.system_qty), is_checked: 1 })
+  }, [saveItem])
+
   const handleConflictOverwrite = async () => {
     if (!conflict) return
     // 先按 itemId 重拉最新行,再用新 version + 用户的草稿重试一次
@@ -840,14 +868,55 @@ export default function StockCheckPage() {
 
   const handleRefreshBom = useCallback(async () => {
     if (!activeCheck) return
+    let recentDays = 7
+    // 确认框内容组件(自带 state,同步到外部变量供 onOk 读取)
+    const Content = () => {
+      const [days, setDays] = useState<number | null>(7)
+      return (
+        <div>
+          <p>将按当前订单的最新BOM重新展开，把之前未纳入的子BOM物料补入此盘点单（已有明细及已录入数据保留）。</p>
+          <p style={{ marginBottom: 0 }}>
+            近期已盘免盘天数(必选,可选可输;0=仅当天;不限=全部历史)：
+            <Select
+              showSearch size="small" style={{ width: 180, margin: '0 6px' }}
+              value={days ?? undefined}
+              placeholder="选择或输入天数"
+              status={days == null ? 'error' : undefined}
+              options={[
+                { value: 1, label: '1 天' },
+                { value: 3, label: '3 天' },
+                { value: 7, label: '7 天' },
+                { value: 15, label: '15 天' },
+                { value: 30, label: '30 天' },
+                { value: 90, label: '90 天' },
+                { value: 99999, label: '不限（全部历史）' },
+              ]}
+              onSelect={(v) => {
+                const d = Number(v)
+                setDays(d)
+                recentDays = d
+              }}
+              onSearch={(text) => {
+                const t = text.replace(/[^\d]/g, '')
+                if (t === '') { setDays(null); recentDays = 0; return }
+                const d = Math.max(0, Math.min(99999, Number(t)))
+                setDays(d)
+                recentDays = d
+              }}
+              filterOption={() => true}
+            />
+          </p>
+        </div>
+      )
+    }
     Modal.confirm({
       title: '补入缺失的子BOM物料',
-      content: '将按当前订单的最新BOM重新展开，把之前未纳入的子BOM物料补入此盘点单（已有明细及已录入数据保留）。是否继续？',
+      content: <Content />,
       okText: '刷新',
       cancelText: '取消',
       onOk: async () => {
         try {
-          await materialApi.refreshStockCheckBom(activeCheck.id)
+          await materialApi.refreshStockCheckBom(activeCheck.id, recentDays)
           await loadCheck(activeCheck.id)
           message.success('已补入子BOM物料')
         } catch (e: any) {
@@ -1041,8 +1110,10 @@ export default function StockCheckPage() {
         title: '盘点数', dataIndex: 'actual_qty', width: 220, align: 'right' as const,
         ...numCol('actual_qty'),
         render: (_: any, r: StockCheckItem) => {
-          const recentMark = !!r.recent_checked_check_no
-          // 近期已盘免盘行(带标记未重盘,含旧预填行): 只显示标签+重盘入口,不显示输入框
+          // 近期已盘免盘行(带标记未重盘,含旧预填行): 只显示标签+重盘入口,不显示输入框;
+          // 点击重盘后本地置 force_recount 标志进入录入态,服务端标记保留至真正录入实盘数,
+          // 未录数刷新/重拉后仍恢复"近期已盘"免盘展示
+          const recentMark = !!r.recent_checked_check_no && !r.force_recount
           const recentPending = recentMark
           return (
             <Space size={4} style={{ width: '100%', justifyContent: 'flex-end' }}>
@@ -1067,21 +1138,6 @@ export default function StockCheckPage() {
                 <Tooltip title={`近期已盘 ${r.recent_checked_check_no}${r.recent_checked_date ? ` · ${r.recent_checked_date}` : ''}，免盘`}>
                   <Tag color="default">近期已盘</Tag>
                 </Tooltip>
-              )}
-              {recentPending && !readonly && (
-                <Button
-                  type="link" size="small" style={{ padding: 0, height: 'auto' }}
-                  onClick={() => {
-                    materialApi.updateStockCheckItem(r.id, { force_recount: true }).then(async (res: any) => {
-                      const updated: StockCheckItem = res.data
-                      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated, force_recount: true } : p))
-                      const headRes: any = await materialApi.getStockCheck(updated.check_id)
-                      setActiveCheck(prev => prev ? { ...prev, ...headRes.data } : headRes.data)
-                    }).catch((err: any) => {
-                      message.error(err?.response?.data?.detail || err.message || '重盘失败')
-                    })
-                  }}
-                >重盘</Button>
               )}
               {(presenceByItem[r.id] || []).length > 0 && (
                 <Tooltip title={`${(presenceByItem[r.id] || []).map((x) => x.name).join('、')} 正在编辑此行`}>
@@ -1150,6 +1206,26 @@ export default function StockCheckPage() {
             && r.actual_qty == null
           return (
             <Space size="small">
+              {!!r.recent_checked_check_no && !r.force_recount && !readonly && (
+                <Button
+                  type="link" size="small" style={{ padding: 0 }}
+                  onClick={() => {
+                    materialApi.updateStockCheckItem(r.id, { force_recount: true }).then(async (res: any) => {
+                      const updated: StockCheckItem = res.data
+                      setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated, force_recount: true } : p))
+                      const headRes: any = await materialApi.getStockCheck(updated.check_id)
+                      setActiveCheck(prev => prev ? { ...prev, ...headRes.data } : headRes.data)
+                    }).catch((err: any) => {
+                      message.error(err?.response?.data?.detail || err.message || '重盘失败')
+                    })
+                  }}
+                >重盘</Button>
+              )}
+              {!readonly && r.system_qty != null && !r.recent_checked_check_no && (
+                <Tooltip title={`按库存数 ${Number(r.system_qty)} 盘点(差异 0)并立即保存`}>
+                  <Button type="link" size="small" style={{ padding: 0 }} onClick={() => handleMarkEven(r)}>盘平</Button>
+                </Tooltip>
+              )}
               <Button type="link" size="small" icon={<SaveOutlined />}
                 disabled={readonly}
                 onClick={() => saveItem(r)}>保存</Button>
@@ -1217,24 +1293,14 @@ export default function StockCheckPage() {
       <Space wrap>
         <span data-tour="stock-check-search">
           <Input
-            placeholder="输入订单号 (如 HJ2024-001)"
+            placeholder="输入订单号自动搜索 (如 HJ2024-001)"
             value={searchText}
             onChange={e => setSearchText(e.target.value)}
-            onPressEnter={handleSearch}
             allowClear
-            style={{ width: 280 }}
+            style={{ width: 300 }}
             prefix={<SearchOutlined />}
           />
         </span>
-        <Button type="primary" onClick={handleSearch}>搜索订单</Button>
-        <Button onClick={() => {
-          setSearchText('')
-          setOrderNo('')
-          setCheckIdParam(null)
-          setActiveCheck(null)
-          setItems([])
-          setParams({})
-        }}>清空</Button>
         {orderNo && !activeCheck && (
           <span data-tour="stock-check-create">
             <Button type="primary" ghost onClick={() => setOrderPickerOpen(true)}>
@@ -1246,11 +1312,16 @@ export default function StockCheckPage() {
           <span data-tour="stock-check-pool-badge">
             <Badge count={poolCount} size="small" offset={[10, -2]} overflowCount={999}>
               <Button type="primary" icon={<PlusOutlined />} onClick={() => setPickerOpen(true)}>
-                手动盘点 — 选择物料
+                手动盘点
               </Button>
             </Badge>
           </span>
         </span>
+        <Button
+          type="primary" ghost
+          icon={<ThunderboltOutlined style={{ color: '#faad14' }} />}
+          onClick={() => navigate('/quick-stock-check')}
+        >快捷盘点</Button>
         <Button
           icon={<CloudDownloadOutlined />}
           onClick={() => setK3ModalOpen(true)}
@@ -1704,19 +1775,21 @@ export default function StockCheckPage() {
         onCancel={() => setPickerOpen(false)}
         onConfirm={handleCreateFromMaterials}
         confirmLoading={creating}
+        showRecentDays
       />
       <MaterialPickerModal
         open={addPickerOpen}
         onCancel={() => setAddPickerOpen(false)}
         onConfirm={handleAddItemsToCheck}
         confirmLoading={creating}
+        showRecentDays
       />
       <OrderProductPickerModal
         open={orderPickerOpen}
         orderNo={orderNo}
         coveredKeys={coveredKeySet}
         onCancel={() => setOrderPickerOpen(false)}
-        onCreate={(selected) => handleCreate(orderNo, selected)}
+        onCreate={(selected, recentDays) => handleCreate(orderNo, selected, recentDays)}
         confirmLoading={loading}
       />
       <CoCheckerPickerModal

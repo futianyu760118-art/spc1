@@ -21,6 +21,8 @@ class StockCheckCreate(BaseModel):
     # 指定要盘点哪些产品行;省略/为 None = 全部产品行(向后兼容),为空列表 = 未选(报错)
     selected_products: Optional[List[StockCheckProductSelection]] = None
     co_checker_user_ids: Optional[List[int]] = None
+    # 近 N 天内已盘视为"近期已盘"免盘;省略 = 服务端配置默认(7 天);-1 = 不限(全部历史)
+    recent_days: Optional[int] = None
 
 
 class StockCheckMaterialSelection(BaseModel):
@@ -41,11 +43,20 @@ class StockCheckFromMaterialsCreate(BaseModel):
     check_date: Optional[date] = None
     remark: Optional[str] = None
     co_checker_user_ids: Optional[List[int]] = None
+    # 近 N 天内已盘的行打「近期已盘」免盘标记; 省略 = 不标记; -1 = 不限(全部历史)
+    recent_days: Optional[int] = None
 
 
 class CoCheckersUpdate(BaseModel):
     co_checker_user_ids: List[int] = []
     expected_version: Optional[int] = None
+
+
+class QuickCountIn(BaseModel):
+    """快捷盘点: 搜索物料直接录入实盘数"""
+    material_id: int
+    wh_id: Optional[int] = None
+    actual_qty: Decimal
 
 
 class PresenceUpdate(BaseModel):

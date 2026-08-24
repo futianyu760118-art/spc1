@@ -10,6 +10,7 @@ from sqlalchemy import select, func, desc, or_, and_, String as SAString, text, 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
+from app.core.config import get_settings
 from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.material import Material
 from app.models.material.inventory_check import StockCheck, StockCheckItem
@@ -434,6 +435,18 @@ async def _next_seq_for_today(db: AsyncSession) -> int:
     return max_seq + 1
 
 
+RECENT_DAYS_UNLIMITED = 100000  # 「不限」天数哨兵:约 273 年,等效覆盖全部历史盘点
+
+
+def _resolve_recent_days(recent_days: Optional[int]) -> int:
+    """近期已盘窗口天数: None=配置默认(7); 负数=不限(全部历史); 其余=该天数(钳到 0)"""
+    if recent_days is None:
+        return int(get_settings().STOCK_CHECK_RECENT_SKIP_DAYS)
+    if int(recent_days) < 0:
+        return RECENT_DAYS_UNLIMITED
+    return max(0, int(recent_days))
+
+
 async def create_stock_check_from_order(
     db: AsyncSession,
     order_no: str,
@@ -444,12 +457,14 @@ async def create_stock_check_from_order(
     remark: Optional[str] = None,
     selected_products: Optional[List[Dict[str, Optional[str]]]] = None,
     co_checker_user_ids: Optional[List[int]] = None,
+    recent_days: Optional[int] = None,
 ) -> StockCheck:
     """从订单创建盘点单: BOM 多层展开 + 每节点一行 + 写头/行
 
     selected_products: 每项 {"product_code": str|None, "bom_no": str|None};
         None 表示全部产品行;非空则只展开匹配的产品行。
     co_checker_user_ids: 共同盘点人(sys_user.id)列表，可与创建人共同修改盘点单。
+    recent_days: 近 N 天内已盘视为"近期已盘"免盘;None=用配置默认。
     """
     order = (await db.execute(select(SaleOrder.id).where(SaleOrder.order_no == order_no))).scalar_one_or_none()
     if not order:
@@ -558,8 +573,7 @@ async def create_stock_check_from_order(
             dedup_order.append(k)
 
     # 2) 查近盘预填补
-    from app.core.config import get_settings
-    skip_days = int(get_settings().STOCK_CHECK_RECENT_SKIP_DAYS)
+    skip_days = _resolve_recent_days(recent_days)
     recent_map = await _get_recent_checked_by_warehouse(db, dedup_order)
     today = date.today()
 
@@ -624,6 +638,34 @@ async def create_stock_check_from_order(
     return head
 
 
+async def _mark_recent_checked(
+    db: AsyncSession,
+    item_rows: List[StockCheckItem],
+    recent_days: Optional[int],
+) -> int:
+    """按近期已盘窗口给行打免盘标记。recent_days=None 不打标;>=0=窗口天数;-1=不限。
+    返回打标行数。"""
+    if recent_days is None or not item_rows:
+        return 0
+    skip_days = _resolve_recent_days(recent_days)
+    recent_map = await _get_recent_checked_by_warehouse(
+        db, [(r.material_id, r.wh_id) for r in item_rows]
+    )
+    today = date.today()
+    n = 0
+    for r in item_rows:
+        recent = recent_map.get((r.material_id, r.wh_id))
+        if (
+            recent is not None
+            and recent["check_date"] is not None
+            and (today - recent["check_date"]).days <= skip_days
+        ):
+            r.recent_checked_check_no = recent["check_no"]
+            r.recent_checked_date = recent["check_date"]
+            n += 1
+    return n
+
+
 async def create_stock_check_from_materials(
     db: AsyncSession,
     material_ids: Optional[List[int]] = None,
@@ -634,12 +676,15 @@ async def create_stock_check_from_materials(
     check_date: Optional[date] = None,
     remark: Optional[str] = None,
     co_checker_user_ids: Optional[List[int]] = None,
+    recent_days: Optional[int] = None,
 ) -> StockCheck:
     """从选定的物料清单创建手动盘点单 (check_type='manual', order_no=NULL)。
 
     items: 按 (material_id, wh_id) 精确盘点, wh_id=None 表示未入库合成行;
     material_ids: 兼容旧方式, 整物料拆全仓库;
     两者可同时提供, 合并去重; 至少提供其一。
+    recent_days: None=不标记近期已盘(所有行都需盘点);
+        >=0=近 N 天内已盘的行打「近期已盘」免盘标记; -1=不限(全部历史)。
     """
     unique_ids, selections = await _resolve_material_selections(db, material_ids, items)
 
@@ -662,6 +707,10 @@ async def create_stock_check_from_materials(
     await db.flush()
 
     item_rows = await _build_manual_item_rows(db, head.id, selections, unique_ids)
+
+    # 可选: 按近期已盘窗口给行打免盘标记(None=不打,保持全部需盘点)
+    await _mark_recent_checked(db, item_rows, recent_days)
+
     db.add_all(item_rows)
     await db.flush()
 
@@ -829,14 +878,161 @@ async def _build_manual_item_rows(
     return item_rows
 
 
+QUICK_CHECK_TITLE_PREFIX = "快捷盘点"
+
+
+async def get_today_quick_check(
+    db: AsyncSession,
+    current_user: dict,
+) -> Optional[Tuple[StockCheck, List[StockCheckItem]]]:
+    """取当前用户当日的快捷盘点单(含明细);不存在返回 None。"""
+    uid = _current_user_id(current_user)
+    if uid is None:
+        return None
+    today = date.today()
+    head = (await db.execute(
+        select(StockCheck)
+        .where(
+            StockCheck.check_type == "manual",
+            StockCheck.title == f"{QUICK_CHECK_TITLE_PREFIX} {today.strftime('%Y-%m-%d')}",
+            StockCheck.created_by_user_id == uid,
+            StockCheck.check_date == today,
+            StockCheck.status.in_(("open", "in_progress")),
+        )
+        .order_by(StockCheck.id.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if head is None:
+        return None
+    items = list((await db.execute(
+        select(StockCheckItem)
+        .where(StockCheckItem.check_id == head.id)
+        .order_by(StockCheckItem.counted_at.desc(), StockCheckItem.id.desc())
+    )).scalars().all())
+    return head, items
+
+
+async def quick_count_material(
+    db: AsyncSession,
+    current_user: dict,
+    material_id: int,
+    wh_id: Optional[int],
+    actual_qty: Decimal,
+) -> Tuple[StockCheck, StockCheckItem]:
+    """快捷盘点: 找到/创建当前用户当日的快捷盘点单,把 (物料,仓库) 行加入并直接录入实盘数。
+
+    - 单据识别: check_type='manual' + title=「快捷盘点 YYYY-MM-DD」+ created_by_user_id=当前用户
+      + check_date=今天 + status in open/in_progress(精确标题匹配,避免误复用普通手动单)。
+    - 行已存在则覆盖录入(重盘),不存在则新增行(快照取当前即时库存)。
+    - 并发竞态(同一人同刻两次首发建单)极小概率产生两张当日单,后续会复用先建的那张,可接受。
+    """
+    uid = _current_user_id(current_user)
+    today = date.today()
+    title = f"{QUICK_CHECK_TITLE_PREFIX} {today.strftime('%Y-%m-%d')}"
+
+    head = None
+    if uid is not None:
+        head = (await db.execute(
+            select(StockCheck)
+            .where(
+                StockCheck.check_type == "manual",
+                StockCheck.title == title,
+                StockCheck.created_by_user_id == uid,
+                StockCheck.check_date == today,
+                StockCheck.status.in_(("open", "in_progress")),
+            )
+            .order_by(StockCheck.id.desc())
+            .limit(1)
+            # 锁住头行,防止并发重复建单/聚合互相覆盖
+            .with_for_update()
+        )).scalar_one_or_none()
+    if head is None:
+        seq = await _next_seq_for_today(db)
+        head = StockCheck(
+            check_no=_gen_check_no(seq),
+            order_no=None,
+            title=title,
+            check_type="manual",
+            status="in_progress",
+            check_date=today,
+            created_by=current_user.get("username", "") if current_user else "",
+            created_by_user_id=uid,
+            remark="快捷盘点(搜索物料直接录入)",
+        )
+        db.add(head)
+        await db.flush()
+
+    # 找已有行(重盘覆盖)或新增行(快照即时库存)
+    item = (await db.execute(
+        select(StockCheckItem)
+        .where(
+            StockCheckItem.check_id == head.id,
+            StockCheckItem.material_id == int(material_id),
+            StockCheckItem.wh_id.is_(None) if wh_id is None else StockCheckItem.wh_id == int(wh_id),
+        )
+        .limit(1)
+        .with_for_update()
+    )).scalar_one_or_none()
+
+    if item is None:
+        rows = await _build_manual_item_rows(
+            db, head.id, [(int(material_id), wh_id)], [int(material_id)]
+        )
+        if not rows:
+            raise ValueError("该物料在此仓库无库存行,无法快捷盘点")
+        item = rows[0]
+        db.add(item)
+        await db.flush()
+
+    new_actual = Decimal(str(actual_qty))
+    item.actual_qty = new_actual
+    item.diff_qty = new_actual - Decimal(str(item.system_qty or 0))
+    item.is_checked = 1
+    item.checked_at = datetime.now()
+    item.checked_by = current_user.get("username", "") if current_user else None
+    item.counted_by_user_id = uid
+    item.counted_by = current_user.get("username", "") if current_user else None
+    item.counted_at = datetime.now()
+    # 快捷重盘(行带近期已盘标记)时真实盘点取代免盘,同步撤销
+    item.recent_checked_check_no = None
+    item.recent_checked_date = None
+    item.version = int(item.version or 0) + 1
+
+    await _refresh_check_aggregates(db, head.id)
+    head.version = int(head.version or 0) + 1
+    await db.flush()
+    await publish_event(
+        head.id,
+        "item_updated",
+        {
+            "item_id": item.id,
+            "version": int(item.version or 0),
+            "item": _serialize_item(item),
+            "head_aggregates": {
+                "checked_materials": int(head.checked_materials or 0),
+                "total_materials": int(head.total_materials or 0),
+                "total_diff_qty": float(head.total_diff_qty or 0),
+            },
+        },
+        uid,
+    )
+    return head, item
+
+
 async def add_items_to_check(
     db: AsyncSession,
     check_id: int,
     material_ids: Optional[List[int]] = None,
     items: Optional[List[Tuple[int, Optional[int]]]] = None,
     current_user: dict = None,
+    *,
+    recent_days: Optional[int] = None,
 ) -> List[StockCheckItem]:
-    """为进行中的手动盘点单追加物料明细。返回新增的行。"""
+    """为进行中的手动盘点单追加物料明细。返回新增的行。
+
+    recent_days: None=不标记近期已盘(新增行都需盘点);
+        >=0=近 N 天内已盘的新增行打「近期已盘」免盘标记; -1=不限。
+    """
     head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id).with_for_update())).scalar_one_or_none()
     if not head:
         raise ValueError(f"盘点单 {check_id} 不存在")
@@ -850,6 +1046,8 @@ async def add_items_to_check(
     item_rows = await _build_manual_item_rows(db, check_id, selections, unique_ids)
     if not item_rows:
         raise ValueError("所选物料均无可用库存行,请重新选择")
+    # 可选: 按近期已盘窗口给新增行打免盘标记
+    await _mark_recent_checked(db, item_rows, recent_days)
     db.add_all(item_rows)
     await db.flush()
     await _refresh_check_aggregates(db, check_id)
@@ -1277,8 +1475,9 @@ async def update_stock_check_item(
     old_is_checked = int(item.is_checked or 0)
     actual_qty_changed = False
     if force_recount:
-        item.recent_checked_check_no = None
-        item.recent_checked_date = None
+        # 重盘意图:仅重置签收状态;近期已盘标记保留,待真正录入实盘数时
+        # 才撤销(下方 old_actual_qty is None 分支),避免"点了重盘未录数"
+        # 的行刷新后丢失免盘标记
         item.is_checked = 0
         item.checked_at = None
         item.checked_by = None
@@ -1526,12 +1725,16 @@ async def set_co_checkers(
     return head
 
 
-async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict) -> StockCheck:
+async def refresh_order_bom(
+    db: AsyncSession, check_id: int, current_user: dict,
+    *, recent_days: Optional[int] = None,
+) -> StockCheck:
     """对 in-progress 的订单盘点单重新展开 BOM，补入之前未纳入的子 BOM 物料。
 
     - 仅订单盘点单、仅 open/in_progress 状态可用。
     - 按 head.covered_products 筛选产品行（为空则全部）。
     - 保留已有明细及已录入数据；缺失的 material_id 取首次出现位置补入一行（带 level）。
+    - recent_days: 近 N 天内已盘的新增行视为"近期已盘"免盘;None=用配置默认。
     - 权限：创建人 / 共同盘点人 / admin（沿用 _user_can_edit）。
     """
     head = (await db.execute(select(StockCheck).where(StockCheck.id == check_id))).scalar_one_or_none()
@@ -1636,8 +1839,7 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
         await db.flush()
         return head
 
-    from app.core.config import get_settings
-    skip_days = int(get_settings().STOCK_CHECK_RECENT_SKIP_DAYS)
+    skip_days = _resolve_recent_days(recent_days)
     recent_map = await _get_recent_checked_by_warehouse(db, new_keys)
     today = date.today()
 

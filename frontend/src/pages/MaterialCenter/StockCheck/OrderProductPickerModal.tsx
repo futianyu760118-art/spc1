@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Modal, Table, Button, Space, message, Empty, Tag, Input } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { orderApi } from '@/services/api'
+import RecentDaysPicker from './RecentDaysPicker'
 
 export interface OrderProductLine {
   line_no?: string | null
@@ -25,7 +26,7 @@ interface Props {
   orderNo: string
   coveredKeys?: Set<string>
   onCancel: () => void
-  onCreate: (selected: OrderProductSelection[]) => void
+  onCreate: (selected: OrderProductSelection[], recentDays: number) => void
   confirmLoading?: boolean
 }
 
@@ -39,6 +40,7 @@ export default function OrderProductPickerModal({
   const [loading, setLoading] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [keyword, setKeyword] = useState('')
+  const [recentDays, setRecentDays] = useState<number | null>(null) // null=未选择(强制);-1=不限
 
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
@@ -86,6 +88,10 @@ export default function OrderProductPickerModal({
   }, [open, orderNo, coveredKeys])
 
   const handleCreate = () => {
+    if (recentDays == null) {
+      message.warning('「近期已盘」免盘天数为必填项')
+      return
+    }
     const selected = items
       .filter((it) => selectedKeys.includes(rowKey(it)))
       .map((it) => ({ product_code: it.product_code ?? null, bom_no: it.bom_no ?? null }))
@@ -93,7 +99,7 @@ export default function OrderProductPickerModal({
       message.warning('请至少选择一个产品')
       return
     }
-    onCreate(selected)
+    onCreate(selected, recentDays)
   }
 
   const columns = [
@@ -137,12 +143,16 @@ export default function OrderProductPickerModal({
             onClick={() => setSelectedKeys([])}
             disabled={items.length === 0}
           >清空</Button>
-          <Button type="primary" loading={confirmLoading} onClick={handleCreate}>
+          <Button
+            type="primary" loading={confirmLoading} onClick={handleCreate}
+            disabled={recentDays == null}
+          >
             确定创建（已选{selectedKeys.length}项）
           </Button>
         </Space>
       }
     >
+      <RecentDaysPicker value={recentDays} onChange={setRecentDays} required />
       {items.length === 0 && !loading ? (
         <Empty description="该订单未展开出任何产品行" />
       ) : (

@@ -3,6 +3,7 @@ import { Modal, Input, Table, Button, Space, message, Pagination, Spin, Tabs, Em
 import { SearchOutlined, ClearOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { materialApi } from '@/services/api'
 import { useStockCheckPoolStore, PoolMaterial, poolKey } from '@/store/stockCheckPool'
+import RecentDaysPicker from './RecentDaysPicker'
 
 interface MaterialCandidate {
   erp_material_id: number
@@ -22,8 +23,10 @@ interface MaterialCandidate {
 interface Props {
   open: boolean
   onCancel: () => void
-  onConfirm: (selected: MaterialCandidate[], source: 'search' | 'pool') => void
+  onConfirm: (selected: MaterialCandidate[], source: 'search' | 'pool', recentDays: number | null) => void
   confirmLoading?: boolean
+  /** true=显示「近期已盘」免盘范围面板(手动建单);不传=不显示(向已有单追加明细) */
+  showRecentDays?: boolean
 }
 
 type TabKey = 'search' | 'pool'
@@ -32,7 +35,7 @@ function rowKey(row: Pick<MaterialCandidate, 'erp_material_id' | 'wh_id'>): stri
   return poolKey(row)
 }
 
-export default function MaterialPickerModal({ open, onCancel, onConfirm, confirmLoading }: Props) {
+export default function MaterialPickerModal({ open, onCancel, onConfirm, confirmLoading, showRecentDays }: Props) {
   const [keyword, setKeyword] = useState('')
   const [whFilter, setWhFilter] = useState('')
   const [page, setPage] = useState(1)
@@ -42,6 +45,8 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
   const [loading, setLoading] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [selectedMap, setSelectedMap] = useState<Record<string, MaterialCandidate>>({})
+  // null=未选择(不标记);-1=不限;>=0=天数
+  const [recentDays, setRecentDays] = useState<number | null>(null)
 
   const [activeTab, setActiveTab] = useState<TabKey>('search')
   const [poolSelectedIds, setPoolSelectedIds] = useState<string[]>([])
@@ -99,6 +104,7 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       setActiveTab('search')
       setPoolSelectedIds([])
       setPoolKeyword('')
+      setRecentDays(null)
     }
   }, [open])
 
@@ -156,7 +162,7 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       message.warning('请至少选择一个物料')
       return
     }
-    onConfirm(Object.values(selectedMap), 'search')
+    onConfirm(Object.values(selectedMap), 'search', recentDays)
   }
 
   const handleAddToPool = (rows: MaterialCandidate[]) => {
@@ -210,7 +216,7 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
         wh_name: row?.wh_name ?? null,
       }
     }).filter((s) => s.erp_material_id > 0)
-    onConfirm(selected, 'pool')
+    onConfirm(selected, 'pool', recentDays)
   }
 
   const renderWhName = (row: { wh_name?: string | null }) => {
@@ -503,6 +509,7 @@ export default function MaterialPickerModal({ open, onCancel, onConfirm, confirm
       destroyOnClose
       footer={activeTab === 'search' ? searchFooter : poolFooter}
     >
+      {showRecentDays && <RecentDaysPicker value={recentDays} onChange={setRecentDays} />}
       <Tabs
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as TabKey)}

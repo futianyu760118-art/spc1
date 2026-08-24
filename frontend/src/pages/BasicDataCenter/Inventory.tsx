@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react'
-import { Table, Button, Input, message, Space, Row, Col, Tabs, Tag, Tooltip, Popover, Checkbox } from 'antd'
+import { useState, useCallback, useEffect, useRef } from 'react'
+import { Table, Button, Input, InputNumber, message, Space, Row, Col, Tabs, Tag, Tooltip, Popover, Checkbox, Select } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, SettingOutlined, HolderOutlined,
   DatabaseOutlined, AuditOutlined, InboxOutlined, LockOutlined,
@@ -209,11 +209,62 @@ function SearchBar({
   )
 }
 
+/** 近期已盘天数: 可选可输;0=仅当天;99999=不限(全部历史); 防抖 400ms 生效 */
+function RecentDaysControl({
+  value, onChange,
+}: { value: number; onChange: (v: number) => void }) {
+  const options = [
+    { value: 1, label: '1 天' },
+    { value: 3, label: '3 天' },
+    { value: 7, label: '7 天' },
+    { value: 15, label: '15 天' },
+    { value: 30, label: '30 天' },
+    { value: 90, label: '90 天' },
+    { value: 99999, label: '不限（全部历史）' },
+  ]
+  if (!options.some((o) => o.value === value)) {
+    options.push({ value, label: value === 0 ? '0 天（仅当天）' : `${value} 天` })
+  }
+  return (
+    <Tooltip title="「近期已盘」= 近 N 天内盘点过;0=仅当天;不限=全部历史;修改后自动刷新">
+      <Space size={4}>
+        <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>近</span>
+        <Select
+          size="small"
+          showSearch
+          value={value}
+          options={options}
+          style={{ width: 130 }}
+          onSelect={(v) => onChange(Number(v))}
+          onSearch={(text) => {
+            const t = text.replace(/[^\d]/g, '')
+            if (t === '') return
+            onChange(Math.max(0, Math.min(99999, Number(t))))
+          }}
+          filterOption={() => true}
+        />
+        <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>天已盘</span>
+      </Space>
+    </Tooltip>
+  )
+}
+
+/** 天数变化防抖触发重新加载 */
+function useRecentDaysDebounce(days: number, reload: () => void) {
+  const first = useRef(true)
+  useEffect(() => {
+    if (first.current) { first.current = false; return }
+    const t = setTimeout(reload, 400)
+    return () => clearTimeout(t)
+  }, [days]) // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 /** 库存明细：物料 x 仓库 x 库位 */
 function InventoryDetail() {
   const [data, setData] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
+  const [recentDays, setRecentDays] = useState(7)
   const [totals, setTotals] = useState({ onHand: 0, locked: 0, balance: 0, inTransit: 0, endingBalance: 0 })
   const [stats, setStats] = useState({ totalMaterials: 0, countedMaterials: 0 })
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
@@ -256,6 +307,7 @@ function InventoryDetail() {
       if (f.wh_name?.length) params.wh_name = f.wh_name.join(',')
       if (f.batch_no?.length) params.batch_no = f.batch_no.join(',')
       if (f.recent_checked?.length === 1) params.recent_checked = f.recent_checked[0]
+      params.recent_days = recentDays
       const res: any = await api.get('/basicdata/inventory', { params })
       const items = res.data?.items || []
       setData(items)
@@ -284,7 +336,9 @@ function InventoryDetail() {
     } finally {
       setLoading(false)
     }
-  }, [keyword, sortInfo, filters]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, sortInfo, filters, recentDays]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useRecentDaysDebounce(recentDays, () => fetchData(1, pagination.pageSize))
 
   useEffect(() => {
     fetchData(1, pagination.pageSize)
@@ -362,7 +416,7 @@ function InventoryDetail() {
           onSearch={() => fetchData(1, pagination.pageSize)}
           onRefresh={() => fetchData(pagination.current, pagination.pageSize)}
           placeholder="搜索物料编码/名称/仓库"
-          extra={<ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} />}
+          extra={<Space><RecentDaysControl value={recentDays} onChange={setRecentDays} /><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
         />
         <StatSummary totals={totals} stats={stats} />
       </div>
@@ -393,6 +447,7 @@ function InventoryByWarehouse() {
   const [data, setData] = useState<InventoryByWhItem[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
+  const [recentDays, setRecentDays] = useState(7)
   const [totals, setTotals] = useState({ onHand: 0, locked: 0, balance: 0, inTransit: 0, endingBalance: 0 })
   const [stats, setStats] = useState({ totalMaterials: 0, countedMaterials: 0 })
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
@@ -434,6 +489,7 @@ function InventoryByWarehouse() {
       if (f.wh_code?.length) params.wh_code = f.wh_code.join(',')
       if (f.wh_name?.length) params.wh_name = f.wh_name.join(',')
       if (f.recent_checked?.length === 1) params.recent_checked = f.recent_checked[0]
+      params.recent_days = recentDays
       const res: any = await api.get('/basicdata/inventory/by-warehouse', { params })
       setData(res.data?.items || [])
       setPagination({
@@ -461,7 +517,9 @@ function InventoryByWarehouse() {
     } finally {
       setLoading(false)
     }
-  }, [keyword, sortInfo, filters]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, sortInfo, filters, recentDays]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useRecentDaysDebounce(recentDays, () => fetchData(1, pagination.pageSize))
 
   useEffect(() => {
     fetchData(1, pagination.pageSize)
@@ -536,7 +594,7 @@ function InventoryByWarehouse() {
           onSearch={() => fetchData(1, pagination.pageSize)}
           onRefresh={() => fetchData(pagination.current, pagination.pageSize)}
           placeholder="搜索物料编码/名称/仓库"
-          extra={<ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} />}
+          extra={<Space><RecentDaysControl value={recentDays} onChange={setRecentDays} /><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
         />
         <StatSummary totals={totals} stats={stats} />
       </div>

@@ -281,6 +281,7 @@ export const materialApi = {
     check_date?: string
     remark?: string
     selected_products?: Array<{ product_code?: string | null; bom_no?: string | null }>
+    recent_days?: number
   }) =>
     api.post(`/materials/stock-check/from-order/${orderNo}`, data || {}),
   getRecentStockChecks: (params: Record<string, any> = {}) =>
@@ -338,11 +339,14 @@ export const materialApi = {
     check_date?: string
     remark?: string
     co_checker_user_ids?: number[]
+    recent_days?: number
   }) => api.post('/materials/stock-check/from-materials', data),
   updateStockCheckCoCheckers: (checkId: number, co_checker_user_ids: number[], expected_version?: number) =>
     api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids, expected_version }),
-  refreshStockCheckBom: (checkId: number) =>
-    api.post(`/materials/stock-check/${checkId}/refresh-bom`),
+  refreshStockCheckBom: (checkId: number, recentDays?: number) =>
+    api.post(`/materials/stock-check/${checkId}/refresh-bom`, null, {
+      params: recentDays != null ? { recent_days: recentDays } : {},
+    }),
   refreshStockCheckWarehouses: (checkId: number) =>
     api.post(`/materials/stock-check/${checkId}/refresh-warehouses`),
   getCoCheckerCandidates: () =>
@@ -352,7 +356,15 @@ export const materialApi = {
   addStockCheckItems: (checkId: number, data: {
     material_ids?: number[]
     items?: Array<{ material_id: number; wh_id?: number | null }>
+    recent_days?: number
   }) => api.post(`/materials/stock-check/${checkId}/items`, data),
+  quickCountStockCheck: (data: {
+    material_id: number
+    wh_id?: number | null
+    actual_qty: number
+  }) => api.post('/materials/stock-check/quick-count', data),
+  getTodayQuickCheck: () =>
+    api.get('/materials/stock-check/quick-count/today'),
   removeStockCheckItem: (itemId: number) =>
     api.delete(`/materials/stock-check/items/${itemId}`),
   // K3 盘盈盘亏单导入
