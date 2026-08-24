@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     AI_MAX_AGENT_DURATION_S: int = 120
 
     # 物料盘点
-    STOCK_CHECK_RECENT_SKIP_DAYS: int = 7  # 订单盘点建单时，近 N 天内已盘过的(物料×仓库)行自动预填补
+    STOCK_CHECK_RECENT_SKIP_DAYS: int = 7  # 订单盘点建单/刷新BOM时，近 N 天内已盘过的(物料×仓库)行仅标记"近期已盘"免盘(不预填盘点数据)
 
     # WeCom (企业微信)
     wecom_corp_id: Optional[str] = None

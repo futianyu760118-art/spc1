@@ -1040,32 +1040,38 @@ export default function StockCheckPage() {
       {
         title: '盘点数', dataIndex: 'actual_qty', width: 220, align: 'right' as const,
         ...numCol('actual_qty'),
-        render: (_: any, r: StockCheckItem) => (
-          <Space size={4} style={{ width: '100%', justifyContent: 'flex-end' }}>
-            <InputNumber
-              size="small"
-              min={0}
-              step={0.01}
-              style={{ width: 100 }}
-              disabled={readonly || !!r.recent_checked_check_no}
-              value={r.actual_qty != null ? Number(r.actual_qty) : null}
-              onFocus={() => handleEditingFocus(r.id)}
-              onBlur={handleEditingBlur}
-              onChange={(v) => {
-                const actual = v == null ? null : Number(v)
-                const diff = actual != null && r.system_qty != null ? actual - Number(r.system_qty) : null
-                updateItem(r.id, { actual_qty: actual, diff_qty: diff, is_checked: actual != null ? 1 : 0 })
-              }}
-            />
-            {r.recent_checked_check_no && !readonly && (
-              <Tooltip title={`近期已盘 ${r.recent_checked_check_no}${r.recent_checked_date ? ` · ${r.recent_checked_date}` : ''}`}>
-                <Tag color="default">近期已盘</Tag>
-              </Tooltip>
-            )}
-            {r.recent_checked_check_no && !readonly && (
-              <Checkbox
-                onChange={(e) => {
-                  if (e.target.checked) {
+        render: (_: any, r: StockCheckItem) => {
+          const recentMark = !!r.recent_checked_check_no
+          // 近期已盘免盘行(带标记未重盘,含旧预填行): 只显示标签+重盘入口,不显示输入框
+          const recentPending = recentMark
+          return (
+            <Space size={4} style={{ width: '100%', justifyContent: 'flex-end' }}>
+              {!recentPending && (
+                <InputNumber
+                  size="small"
+                  min={0}
+                  step={0.01}
+                  style={{ width: 100 }}
+                  disabled={readonly || recentMark}
+                  value={r.actual_qty != null ? Number(r.actual_qty) : null}
+                  onFocus={() => handleEditingFocus(r.id)}
+                  onBlur={handleEditingBlur}
+                  onChange={(v) => {
+                    const actual = v == null ? null : Number(v)
+                    const diff = actual != null && r.system_qty != null ? actual - Number(r.system_qty) : null
+                    updateItem(r.id, { actual_qty: actual, diff_qty: diff, is_checked: actual != null ? 1 : 0 })
+                  }}
+                />
+              )}
+              {recentMark && (
+                <Tooltip title={`近期已盘 ${r.recent_checked_check_no}${r.recent_checked_date ? ` · ${r.recent_checked_date}` : ''}，免盘`}>
+                  <Tag color="default">近期已盘</Tag>
+                </Tooltip>
+              )}
+              {recentPending && !readonly && (
+                <Button
+                  type="link" size="small" style={{ padding: 0, height: 'auto' }}
+                  onClick={() => {
                     materialApi.updateStockCheckItem(r.id, { force_recount: true }).then(async (res: any) => {
                       const updated: StockCheckItem = res.data
                       setItems(prev => prev.map(p => p.id === updated.id ? { ...p, ...updated, force_recount: true } : p))
@@ -1074,23 +1080,23 @@ export default function StockCheckPage() {
                     }).catch((err: any) => {
                       message.error(err?.response?.data?.detail || err.message || '重盘失败')
                     })
-                  }
-                }}
-              >重盘</Checkbox>
-            )}
-            {(presenceByItem[r.id] || []).length > 0 && (
-              <Tooltip title={`${(presenceByItem[r.id] || []).map((x) => x.name).join('、')} 正在编辑此行`}>
-                <span style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
-                  {(presenceByItem[r.id] || []).map((x, i) => (
-                    <span key={x.user_id} style={{ color: x.isSelf ? '#2563eb' : '#d97706', marginLeft: i > 0 ? 4 : 0 }}>
-                      👤{x.name}
-                    </span>
-                  ))}
-                </span>
-              </Tooltip>
-            )}
-          </Space>
-        ),
+                  }}
+                >重盘</Button>
+              )}
+              {(presenceByItem[r.id] || []).length > 0 && (
+                <Tooltip title={`${(presenceByItem[r.id] || []).map((x) => x.name).join('、')} 正在编辑此行`}>
+                  <span style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                    {(presenceByItem[r.id] || []).map((x, i) => (
+                      <span key={x.user_id} style={{ color: x.isSelf ? '#2563eb' : '#d97706', marginLeft: i > 0 ? 4 : 0 }}>
+                        👤{x.name}
+                      </span>
+                    ))}
+                  </span>
+                </Tooltip>
+              )}
+            </Space>
+          )
+        },
         ...resizeCol('actual_qty', 220),
       },
       {

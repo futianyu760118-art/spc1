@@ -390,11 +390,21 @@ def _serialize_item(item: StockCheckItem) -> dict:
 
 
 async def _refresh_check_aggregates(db: AsyncSession, check_id: int) -> None:
-    """刷新头表 total_materials / checked_materials / total_diff_qty"""
+    """刷新头表 total_materials / checked_materials / total_diff_qty
+
+    checked 口径: is_checked=1(已录数/已签收) 或 带近期已盘标记(recent_checked_check_no 非空,
+    免盘行,不记录盘点数据但视为无需再盘)。
+    """
     items_agg = await db.execute(
         select(
             func.count(StockCheckItem.id).label("total"),
-            func.coalesce(func.sum(StockCheckItem.is_checked), 0).label("checked"),
+            func.coalesce(func.sum(case(
+                (or_(
+                    StockCheckItem.is_checked == 1,
+                    StockCheckItem.recent_checked_check_no.isnot(None),
+                ), 1),
+                else_=0,
+            )), 0).label("checked"),
             func.coalesce(func.sum(StockCheckItem.diff_qty), 0).label("diff"),
         ).where(StockCheckItem.check_id == check_id)
     )
@@ -565,7 +575,8 @@ async def create_stock_check_from_order(
             and (today - recent["check_date"]).days <= skip_days
         )
         if prefill:
-            actual_q = recent["actual_qty"]
+            # 近期已盘: 仅打标记,不预填任何盘点数据(实盘数/差异/已盘状态均不记录),
+            # 避免旧实盘数与当前库存跨时间点错配产生假差异;需要重盘时走 force_recount。
             item_rows.append(StockCheckItem(
                 check_id=head.id,
                 line_no=None,
@@ -580,11 +591,9 @@ async def create_stock_check_from_order(
                 system_qty_time=meta.get("system_qty_time"),
                 wh_id=wh_id,
                 wh_name=meta["wh_name"],
-                actual_qty=actual_q,
-                diff_qty=Decimal(str(actual_q)) - Decimal(str(meta["system_qty"])),
-                is_checked=1,
-                checked_at=datetime.now(),
-                checked_by="system-recent",
+                actual_qty=None,
+                diff_qty=Decimal("0"),
+                is_checked=0,
                 recent_checked_check_no=recent["check_no"],
                 recent_checked_date=recent["check_date"],
             ))
@@ -1283,8 +1292,12 @@ async def update_stock_check_item(
             new_actual_qty = Decimal(str(actual_qty))
             item.actual_qty = new_actual_qty
             if old_actual_qty is None:
-                # 首次录入盘点数 → 冻结快照库存为当前实时值
+                # 首次录入盘点数 → 冻结快照库存为当前实时值;
+                # 若该行带近期已盘标记,真实盘点已取代免盘,同步撤销标记
                 await _freeze_snapshot_for_count(db, item, live_cache)
+                if item.recent_checked_check_no is not None:
+                    item.recent_checked_check_no = None
+                    item.recent_checked_date = None
             if new_actual_qty != old_actual_qty or force_recount:
                 actual_qty_changed = True
                 item.counted_by_user_id = _current_user_id(current_user)
@@ -1398,7 +1411,11 @@ async def complete_stock_check(
     )).scalar_one()
     checked = (await db.execute(
         select(func.count(StockCheckItem.id)).where(
-            StockCheckItem.check_id == check_id, StockCheckItem.is_checked == 1
+            StockCheckItem.check_id == check_id,
+            or_(
+                StockCheckItem.is_checked == 1,
+                StockCheckItem.recent_checked_check_no.isnot(None),
+            ),
         )
     )).scalar_one()
     if int(total or 0) == 0:
@@ -1407,7 +1424,8 @@ async def complete_stock_check(
         raise ValueError(f"还有 {int(total) - int(checked)} 行未盘点,无法完结")
 
     for item in head.items:
-        if item.actual_qty is None:
+        # 近期已盘免盘行(recent 标记未撤销且未录入实盘数)不强制录入
+        if item.actual_qty is None and not item.recent_checked_check_no:
             raise ValueError(f"物料 {item.material_code or item.material_id} 还未录入实盘数,请先填写再完结")
 
     head.status = "completed"
@@ -1633,7 +1651,7 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
             and (today - recent["check_date"]).days <= skip_days
         )
         if prefill:
-            actual_q = recent["actual_qty"]
+            # 近期已盘: 仅打标记,不预填任何盘点数据(与 create_stock_check_from_order 同口径)
             db.add(StockCheckItem(
                 check_id=check_id,
                 line_no=None,
@@ -1648,11 +1666,9 @@ async def refresh_order_bom(db: AsyncSession, check_id: int, current_user: dict)
                 system_qty_time=meta.get("system_qty_time"),
                 wh_id=wh_id,
                 wh_name=meta["wh_name"],
-                actual_qty=actual_q,
-                diff_qty=Decimal(str(actual_q)) - Decimal(str(meta["system_qty"])),
-                is_checked=1,
-                checked_at=datetime.now(),
-                checked_by="system-recent",
+                actual_qty=None,
+                diff_qty=Decimal("0"),
+                is_checked=0,
                 recent_checked_check_no=recent["check_no"],
                 recent_checked_date=recent["check_date"],
             ))
