@@ -5,8 +5,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-# 添加项目路径
-backend_path = Path(__file__).parent / "backend"
+# 添加项目路径（本脚本位于 backend/scripts/oneoff/）
+backend_path = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(backend_path))
 
 from sqlalchemy import text

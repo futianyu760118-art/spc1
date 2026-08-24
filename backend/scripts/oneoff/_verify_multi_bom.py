@@ -1,14 +1,14 @@
 """Quick verification for multi-level BOM expansion.
 
 Run from backend/ dir:
-    python ..\scripts\_verify_multi_bom.py
+    python scripts\oneoff\_verify_multi_bom.py
 """
 import asyncio
 import sys
 from pathlib import Path
 
 # Ensure backend/ is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # backend/
 
 from sqlalchemy import select, text
 from app.core.database import AsyncSessionLocal

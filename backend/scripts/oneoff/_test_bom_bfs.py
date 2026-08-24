@@ -1,7 +1,7 @@
 """Unit tests for _expand_bom_tree BFS recursion using a mock DB session.
 
 Run from backend/ dir:
-    python ..\scripts\_test_bom_bfs.py
+    python scripts\oneoff\_test_bom_bfs.py
 
 Covers:
 - empty root
@@ -17,7 +17,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # backend/
 
 from app.services.order.order_materials_service import _expand_bom_tree
 
