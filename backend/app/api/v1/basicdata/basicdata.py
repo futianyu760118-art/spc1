@@ -4,6 +4,7 @@ import logging
 from datetime import date, timedelta
 from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, cast, String, not_
 from sqlalchemy.orm import aliased
@@ -37,6 +38,7 @@ from app.services.material.stock_check_service import (
     _get_recent_checked_by_warehouse,
     _resolve_recent_days,
 )
+from app.services.common.export_service import GenericExportService, ExportColumn
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -53,21 +55,6 @@ def _apply_sort(query, model, sort_by: Optional[str], sort_order: Optional[str],
     if not order_clauses:
         order_clauses = [model.id.desc()]
     return query.order_by(*order_clauses)
-
-
-def _inventory_checked_exists():
-    """已盘物料判定条件：存在 actual_qty 非空且盘点单未取消的盘点记录。"""
-    return (
-        select(1)
-        .select_from(StockCheckItem)
-        .join(StockCheck, StockCheck.id == StockCheckItem.check_id)
-        .where(
-            StockCheckItem.material_id == Inventory.material_id,
-            StockCheckItem.actual_qty.isnot(None),
-            StockCheck.status != "cancelled",
-        )
-        .exists()
-    )
 
 
 async def _enrich_recent_checked(db: AsyncSession, keys, recent_days: Optional[int] = None):
@@ -125,6 +112,51 @@ def _inventory_material_active_cond():
         )
         .exists()
     )
+
+
+def _inventory_nonzero_qty_cond():
+    """库存行排除零库存：qty_on_hand 为 0/NULL 的行不参与页面统计与导出。"""
+    return func.coalesce(Inventory.qty_on_hand, 0) != 0
+
+
+def _inventory_filter_conds(
+    keyword: Optional[str] = None,
+    material_code: Optional[str] = None,
+    wh_code: Optional[str] = None,
+    wh_name: Optional[str] = None,
+    batch_no: Optional[str] = None,
+    recent_checked: Optional[str] = None,
+    recent_days: Optional[int] = None,
+) -> list:
+    """库存列表/导出共用的筛选条件（含排除已删除物料与零库存）。"""
+    conds = [_inventory_material_active_cond(), _inventory_nonzero_qty_cond()]
+    if keyword:
+        like = f"%{keyword}%"
+        conds.append(or_(
+            Inventory.material_code.ilike(like),
+            Inventory.material_name.ilike(like),
+            Inventory.wh_name.ilike(like),
+        ))
+    if material_code:
+        vals = [v.strip() for v in material_code.split(",") if v.strip()]
+        if vals:
+            conds.append(Inventory.material_code.in_(vals))
+    if wh_code:
+        vals = [v.strip() for v in wh_code.split(",") if v.strip()]
+        if vals:
+            conds.append(Inventory.wh_code.in_(vals))
+    if wh_name:
+        vals = [v.strip() for v in wh_name.split(",") if v.strip()]
+        if vals:
+            conds.append(Inventory.wh_name.in_(vals))
+    if batch_no:
+        vals = [v.strip() for v in batch_no.split(",") if v.strip()]
+        if vals:
+            conds.append(Inventory.batch_no.in_(vals))
+    if recent_checked is not None and recent_checked.strip().lower() in ("true", "1", "yes", "false", "0", "no"):
+        rc_exists = _recent_checked_exists_cond(recent_days)
+        conds.append(rc_exists if recent_checked.strip().lower() in ("true", "1", "yes") else not_(rc_exists))
+    return conds
 
 
 def _employee_out(employee: Employee, position_name: Optional[str] = None, manager_name: Optional[str] = None) -> EmployeeOut:
@@ -1439,7 +1471,7 @@ async def list_inventory(
     wh_name: Optional[str] = Query(None, description="仓库名称精确筛选"),
     batch_no: Optional[str] = Query(None, description="批次号精确筛选"),
     recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
-    recent_days: Optional[int] = Query(None, ge=-1, le=3650, description="近 N 天内已盘算近期已盘;-1=不限(全部历史);省略=服务端配置默认"),
+    recent_days: Optional[int] = Query(None, ge=-1, le=100000, description="近 N 天内已盘算近期已盘;-1 或 99999=不限(全部历史);省略=服务端配置默认"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
@@ -1455,14 +1487,15 @@ async def list_inventory(
         func.coalesce(func.sum(Inventory.ending_balance), 0),
     )
     total_materials_query = select(func.count(func.distinct(Inventory.material_id)))
-    counted_materials_query = select(func.count(func.distinct(Inventory.material_id))).where(_inventory_checked_exists())
+    counted_materials_query = select(func.count(func.distinct(Inventory.material_id))).where(_recent_checked_exists_cond(recent_days))
 
     active_cond = _inventory_material_active_cond()
-    query = query.where(active_cond)
-    count_query = count_query.where(active_cond)
-    sums_query = sums_query.where(active_cond)
-    total_materials_query = total_materials_query.where(active_cond)
-    counted_materials_query = counted_materials_query.where(active_cond)
+    nonzero_cond = _inventory_nonzero_qty_cond()
+    query = query.where(active_cond, nonzero_cond)
+    count_query = count_query.where(active_cond, nonzero_cond)
+    sums_query = sums_query.where(active_cond, nonzero_cond)
+    total_materials_query = total_materials_query.where(active_cond, nonzero_cond)
+    counted_materials_query = counted_materials_query.where(active_cond, nonzero_cond)
 
     if keyword:
         like = f"%{keyword}%"
@@ -1586,14 +1619,14 @@ async def list_inventory_by_warehouse(
     wh_code: Optional[str] = Query(None, description="仓库编码精确筛选"),
     wh_name: Optional[str] = Query(None, description="仓库名称精确筛选"),
     recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
-    recent_days: Optional[int] = Query(None, ge=-1, le=3650, description="近 N 天内已盘算近期已盘;-1=不限(全部历史);省略=服务端配置默认"),
+    recent_days: Optional[int] = Query(None, ge=-1, le=100000, description="近 N 天内已盘算近期已盘;-1 或 99999=不限(全部历史);省略=服务端配置默认"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data.inventory", "read")),
 ):
     """按 物料 x 仓库 聚合的即时库存视图（合并库位维度）。"""
-    filters = [_inventory_material_active_cond()]
+    filters = [_inventory_material_active_cond(), _inventory_nonzero_qty_cond()]
     if keyword:
         like = f"%{keyword}%"
         filters.append(or_(
@@ -1629,6 +1662,8 @@ async def list_inventory_by_warehouse(
     query = select(*group_cols, sum_qty, sum_locked, sum_balance, sum_transit, sum_ending, cnt_locations).group_by(*group_cols)
     for f in filters:
         query = query.where(f)
+    # 组级排除零库存（防正负抵消为 0 的组）
+    query = query.having(sum_qty != 0)
 
     sortable = {
         "material_code": Inventory.material_code,
@@ -1646,9 +1681,11 @@ async def list_inventory_by_warehouse(
     else:
         query = query.order_by(Inventory.material_code.asc(), Inventory.wh_code.asc())
 
-    count_subq = select(Inventory.material_id, Inventory.wh_id).group_by(Inventory.material_id, Inventory.wh_id)
+    count_sum = func.coalesce(func.sum(Inventory.qty_on_hand), 0)
+    count_subq = select(Inventory.material_id, Inventory.wh_id, count_sum.label("qty_sum")).group_by(Inventory.material_id, Inventory.wh_id)
     for f in filters:
         count_subq = count_subq.where(f)
+    count_subq = count_subq.having(count_sum != 0)
     count_query = select(func.count()).select_from(count_subq.subquery())
     total = (await db.execute(count_query)).scalar() or 0
 
@@ -1664,7 +1701,7 @@ async def list_inventory_by_warehouse(
     sum_on_hand, sum_locked, sum_balance, sum_in_transit, sum_ending = (await db.execute(sums_query)).one()
 
     total_materials_query = select(func.count(func.distinct(Inventory.material_id)))
-    counted_materials_query = select(func.count(func.distinct(Inventory.material_id))).where(_inventory_checked_exists())
+    counted_materials_query = select(func.count(func.distinct(Inventory.material_id))).where(_recent_checked_exists_cond(recent_days))
     for f in filters:
         total_materials_query = total_materials_query.where(f)
         counted_materials_query = counted_materials_query.where(f)
@@ -1729,20 +1766,21 @@ async def inventory_filter_options(
 ):
     """库存列筛选选项：全量去重值（仓库编码/名称全量；物料编码/批次号上限 3000 条）。"""
     active_cond = _inventory_material_active_cond()
+    nonzero_cond = _inventory_nonzero_qty_cond()
     material_codes = (await db.execute(
-        select(Inventory.material_code).where(Inventory.material_code.isnot(None), active_cond)
+        select(Inventory.material_code).where(Inventory.material_code.isnot(None), active_cond, nonzero_cond)
         .distinct().order_by(Inventory.material_code).limit(3000)
     )).scalars().all()
     wh_codes = (await db.execute(
-        select(Inventory.wh_code).where(Inventory.wh_code.isnot(None), active_cond)
+        select(Inventory.wh_code).where(Inventory.wh_code.isnot(None), active_cond, nonzero_cond)
         .distinct().order_by(Inventory.wh_code)
     )).scalars().all()
     wh_names = (await db.execute(
-        select(Inventory.wh_name).where(Inventory.wh_name.isnot(None), active_cond)
+        select(Inventory.wh_name).where(Inventory.wh_name.isnot(None), active_cond, nonzero_cond)
         .distinct().order_by(Inventory.wh_name)
     )).scalars().all()
     batch_nos = (await db.execute(
-        select(Inventory.batch_no).where(Inventory.batch_no.isnot(None), active_cond)
+        select(Inventory.batch_no).where(Inventory.batch_no.isnot(None), active_cond, nonzero_cond)
         .distinct().order_by(Inventory.batch_no).limit(3000)
     )).scalars().all()
     return ResponseModel(data={
@@ -1751,3 +1789,209 @@ async def inventory_filter_options(
         "wh_names": list(wh_names),
         "batch_nos": list(batch_nos),
     })
+
+
+INVENTORY_DETAIL_EXPORT_COLUMNS = [
+    ExportColumn("material_code", "物料编码", 14),
+    ExportColumn("material_name", "物料名称", 24),
+    ExportColumn("wh_code", "仓库编码", 10),
+    ExportColumn("wh_name", "仓库名称", 14),
+    ExportColumn("location_name", "库位名称", 14),
+    ExportColumn("qty_on_hand", "库存量", 12),
+    ExportColumn("locked_qty", "锁定数量", 12),
+    ExportColumn("balance_qty", "结存数量", 12),
+    ExportColumn("qty_in_transit", "在途库存", 12),
+    ExportColumn("unit_price", "库存单价", 12),
+    ExportColumn("ending_balance", "期末余额", 14),
+    ExportColumn("batch_no", "批次号", 14),
+    ExportColumn("recent_checked", "近期已盘", 10),
+    ExportColumn("updated_at", "更新时间", 18),
+]
+
+INVENTORY_BYWH_EXPORT_COLUMNS = [
+    ExportColumn("material_code", "物料编码", 14),
+    ExportColumn("material_name", "物料名称", 24),
+    ExportColumn("wh_code", "仓库编码", 10),
+    ExportColumn("wh_name", "仓库名称", 14),
+    ExportColumn("location_count", "库位数", 10),
+    ExportColumn("qty_on_hand", "库存量", 12),
+    ExportColumn("locked_qty", "锁定数量", 12),
+    ExportColumn("balance_qty", "结存数量", 12),
+    ExportColumn("qty_in_transit", "在途库存", 12),
+    ExportColumn("unit_price", "加权单价", 12),
+    ExportColumn("ending_balance", "期末余额", 14),
+    ExportColumn("recent_checked", "近期已盘", 10),
+]
+
+
+@router.get("/inventory/export")
+async def export_inventory(
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    columns: Optional[str] = Query(None, description="导出字段(逗号分隔key),缺省=全部"),
+    keyword: Optional[str] = Query(None, description="模糊搜索物料编码/名称/仓库名称"),
+    material_code: Optional[str] = Query(None, description="物料编码精确筛选"),
+    wh_code: Optional[str] = Query(None, description="仓库编码精确筛选"),
+    wh_name: Optional[str] = Query(None, description="仓库名称精确筛选"),
+    batch_no: Optional[str] = Query(None, description="批次号精确筛选"),
+    recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
+    recent_days: Optional[int] = Query(None, ge=-1, le=100000, description="近 N 天内已盘算近期已盘;-1 或 99999=不限(全部历史);省略=服务端配置默认"),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query("asc"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.inventory", "read")),
+):
+    """库存明细导出（物料 x 仓库 x 库位），按当前筛选/排序全量导出，零库存行已排除。"""
+    selected_keys = [c.strip() for c in columns.split(",") if c.strip()] if columns else []
+    allowed = {col.key for col in INVENTORY_DETAIL_EXPORT_COLUMNS}
+    invalid_columns = [key for key in selected_keys if key not in allowed]
+    if invalid_columns:
+        raise HTTPException(status_code=400, detail=f"无效导出字段: {', '.join(invalid_columns)}")
+    selected_columns = [col for col in INVENTORY_DETAIL_EXPORT_COLUMNS if not selected_keys or col.key in selected_keys]
+    if not selected_columns:
+        raise HTTPException(status_code=400, detail="请选择至少一个有效导出字段")
+    conds = _inventory_filter_conds(keyword, material_code, wh_code, wh_name, batch_no, recent_checked, recent_days)
+    query = select(Inventory).where(*conds)
+    query = _apply_sort(query, Inventory, sort_by, sort_order, SORTABLE_INVENTORY)
+    items = (await db.execute(query)).scalars().all()
+
+    recent_meta = await _enrich_recent_checked(
+        db, [(inv.material_id, inv.wh_id) for inv in items], recent_days
+    )
+
+    export_rows = []
+    for inv in items:
+        rc = recent_meta.get((inv.material_id, inv.wh_id)) or {}
+        export_rows.append({
+            "material_code": inv.material_code or "",
+            "material_name": inv.material_name or "",
+            "wh_code": inv.wh_code or "",
+            "wh_name": inv.wh_name or "",
+            "location_name": inv.location_name or "",
+            "qty_on_hand": float(inv.qty_on_hand) if inv.qty_on_hand else 0,
+            "locked_qty": float(inv.locked_qty) if inv.locked_qty else 0,
+            "balance_qty": float(inv.balance_qty) if inv.balance_qty else 0,
+            "qty_in_transit": float(inv.qty_in_transit) if inv.qty_in_transit else 0,
+            "unit_price": float(inv.unit_price) if inv.unit_price else 0,
+            "ending_balance": float(inv.ending_balance) if inv.ending_balance else 0,
+            "batch_no": inv.batch_no or "",
+            "recent_checked": "是" if rc.get("checked") else "否",
+            "updated_at": inv.updated_at.strftime("%Y-%m-%d %H:%M:%S") if inv.updated_at else "",
+        })
+
+    svc = GenericExportService(selected_columns, export_rows, sheet_name="库存明细")
+    if format == "csv":
+        output = svc.to_csv()
+        return StreamingResponse(
+            output,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=inventory_export.csv"},
+        )
+
+    output = svc.to_xlsx()
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=inventory_export.xlsx"},
+    )
+
+
+@router.get("/inventory/by-warehouse/export")
+async def export_inventory_by_warehouse(
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    columns: Optional[str] = Query(None, description="导出字段(逗号分隔key),缺省=全部"),
+    keyword: Optional[str] = Query(None, description="模糊搜索物料编码/名称/仓库名称"),
+    material_code: Optional[str] = Query(None, description="物料编码精确筛选"),
+    wh_code: Optional[str] = Query(None, description="仓库编码精确筛选"),
+    wh_name: Optional[str] = Query(None, description="仓库名称精确筛选"),
+    recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
+    recent_days: Optional[int] = Query(None, ge=-1, le=100000, description="近 N 天内已盘算近期已盘;-1 或 99999=不限(全部历史);省略=服务端配置默认"),
+    sort_by: Optional[str] = Query(None),
+    sort_order: Optional[str] = Query("asc"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.inventory", "read")),
+):
+    """按 物料 x 仓库 聚合的即时库存导出，按当前筛选/排序全量导出，零库存行/组已排除。"""
+    selected_keys = [c.strip() for c in columns.split(",") if c.strip()] if columns else []
+    allowed = {col.key for col in INVENTORY_BYWH_EXPORT_COLUMNS}
+    invalid_columns = [key for key in selected_keys if key not in allowed]
+    if invalid_columns:
+        raise HTTPException(status_code=400, detail=f"无效导出字段: {', '.join(invalid_columns)}")
+    selected_columns = [col for col in INVENTORY_BYWH_EXPORT_COLUMNS if not selected_keys or col.key in selected_keys]
+    if not selected_columns:
+        raise HTTPException(status_code=400, detail="请选择至少一个有效导出字段")
+    filters = _inventory_filter_conds(keyword, material_code, wh_code, wh_name, None, recent_checked, recent_days)
+
+    sum_qty = func.coalesce(func.sum(Inventory.qty_on_hand), 0).label("qty_on_hand")
+    sum_locked = func.coalesce(func.sum(Inventory.locked_qty), 0).label("locked_qty")
+    sum_balance = func.coalesce(func.sum(Inventory.balance_qty), 0).label("balance_qty")
+    sum_transit = func.coalesce(func.sum(Inventory.qty_in_transit), 0).label("qty_in_transit")
+    sum_ending = func.coalesce(func.sum(Inventory.ending_balance), 0).label("ending_balance")
+    cnt_locations = func.count(Inventory.id).label("location_count")
+
+    group_cols = [
+        Inventory.material_id, Inventory.material_code, Inventory.material_name,
+        Inventory.wh_id, Inventory.wh_code, Inventory.wh_name,
+    ]
+
+    query = select(*group_cols, sum_qty, sum_locked, sum_balance, sum_transit, sum_ending, cnt_locations).group_by(*group_cols)
+    for f in filters:
+        query = query.where(f)
+    query = query.having(sum_qty != 0)
+
+    sortable = {
+        "material_code": Inventory.material_code,
+        "material_name": Inventory.material_name,
+        "wh_code": Inventory.wh_code,
+        "qty_on_hand": sum_qty,
+        "locked_qty": sum_locked,
+        "balance_qty": sum_balance,
+        "qty_in_transit": sum_transit,
+        "ending_balance": sum_ending,
+    }
+    if sort_by in sortable:
+        col = sortable[sort_by]
+        query = query.order_by(col.desc() if sort_order == "desc" else col.asc())
+    else:
+        query = query.order_by(Inventory.material_code.asc(), Inventory.wh_code.asc())
+
+    rows = (await db.execute(query)).all()
+
+    recent_meta = await _enrich_recent_checked(db, [(r[0], r[3]) for r in rows], recent_days)  # (material_id, wh_id)
+
+    export_rows = []
+    for row in rows:
+        (mat_id, mat_code, mat_name, wh_id, w_code, w_name,
+         qty, locked, balance, transit, ending, loc_cnt) = row
+        qty_f = float(qty or 0)
+        ending_f = float(ending or 0)
+        rc = recent_meta.get((mat_id, wh_id)) or {}
+        export_rows.append({
+            "material_code": mat_code or "",
+            "material_name": mat_name or "",
+            "wh_code": w_code or "",
+            "wh_name": w_name or "",
+            "location_count": int(loc_cnt or 0),
+            "qty_on_hand": qty_f,
+            "locked_qty": float(locked or 0),
+            "balance_qty": float(balance or 0),
+            "qty_in_transit": float(transit or 0),
+            "unit_price": (ending_f / qty_f) if qty_f else 0,
+            "ending_balance": ending_f,
+            "recent_checked": "是" if rc.get("checked") else "否",
+        })
+
+    svc = GenericExportService(selected_columns, export_rows, sheet_name="按物料仓库统计")
+    if format == "csv":
+        output = svc.to_csv()
+        return StreamingResponse(
+            output,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=inventory_by_warehouse.csv"},
+        )
+
+    output = svc.to_xlsx()
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=inventory_by_warehouse.xlsx"},
+    )

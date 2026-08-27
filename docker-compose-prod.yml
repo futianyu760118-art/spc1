@@ -5,6 +5,7 @@ services:
       - "18085:8000"
     environment:
       TZ: Asia/Shanghai
+      SERVER_ID: ${SERVER_ID:-spc-prod}
       DATABASE_URL: ${DATABASE_URL}
       DATABASE_URL_SYNC: ${DATABASE_URL_SYNC}
       ERP_DB_URL: ${ERP_DB_URL}
@@ -49,7 +50,7 @@ services:
     volumes:
       # 企业微信可信域名校验文件
       - ./data/wecom_verify:/usr/share/nginx/html/wecom_verify:ro
-      - /Users/mac/hjgd-IM/docker/openim-docker/components/nginx/ssl:/etc/nginx/ssl
+      - /Users/mac/Desktop/nginx-ssl:/etc/nginx/ssl
       - ./nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - backend

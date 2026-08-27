@@ -5,6 +5,7 @@ services:
       - "8000:8000"
     environment:
       TZ: Asia/Shanghai
+      SERVER_ID: ${SERVER_ID:-spc-dev}
       DATABASE_URL: ${DATABASE_URL}
       DATABASE_URL_SYNC: ${DATABASE_URL_SYNC}
       ERP_DB_URL: ${ERP_DB_URL}

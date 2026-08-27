@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, Tabs, List, Tag, Typography, notification as antNotification } from 'antd'
 import {
@@ -382,6 +382,38 @@ function toAntdItems(items: PermissionAwareItem[]): any[] {
   }))
 }
 
+// 当前路径是否命中菜单项（精确或子路径，如 /orders/SO-123 命中 /orders）
+function pathMatches(key: string, pathname: string): boolean {
+  return pathname === key || pathname.startsWith(key + '/')
+}
+
+// 菜单树中当前激活的叶子项 key
+function findActiveKey(items: PermissionAwareItem[], pathname: string): string | null {
+  for (const item of items) {
+    if (item.children && item.children.length > 0) {
+      const found = findActiveKey(item.children, pathname)
+      if (found) return found
+    } else if (pathMatches(item.key, pathname)) {
+      return item.key
+    }
+  }
+  return null
+}
+
+// 面包屑：一级分组名 + 当前页名（顶级页面 root 固定为「供应链中台」）
+type CrumbInfo = { root: string; page: string }
+function findCrumb(items: PermissionAwareItem[], pathname: string, rootLabel?: string): CrumbInfo | null {
+  for (const item of items) {
+    if (item.children && item.children.length > 0) {
+      const found = findCrumb(item.children, pathname, rootLabel || item.label)
+      if (found) return found
+    } else if (pathMatches(item.key, pathname)) {
+      return { root: rootLabel || '供应链中台', page: item.label }
+    }
+  }
+  return null
+}
+
 function findPurchase(menuItems: PermissionAwareItem[]): PermissionAwareItem | undefined {
   for (const item of menuItems) {
     if (item.label === '采购中心') return item
@@ -545,6 +577,7 @@ function getRequiredPermission(pathname: string, dynamicMap?: Record<string, str
   if (dynamicMap && dynamicMap[pathname]) return dynamicMap[pathname]
   if (pathToPermission[pathname]) return pathToPermission[pathname]
   if (pathname.startsWith('/orders/')) return 'orders.list'
+  if (pathname.startsWith('/stock-check/')) return 'materials.stock_check'
   return undefined
 }
 
@@ -812,30 +845,48 @@ export default function MainLayout() {
     }
   }
 
-  const menuItems = useMemo(() => {
+  // 过滤后的导航树（侧边栏渲染 + 面包屑推导共用）
+  const navTree = useMemo(() => {
     if (isShareUser()) {
       const targetPath = getShareTargetPath()
       if (targetPath) {
-        return toAntdItems(filterMenuByPath(dynamicMenuItems, targetPath, hasPermission))
+        return filterMenuByPath(dynamicMenuItems, targetPath, hasPermission)
       }
       return []
     }
     if (isSupplierUser()) {
-      return toAntdItems(filterSupplierPortalMenu(dynamicMenuItems, hasPermission))
+      return filterSupplierPortalMenu(dynamicMenuItems, hasPermission)
     }
-    const filtered = filterMenuByPermission(dynamicMenuItems, hasPermission)
-    return toAntdItems(filtered)
+    return filterMenuByPermission(dynamicMenuItems, hasPermission)
   }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
   const canViewCurrentPage = !requiredPermission || hasPermission(requiredPermission, 'read')
+
+  const menuItems = toAntdItems(navTree)
+
   const openKeys = useMemo(() => {
+    // 动态子路由（如 /stock-check/:checkId）回退到父路径的分组，保持菜单组展开
     const gk = dynamicPathToGroupKey[location.pathname]
+      || (location.pathname.startsWith('/stock-check/') ? dynamicPathToGroupKey['/stock-check'] : undefined)
     return gk ? [gk] : []
   }, [location.pathname, dynamicPathToGroupKey])
 
+  const crumb = useMemo(() => {
+    const extraPageNames: Record<string, string> = {
+      '/profile': '个人中心',
+    }
+    return findCrumb(navTree, location.pathname) || { root: '供应链中台', page: extraPageNames[location.pathname] || '' }
+  }, [navTree, location.pathname])
+
+  const userDisplayName = currentUser && 'display_name' in currentUser
+    ? (currentUser.display_name || currentUser.username)
+    : '用户'
+  const userInitial = (userDisplayName || '用').charAt(0)
+  const userPosition = currentUser && 'position_name' in currentUser && currentUser.position_name ? currentUser.position_name : ''
+
   return (
-    <Layout className="min-h-screen" style={{ background: '#f0f4f8' }}>
+    <Layout className="min-h-screen" style={{ background: '#f8fafc' }}>
       {!isShareUser() && (
         <Sider
           trigger={null}
@@ -872,7 +923,7 @@ export default function MainLayout() {
           <Menu
             theme="dark"
             mode="inline"
-            selectedKeys={[location.pathname]}
+            selectedKeys={[findActiveKey(navTree, location.pathname) || location.pathname]}
             defaultOpenKeys={openKeys}
             items={menuItems}
             onClick={({ key }) => navigate(key)}
@@ -880,19 +931,24 @@ export default function MainLayout() {
         </Sider>
       )}
 
-      <Layout style={{ marginLeft: !isShareUser() && collapsed ? 80 : (!isShareUser() ? 256 : 0), transition: 'margin-left .2s', minHeight: '100vh' }}>
-        <div className="header-bar" style={{ position: 'sticky', top: 0, zIndex: 9 }}>
+      <Layout style={{ marginLeft: !isShareUser() && collapsed ? 80 : (!isShareUser() ? 256 : 0), transition: 'margin-left .2s', minHeight: '100vh', background: 'transparent' }}>
+        <div className="topbar-v2">
           {!isShareUser() && (
-            <Space size="middle">
-              <Button
-                type="text"
-                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                onClick={() => setCollapsed(!collapsed)}
-                style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', width: 36, height: 36, borderRadius: 10 }}
-              />
-            </Space>
+            <div className="tbv2-collapse" onClick={() => setCollapsed(!collapsed)} title={collapsed ? '展开侧栏' : '收起侧栏'}>
+              {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            </div>
           )}
-          <Space size="middle">
+          <div className="tbv2-crumb">
+            {crumb.root !== crumb.page && (
+              <>
+                <span className="tbv2-crumb-root">{crumb.root}</span>
+                <span>/</span>
+              </>
+            )}
+            <b>{crumb.page || crumb.root}</b>
+          </div>
+          <div className="tbv2-actions">
+            {!isShareUser() && !isSupplierUser() && canUseTopbar.aiSearch && <TopBarAssistant />}
             {!isShareUser() && !isSupplierUser() && canUseTopbar.share && <ShareButton />}
             {!isSupplierUser() && canUseTopbar.feedback && <FeedbackButton />}
             {canUseTopbar.fontSize && <FontSizeSetting />}
@@ -972,14 +1028,17 @@ export default function MainLayout() {
                   </div>
                 }
               >
-                <Badge count={unreadTotal} size="small" offset={[-4, 4]}>
-                  <Button type="text" icon={<BellOutlined />} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', width: 36, height: 36, borderRadius: 10, color: '#64748b' }} />
-                </Badge>
+                <div className="tbv2-icon-btn" title="通知中心">
+                  <Badge count={unreadTotal} size="small" offset={[3, -3]}>
+                    <BellOutlined style={{ fontSize: 16, color: '#475569' }} />
+                  </Badge>
+                </div>
               </Popover>
             )}
             {isShareUser() ? (
               <Button
                 type="primary"
+                size="small"
                 icon={<LogoutOutlined />}
                 onClick={() => { exitShare(); navigate('/dashboard') }}
               >
@@ -999,24 +1058,15 @@ export default function MainLayout() {
                   },
                 }}
               >
-                <Space className="cursor-pointer" style={{ padding: '4px 12px', borderRadius: 10 }}>
-                  <div style={{ width: 30, height: 30, borderRadius: 8, background: 'linear-gradient(135deg, #6366f1, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <UserOutlined style={{ color: '#fff', fontSize: 'calc(0.875rem * var(--font-size-scale))' }} />
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                    <span style={{ color: '#334155', fontSize: 'calc(0.875rem * var(--font-size-scale))', fontWeight: 500 }}>
-                      {currentUser && 'display_name' in currentUser ? (currentUser.display_name || currentUser.username) : '用户'}
-                    </span>
-                    {currentUser && 'position_name' in currentUser && currentUser.position_name && (
-                      <span style={{ color: '#94a3b8', fontSize: 'calc(0.75rem * var(--font-size-scale))', fontWeight: 400 }}>
-                        {currentUser.position_name}
-                      </span>
-                    )}
-                  </div>
-                </Space>
+                <div className="tbv2-avatar">
+                  <div className="tbv2-avatar-circle">{userInitial}</div>
+                  <span className="tbv2-avatar-name">
+                    {userDisplayName}{userPosition ? ` · ${userPosition}` : ''}
+                  </span>
+                </div>
               </Dropdown>
             )}
-          </Space>
+          </div>
         </div>
 
         <Modal
@@ -1060,7 +1110,7 @@ export default function MainLayout() {
           </Form>
         </Modal>
 
-        <Content style={{ padding: '12px 24px 24px' }}>
+        <Content style={{ padding: '20px 24px 32px' }}>
           {canViewCurrentPage ? (
             <Outlet />
           ) : (

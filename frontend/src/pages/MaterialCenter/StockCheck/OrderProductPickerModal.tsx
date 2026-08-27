@@ -40,7 +40,7 @@ export default function OrderProductPickerModal({
   const [loading, setLoading] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<string[]>([])
   const [keyword, setKeyword] = useState('')
-  const [recentDays, setRecentDays] = useState<number | null>(null) // null=未选择(强制);-1=不限
+  const [recentDays, setRecentDays] = useState<number | null>(99999) // 默认不限(全部历史);null=未选择(强制)
 
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
@@ -86,6 +86,11 @@ export default function OrderProductPickerModal({
       })
     return () => { cancelled = true }
   }, [open, orderNo, coveredKeys])
+
+  // 关闭时重置免盘天数为默认「不限(全部历史)」
+  useEffect(() => {
+    if (!open) setRecentDays(99999)
+  }, [open])
 
   const handleCreate = () => {
     if (recentDays == null) {

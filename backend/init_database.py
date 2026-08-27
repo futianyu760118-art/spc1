@@ -130,6 +130,9 @@ class DatabaseInitializer:
         """为已有表补充新增字段（ALTER TABLE ADD COLUMN IF NOT EXISTS）"""
         print("Checking for missing columns...")
         new_columns = {
+            "sync_log": {
+                "server_id": "VARCHAR(64)",
+            },
             "sale_order": {
                 "line_no": "VARCHAR(32) NOT NULL DEFAULT ''",
                 "customer": "VARCHAR(128)",

@@ -3,10 +3,12 @@ import { Table, Button, Input, InputNumber, message, Space, Row, Col, Tabs, Tag,
 import {
   ReloadOutlined, SearchOutlined, SettingOutlined, HolderOutlined,
   DatabaseOutlined, AuditOutlined, InboxOutlined, LockOutlined,
-  FileDoneOutlined, CarOutlined, WalletOutlined,
+  FileDoneOutlined, CarOutlined, WalletOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import api from '../../services/api'
 import { useAuthStore } from '../../store/auth'
+import { useExport } from '../../hooks/useExport'
+import ExportColumnSelector, { type ExportColumnOption } from '../../components/ExportColumnSelector'
 
 interface InventoryItem {
   id: number
@@ -57,6 +59,64 @@ const priceFmt = (v: number | null | undefined) =>
 const moneyFmt = (v: number | null | undefined) =>
   v != null ? v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'
 const optList = (arr?: string[]) => (arr || []).map(v => ({ text: v, value: v }))
+
+/** 导出字段选项（key 与后端导出列一致） */
+const DETAIL_EXPORT_OPTIONS: ExportColumnOption[] = [
+  { field: 'material_code', label: '物料编码' },
+  { field: 'material_name', label: '物料名称' },
+  { field: 'wh_code', label: '仓库编码' },
+  { field: 'wh_name', label: '仓库名称' },
+  { field: 'location_name', label: '库位名称' },
+  { field: 'qty_on_hand', label: '库存量' },
+  { field: 'locked_qty', label: '锁定数量' },
+  { field: 'balance_qty', label: '结存数量' },
+  { field: 'qty_in_transit', label: '在途库存' },
+  { field: 'unit_price', label: '库存单价' },
+  { field: 'ending_balance', label: '期末余额' },
+  { field: 'batch_no', label: '批次号' },
+  { field: 'recent_checked', label: '近期已盘' },
+  { field: 'updated_at', label: '更新时间' },
+]
+
+const BYWH_EXPORT_OPTIONS: ExportColumnOption[] = [
+  { field: 'material_code', label: '物料编码' },
+  { field: 'material_name', label: '物料名称' },
+  { field: 'wh_code', label: '仓库编码' },
+  { field: 'wh_name', label: '仓库名称' },
+  { field: 'location_count', label: '库位数' },
+  { field: 'qty_on_hand', label: '库存量' },
+  { field: 'locked_qty', label: '锁定数量' },
+  { field: 'balance_qty', label: '结存数量' },
+  { field: 'qty_in_transit', label: '在途库存' },
+  { field: 'unit_price', label: '加权单价' },
+  { field: 'ending_balance', label: '期末余额' },
+  { field: 'recent_checked', label: '近期已盘' },
+]
+
+/** 实测容器高度，扣除表头/分页实测高度，得出表格体 scroll.y，保证窗口不出现滚动条 */
+function useTableScrollY(wrapRef: React.RefObject<HTMLDivElement | null>, deps: unknown[] = []) {
+  const [scrollY, setScrollY] = useState<number>(400)
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const update = () => {
+      const thead = el.querySelector('.ant-table-thead') as HTMLElement | null
+      const pag = el.querySelector('.ant-pagination') as HTMLElement | null
+      const theadH = thead ? thead.offsetHeight : 39
+      // 分页: 自身高度 + 上外距16; 卡片: 底部内边距4 + 边框2; 无分页时仅卡片部分
+      const extra = pag ? pag.offsetHeight + 16 + 4 + 2 : 4 + 2
+      const y = el.clientHeight - theadH - extra
+      setScrollY(Math.max(y, 120))
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    if (el.firstElementChild) ro.observe(el.firstElementChild as HTMLElement)
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wrapRef, ...deps])
+  return scrollY
+}
 
 function ColumnSettings({
   columns, config, onChange,
@@ -136,15 +196,17 @@ function ColumnSettings({
 }
 
 function StatSummary({
-  totals, stats,
+  totals, stats, recentDays,
 }: {
   totals: { onHand: number; locked: number; balance: number; inTransit: number; endingBalance: number }
   stats: { totalMaterials: number; countedMaterials: number }
+  recentDays: number
 }) {
   const num2 = (v: number) => v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const countedTitle = recentDays >= 99999 ? '已盘数（全部历史）' : recentDays === 0 ? '已盘数（仅当天）' : `已盘数（近${recentDays}天）`
   const cards = [
     { icon: <DatabaseOutlined />, color: '#6366f1', title: '总物料数', value: stats.totalMaterials.toLocaleString() },
-    { icon: <AuditOutlined />, color: '#16a34a', title: '已盘数', value: stats.countedMaterials.toLocaleString() },
+    { icon: <AuditOutlined />, color: '#16a34a', title: countedTitle, value: stats.countedMaterials.toLocaleString() },
     { icon: <InboxOutlined />, color: '#f59e0b', title: '库存量合计', value: num2(totals.onHand) },
     { icon: <LockOutlined />, color: '#ef4444', title: '锁定数量合计', value: num2(totals.locked) },
     { icon: <FileDoneOutlined />, color: '#0ea5e9', title: '结存数量合计', value: num2(totals.balance) },
@@ -264,7 +326,7 @@ function InventoryDetail() {
   const [data, setData] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
-  const [recentDays, setRecentDays] = useState(7)
+  const [recentDays, setRecentDays] = useState(99999) // 默认「不限（全部历史）」
   const [totals, setTotals] = useState({ onHand: 0, locked: 0, balance: 0, inTransit: 0, endingBalance: 0 })
   const [stats, setStats] = useState({ totalMaterials: 0, countedMaterials: 0 })
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
@@ -288,6 +350,10 @@ function InventoryDetail() {
     } catch { /* ignore */ }
     return { order: [], hidden: {} }
   })
+  const { exporting, exportData } = useExport()
+  const [exportColumnModalOpen, setExportColumnModalOpen] = useState(false)
+  const tableWrapRef = useRef<HTMLDivElement | null>(null)
+  const scrollY = useTableScrollY(tableWrapRef, [data.length, pagination.total])
 
   const fetchData = useCallback(async (
     page = 1,
@@ -373,6 +439,21 @@ function InventoryDetail() {
     fetchData(page, _pag.pageSize, { sort: { sort_by: sortField, sort_order: sortOrder }, filters: newFilters })
   }
 
+  const handleExportConfirm = (selectedColumns: string[]) => {
+    setExportColumnModalOpen(false)
+    const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
+    if (keyword) params.keyword = keyword
+    if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
+    if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
+    if (filters.material_code?.length) params.material_code = filters.material_code.join(',')
+    if (filters.wh_code?.length) params.wh_code = filters.wh_code.join(',')
+    if (filters.wh_name?.length) params.wh_name = filters.wh_name.join(',')
+    if (filters.batch_no?.length) params.batch_no = filters.batch_no.join(',')
+    if (filters.recent_checked?.length === 1) params.recent_checked = filters.recent_checked[0]
+    params.recent_days = recentDays
+    exportData('/api/v1/basicdata/inventory/export', params, `库存明细_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
   const allColumns = [
     { title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 120, sorter: true, filters: optList(filterOptions.material_codes), filterSearch: true },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 160, ellipsis: true, sorter: true },
@@ -408,26 +489,26 @@ function InventoryDetail() {
     .filter(Boolean)
 
   return (
-    <div>
-      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 12, flexShrink: 0 }}>
         <SearchBar
           keyword={keyword}
           setKeyword={setKeyword}
           onSearch={() => fetchData(1, pagination.pageSize)}
           onRefresh={() => fetchData(pagination.current, pagination.pageSize)}
           placeholder="搜索物料编码/名称/仓库"
-          extra={<Space><RecentDaysControl value={recentDays} onChange={setRecentDays} /><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
+          extra={<Space><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => setExportColumnModalOpen(true)}>导出</Button><RecentDaysControl value={recentDays} onChange={setRecentDays} /><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
         />
-        <StatSummary totals={totals} stats={stats} />
+        <StatSummary totals={totals} stats={stats} recentDays={recentDays} />
       </div>
 
-      <div className="card-modern" style={{ padding: '0 0 4px' }}>
+      <div ref={tableWrapRef} className="card-modern" style={{ padding: '0 0 4px', flex: 1, minHeight: 0 }}>
         <Table
           rowKey="id"
           columns={columns}
           dataSource={data}
           loading={loading}
-          scroll={{ x: 1700 }}
+          scroll={{ x: 1700, y: scrollY }}
           size="small"
           onChange={handleTableChange}
           pagination={{
@@ -438,6 +519,13 @@ function InventoryDetail() {
           }}
         />
       </div>
+
+      <ExportColumnSelector
+        open={exportColumnModalOpen}
+        columns={DETAIL_EXPORT_OPTIONS}
+        onConfirm={handleExportConfirm}
+        onCancel={() => setExportColumnModalOpen(false)}
+      />
     </div>
   )
 }
@@ -447,7 +535,7 @@ function InventoryByWarehouse() {
   const [data, setData] = useState<InventoryByWhItem[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
-  const [recentDays, setRecentDays] = useState(7)
+  const [recentDays, setRecentDays] = useState(99999) // 默认「不限（全部历史）」
   const [totals, setTotals] = useState({ onHand: 0, locked: 0, balance: 0, inTransit: 0, endingBalance: 0 })
   const [stats, setStats] = useState({ totalMaterials: 0, countedMaterials: 0 })
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
@@ -471,6 +559,10 @@ function InventoryByWarehouse() {
     } catch { /* ignore */ }
     return { order: [], hidden: {} }
   })
+  const { exporting, exportData } = useExport()
+  const [exportColumnModalOpen, setExportColumnModalOpen] = useState(false)
+  const tableWrapRef = useRef<HTMLDivElement | null>(null)
+  const scrollY = useTableScrollY(tableWrapRef, [data.length, pagination.total])
 
   const fetchData = useCallback(async (
     page = 1,
@@ -553,6 +645,20 @@ function InventoryByWarehouse() {
     fetchData(page, _pag.pageSize, { sort: { sort_by: sortField, sort_order: sortOrder }, filters: newFilters })
   }
 
+  const handleExportConfirm = (selectedColumns: string[]) => {
+    setExportColumnModalOpen(false)
+    const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
+    if (keyword) params.keyword = keyword
+    if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
+    if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
+    if (filters.material_code?.length) params.material_code = filters.material_code.join(',')
+    if (filters.wh_code?.length) params.wh_code = filters.wh_code.join(',')
+    if (filters.wh_name?.length) params.wh_name = filters.wh_name.join(',')
+    if (filters.recent_checked?.length === 1) params.recent_checked = filters.recent_checked[0]
+    params.recent_days = recentDays
+    exportData('/api/v1/basicdata/inventory/by-warehouse/export', params, `按物料仓库库存_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
   const allColumns = [
     { title: '物料编码', dataIndex: 'material_code', key: 'material_code', width: 120, sorter: true, filters: optList(filterOptions.material_codes), filterSearch: true },
     { title: '物料名称', dataIndex: 'material_name', key: 'material_name', width: 180, ellipsis: true, sorter: true },
@@ -586,26 +692,26 @@ function InventoryByWarehouse() {
     .filter(Boolean)
 
   return (
-    <div>
-      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 12, flexShrink: 0 }}>
         <SearchBar
           keyword={keyword}
           setKeyword={setKeyword}
           onSearch={() => fetchData(1, pagination.pageSize)}
           onRefresh={() => fetchData(pagination.current, pagination.pageSize)}
           placeholder="搜索物料编码/名称/仓库"
-          extra={<Space><RecentDaysControl value={recentDays} onChange={setRecentDays} /><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
+          extra={<Space><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => setExportColumnModalOpen(true)}>导出</Button><RecentDaysControl value={recentDays} onChange={setRecentDays} /><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
         />
-        <StatSummary totals={totals} stats={stats} />
+        <StatSummary totals={totals} stats={stats} recentDays={recentDays} />
       </div>
 
-      <div className="card-modern" style={{ padding: '0 0 4px' }}>
+      <div ref={tableWrapRef} className="card-modern" style={{ padding: '0 0 4px', flex: 1, minHeight: 0 }}>
         <Table
           rowKey={(r) => `${r.material_id}-${r.wh_id}`}
           columns={columns}
           dataSource={data}
           loading={loading}
-          scroll={{ x: 1300 }}
+          scroll={{ x: 1300, y: scrollY }}
           size="small"
           onChange={handleTableChange}
           pagination={{
@@ -616,6 +722,13 @@ function InventoryByWarehouse() {
           }}
         />
       </div>
+
+      <ExportColumnSelector
+        open={exportColumnModalOpen}
+        columns={BYWH_EXPORT_OPTIONS}
+        onConfirm={handleExportConfirm}
+        onCancel={() => setExportColumnModalOpen(false)}
+      />
     </div>
   )
 }
@@ -624,14 +737,17 @@ export default function Inventory() {
   const [activeKey, setActiveKey] = useState('detail')
 
   return (
-    <Tabs
-      activeKey={activeKey}
-      onChange={setActiveKey}
-      destroyInactiveTabPane
-      items={[
-        { key: 'detail', label: '库存明细（物料/仓库/库位）', children: <InventoryDetail /> },
-        { key: 'by-wh', label: '按物料/仓库统计', children: <InventoryByWarehouse /> },
-      ]}
-    />
+    <div style={{ height: 'calc(100vh - 104px)', overflow: 'hidden' }}>
+      <Tabs
+        className="inv-page-tabs"
+        activeKey={activeKey}
+        onChange={setActiveKey}
+        destroyInactiveTabPane
+        items={[
+          { key: 'detail', label: '库存明细（物料/仓库/库位）', children: <InventoryDetail /> },
+          { key: 'by-wh', label: '按物料/仓库统计', children: <InventoryByWarehouse /> },
+        ]}
+      />
+    </div>
   )
 }

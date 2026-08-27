@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional, List, Dict, Tuple
 
-from sqlalchemy import select, func, desc, or_, and_, String as SAString, text, case
+from sqlalchemy import select, func, desc, or_, and_, distinct, String as SAString, text, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -893,8 +893,7 @@ async def get_today_quick_check(
     head = (await db.execute(
         select(StockCheck)
         .where(
-            StockCheck.check_type == "manual",
-            StockCheck.title == f"{QUICK_CHECK_TITLE_PREFIX} {today.strftime('%Y-%m-%d')}",
+            StockCheck.check_type == "quick",
             StockCheck.created_by_user_id == uid,
             StockCheck.check_date == today,
             StockCheck.status.in_(("open", "in_progress")),
@@ -912,6 +911,55 @@ async def get_today_quick_check(
     return head, items
 
 
+async def _close_stale_quick_checks(db: AsyncSession, current_user: dict) -> None:
+    """懒清理: 完结本人之前日期遗留的进行中快捷盘点单。
+
+    - 有明细的单 → 完结(快捷单的行只能经 quick_count_material 写入,均为已盘,满足完结条件);
+    - 明细被删空的单 → 取消(空单无法完结)。
+    仅在建当日新快捷单前调用,只处理本人单据,无跨用户影响。
+    """
+    uid = _current_user_id(current_user)
+    if uid is None:
+        return
+    today = date.today()
+    stale = list((await db.execute(
+        select(StockCheck)
+        .where(
+            StockCheck.check_type == "quick",
+            StockCheck.created_by_user_id == uid,
+            StockCheck.check_date < today,
+            StockCheck.status.in_(("open", "in_progress")),
+        )
+        .order_by(StockCheck.id)
+        .with_for_update(skip_locked=True)
+    )).scalars().all())
+    username = current_user.get("username", "") if current_user else ""
+    for head in stale:
+        item_cnt = (await db.execute(
+            select(func.count(StockCheckItem.id)).where(StockCheckItem.check_id == head.id)
+        )).scalar_one()
+        if int(item_cnt or 0) > 0:
+            head.status = "completed"
+            head.completed_at = datetime.now()
+            head.checked_by = username
+        else:
+            head.status = "cancelled"
+        head.version = int(head.version or 0) + 1
+        await db.flush()
+        await publish_event(
+            head.id,
+            "status_changed",
+            {
+                "check_id": head.id,
+                "status": head.status,
+                "head_version": int(head.version or 0),
+                "checked_by": head.checked_by,
+                "completed_at": head.completed_at.isoformat() if head.completed_at else None,
+            },
+            uid,
+        )
+
+
 async def quick_count_material(
     db: AsyncSession,
     current_user: dict,
@@ -921,8 +969,8 @@ async def quick_count_material(
 ) -> Tuple[StockCheck, StockCheckItem]:
     """快捷盘点: 找到/创建当前用户当日的快捷盘点单,把 (物料,仓库) 行加入并直接录入实盘数。
 
-    - 单据识别: check_type='manual' + title=「快捷盘点 YYYY-MM-DD」+ created_by_user_id=当前用户
-      + check_date=今天 + status in open/in_progress(精确标题匹配,避免误复用普通手动单)。
+    - 单据识别: check_type='quick' + created_by_user_id=当前用户
+      + check_date=今天 + status in open/in_progress(每人每日一张,复用当日单)。
     - 行已存在则覆盖录入(重盘),不存在则新增行(快照取当前即时库存)。
     - 并发竞态(同一人同刻两次首发建单)极小概率产生两张当日单,后续会复用先建的那张,可接受。
     """
@@ -935,8 +983,7 @@ async def quick_count_material(
         head = (await db.execute(
             select(StockCheck)
             .where(
-                StockCheck.check_type == "manual",
-                StockCheck.title == title,
+                StockCheck.check_type == "quick",
                 StockCheck.created_by_user_id == uid,
                 StockCheck.check_date == today,
                 StockCheck.status.in_(("open", "in_progress")),
@@ -947,12 +994,14 @@ async def quick_count_material(
             .with_for_update()
         )).scalar_one_or_none()
     if head is None:
+        # 懒清理: 之前日期遗留的进行中快捷单自动完结/取消,避免永久挂在进行中
+        await _close_stale_quick_checks(db, current_user)
         seq = await _next_seq_for_today(db)
         head = StockCheck(
             check_no=_gen_check_no(seq),
             order_no=None,
             title=title,
-            check_type="manual",
+            check_type="quick",
             status="in_progress",
             check_date=today,
             created_by=current_user.get("username", "") if current_user else "",
@@ -1086,6 +1135,43 @@ async def remove_item_from_check(
         raise ValueError(f"已{head.status}的盘点单不能移除明细")
     if item.is_checked or item.actual_qty is not None:
         raise ValueError("该行已录入盘点数据,请先取消标记/清空实盘数再移除")
+    await db.delete(item)
+    await db.flush()
+    await _refresh_check_aggregates(db, head.id)
+    head.version = int(head.version or 0) + 1
+    await db.flush()
+    await publish_event(
+        head.id,
+        "bom_refreshed",
+        {"check_id": head.id, "head_version": int(head.version or 0), "new_item_ids": []},
+        _current_user_id(current_user),
+    )
+    return head
+
+
+async def remove_quick_count_item(
+    db: AsyncSession,
+    item_id: int,
+    current_user: dict,
+) -> StockCheck:
+    """快捷盘点: 移除当日快捷盘点单中的一条已录入明细。
+
+    与通用 remove_item_from_check 的区别: 快捷盘点的行全部已录入实盘数,
+    因此不做 is_checked/actual_qty 校验, 但收紧为仅限 check_type='quick'
+    的进行中单据(创建人/共同盘点人/管理员)。
+    """
+    item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id).with_for_update())).scalar_one_or_none()
+    if not item:
+        raise ValueError(f"盘点行 {item_id} 不存在")
+    head = (await db.execute(select(StockCheck).where(StockCheck.id == item.check_id).with_for_update())).scalar_one_or_none()
+    if not head:
+        raise ValueError(f"盘点单 {item.check_id} 不存在")
+    if not _user_can_edit(head, current_user):
+        raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
+    if head.check_type != "quick":
+        raise ValueError("仅快捷盘点单支持移除已录入明细")
+    if head.status in ("completed", "cancelled"):
+        raise ValueError(f"已{head.status}的盘点单不能移除明细")
     await db.delete(item)
     await db.flush()
     await _refresh_check_aggregates(db, head.id)
@@ -1261,6 +1347,9 @@ async def list_counted_materials_ledger(
     material_code: Optional[str] = None,
     material_name: Optional[str] = None,
     spec_model: Optional[str] = None,
+    only_mine: bool = False,
+    diff_only: bool = False,
+    current_user_id: Optional[int] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
 ) -> Tuple[int, List[Dict]]:
@@ -1269,6 +1358,8 @@ async def list_counted_materials_ledger(
     只统计 actual_qty 非空 且盘点单未取消的盘点行;
     wh_id 接受数字(精确 wh_id)或字符串(wh_name 模糊); 筛选在 ROW_NUMBER 之前,
     即「筛选范围内每组最近一次已盘点记录」。
+    only_mine(需传 current_user_id)按最后录入人过滤; diff_only 仅保留差异行;
+    两者同样作用于 ROW_NUMBER 之前,即「过滤后每组最近一条」。
     sort_by/sort_order 走 CTE 别名的白名单; 默认 material_code / wh_name / material_id。
     返回 (total, [dict, ...])。
     """
@@ -1333,6 +1424,13 @@ async def list_counted_materials_ledger(
     if spec_model:
         params["sm_like"] = f"%{spec_model}%"
         conds.append("ic.spec_model ILIKE :sm_like")
+    if only_mine and current_user_id is not None:
+        # 仅当前用户盘点过的行(按最后录入实盘数的人过滤)
+        params["mine_uid"] = int(current_user_id)
+        conds.append("ic.counted_by_user_id = :mine_uid")
+    if diff_only:
+        # 仅差异行; diff_qty 为 NULL 的旧数据行天然被 <> 0 排除
+        conds.append("ic.diff_qty <> 0")
     if status:
         statuses = [s.strip() for s in status if s and s.strip()]
         if statuses:
@@ -1360,6 +1458,7 @@ WITH ranked AS (
         ic.wh_name             AS wh_name,
         ic.system_qty          AS system_qty,
         ic.system_qty_time     AS system_qty_time,
+        ic.req_qty             AS req_qty,
         ic.actual_qty          AS actual_qty,
         ic.diff_qty            AS diff_qty,
         ic.counted_by          AS counted_by,
@@ -1410,6 +1509,7 @@ WITH ranked AS (
             "wh_name": r.wh_name or "(未入库)",
             "system_qty": r.system_qty,
             "system_qty_time": r.system_qty_time,
+            "req_qty": r.req_qty,
             "actual_qty": r.actual_qty,
             "diff_qty": r.diff_qty,
             "counted_by": r.counted_by,
@@ -1459,15 +1559,27 @@ async def update_stock_check_item(
     expected_version: Optional[int] = None,
     current_user: Optional[dict] = None,
     live_cache: Optional[Dict[Tuple[int, Optional[int]], Tuple[Decimal, Optional[datetime]]]] = None,
+    head: Optional[StockCheck] = None,
+    defer_aggregates_and_publish: bool = False,
 ) -> StockCheckItem:
+    """更新单个盘点行。
+
+    - head: 批量场景传入预锁定/预校验的头表对象,跳过逐行的头表锁与权限校验。
+    - defer_aggregates_and_publish: 批量场景置 True,聚合刷新与 SSE 事件由调用方
+      在循环结束后统一执行一次(避免 N 行 × (2 次聚合查询 + 1 次 Redis 连接))。
+    """
     item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id).with_for_update())).scalar_one_or_none()
     if not item:
         raise ValueError(f"盘点行 {item_id} 不存在")
     # 状态守卫(修场景 8):已完结/取消的单子不允许再改行
-    head_for_guard = (await db.execute(select(StockCheck).where(StockCheck.id == item.check_id).with_for_update())).scalar_one_or_none()
+    if head is not None:
+        head_for_guard = head
+    else:
+        head_for_guard = (await db.execute(select(StockCheck).where(StockCheck.id == item.check_id).with_for_update())).scalar_one_or_none()
     if head_for_guard and head_for_guard.status in ("completed", "cancelled"):
         raise StockCheckPermissionError(f"盘点单已{head_for_guard.status},不可修改")
-    await _assert_can_edit(db, item.check_id, current_user)
+    if head is None:
+        await _assert_can_edit(db, item.check_id, current_user)
     # 乐观锁校验(with_for_update 已保证此处读到的 version 是已锁行的最新值)
     if expected_version is not None and int(item.version or 0) != int(expected_version):
         raise StockCheckConflictError("item", int(item.version or 0), _serialize_item(item))
@@ -1530,6 +1642,9 @@ async def update_stock_check_item(
     elif actual_qty_provided:
         item.diff_qty = Decimal("0")
     item.version = int(item.version or 0) + 1
+    if defer_aggregates_and_publish:
+        # 批量模式:聚合刷新与事件发布由调用方统一执行(序列化读取内存属性即可)
+        return item
     await _refresh_check_aggregates(db, item.check_id)
     await db.flush()
     # 发布事件(全量快照 payload:完整 item + 头 aggregates)
@@ -1560,14 +1675,25 @@ async def batch_update_items(
     items: List[dict],
     current_user: dict,
 ) -> int:
+    payloads = [it for it in items if it.get("id") is not None]
+    if not payloads:
+        return 0
+    # 头表只锁一次 + 状态守卫 + 权限校验一次(替代逐行重复 3 次头表查询)
+    head = (await db.execute(
+        select(StockCheck).where(StockCheck.id == check_id).with_for_update()
+    )).scalar_one_or_none()
+    if not head:
+        raise ValueError(f"盘点单 {check_id} 不存在")
+    if head.status in ("completed", "cancelled"):
+        raise StockCheckPermissionError(f"盘点单已{head.status},不可修改")
+    if not _user_can_edit(head, current_user):
+        raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
     # 预取待首次录入行的实时库存,避免逐行查询
-    ids = [int(it["id"]) for it in items if it.get("id") is not None]
+    ids = [int(it["id"]) for it in payloads]
     live_cache = await _build_live_freeze_cache(db, ids)
-    n = 0
-    for it in items:
-        if it.get("id") is None:
-            continue
-        await update_stock_check_item(
+    updated: List[StockCheckItem] = []
+    for it in payloads:
+        item = await update_stock_check_item(
             db,
             int(it["id"]),
             actual_qty=it.get("actual_qty"),
@@ -1578,9 +1704,36 @@ async def batch_update_items(
             expected_version=it.get("expected_version"),
             current_user=current_user,
             live_cache=live_cache,
+            head=head,
+            defer_aggregates_and_publish=True,
         )
-        n += 1
-    return n
+        updated.append(item)
+    # 聚合只刷一次(内部 autoflush 会把行变更落库后再聚合)
+    await _refresh_check_aggregates(db, check_id)
+    await db.flush()
+    # 一次 Redis 连接发一个批量事件(替代 N 个 item_updated)
+    await publish_event(
+        check_id,
+        "items_batch_updated",
+        {
+            "check_id": check_id,
+            "items": [
+                {
+                    "item_id": it.id,
+                    "version": int(it.version or 0),
+                    "item": _serialize_item(it),
+                }
+                for it in updated
+            ],
+            "head_aggregates": {
+                "checked_materials": int(head.checked_materials or 0),
+                "total_materials": int(head.total_materials or 0),
+                "total_diff_qty": float(head.total_diff_qty or 0),
+            },
+        },
+        _current_user_id(current_user),
+    )
+    return len(updated)
 
 
 async def complete_stock_check(
@@ -2079,6 +2232,7 @@ async def list_recent_stock_checks(
         'checked_materials': StockCheck.checked_materials,
         'total_diff_qty': StockCheck.total_diff_qty,
         'created_at': StockCheck.created_at,
+        'updated_at': StockCheck.updated_at,
     }
     query = select(StockCheck)
     if keyword:
@@ -2252,6 +2406,64 @@ async def get_stock_check_stats(
     }
 
 
+async def get_stock_check_kpi(db: AsyncSession) -> Dict:
+    """盘点台账页 KPI 行(全局汇总,不带筛选):
+    状态分布 / 本周新增(按类型) / 待处理盈亏行数 / 近期已盘免盘窗口内已盘物料数。纯 SQL 聚合,无写入。"""
+    # 1) 状态分布(四个状态键缺省补 0)
+    status_counts = {k: 0 for k in ("open", "in_progress", "completed", "cancelled")}
+    status_rows = (await db.execute(
+        select(StockCheck.status, func.count()).group_by(StockCheck.status)
+    )).all()
+    for r in status_rows:
+        if r.status in status_counts:
+            status_counts[r.status] = int(r[1] or 0)
+
+    # 2) 本周新增(本周一 00:00 起):按 check_type 分组;source='k3' 的归并到 'k3' 键
+    week_start = datetime.combine(
+        date.today() - timedelta(days=date.today().weekday()),
+        datetime.min.time(),
+    )
+    week_rows = (await db.execute(
+        select(StockCheck.check_type, StockCheck.source, func.count())
+        .where(StockCheck.created_at >= week_start)
+        .group_by(StockCheck.check_type, StockCheck.source)
+    )).all()
+    week_new_by_type: Dict[str, int] = {"order": 0, "manual": 0, "quick": 0, "k3": 0}
+    week_new_checks = 0
+    for r in week_rows:
+        cnt = int(r[2] or 0)
+        week_new_checks += cnt
+        key = "k3" if r.source == "k3" else r.check_type
+        if key in week_new_by_type:
+            week_new_by_type[key] += cnt
+
+    # 3) 盈/亏行数: 复用盘盈盘亏统计(无筛选,已排除已取消单)
+    stats = await get_stock_check_stats(db)
+
+    # 4) 近期已盘免盘窗口内有 counted_at 的去重物料数(排除已取消单);窗口天数取配置
+    recent_days = int(get_settings().STOCK_CHECK_RECENT_SKIP_DAYS)
+    window_start = datetime.now() - timedelta(days=recent_days)
+    recent_checked = (await db.execute(
+        select(func.count(distinct(StockCheckItem.material_id)))
+        .join(StockCheck, StockCheck.id == StockCheckItem.check_id)
+        .where(
+            StockCheckItem.counted_at >= window_start,
+            StockCheckItem.material_id.isnot(None),
+            StockCheck.status != "cancelled",
+        )
+    )).scalar() or 0
+
+    return {
+        "status_counts": status_counts,
+        "in_progress_checks": status_counts["in_progress"],
+        "week_new_checks": week_new_checks,
+        "week_new_by_type": week_new_by_type,
+        "pending_gain_count": stats["gain_count"],
+        "pending_loss_count": stats["loss_count"],
+        "recent7_checked_materials": int(recent_checked),
+    }
+
+
 async def list_my_stock_check_items(
     db: AsyncSession,
     user_id: int,
@@ -2397,3 +2609,35 @@ async def list_my_stock_check_items(
             "recent_checked_date": it.recent_checked_date,
         })
     return int(total), items
+
+
+async def attach_list_extras(db: AsyncSession, rows: List[StockCheck]) -> None:
+    """为列表行补充 盈/亏行数 与 协同人姓名(写回 ORM 对象的运行时属性)。"""
+    ids = [r.id for r in rows]
+    if not ids:
+        return
+    # 盈亏计数: 仅 is_checked=1 且 diff_qty 非空
+    res = await db.execute(
+        select(
+            StockCheckItem.check_id,
+            func.sum(case((StockCheckItem.diff_qty > 0, 1), else_=0)).label('gain'),
+            func.sum(case((StockCheckItem.diff_qty < 0, 1), else_=0)).label('loss'),
+        )
+        .where(
+            StockCheckItem.check_id.in_(ids),
+            StockCheckItem.is_checked == 1,
+            StockCheckItem.diff_qty.isnot(None),
+        )
+        .group_by(StockCheckItem.check_id)
+    )
+    gain_map = {r.check_id: (int(r.gain or 0), int(r.loss or 0)) for r in res.all()}
+    # 协同人姓名: 复用 _resolve_user_names,按批缓存避免重复查询
+    name_cache: Dict[int, str] = {}
+    for r in rows:
+        g = gain_map.get(r.id, (0, 0))
+        r.gain_count, r.loss_count = g
+        uids = (r.co_checker_user_ids or [])
+        need = [u for u in uids if u not in name_cache]
+        if need:
+            name_cache.update(await _resolve_user_names(db, need))
+        r.co_checkers = [{"user_id": u, "name": name_cache.get(u, f"user#{u}")} for u in uids]

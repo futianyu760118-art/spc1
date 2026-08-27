@@ -54,6 +54,8 @@ export default function RecentDaysPicker({ value, onChange, required = false }: 
           status={required && !filled ? 'error' : undefined}
           style={{ width: 200 }}
           options={options}
+          // 弹层挂到自身父容器: 随弹窗内容一起滚动,避免 Modal 滚动时下拉列表漂移/消失
+          getPopupContainer={(node) => node.parentElement}
           onSelect={(v) => onChange(Number(v))}
           onSearch={(text) => {
             const t = text.replace(/[^\d]/g, '')

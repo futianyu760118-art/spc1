@@ -98,6 +98,7 @@ class StockCheckCountedItemOut(BaseModel):
     wh_name: Optional[str] = None
     system_qty: Optional[Decimal] = None
     system_qty_time: Optional[datetime] = None
+    req_qty: Optional[Decimal] = None
     actual_qty: Optional[Decimal] = None
     diff_qty: Optional[Decimal] = None
     counted_by: Optional[str] = None
@@ -217,6 +218,11 @@ class StockCheckListOut(BaseModel):
     erp_bill_no: Optional[str] = None
     covered_products: Optional[List[Dict[str, Any]]] = None
     co_checker_user_ids: Optional[List[int]] = None
+    updated_at: Optional[datetime] = None
+    # 以下为运行时计算字段(attach_list_extras 写回)
+    gain_count: Optional[int] = None      # 已盘行 diff_qty>0 数
+    loss_count: Optional[int] = None      # 已盘行 diff_qty<0 数
+    co_checkers: Optional[List[Dict[str, Any]]] = None  # [{user_id, name}]
 
     model_config = {"from_attributes": True}
 
@@ -287,6 +293,17 @@ class StockCheckStats(BaseModel):
     total_gain_qty: float
     total_loss_qty: float
     top_diff_materials: List[TopDiffMaterial] = []
+
+
+class StockCheckKpi(BaseModel):
+    """盘点台账页 KPI 行(全局,不带筛选)"""
+    status_counts: Dict[str, int]          # {open, in_progress, completed, cancelled} 缺省补 0
+    in_progress_checks: int                # status='in_progress' 数
+    week_new_checks: int                   # created_at >= 本周一 00:00 的单数
+    week_new_by_type: Dict[str, int]       # 键: order/manual/quick/k3(k3=source='k3' 的单)
+    pending_gain_count: int                # 已盘行 diff>0 总数(排除已取消单)
+    pending_loss_count: int
+    recent7_checked_materials: int         # 7 日内有 counted_at 的去重 material_id 数(排除已取消单)
 
 
 class StockCheckConflictOut(BaseModel):

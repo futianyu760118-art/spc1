@@ -4,7 +4,7 @@ import json
 from datetime import date
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,7 @@ from app.schemas.material.stock_check import (
     MaterialCandidateOut,
     StockCheckCountedItemOut,
     StockCheckStats,
+    StockCheckKpi,
     StockCheckMyItemOut,
     StockCheckConflictOut,
     StockCheckActionBody,
@@ -38,6 +39,7 @@ from app.schemas.material.stock_check import (
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.material.stock_check_service import (
+    attach_list_extras,
     create_stock_check_from_order,
     create_stock_check_from_materials,
     list_material_candidates,
@@ -53,6 +55,7 @@ from app.services.material.stock_check_service import (
     add_items_to_check,
     quick_count_material,
     get_today_quick_check,
+    remove_quick_count_item,
     remove_item_from_check,
     get_stock_check_with_items,
     list_recent_stock_checks,
@@ -62,6 +65,7 @@ from app.services.material.stock_check_service import (
     enrich_items_assoc,
     enrich_live_qty,
     get_stock_check_stats,
+    get_stock_check_kpi,
     list_my_stock_check_items,
     _user_can_edit,
     _current_user_id,
@@ -216,13 +220,15 @@ async def list_counted_materials_view(
     wh_id: Optional[str] = Query(None, description="仓库ID(int)或名称(string)"),
     date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
     date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
-    check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
+    check_type: Optional[str] = Query(None, description="盘点类型:order/manual/quick"),
     status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed)"),
     check_no: Optional[str] = Query(None, description="盘点单号模糊匹配"),
     counted_by: Optional[str] = Query(None, description="盘点人模糊匹配"),
     material_code: Optional[str] = Query(None, description="物料编码模糊匹配"),
     material_name: Optional[str] = Query(None, description="物料名称模糊匹配"),
     spec_model: Optional[str] = Query(None, description="规格型号模糊匹配"),
+    only_mine: Optional[bool] = Query(False, description="仅当前用户盘点过的行"),
+    diff_only: Optional[bool] = Query(False, description="仅差异行(diff_qty != 0)"),
     sort_by: Optional[str] = Query(None, description="排序字段:material_code/material_name/spec_model/unit/wh_name/system_qty/actual_qty/diff_qty/check_no/check_date/counted_by/counted_at/status"),
     sort_order: Optional[str] = Query(None, description="排序方向:asc/desc"),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
@@ -245,6 +251,9 @@ async def list_counted_materials_view(
         material_code=material_code,
         material_name=material_name,
         spec_model=spec_model,
+        only_mine=bool(only_mine),
+        diff_only=bool(diff_only),
+        current_user_id=_current_user_id(current_user),
         sort_by=sort_by,
         sort_order=sort_order,
     )
@@ -272,11 +281,11 @@ async def recent(
     page_size: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = Query(None, description="搜索盘点单号/订单号/标题"),
     status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed/cancelled)"),
-    check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
+    check_type: Optional[str] = Query(None, description="盘点类型:order/manual/quick"),
     source: Optional[str] = Query(None, description="数据来源:k3/manual"),
     date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
     date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
-    sort_by: Optional[str] = Query(None, description="排序字段:check_no/order_no/check_date/total_materials/checked_materials/total_diff_qty/created_at"),
+    sort_by: Optional[str] = Query(None, description="排序字段:check_no/order_no/check_date/total_materials/checked_materials/total_diff_qty/created_at/updated_at"),
     sort_order: Optional[str] = Query(None, description="asc/desc,默认 desc"),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
     db: AsyncSession = Depends(get_db),
@@ -295,6 +304,7 @@ async def recent(
         sort_by=sort_by,
         sort_order=sort_order,
     )
+    await attach_list_extras(db, rows)
     filter_query = select(StockCheck)
     if keyword:
         like = f"%{keyword}%"
@@ -351,7 +361,7 @@ async def list_my_items(
     date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
     date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
     check_no: Optional[str] = Query(None, description="盘点单号模糊匹配"),
-    check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
+    check_type: Optional[str] = Query(None, description="盘点类型:order/manual/quick"),
     status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed)"),
     order_no: Optional[str] = Query(None, description="订单号模糊匹配"),
     material_code: Optional[str] = Query(None, description="物料编码模糊匹配"),
@@ -397,7 +407,7 @@ async def list_my_items(
 
 @router.get("/stock-check/stats", response_model=ResponseModel[StockCheckStats])
 async def stock_check_stats(
-    check_type: Optional[str] = Query(None, description="盘点类型:order/manual"),
+    check_type: Optional[str] = Query(None, description="盘点类型:order/manual/quick"),
     date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
     date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
     status: Optional[str] = Query(None, description="状态筛选,逗号分隔(open/in_progress/completed);cancelled 始终排除"),
@@ -414,6 +424,15 @@ async def stock_check_stats(
         status=statuses,
     )
     return ResponseModel(data=StockCheckStats(**data))
+
+
+@router.get("/stock-check/kpi", response_model=ResponseModel[StockCheckKpi])
+async def stock_check_kpi(
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """盘点台账页 KPI 行(全局汇总,不带筛选)。"""
+    return ResponseModel(data=StockCheckKpi(**await get_stock_check_kpi(db)))
 
 
 @router.get("/stock-check/{check_id}", response_model=ResponseModel[StockCheckOut])
@@ -732,6 +751,113 @@ async def quick_count_today(
             for it in items
         ],
     })
+
+
+@router.delete("/stock-check/quick-count/items/{item_id}", response_model=ResponseModel[dict])
+async def quick_count_remove_item(
+    item_id: int,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """快捷盘点: 移除当日快捷盘点单中的一条已录入明细(仅限本人进行中的快捷单)。"""
+    try:
+        head = await remove_quick_count_item(db, item_id, current_user)
+    except StockCheckPermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ResponseModel(data={"removed": True, "check_id": head.id})
+
+
+@router.get("/stock-check/quick-count/import-template")
+async def quick_count_import_template(
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+):
+    """快捷盘点 Excel 导入模板下载。"""
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    from app.services.material.stock_check_excel_import import build_import_template
+
+    content = build_import_template()
+    filename = quote("快捷盘点导入模板.xlsx")
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
+
+
+@router.post("/stock-check/quick-count/import-preview", response_model=ResponseModel[dict])
+async def quick_count_import_preview(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+):
+    """快捷盘点: Excel 导入前预览 — 只解析文件,返回各盘点日期的行数分布,
+    前端据此渲染日期勾选。不做任何 DB 校验/写入。"""
+    from fastapi.responses import JSONResponse
+
+    from app.services.material.stock_check_excel_import import (
+        summarize_dates,
+        parse_quick_import_excel,
+    )
+
+    try:
+        rows = parse_quick_import_excel(await file.read())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not rows:
+        raise HTTPException(status_code=400, detail="文件中没有数据行")
+    return ResponseModel(data={"total": len(rows), "dates": summarize_dates(rows)})
+
+
+@router.post("/stock-check/quick-count/import", response_model=ResponseModel[dict])
+async def quick_count_import(
+    file: UploadFile = File(...),
+    dates: str = Form("", description="逗号分隔 ISO 日期;留空=只导今日"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """快捷盘点: Excel 批量导入到当前用户当日快捷单(全部成功或全部回滚)。
+
+    dates: 逗号分隔的 ISO 日期列表(导入预览中勾选的日期);
+    留空=只导入今日(含未填日期行)。所选日期的数据均并入今日单。
+    校验失败返回 HTTP 200 + code=1 + data.errors(行级错误,全部给出);
+    前端请求带 skipErrorToast,由弹窗渲染错误列表。
+    """
+    from datetime import date as _date
+
+    from fastapi.responses import JSONResponse
+
+    from app.services.material.stock_check_excel_import import (
+        ExcelImportValidationError,
+        import_quick_count_excel,
+    )
+
+    selected_dates = None
+    if dates and dates.strip():
+        selected_dates = []
+        for token in dates.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                selected_dates.append(_date.fromisoformat(token))
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"日期参数无效: {token}")
+
+    try:
+        result = await import_quick_count_excel(db, current_user, file, selected_dates)
+    except ExcelImportValidationError as e:
+        return JSONResponse(status_code=200, content={
+            "code": 1,
+            "message": f"导入失败,共 {len(e.errors)} 处错误,未导入任何数据",
+            "data": {"errors": e.errors},
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ResponseModel(data=result)
 
 
 @router.post("/stock-check/{check_id}/items", response_model=ResponseModel[dict])

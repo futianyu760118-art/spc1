@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.core.config import get_settings
+from app.core.config import get_settings, get_server_identity
 from app.api.v1 import api_router
 from app.services.basicdata.sync_scheduler import scheduler  # noqa: F401
 from app.services.exception.risk_scheduler import risk_scheduler  # noqa: F401
@@ -101,12 +101,17 @@ async def lifespan(app: FastAPI):
                 await cleanup_deprecated_permissions(db)
             except Exception as e:
                 logger.warning(f"[权限注册] 清理废弃权限失败: {e}")
-            # 清理上次未完成的同步任务（服务重启导致的僵尸 running/pending 任务）
+            # 清理上次未完成的同步任务（服务重启导致的僵尸 running/pending 任务）。
+            # 仅清理本实例（按 server_id）的任务：多实例共用一个库时，
+            # 不能把其它实例正在执行的任务误标为失败。
             try:
                 from sqlalchemy import update, select
                 from app.models.basicdata.sync_log import SyncLog
                 stale = await db.execute(
-                    select(SyncLog).where(SyncLog.status.in_(("pending", "running")))
+                    select(SyncLog).where(
+                        SyncLog.status.in_(("pending", "running")),
+                        SyncLog.server_id == get_server_identity(),
+                    )
                 )
                 for log in stale.scalars():
                     log.status = "failed"

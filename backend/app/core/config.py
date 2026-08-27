@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # 远程 DB 空闲连接会被防火墙/NAT 静默掐断(无 RST),必须 recycle+pre_ping 双保险
     DB_POOL_RECYCLE: int = 180
 
+    # 后端服务实例标识（同步日志溯源）；空则回退 hostname
+    SERVER_ID: str = ""
+
     # ERP 中间库连接（只读）
     ERP_DB_URL: str = ""  # e.g. "mssql+pyodbc://user:pass@host/erp_db?driver=ODBC+Driver+17+for+SQL+Server"
     ERP_DB_SCHEMA: str = "dbo"  # ERP 中间表所在 schema
@@ -113,3 +116,9 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def get_server_identity() -> str:
+    """后端服务实例标识：SERVER_ID 优先，未配置回退 hostname（Docker 内为容器ID）"""
+    import socket
+    return get_settings().SERVER_ID or socket.gethostname()

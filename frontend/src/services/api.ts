@@ -125,12 +125,13 @@ export default api
 
 // ============ Auth (基础数据与集成中心) ============
 export const authApi = {
-  login: (username: string, password: string, loginType: 'employee' | 'supplier' = 'employee', channel?: string) => {
+  login: (username: string, password: string, loginType: 'employee' | 'supplier' = 'employee', channel?: string, rememberMe?: boolean) => {
     const formData = new URLSearchParams()
     formData.append('username', username)
     formData.append('password', password)
     formData.append('login_type', loginType)
     if (channel) formData.append('channel', channel)
+    if (rememberMe) formData.append('remember_me', 'true')
     return api.post('/basicdata/auth/login', formData, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       skipErrorToast: true,
@@ -290,6 +291,7 @@ export const materialApi = {
     api.get('/materials/stock-check/my-items', { params }),
   getStockCheckStats: (params: { check_type?: string; date_from?: string; date_to?: string; status?: string } = {}) =>
     api.get('/materials/stock-check/stats', { params }),
+  getStockCheckKpi: () => api.get('/materials/stock-check/kpi'),
   getStockChecksByOrder: (orderNo: string) =>
     api.get(`/materials/stock-check/by-order/${orderNo}`),
   getStockCheck: (checkId: number) =>
@@ -328,6 +330,10 @@ export const materialApi = {
     date_from?: string
     date_to?: string
     check_type?: string
+    only_mine?: boolean
+    diff_only?: boolean
+    sort_by?: string
+    sort_order?: 'asc' | 'desc'
     page?: number
     page_size?: number
   } = {}) => api.get('/materials/stock-check/counted-ledger', { params }),
@@ -365,6 +371,17 @@ export const materialApi = {
   }) => api.post('/materials/stock-check/quick-count', data),
   getTodayQuickCheck: () =>
     api.get('/materials/stock-check/quick-count/today'),
+  removeQuickCountItem: (itemId: number) =>
+    api.delete(`/materials/stock-check/quick-count/items/${itemId}`),
+  importQuickCountExcel: (file: File, dates?: string[]) => {
+    const fd = new FormData(); fd.append('file', file)
+    if (dates?.length) fd.append('dates', dates.join(','))
+    return api.post('/materials/stock-check/quick-count/import', fd, { skipErrorToast: true })
+  },
+  previewQuickCountExcel: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/materials/stock-check/quick-count/import-preview', fd, { skipErrorToast: true })
+  },
   removeStockCheckItem: (itemId: number) =>
     api.delete(`/materials/stock-check/items/${itemId}`),
   // K3 盘盈盘亏单导入
