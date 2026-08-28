@@ -18,9 +18,9 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/api/v1"
 
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://root:123456@192.168.0.127:5432/spc_db"
-    DATABASE_URL_SYNC: str = "postgresql+psycopg2://root:123456@192.168.0.127:5432/spc_db"
+    # Database（默认值仅为占位符；真实连接串必须由 .env / 环境变量注入）
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/spc_db"
+    DATABASE_URL_SYNC: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/spc_db"
     # 远程 DB 空闲连接会被防火墙/NAT 静默掐断(无 RST),必须 recycle+pre_ping 双保险
     DB_POOL_RECYCLE: int = 180
 

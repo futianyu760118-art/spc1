@@ -11,7 +11,7 @@ import ShipmentBoard from './components/ShipmentBoard'
 import { dashboardApi, riskApi } from '../../services/api'
 import './dashboard.css'
 
-type DashboardTab = 'today' | 'special'
+type DashboardTab = 'today' | 'procurement' | 'shipment'
 
 const REFRESH_INTERVAL = 30 * 60 * 1000
 
@@ -159,28 +159,35 @@ export default function Dashboard() {
           <div className={`tab ${activeTab === 'today' ? 'active' : ''}`} onClick={() => setActiveTab('today')}>
             今日总览
           </div>
-          <div className={`tab ${activeTab === 'special' ? 'active' : ''}`} onClick={() => setActiveTab('special')}>
-            专项看板<span className="n">采购 · 发货</span>
+          <div className={`tab ${activeTab === 'procurement' ? 'active' : ''}`} onClick={() => setActiveTab('procurement')}>
+            采购看板
+          </div>
+          <div className={`tab ${activeTab === 'shipment' ? 'active' : ''}`} onClick={() => setActiveTab('shipment')}>
+            出货计划看板
           </div>
           <div className="toolbar">
-            <span className="meta">数据截至 {lastUpdated ?? '—'} · 每 30 分钟刷新</span>
+            {activeTab === 'today' && (
+              <>
+                <span className="meta">数据截至 {lastUpdated ?? '—'} · 每 30 分钟刷新</span>
+                <button
+                  className={`icon-btn ${refreshing ? 'spinning' : ''}`}
+                  title="刷新"
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+                    <path d="M20 12a8 8 0 1 1-2.5-5.8" />
+                    <path d="M20 3.5V8h-4.5" />
+                  </svg>
+                </button>
+              </>
+            )}
             <button className="btn btn-secondary btn-sm" onClick={handleScan} disabled={scanning}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
                 <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
                 <path d="M4 12h16" />
               </svg>
               {scanning ? '扫描中…' : '立即扫描'}
-            </button>
-            <button
-              className={`icon-btn ${refreshing ? 'spinning' : ''}`}
-              title="刷新"
-              onClick={handleRefresh}
-              disabled={refreshing}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
-                <path d="M20 12a8 8 0 1 1-2.5-5.8" />
-                <path d="M20 3.5V8h-4.5" />
-              </svg>
             </button>
           </div>
         </div>
@@ -216,27 +223,10 @@ export default function Dashboard() {
             </div>
           </div>
         </>
+      ) : activeTab === 'procurement' ? (
+        <ProcurementBoard />
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div className="card">
-            <div className="card-head">
-              <h3>采购看板</h3>
-              <span className="hint">7 日备料白板</span>
-            </div>
-            <div className="card-body p0" style={{ padding: 12 }}>
-              <ProcurementBoard />
-            </div>
-          </div>
-          <div className="card">
-            <div className="card-head">
-              <h3>出货计划看板</h3>
-              <span className="hint">已逾期 + 今日</span>
-            </div>
-            <div className="card-body p0" style={{ padding: 12 }}>
-              <ShipmentBoard />
-            </div>
-          </div>
-        </div>
+        <ShipmentBoard />
       )}
     </div>
   )

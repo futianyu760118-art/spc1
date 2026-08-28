@@ -1,7 +1,12 @@
 """调价单模块 - 数据库表创建（独立于排产系统）"""
+import os
+
 import psycopg2
 
-CONN = 'postgresql://root:123456@183.134.254.14:15432/spc_db'
+# 连接串从环境变量注入（与根目录 .env 的 DATABASE_URL_SYNC 一致），不再硬编码凭据
+CONN = os.environ.get(
+    "DATABASE_URL_SYNC", "postgresql://postgres:postgres@localhost:5432/spc_db"
+).replace("postgresql+psycopg2://", "postgresql://")
 
 SQL_LIST = [
     # 1. 主表
