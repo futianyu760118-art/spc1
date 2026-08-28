@@ -72,6 +72,8 @@ const dotStyle = (color: string): React.CSSProperties => ({
   background: color, flexShrink: 0,
 })
 
+const fs = (px: number): string => `calc(${px}px * var(--font-size-scale, 1))`
+
 function relTime(ts: string | null | undefined): string | null {
   if (!ts) return null
   const d = dayjs(ts)
@@ -258,7 +260,7 @@ export default function DataIntegration() {
       `}</style>
 
       {configStatus && (!configStatus.enabled || !configStatus.erp_db_configured) && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fbe6b6', borderRadius: 10, padding: '10px 16px', fontSize: 13, color: '#92400e', flexShrink: 0 }}>
+        <div style={{ background: '#fffbeb', border: '1px solid #fbe6b6', borderRadius: 10, padding: '10px 16px', fontSize: fs(13), color: '#92400e', flexShrink: 0 }}>
           ⚠ {configStatus.enabled ? 'ERP 数据库未配置（ERP_DB_URL）' : 'ERP 同步未启用（ERP_SYNC_ENABLED）'}，同步功能不可用
         </div>
       )}
@@ -266,7 +268,7 @@ export default function DataIntegration() {
       <div style={{ display: 'flex', gap: 18, flex: 1, minHeight: 0, marginTop: configStatus && (!configStatus.enabled || !configStatus.erp_db_configured) ? 14 : 0 }}>
         {/* ============ 左：发起同步 ============ */}
         <div className="card-modern" style={{ flex: 1.1, minWidth: 0, padding: '18px 20px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div style={{ fontSize: 13, color: COLORS.sub, fontWeight: 600, marginBottom: 10, flexShrink: 0 }}>发起同步</div>
+          <div style={{ fontSize: fs(13), color: COLORS.sub, fontWeight: 600, marginBottom: 10, flexShrink: 0 }}>发起同步</div>
 
           {configStatus == null ? (
             <div style={{ padding: '80px 0', textAlign: 'center', flex: 1 }}><Spin /></div>
@@ -278,7 +280,7 @@ export default function DataIntegration() {
                     <div
                       onClick={() => setSelectedType(e.key)}
                       style={{
-                        display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', fontSize: 13,
+                        display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', fontSize: fs(13),
                         borderBottom: idx === typeEntries.length - 1 ? 'none' : '1px solid #f5f7fa',
                         cursor: 'pointer',
                         background: selectedType === e.key ? '#eef4fd' : undefined,
@@ -290,7 +292,7 @@ export default function DataIntegration() {
                     >
                       <span style={dotStyle(e.dot)} />
                       <span>{e.label}</span>
-                      <span style={{ marginLeft: 'auto', color: COLORS.sub, fontSize: 11.5, fontWeight: 400 }}>
+                      <span style={{ marginLeft: 'auto', color: COLORS.sub, fontSize: fs(11.5), fontWeight: 400 }}>
                         {e.rel || '未同步'}
                       </span>
                     </div>
@@ -299,32 +301,32 @@ export default function DataIntegration() {
               </div>
 
               <div style={{ marginTop: 16, borderTop: '1px solid #f0f2f6', paddingTop: 16, flexShrink: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 15, fontWeight: 700, marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: fs(15), fontWeight: 700, marginBottom: 12 }}>
                   <span style={dotStyle(selectedDot)} />
                   {labelOf(selectedType)}
                   {selectedNote && (
-                    <span style={{ fontSize: 12, color: COLORS.err, fontWeight: 400 }}>⚠ {selectedNote}</span>
+                    <span style={{ fontSize: fs(12), color: COLORS.err, fontWeight: 400 }}>⚠ {selectedNote}</span>
                   )}
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12.5, color: COLORS.sub }}>同步范围：最近</span>
+                  <span style={{ fontSize: fs(12.5), color: COLORS.sub }}>同步范围：最近</span>
                   <Segmented size="small" options={HOURS_OPTIONS} value={hours} onChange={v => setHours(v as number)} />
-                  <span style={{ fontSize: 12.5, color: COLORS.sub }}>内的变动数据</span>
+                  <span style={{ fontSize: fs(12.5), color: COLORS.sub }}>内的变动数据</span>
                   <PermButton
                     type="primary"
                     permResource="basicdata.import" permAction="import"
                     disabled={!!selectedCfg && !selectedCfg.has_sql}
                     loading={syncing}
                     onClick={handleSync}
-                    style={{ marginLeft: 'auto', padding: '9px 28px', fontSize: 14, borderRadius: 8, height: 'auto' }}
+                    style={{ marginLeft: 'auto', padding: '9px 28px', fontSize: fs(14), borderRadius: 8, height: 'auto' }}
                   >
                     {selectedCfg && !selectedCfg.has_sql ? 'SQL 未配置' : syncing ? '同步中…' : '▶ 同步'}
                   </PermButton>
                 </div>
 
                 {(selectedType === 'orders' || selectedType === 'materials') && (
-                  <div style={{ marginTop: 10, fontSize: 12, color: COLORS.sub }}>
+                  <div style={{ marginTop: 10, fontSize: fs(12), color: COLORS.sub }}>
                     💡 需要只同步指定订单？
                     <a onClick={openOrderModal} style={{ marginLeft: 4 }}>
                       指定订单号{selectedOrders.length > 0 ? `（已选 ${selectedOrders.length} 单）` : ''}
@@ -338,19 +340,19 @@ export default function DataIntegration() {
 
               {runningFeed.length > 0 && (
                 <div style={{ marginTop: 16, flexShrink: 0 }}>
-                  <div style={{ fontSize: 13, color: COLORS.sub, fontWeight: 600, marginBottom: 2 }}>正在同步</div>
+                  <div style={{ fontSize: fs(13), color: COLORS.sub, fontWeight: 600, marginBottom: 2 }}>正在同步</div>
                   {runningFeed.map(f => {
                     const started = dayjs(f.started_at || f.created_at)
                     const elapsed = started.isValid() ? now.diff(started, 'second') : null
                     return (
-                      <div key={f.task_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px dashed #f0f2f6', fontSize: 12.5 }}>
+                      <div key={f.task_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px dashed #f0f2f6', fontSize: fs(12.5) }}>
                         <span style={{ ...dotStyle(COLORS.acc), animation: 'di-pulse 1.1s infinite' }} />
                         <b style={{ fontWeight: 600 }}>{labelOf(f.sync_type)}</b>
                         <span style={{ flex: 1, height: 4, borderRadius: 2, background: '#eef1f5', overflow: 'hidden', position: 'relative', display: 'block' }}>
                           <span style={{ position: 'absolute', top: 0, bottom: 0, borderRadius: 2, background: COLORS.acc, animation: 'di-indet 1.4s ease-in-out infinite' }} />
                         </span>
                         {elapsed != null && (
-                          <span style={{ color: COLORS.acc, fontSize: 12, fontFamily: 'Consolas, monospace', width: 40, textAlign: 'right' }}>{elapsed}s</span>
+                          <span style={{ color: COLORS.acc, fontSize: fs(12), fontFamily: 'Consolas, monospace', width: 40, textAlign: 'right' }}>{elapsed}s</span>
                         )}
                       </div>
                     )
@@ -363,7 +365,7 @@ export default function DataIntegration() {
 
         {/* ============ 右：同步动态 ============ */}
         <div className="card-modern" style={{ flex: 1, minWidth: 0, padding: '18px 20px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div style={{ fontSize: 13, color: COLORS.sub, fontWeight: 600, marginBottom: 4, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+          <div style={{ fontSize: fs(13), color: COLORS.sub, fontWeight: 600, marginBottom: 4, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
             同步动态
             <div style={{ flex: 1 }} />
             <Button type="text" size="small" icon={<ReloadOutlined />} onClick={() => { fetchFeed(); loadConfig() }} title="刷新" />
@@ -382,20 +384,20 @@ export default function DataIntegration() {
                 : f.trigger_mode === 'manual' ? `手动同步${f.triggered_by ? ` · ${f.triggered_by}` : ''}`
                 : '同步完成'
               return (
-                <div key={f.task_id} style={{ display: 'flex', gap: 10, padding: '7px 0', borderBottom: idx === feed.length - 1 ? 'none' : '1px solid #f5f7fa', fontSize: 12.5, alignItems: 'baseline' }}>
-                  <span style={{ color: COLORS.sub, fontSize: 11.5, fontFamily: 'Consolas, monospace', width: 44, flexShrink: 0 }}>
+                <div key={f.task_id} style={{ display: 'flex', gap: 10, padding: '7px 0', borderBottom: idx === feed.length - 1 ? 'none' : '1px solid #f5f7fa', fontSize: fs(12.5), alignItems: 'baseline' }}>
+                  <span style={{ color: COLORS.sub, fontSize: fs(11.5), fontFamily: 'Consolas, monospace', width: 44, flexShrink: 0 }}>
                     {feedTime(f.created_at)}
                   </span>
                   <span style={{ ...dotStyle(isRun ? COLORS.acc : dot), alignSelf: 'center', ...(isRun ? { animation: 'di-pulse 1.1s infinite' } : {}) }} />
                   <span style={{ color: '#1e2532' }}>
                     {labelOf(f.sync_type)}{' '}
                     <Tooltip title={isFail ? (f.message || '同步失败') : undefined}>
-                      <span style={{ color: isFail ? COLORS.err : COLORS.sub, fontSize: 12, cursor: isFail ? 'pointer' : undefined }}>
+                      <span style={{ color: isFail ? COLORS.err : COLORS.sub, fontSize: fs(12), cursor: isFail ? 'pointer' : undefined }}>
                         {isFail ? txt.slice(0, 40) + (txt.length > 40 ? '…' : '') : txt}
                       </span>
                     </Tooltip>{' '}
                     {isOk && (
-                      <span style={{ color: COLORS.sub, fontFamily: 'Consolas, monospace', fontSize: 11.5 }}>
+                      <span style={{ color: COLORS.sub, fontFamily: 'Consolas, monospace', fontSize: fs(11.5) }}>
                         +{f.created_count ?? 0} ~{f.updated_count ?? 0}
                         {f.failed_count ? <span style={{ color: COLORS.err }}> ✗{f.failed_count}</span> : null}
                       </span>
@@ -420,7 +422,7 @@ export default function DataIntegration() {
           <Button key="ok" type="primary" onClick={confirmOrders}>确定（已选 {pickedRows.size} 行）</Button>,
         ]}
       >
-        <div style={{ marginBottom: 8, fontSize: 12, color: COLORS.sub }}>最近 30 天 ERP 订单（行级），确认后按所选行归属的订单号同步</div>
+        <div style={{ marginBottom: 8, fontSize: fs(12), color: COLORS.sub }}>最近 30 天 ERP 订单（行级），确认后按所选行归属的订单号同步</div>
         {ordersLoading ? (
           <div style={{ padding: '40px 0', textAlign: 'center' }}><Spin /></div>
         ) : (
@@ -432,7 +434,7 @@ export default function DataIntegration() {
                   key={rowKey}
                   onClick={() => toggleRow(rowKey)}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px', fontSize: 12.5, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px', fontSize: fs(12.5), cursor: 'pointer',
                     borderBottom: idx === erpOrders.length - 1 ? 'none' : '1px solid #f5f7fa',
                     background: pickedRows.has(rowKey) ? '#eef4fd' : undefined,
                   }}
@@ -440,7 +442,7 @@ export default function DataIntegration() {
                   <input type="checkbox" checked={pickedRows.has(rowKey)} onChange={() => toggleRow(rowKey)} onClick={e => e.stopPropagation()} />
                   <span style={{ fontFamily: 'Consolas, monospace', width: 110 }}>{o.order_no}</span>
                   <span style={{ flex: 1, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.customer}</span>
-                  <span style={{ color: COLORS.sub, fontSize: 11.5 }}>{o.promised_date}</span>
+                  <span style={{ color: COLORS.sub, fontSize: fs(11.5) }}>{o.promised_date}</span>
                 </div>
               )
             })}
