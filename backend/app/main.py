@@ -143,18 +143,21 @@ async def lifespan(app: FastAPI):
     # 启动时：开启写回 Worker
     from app.services.basicdata.writeback_worker import writeback_worker
     writeback_worker.start()
-    # 启动时：初始化通知 SSE broker 的共享 Redis 客户端
+    # 启动时：探测共享 Redis 客户端（不可用仅告警，各调用方自动降级）
     try:
-        from app.services.notification.notification_broker import init_client
-        await init_client()
+        from app.core.redis_client import probe_redis
+        if await probe_redis():
+            logger.info("[启动] Redis 连接正常")
+        else:
+            logger.warning("[启动] Redis 不可用，相关功能（token黑名单/权限缓存/实时协同/限流）降级运行")
     except Exception as e:
-        logger.warning(f"[启动] 通知 broker redis 初始化失败（将降级）: {e}")
+        logger.warning(f"[启动] Redis 探测异常（将降级）: {e}")
     yield
     # 关闭时：停止调度器
-    # 关闭通知 broker 共享 Redis 客户端
+    # 关闭共享 Redis 客户端
     try:
-        from app.services.notification.notification_broker import close_client
-        await close_client()
+        from app.core.redis_client import close_shared_client
+        await close_shared_client()
     except Exception:
         pass
     await writeback_worker.stop()

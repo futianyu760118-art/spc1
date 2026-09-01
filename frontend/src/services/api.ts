@@ -364,6 +364,9 @@ export const materialApi = {
     items?: Array<{ material_id: number; wh_id?: number | null }>
     recent_days?: number
   }) => api.post(`/materials/stock-check/${checkId}/items`, data),
+  resolveStockCheckCode: (code: string, whId?: number | null) =>
+    api.get('/materials/stock-check/resolve-code', { params: { code, wh_id: whId ?? undefined } }),
+  listScanWarehouses: () => api.get('/materials/stock-check/scan-warehouses'),
   quickCountStockCheck: (data: {
     material_id: number
     wh_id?: number | null
@@ -424,6 +427,13 @@ export const materialApi = {
     api.put(`/materials/subcontract-orders/${id}/details/${detailId}`, data),
   deleteSubcontractOrderDetail: (id: number, detailId: number) =>
     api.delete(`/materials/subcontract-orders/${id}/details/${detailId}`),
+  // 报废物料库存查询（无状态查询工具；导出走 useExport 的 blob POST）
+  queryScrapInventory: (codes: string[]) =>
+    api.post('/materials/scrap-inventory/query', { codes }),
+  queryScrapInventoryFile: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/materials/scrap-inventory/query-file', fd, { skipErrorToast: true })
+  },
 }
 
 // ============ 供应商即时沟通 ============

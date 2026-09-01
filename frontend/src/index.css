@@ -1084,3 +1084,243 @@ tr.ant-table-row:hover .sc-row-act { opacity: 1; }
 .sc-page .ant-checkbox-indeterminate .ant-checkbox-inner::after { background: #5b5bd6; }
 .sc-page .ant-progress.ant-progress-line .ant-progress-bg { background: #5b5bd6; }
 .sc-page .ant-empty-description { color: #94a3b8; font-size: calc(13px * var(--font-size-scale)); }
+
+/* ===== 物料主数据页 · 原型复刻补充（.sc-page 作用域，docs/prototype/redesign/materials.html） ===== */
+
+/* 搜索框：原型 .input-search（灰底无边框，聚焦转白 + 靛蓝描边 + 光环） */
+.sc-search .ant-input-affix-wrapper,
+.sc-search.ant-input-affix-wrapper { background: #f1f5f9; border-color: transparent; box-shadow: none; }
+.sc-search .ant-input-affix-wrapper:hover,
+.sc-search.ant-input-affix-wrapper:hover { background: #f1f5f9; }
+.sc-search .ant-input-affix-wrapper:focus-within,
+.sc-search.ant-input-affix-wrapper:focus-within {
+  background: #fff;
+  border-color: #5b5bd6;
+  box-shadow: 0 0 0 3px rgba(91, 91, 214, 0.14);
+}
+
+/* 采/产 mini 徽标（原型 .pp：19px 圆角小方块，off 置灰） */
+.sc-pp {
+  display: inline-flex;
+  width: 19px;
+  height: 19px;
+  border-radius: 5px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 3px;
+  font-size: calc(11px * var(--font-size-scale));
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: -3px;
+}
+.sc-pp.buy { background: #f0f9ff; color: #0284c7; border: 1px solid #bae6fd; }
+.sc-pp.make { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+.sc-pp.off { background: #f8fafc; color: #cbd5e1; border: 1px solid #e2e8f0; }
+
+/* 物料组合列：名称 500 + 编码副行（原型 .mat-name / .mat-code） */
+.sc-mat-name { font-weight: 500; color: #0f172a; line-height: 1.4; }
+.sc-mat-code {
+  font-size: calc(11.5px * var(--font-size-scale));
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  margin-top: 1px;
+}
+
+/* 批量操作条（原型 .batchbar：白卡 + 大阴影浮起） */
+.sc-batch-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px 14px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  white-space: nowrap;
+}
+.sc-batch-bar .bb-n { font-size: calc(13.5px * var(--font-size-scale)); color: #0f172a; }
+.sc-batch-bar .bb-n b { color: #4c4dc2; padding-inline: 2px; }
+.sc-batch-bar .bb-sep { width: 1px; height: 18px; background: #e2e8f0; margin: 0 4px; }
+
+/* 详情抽屉（原型 .drawer 段落：96px 标签列 dl + 分节标题） */
+.sc-drawer .d-sec { padding: 14px 20px; border-bottom: 1px solid #f1f5f9; }
+.sc-drawer .d-sec:last-child { border-bottom: none; }
+.sc-drawer .d-sec h4 {
+  font-size: calc(12px * var(--font-size-scale));
+  color: #94a3b8;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+.sc-drawer .d-kv {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  row-gap: 8px;
+  font-size: calc(13.5px * var(--font-size-scale));
+  margin: 0;
+}
+.sc-drawer .d-kv dt { color: #94a3b8; }
+.sc-drawer .d-kv dd { color: #0f172a; margin: 0; }
+.sc-drawer .ref-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #f1f5f9;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: calc(13.5px * var(--font-size-scale));
+  background: #fff;
+}
+.sc-drawer .ref-item .t { color: #94a3b8; font-size: calc(11.5px * var(--font-size-scale)); margin-left: auto; }
+
+/* 表单提示条（原型 .f-note：info 软底） */
+.f-note {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  color: #075985;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: calc(12.5px * var(--font-size-scale));
+  line-height: 1.6;
+}
+
+/* ===== 报废物料库存查询 · 原型复刻补充（.sc-page 作用域，docs/prototype/redesign/scrap-inventory.html） ===== */
+
+/* 危险态软标签（原型 .tag-risk-high，sc-tag 系列缺的危险色） */
+.sc-tag-danger { color: #dc2626; background: #fef2f2; }
+
+/* 状态 chip 激活变体（有库存=绿 / 零库存=琥珀 / 未匹配=红） */
+.sc-chip.on.si-has  { background: #f0fdf4; border-color: #bbf7d0; color: #16a34a; }
+.sc-chip.on.si-zero { background: #fffbeb; border-color: #fde68a; color: #d97706; }
+.sc-chip.on.si-nf   { background: #fef2f2; border-color: #fecaca; color: #dc2626; }
+
+/* 卡片头/体（原型 .card-head / .card-body） */
+.si-card-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid #f1f5f9; flex-wrap: wrap; }
+.si-card-head h3 { font-size: calc(14px * var(--font-size-scale)); font-weight: 600; margin: 0; }
+.si-card-head .hint { font-size: calc(12.5px * var(--font-size-scale)); color: #94a3b8; }
+.si-card-head .more { margin-left: auto; font-size: calc(12.5px * var(--font-size-scale)); color: #94a3b8; }
+.si-card-body { padding: 16px; }
+.si-card-body.p0 { padding: 0; }
+
+/* 载入卡：粘贴 / 上传 双模（原型 .load-*） */
+.si-load-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+.si-load-mode { margin-bottom: 12px; display: inline-flex; }
+.si-paste-box {
+  width: 100%; height: 148px; padding: 10px 12px;
+  border: 1px solid #e2e8f0; border-radius: 8px;
+  font-size: calc(12.5px * var(--font-size-scale)); line-height: 1.7;
+  color: #334155; background: #fff;
+  overflow-y: auto; white-space: pre; resize: vertical;
+}
+.si-paste-box:focus {
+  border-color: #5b5bd6;
+  box-shadow: 0 0 0 3px rgba(91, 91, 214, 0.14);
+  outline: none;
+}
+.si-dropzone.ant-upload-drag {
+  border: 1.5px dashed #cbd5e1 !important; border-radius: 8px !important;
+  background: #f8fafc; height: 148px; display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.12s, background 0.12s;
+}
+.si-dropzone.ant-upload-drag:hover { border-color: #7a7de6 !important; background: #eef0fe !important; }
+.si-dropzone.ant-upload-drag .ant-upload-btn { padding: 0 !important; }
+.si-dropzone .ant-upload-drag-icon { margin-bottom: 4px; color: #94a3b8; }
+.si-dropzone .ant-upload-text { color: #475569; font-size: calc(13.5px * var(--font-size-scale)); font-weight: 500; }
+.si-dropzone .ant-upload-hint { color: #94a3b8; font-size: calc(11.5px * var(--font-size-scale)); }
+.si-load-side { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.si-load-side .ant-btn-lg { height: 40px; padding: 0 18px; font-size: calc(14px * var(--font-size-scale)); }
+.si-hint-list { font-size: calc(12px * var(--font-size-scale)); color: #94a3b8; line-height: 1.8; }
+.si-hint-list b { color: #475569; font-weight: 500; }
+.si-load-foot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 16px; border-top: 1px solid #f1f5f9;
+  font-size: calc(12.5px * var(--font-size-scale)); color: #94a3b8; background: #f8fafc;
+  border-radius: 0 0 10px 10px;
+}
+.si-file-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 10px; border-radius: 6px;
+  background: #eef0fe; border: 1px solid #c6cbfa; color: #4c4dc2;
+  font-size: calc(12px * var(--font-size-scale)); font-weight: 500;
+}
+.si-load-foot .sep { width: 1px; height: 14px; background: #e2e8f0; }
+.si-load-foot b { font-variant-numeric: tabular-nums; color: #334155; font-weight: 600; }
+.si-load-foot .act { font-size: calc(12.5px * var(--font-size-scale)); color: #4c4dc2; cursor: pointer; padding: 2px 6px; border-radius: 5px; }
+.si-load-foot .act:hover { background: #f1f5f9; }
+.si-load-foot .act.dim { color: #94a3b8; }
+
+/* 载入卡收起态：查询成功后折叠为单行摘要（来源 + 解析/重复/无效 + 操作），把高度让给结果表 */
+.si-load-mini {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 14px;
+  font-size: calc(12.5px * var(--font-size-scale)); color: #94a3b8;
+}
+.si-load-mini .ttl { display: inline-flex; align-items: center; gap: 6px; font-size: calc(13px * var(--font-size-scale)); font-weight: 600; color: #334155; }
+.si-load-mini .ttl .anticon { color: #5b5bd6; }
+.si-load-mini .sep { width: 1px; height: 14px; background: #e2e8f0; }
+.si-load-mini b { font-variant-numeric: tabular-nums; color: #334155; font-weight: 600; }
+.si-load-mini .act { display: inline-flex; align-items: center; gap: 4px; font-size: calc(12.5px * var(--font-size-scale)); color: #4c4dc2; cursor: pointer; padding: 2px 6px; border-radius: 5px; }
+.si-load-mini .act .anticon { font-size: 11px; }
+.si-load-mini .act:hover { background: #f1f5f9; }
+.si-load-mini .act.dim { color: #94a3b8; }
+
+/* KPI 带（sc-stat-card 横排网格） */
+.si-kpi-band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 12px 0; }
+
+/* 工具栏（sc-toolbar 复用，这里只补右侧图标按钮与分隔线） */
+.si-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.si-toolbar .chips { display: flex; gap: 6px; }
+.si-toolbar .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.si-toolbar .vsep { width: 1px; height: 20px; background: #e2e8f0; }
+.si-icon-btn {
+  width: 30px; height: 30px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #475569; cursor: pointer; border: 1px solid transparent; font-size: 16px;
+}
+.si-icon-btn:hover { background: #f1f5f9; }
+.si-icon-btn.on { background: #eef0fe; color: #4c4dc2; }
+
+/* 仓库分布缩略（原型 .wh-mini，多仓可点开抽屉） */
+.si-wh-mini { display: inline-flex; align-items: center; gap: 5px; font-size: calc(12px * var(--font-size-scale)); color: #475569; }
+.si-wh-mini .n { font-variant-numeric: tabular-nums; }
+.si-wh-mini.none { color: #cbd5e1; }
+a.si-wh-link { color: #475569; cursor: pointer; }
+a.si-wh-link:hover { color: #4c4dc2; }
+.si-wh-mini .anticon { font-size: 12px; color: #94a3b8; }
+
+/* 行内 hover 操作（复用 sc-row-act，链接形态） */
+.sc-page .sc-row-act a { padding: 2px 7px; border-radius: 5px; font-size: calc(12.5px * var(--font-size-scale)); color: #475569; cursor: pointer; }
+.sc-page .sc-row-act a:hover { background: #f1f5f9; color: #4c4dc2; }
+
+/* 密度切换：更紧的行距 + 隐藏编码副行 */
+.si-dense .ant-table-tbody > tr > td { padding-top: 4px; padding-bottom: 4px; }
+.si-dense .sc-mat-code { display: none; }
+
+/* 库存明细抽屉：仓库分行 + 占比条 + 合计（原型 .wh-row / .d-total） */
+.si-wh-row { padding: 8px 0; border-bottom: 1px dashed #f1f5f9; }
+.si-wh-row:last-of-type { border-bottom: none; }
+.si-wh-row .t { display: flex; align-items: baseline; gap: 8px; font-size: calc(13.5px * var(--font-size-scale)); }
+.si-wh-row .t b { color: #0f172a; font-weight: 500; }
+.si-wh-row .t .whc { font-size: calc(11.5px * var(--font-size-scale)); color: #94a3b8; }
+.si-wh-row .t .q { margin-left: auto; color: #0f172a; font-weight: 600; font-variant-numeric: tabular-nums; }
+.si-wh-row .t .pct { font-size: calc(11.5px * var(--font-size-scale)); color: #94a3b8; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+.si-wh-bar { height: 6px; border-radius: 999px; background: #e2e8f0; overflow: hidden; margin-top: 6px; }
+.si-wh-bar > i { display: block; height: 100%; border-radius: 999px; background: #5b5bd6; }
+.si-d-total {
+  display: flex; align-items: baseline; gap: 8px; padding: 10px 12px;
+  border-radius: 8px; background: #f8fafc; font-size: calc(13.5px * var(--font-size-scale)); margin-top: 2px;
+}
+.si-d-total b { font-size: calc(17px * var(--font-size-scale)); color: #0f172a; font-variant-numeric: tabular-nums; }
+.si-d-total .sub { color: #94a3b8; font-size: calc(12px * var(--font-size-scale)); }
+
+@media (max-width: 992px) {
+  .si-load-grid { grid-template-columns: 1fr; }
+  .si-kpi-band { grid-template-columns: repeat(2, 1fr); }
+}

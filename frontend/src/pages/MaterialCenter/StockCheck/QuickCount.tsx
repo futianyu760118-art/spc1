@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Button, Input, InputNumber, message, Modal, Popconfirm, Space, Spin, Tag, Tooltip, Typography,
+  Button, Input, InputNumber, message, Modal, Popconfirm, Select, Space, Spin, Tag, Tooltip, Typography,
 } from 'antd'
 import type { InputRef } from 'antd'
 import {
@@ -85,6 +85,37 @@ const diffColor = (v: number | null | undefined) => {
 export default function QuickCount() {
   const navigate = useNavigate()
 
+  // ===== 仓库选择 =====
+  const [warehouseOptions, setWarehouseOptions] = useState<{ value: number; label: string }[]>([])
+  const [selectedWarehouses, setSelectedWarehouses] = useState<number[]>([])
+  const [warehouseLoading, setWarehouseLoading] = useState(false)
+
+  // 加载仓库列表
+  const loadWarehouses = useCallback(async () => {
+    setWarehouseLoading(true)
+    try {
+      const res: any = await materialApi.listCountedWarehouses()
+      const options = (res.data || []).map((wh: any) => ({
+        value: wh.wh_id,
+        label: wh.wh_name,
+      }))
+      setWarehouseOptions(options)
+      // 默认选中赠品仓库（如果存在）
+      const giftWarehouse = options.find((opt: any) => 
+        opt.label.includes('赠品') || opt.label.toLowerCase().includes('gift')
+      )
+      if (giftWarehouse) {
+        setSelectedWarehouses([giftWarehouse.value])
+      }
+    } catch {
+      /* 静默 */
+    } finally {
+      setWarehouseLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadWarehouses() }, [])
+
   // ===== 搜索(输入即搜,防抖 300ms;回车立即搜索=扫码枪模式) =====
   const [keyword, setKeyword] = useState('')
   const [results, setResults] = useState<Candidate[]>([])
@@ -101,20 +132,25 @@ export default function QuickCount() {
     setSearching(true)
     setSearched(true)
     try {
-      const res: any = await materialApi.listMaterialCandidates({ keyword: q, page: 1, page_size: 20 })
+      const params: any = { keyword: q, page: 1, page_size: 20 }
+      // 如果选中了仓库，添加仓库筛选条件
+      if (selectedWarehouses.length > 0) {
+        params.wh_id = selectedWarehouses.join(',')
+      }
+      const res: any = await materialApi.listMaterialCandidates(params)
       setResults(res.data?.items || [])
     } catch (e: any) {
       message.error(e?.response?.data?.detail || e.message || '搜索物料失败')
     } finally {
       setSearching(false)
     }
-  }, [])
+  }, [selectedWarehouses])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => doSearch(keyword), 300)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [keyword]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, selectedWarehouses]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearchEnter = useCallback(() => {
     // 回车=立即搜索(不等待防抖),并离开输入框 → 后续数字键 1/2/3 触发快捷盘点
@@ -462,6 +498,20 @@ export default function QuickCount() {
           flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 14,
         }}>
           <div className="card-modern" style={{ padding: '14px 16px', flexShrink: 0 }}>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>仓库筛选</div>
+              <Select
+                mode="multiple"
+                style={{ width: '100%' }}
+                placeholder="选择仓库筛选物料"
+                loading={warehouseLoading}
+                options={warehouseOptions}
+                value={selectedWarehouses}
+                onChange={setSelectedWarehouses}
+                allowClear
+                maxTagCount="responsive"
+              />
+            </div>
             <Input
               ref={inputRef}
               size="large"

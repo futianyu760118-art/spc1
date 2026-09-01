@@ -169,6 +169,9 @@ class MaterialUpdate(BaseModel):
 
 class MaterialOut(MaterialBase):
     id: int
+    data_source: Optional[str] = None
+    create_time: Optional[datetime] = None
+    update_time: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -190,6 +193,8 @@ class MaterialTreeNode(BaseModel):
     supplier_id: Optional[int] = None
     order_unit_price: Optional[Decimal] = None
     last_outbound_date: Optional[date] = None
+    data_source: Optional[str] = None
+    erp_sync_flag: int = 0
     children: List["MaterialTreeNode"] = []
 
     model_config = {"from_attributes": True}

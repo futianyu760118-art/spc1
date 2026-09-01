@@ -81,6 +81,31 @@ class MaterialCandidateOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ScanWarehouseOut(BaseModel):
+    """扫码盘点: 仓库精简项(顶部选择器 / 物料卡仓库切换)"""
+    wh_id: int
+    wh_code: Optional[str] = None
+    wh_name: Optional[str] = None
+    system_qty: Optional[Decimal] = None
+
+
+class ResolvedCodeOut(BaseModel):
+    """扫码盘点: 编码 → 物料解析结果"""
+    erp_material_id: int
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    spec_model: Optional[str] = None
+    unit: Optional[str] = None
+    resolved_by: str = "material_code"  # material_code | sku_barcode
+    wh_id: Optional[int] = None
+    wh_code: Optional[str] = None
+    wh_name: Optional[str] = None
+    # 所选仓库的系统库存(scm_inventory 按 物料×仓库 汇总 qty_on_hand);
+    # 未传 wh_id = null; 传了但无库存行 = 0(与候选列表"(未入库)"口径一致)
+    system_qty: Optional[Decimal] = None
+    warehouses: List[ScanWarehouseOut] = []
+
+
 class StockCheckCountedItemOut(BaseModel):
     """已盘点物料台账: 每个「物料×仓库」取最近一条已盘点(actual_qty 非空、未取消)记录"""
     check_id: Optional[int] = None

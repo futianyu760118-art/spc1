@@ -13,10 +13,15 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "rules.order_standards": FULL_ACTIONS,
         "rules.work_instructions": FULL_ACTIONS,
         "finance.data": ["read"],
+        "materials.scrap_inventory": ["read"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],
         "exceptions.product_samples": ["read", "update"],
+        "materials.scrap_inventory": ["read"],
+    },
+    "purchaser": {
+        "materials.scrap_inventory": ["read"],
     },
     "manager": {
         "production.schedule_plans": ["read", "update"],
@@ -28,6 +33,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "roles": ["read", "update"],
         "materials.subcontract_orders": ["read"],
         "finance.data": ["read"],
+        "materials.scrap_inventory": ["read"],
     },
     "warehouse_Keeper": {
         "materials.subcontract_orders": ["read"],

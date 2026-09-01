@@ -19,6 +19,7 @@ import StockCheck from './pages/MaterialCenter/StockCheck/index'
 import StockCheckWorkbench from './pages/MaterialCenter/StockCheck/Workbench'
 import QuickCount from './pages/MaterialCenter/StockCheck/QuickCount'
 import SubcontractOrders from './pages/MaterialCenter/SubcontractOrders/index'
+import ScrapInventory from './pages/MaterialCenter/ScrapInventory'
 import IssueLedger from './pages/ExceptionCenter/IssueLedger/index'
 import ExceptionPool from './pages/ExceptionCenter/ExceptionPool/index'
 import IssueLogView from './pages/ExceptionCenter/IssueLogView/index'
@@ -194,6 +195,7 @@ export default function App() {
                             <Route path="stock-check/:checkId" element={<StockCheckWorkbench />} />
                             <Route path="quick-stock-check" element={<QuickCount />} />
                             <Route path="subcontract-orders" element={<SubcontractOrders/>}/>
+                            <Route path="scrap-inventory" element={<ScrapInventory/>}/>
                             <Route path="kit-analysis" element={<KitAnalysis/>}/>
                             <Route path="supplier-risk" element={<SupplierRisk/>}/>
                             <Route path="supplier-payment" element={<SupplierPayment/>}/>

@@ -13,6 +13,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.core.config import get_settings
 from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.material import Material
+from app.models.basicdata.sku import SKU
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.models.order.sale_order import SaleOrder
 from app.services.order.order_materials_service import get_order_product_materials, MATERIAL_PROPERTY_LABELS
@@ -1238,11 +1239,25 @@ async def list_material_candidates(
     wh_cond = None
     if wh_id is not None and str(wh_id).strip():
         wh_raw = str(wh_id).strip()
-        try:
-            wh_int = int(wh_raw)
-            wh_cond = inv_subq.c.whid == wh_int
-        except (TypeError, ValueError):
-            wh_cond = inv_subq.c.wh_name.ilike(f"%{wh_raw}%")
+        # 支持多仓库筛选（逗号分隔）
+        wh_ids = [x.strip() for x in wh_raw.split(',') if x.strip()]
+        if len(wh_ids) > 1:
+            # 多仓库筛选
+            wh_ints = []
+            for wid in wh_ids:
+                try:
+                    wh_ints.append(int(wid))
+                except (TypeError, ValueError):
+                    pass
+            if wh_ints:
+                wh_cond = inv_subq.c.whid.in_(wh_ints)
+        else:
+            # 单仓库筛选（保持原有逻辑）
+            try:
+                wh_int = int(wh_raw)
+                wh_cond = inv_subq.c.whid == wh_int
+            except (TypeError, ValueError):
+                wh_cond = inv_subq.c.wh_name.ilike(f"%{wh_raw}%")
     if wh_cond is not None:
         query = query.where(wh_cond)
 
@@ -1269,13 +1284,17 @@ async def list_material_candidates(
             wh_name = (r.wh_name or "").strip() or f"WH#{r.whid}"
         else:
             wh_name = "(未入库)"
+        # 过滤库存为0的记录
+        system_qty = Decimal(str(r.wh_qty or 0)) if has_inv else Decimal("0")
+        if system_qty == 0:
+            continue
         items.append({
             "erp_material_id": int(r.erp_material_id),
             "material_code": r.material_code,
             "material_name": r.material_name,
             "spec_model": r.spec_model,
             "unit": r.unit_of_measure,
-            "system_qty": Decimal(str(r.wh_qty or 0)) if has_inv else Decimal("0"),
+            "system_qty": system_qty,
             "wh_id": int(r.whid) if has_inv else None,
             "wh_code": r.wh_code if has_inv else None,
             "wh_name": wh_name,
@@ -2641,3 +2660,108 @@ async def attach_list_extras(db: AsyncSession, rows: List[StockCheck]) -> None:
         if need:
             name_cache.update(await _resolve_user_names(db, need))
         r.co_checkers = [{"user_id": u, "name": name_cache.get(u, f"user#{u}")} for u in uids]
+
+
+async def list_scan_warehouses(db: AsyncSession) -> List[Dict]:
+    """扫码盘点: 库存表出现过的仓库(去重), 供扫码页顶部选择器。
+
+    不复用 /basicdata/warehouses(要求 basicdata.data.warehouses 权限,盘点员没有);
+    counted-warehouses 只覆盖已盘过的仓库, 新用户为空, 也不合适。
+    """
+    rows = (await db.execute(
+        select(
+            Inventory.wh_id,
+            func.max(Inventory.wh_code).label("wh_code"),
+            func.max(Inventory.wh_name).label("wh_name"),
+        )
+        .where(Inventory.wh_id.is_not(None))
+        .group_by(Inventory.wh_id)
+        .order_by(func.max(Inventory.wh_name))
+    )).all()
+    return [
+        {
+            "wh_id": int(r.wh_id),
+            "wh_code": r.wh_code,
+            "wh_name": (r.wh_name or "").strip() or f"WH#{r.wh_id}",
+        }
+        for r in rows
+    ]
+
+
+async def resolve_material_by_code(
+    db: AsyncSession,
+    code: str,
+    wh_id: Optional[int] = None,
+) -> Dict:
+    """扫码盘点: 编码 → 物料精确解析。
+
+    1) scm_material.material_code 精确匹配(trim, 未删除);
+    2) 兜底 scm_sku.barcode 精确匹配(取 id 最小一条, join 回未删除物料);
+    3) 未命中抛 ValueError, 由 API 层转 404。
+    返回: 物料信息 + 所选仓库 system_qty + 该物料有库存的全部仓库列表。
+    """
+    raw = (code or "").strip()
+    if not raw:
+        raise ValueError("编码不能为空")
+
+    mat = (await db.execute(
+        select(Material).where(Material.material_code == raw, Material.is_deleted == 0)
+    )).scalar_one_or_none()
+    resolved_by = "material_code"
+
+    if mat is None:
+        sku_mat_id = (await db.execute(
+            select(SKU.material_id).where(SKU.barcode == raw).order_by(SKU.id).limit(1)
+        )).scalar()
+        if sku_mat_id is not None:
+            mat = (await db.execute(
+                select(Material).where(
+                    Material.erp_material_id == sku_mat_id, Material.is_deleted == 0
+                )
+            )).scalar_one_or_none()
+            if mat is not None:
+                resolved_by = "sku_barcode"
+
+    if mat is None:
+        raise ValueError(f"未找到物料: {raw}")
+
+    inv_rows = (await db.execute(
+        select(
+            Inventory.wh_id,
+            func.max(Inventory.wh_code).label("wh_code"),
+            func.max(Inventory.wh_name).label("wh_name"),
+            func.coalesce(func.sum(Inventory.qty_on_hand), 0).label("wh_qty"),
+        )
+        .where(Inventory.material_id == mat.erp_material_id, Inventory.wh_id.is_not(None))
+        .group_by(Inventory.wh_id)
+        .order_by(func.max(Inventory.wh_name))
+    )).all()
+
+    warehouses = [
+        {
+            "wh_id": int(r.wh_id),
+            "wh_code": r.wh_code,
+            "wh_name": (r.wh_name or "").strip() or f"WH#{r.wh_id}",
+            "system_qty": Decimal(str(r.wh_qty or 0)),
+        }
+        for r in inv_rows
+    ]
+
+    selected = next((w for w in warehouses if w["wh_id"] == wh_id), None) if wh_id is not None else None
+
+    return {
+        "erp_material_id": int(mat.erp_material_id),
+        "material_code": mat.material_code,
+        "material_name": mat.material_name,
+        "spec_model": mat.spec_model,
+        "unit": mat.unit_of_measure,
+        "resolved_by": resolved_by,
+        "wh_id": wh_id,
+        "wh_code": selected["wh_code"] if selected else None,
+        "wh_name": selected["wh_name"] if selected else None,
+        "system_qty": (
+            selected["system_qty"] if selected is not None
+            else (Decimal("0") if wh_id is not None else None)
+        ),
+        "warehouses": warehouses,
+    }

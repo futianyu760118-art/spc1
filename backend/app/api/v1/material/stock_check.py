@@ -27,6 +27,8 @@ from app.schemas.material.stock_check import (
     PresenceUpdate,
     MaterialHistoryItem,
     MaterialCandidateOut,
+    ScanWarehouseOut,
+    ResolvedCodeOut,
     StockCheckCountedItemOut,
     StockCheckStats,
     StockCheckKpi,
@@ -45,6 +47,8 @@ from app.services.material.stock_check_service import (
     list_material_candidates,
     list_counted_materials_ledger,
     list_counted_warehouses,
+    list_scan_warehouses,
+    resolve_material_by_code,
     update_stock_check_item,
     batch_update_items,
     complete_stock_check,
@@ -210,6 +214,31 @@ async def list_counted_warehouses_view(
     """已盘点物料台账涉及的仓库列表（去重），用于仓库列下拉筛选。"""
     items = await list_counted_warehouses(db)
     return ResponseModel(data=items)
+
+
+@router.get("/stock-check/scan-warehouses", response_model=ResponseModel[List[ScanWarehouseOut]])
+async def list_scan_warehouses_view(
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """扫码盘点: 顶部仓库选择器选项(scm_inventory 去重仓库)。"""
+    items = await list_scan_warehouses(db)
+    return ResponseModel(data=[ScanWarehouseOut(**w) for w in items])
+
+
+@router.get("/stock-check/resolve-code", response_model=ResponseModel[ResolvedCodeOut])
+async def resolve_stock_check_code(
+    code: str = Query(..., description="扫出的编码(物料编码或SKU条码)"),
+    wh_id: Optional[int] = Query(None, description="仓库ID(可选)"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """扫码盘点: 编码精确解析为物料(+所选仓库系统库存)。未找到返回 404。"""
+    try:
+        data = await resolve_material_by_code(db, code=code, wh_id=wh_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return ResponseModel(data=ResolvedCodeOut(**data))
 
 
 @router.get("/stock-check/counted-ledger", response_model=ResponseModel[PageResult[StockCheckCountedItemOut]])

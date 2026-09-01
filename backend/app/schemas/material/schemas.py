@@ -2,7 +2,7 @@
 
 from typing import Optional, List, Dict
 from datetime import date, datetime
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, validator
 
 
 # ============ 采购订单 / 采购到料计划（合并模型） ============
@@ -582,3 +582,9 @@ class SubcontractOrderDetailUpdate(BaseModel):
     delivery_qty: Optional[float] = None
     sale_order_no: Optional[str] = None
     sale_order_id: Optional[int] = None
+
+
+class ScrapInventoryQueryIn(BaseModel):
+    """报废物料库存查询入参。format 仅导出接口使用。"""
+    codes: List[str] = Field(..., description="物料代码列表")
+    format: Optional[str] = Field("xlsx", description="导出格式 xlsx|csv（仅 /export 使用）")

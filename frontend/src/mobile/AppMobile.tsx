@@ -9,6 +9,7 @@ import StockCheckCreatePage from './pages/stock/StockCheckCreatePage'
 import StockCheckDetailPage from './pages/stock/StockCheckDetailPage'
 import StockCheckEntryPage from './pages/stock/StockCheckEntryPage'
 import StockCheckManagePage from './pages/stock/StockCheckManagePage'
+import ScanCountPage from './pages/stock/ScanCountPage'
 
 function AuthGuard() {
   const token = useAuthStore((s) => s.currentToken)
@@ -65,6 +66,7 @@ export default function AppMobile() {
           <Route path="/stock-check/:checkId" element={<StockCheckDetailPage />} />
           <Route path="/stock-check/:checkId/items/:itemId" element={<StockCheckEntryPage />} />
           <Route path="/stock-check/:checkId/manage" element={<StockCheckManagePage />} />
+          <Route path="/scan-count" element={<ScanCountPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

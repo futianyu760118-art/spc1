@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Table, Button, Input, InputNumber, message, Space, Row, Col, Tabs, Tag, Tooltip, Popover, Checkbox, Select } from 'antd'
+import { Table, Button, Input, InputNumber, message, Space, Row, Col, Tabs, Tag, Tooltip, Popover, Checkbox, Select, DatePicker } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, SettingOutlined, HolderOutlined,
   DatabaseOutlined, AuditOutlined, InboxOutlined, LockOutlined,
@@ -8,6 +8,7 @@ import {
 import api from '../../services/api'
 import { useAuthStore } from '../../store/auth'
 import { useExport } from '../../hooks/useExport'
+import dayjs from 'dayjs'
 import ExportColumnSelector, { type ExportColumnOption } from '../../components/ExportColumnSelector'
 
 interface InventoryItem {
@@ -27,6 +28,9 @@ interface InventoryItem {
   unit_price: number
   ending_balance: number
   batch_no: string
+  last_inbound_at?: string | null
+  last_outbound_at?: string | null
+  last_picking_at?: string | null
   created_at: string
   updated_at: string
   recent_checked?: boolean
@@ -48,6 +52,9 @@ interface InventoryByWhItem {
   unit_price: number
   ending_balance: number
   location_count: number
+  last_inbound_at?: string | null
+  last_outbound_at?: string | null
+  last_picking_at?: string | null
   recent_checked?: boolean
   recent_checked_date?: string | null
   recent_checked_check_no?: string | null
@@ -59,6 +66,89 @@ const priceFmt = (v: number | null | undefined) =>
 const moneyFmt = (v: number | null | undefined) =>
   v != null ? v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'
 const optList = (arr?: string[]) => (arr || []).map(v => ({ text: v, value: v }))
+const dtFmt = (v: string | null | undefined) => {
+  if (!v) return '-'
+  const d = new Date(v)
+  if (isNaN(d.getTime())) return '-'
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** 收发时间字段筛选: 时间范围 / 最近N天内 / 距今超N天(含为空) */
+type TimeFilterMode = 'range' | 'within' | 'over'
+interface TimeFilterValue { mode: TimeFilterMode; start?: string; end?: string; days?: number }
+type TimeFilterField = 'last_inbound_at' | 'last_outbound_at' | 'last_picking_at'
+type TimeFilters = Partial<Record<TimeFilterField, TimeFilterValue>>
+
+const timeFilterParams = (tf: TimeFilters): Record<string, any> => {
+  const p: Record<string, any> = {}
+  ;(Object.keys(tf) as TimeFilterField[]).forEach((f) => {
+    const v = tf[f]
+    if (!v) return
+    if (v.mode === 'range') {
+      if (v.start) p[`${f}_start`] = v.start
+      if (v.end) p[`${f}_end`] = v.end
+    } else if (v.days != null && v.days >= 0) {
+      p[`${f}_${v.mode}_days`] = v.days
+    }
+  })
+  return p
+}
+
+function TimeFilterDropdown({ value, onApply }: { value?: TimeFilterValue; onApply: (v?: TimeFilterValue) => void }) {
+  const [mode, setMode] = useState<TimeFilterMode>(value?.mode ?? 'range')
+  const [range, setRange] = useState<[any, any] | null>(
+    value?.mode === 'range' && value?.start && value?.end ? [dayjs(value.start), dayjs(value.end)] : null,
+  )
+  const [days, setDays] = useState<number | null>(value?.days ?? null)
+
+  const apply = (clear?: boolean) => {
+    if (clear) { onApply(undefined); return }
+    if (mode === 'range') {
+      if (range && range[0] && range[1]) {
+        onApply({ mode, start: range[0].format('YYYY-MM-DD'), end: range[1].format('YYYY-MM-DD') })
+      } else {
+        onApply(undefined)
+      }
+    } else if (days != null && days >= 0) {
+      onApply({ mode, days })
+    } else {
+      onApply(undefined)
+    }
+  }
+
+  return (
+    <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8, width: 264 }}>
+      <Select
+        size="small"
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: 'range', label: '时间范围' },
+          { value: 'within', label: '最近 N 天内' },
+          { value: 'over', label: '距今超 N 天未动' },
+        ]}
+      />
+      {mode === 'range' ? (
+        <DatePicker.RangePicker size="small" style={{ width: '100%' }} value={range} onChange={(v: any) => setRange(v)} />
+      ) : (
+        <>
+          <InputNumber
+            size="small" min={0} max={100000} style={{ width: '100%' }} addonAfter="天"
+            value={days ?? undefined} onChange={(v) => setDays(v ?? null)} placeholder="N"
+          />
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>
+            {mode === 'within' ? '只显示该时间在最近 N 天内的行' : '该时间距今天超过 N 天、或从未发生(为空)的行'}
+          </span>
+        </>
+      )}
+      <Space style={{ justifyContent: 'flex-end' }}>
+        <Button size="small" onClick={() => apply(true)}>清除</Button>
+        <Button size="small" type="primary" onClick={() => apply()}>确定</Button>
+      </Space>
+    </div>
+  )
+}
 
 /** 导出字段选项（key 与后端导出列一致） */
 const DETAIL_EXPORT_OPTIONS: ExportColumnOption[] = [
@@ -74,6 +164,9 @@ const DETAIL_EXPORT_OPTIONS: ExportColumnOption[] = [
   { field: 'unit_price', label: '库存单价' },
   { field: 'ending_balance', label: '期末余额' },
   { field: 'batch_no', label: '批次号' },
+  { field: 'last_inbound_at', label: '最后入库时间' },
+  { field: 'last_outbound_at', label: '最后出库时间' },
+  { field: 'last_picking_at', label: '最后领料时间' },
   { field: 'recent_checked', label: '近期已盘' },
   { field: 'updated_at', label: '更新时间' },
 ]
@@ -90,6 +183,9 @@ const BYWH_EXPORT_OPTIONS: ExportColumnOption[] = [
   { field: 'qty_in_transit', label: '在途库存' },
   { field: 'unit_price', label: '加权单价' },
   { field: 'ending_balance', label: '期末余额' },
+  { field: 'last_inbound_at', label: '最后入库时间' },
+  { field: 'last_outbound_at', label: '最后出库时间' },
+  { field: 'last_picking_at', label: '最后领料时间' },
   { field: 'recent_checked', label: '近期已盘' },
 ]
 
@@ -331,6 +427,24 @@ function InventoryDetail() {
   const [stats, setStats] = useState({ totalMaterials: 0, countedMaterials: 0 })
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
   const [sortInfo, setSortInfo] = useState<{ sort_by?: string; sort_order?: string }>({})
+  const [timeFilters, setTimeFilters] = useState<TimeFilters>({})
+  const applyTimeFilter = (field: TimeFilterField, v?: TimeFilterValue) => {
+    const next: TimeFilters = { ...timeFilters }
+    if (v) next[field] = v
+    else delete next[field]
+    setTimeFilters(next)
+    fetchData(1, pagination.pageSize, { timeFilters: next })
+  }
+  const timeCol = (field: TimeFilterField, title: string): any => ({
+    title, dataIndex: field, key: field, width: 140, sorter: true, render: dtFmt,
+    filtered: !!timeFilters[field],
+    filterDropdown: (dp: any) => (
+      <TimeFilterDropdown
+        value={timeFilters[field]}
+        onApply={(v) => { applyTimeFilter(field, v); dp?.confirm?.({ closeDropdown: true }) }}
+      />
+    ),
+  })
   const [filters, setFilters] = useState<Record<string, string[]>>({})
   const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>({})
   const [colConfig, setColConfig] = useState<{ order: string[]; hidden: Record<string, boolean> }>(() => {
@@ -358,13 +472,14 @@ function InventoryDetail() {
   const fetchData = useCallback(async (
     page = 1,
     pageSize = 20,
-    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]> },
+    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters },
   ) => {
     setLoading(true)
     try {
       const s = override?.sort ?? sortInfo
       const f = override?.filters ?? filters
       const params: any = { page, page_size: pageSize }
+      Object.assign(params, timeFilterParams(override?.timeFilters ?? timeFilters))
       if (keyword) params.keyword = keyword
       if (s.sort_by) params.sort_by = s.sort_by
       if (s.sort_order) params.sort_order = s.sort_order
@@ -402,7 +517,7 @@ function InventoryDetail() {
     } finally {
       setLoading(false)
     }
-  }, [keyword, sortInfo, filters, recentDays]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, sortInfo, filters, recentDays, timeFilters]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useRecentDaysDebounce(recentDays, () => fetchData(1, pagination.pageSize))
 
@@ -442,6 +557,7 @@ function InventoryDetail() {
   const handleExportConfirm = (selectedColumns: string[]) => {
     setExportColumnModalOpen(false)
     const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
+    Object.assign(params, timeFilterParams(timeFilters))
     if (keyword) params.keyword = keyword
     if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
     if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
@@ -467,6 +583,9 @@ function InventoryDetail() {
     { title: '库存单价', dataIndex: 'unit_price', key: 'unit_price', width: 110, align: 'right' as const, sorter: true, render: priceFmt },
     { title: '期末余额', dataIndex: 'ending_balance', key: 'ending_balance', width: 120, align: 'right' as const, sorter: true, render: moneyFmt },
     { title: '批次号', dataIndex: 'batch_no', key: 'batch_no', width: 100, sorter: true, filters: optList(filterOptions.batch_nos), filterSearch: true },
+    timeCol('last_inbound_at', '最后入库时间'),
+    timeCol('last_outbound_at', '最后出库时间'),
+    timeCol('last_picking_at', '最后领料时间'),
     {
       title: '近期已盘', dataIndex: 'recent_checked', key: 'recent_checked', width: 90, align: 'center' as const,
       filters: [{ text: '是', value: 'true' }, { text: '否', value: 'false' }],
@@ -508,7 +627,7 @@ function InventoryDetail() {
           columns={columns}
           dataSource={data}
           loading={loading}
-          scroll={{ x: 1700, y: scrollY }}
+          scroll={{ x: 2150, y: scrollY }}
           size="small"
           onChange={handleTableChange}
           pagination={{
@@ -540,6 +659,24 @@ function InventoryByWarehouse() {
   const [stats, setStats] = useState({ totalMaterials: 0, countedMaterials: 0 })
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
   const [sortInfo, setSortInfo] = useState<{ sort_by?: string; sort_order?: string }>({})
+  const [timeFilters, setTimeFilters] = useState<TimeFilters>({})
+  const applyTimeFilter = (field: TimeFilterField, v?: TimeFilterValue) => {
+    const next: TimeFilters = { ...timeFilters }
+    if (v) next[field] = v
+    else delete next[field]
+    setTimeFilters(next)
+    fetchData(1, pagination.pageSize, { timeFilters: next })
+  }
+  const timeCol = (field: TimeFilterField, title: string): any => ({
+    title, dataIndex: field, key: field, width: 140, sorter: true, render: dtFmt,
+    filtered: !!timeFilters[field],
+    filterDropdown: (dp: any) => (
+      <TimeFilterDropdown
+        value={timeFilters[field]}
+        onApply={(v) => { applyTimeFilter(field, v); dp?.confirm?.({ closeDropdown: true }) }}
+      />
+    ),
+  })
   const [filters, setFilters] = useState<Record<string, string[]>>({})
   const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>({})
   const [colConfig, setColConfig] = useState<{ order: string[]; hidden: Record<string, boolean> }>(() => {
@@ -567,13 +704,14 @@ function InventoryByWarehouse() {
   const fetchData = useCallback(async (
     page = 1,
     pageSize = 20,
-    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]> },
+    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters },
   ) => {
     setLoading(true)
     try {
       const s = override?.sort ?? sortInfo
       const f = override?.filters ?? filters
       const params: any = { page, page_size: pageSize }
+      Object.assign(params, timeFilterParams(override?.timeFilters ?? timeFilters))
       if (keyword) params.keyword = keyword
       if (s.sort_by) params.sort_by = s.sort_by
       if (s.sort_order) params.sort_order = s.sort_order
@@ -609,7 +747,7 @@ function InventoryByWarehouse() {
     } finally {
       setLoading(false)
     }
-  }, [keyword, sortInfo, filters, recentDays]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, sortInfo, filters, recentDays, timeFilters]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useRecentDaysDebounce(recentDays, () => fetchData(1, pagination.pageSize))
 
@@ -648,6 +786,7 @@ function InventoryByWarehouse() {
   const handleExportConfirm = (selectedColumns: string[]) => {
     setExportColumnModalOpen(false)
     const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
+    Object.assign(params, timeFilterParams(timeFilters))
     if (keyword) params.keyword = keyword
     if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
     if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
@@ -674,6 +813,9 @@ function InventoryByWarehouse() {
     { title: '在途库存', dataIndex: 'qty_in_transit', key: 'qty_in_transit', width: 110, align: 'right' as const, sorter: true, render: numFmt },
     { title: '加权单价', dataIndex: 'unit_price', key: 'unit_price', width: 120, align: 'right' as const, render: priceFmt },
     { title: '期末余额', dataIndex: 'ending_balance', key: 'ending_balance', width: 130, align: 'right' as const, sorter: true, render: moneyFmt },
+    timeCol('last_inbound_at', '最后入库时间'),
+    timeCol('last_outbound_at', '最后出库时间'),
+    timeCol('last_picking_at', '最后领料时间'),
     {
       title: '近期已盘', dataIndex: 'recent_checked', key: 'recent_checked', width: 90, align: 'center' as const,
       filters: [{ text: '是', value: 'true' }, { text: '否', value: 'false' }],
@@ -711,7 +853,7 @@ function InventoryByWarehouse() {
           columns={columns}
           dataSource={data}
           loading={loading}
-          scroll={{ x: 1300, y: scrollY }}
+          scroll={{ x: 1750, y: scrollY }}
           size="small"
           onChange={handleTableChange}
           pagination={{

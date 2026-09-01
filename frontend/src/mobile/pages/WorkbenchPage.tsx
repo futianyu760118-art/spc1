@@ -28,6 +28,7 @@ const APP_GROUPS = [
   {
     group: '智能仓储',
     items: [
+      { key: 'scan-count', title: '扫码盘点', icon: 'scan', path: '/scan-count', perm: ['materials.stock_check', 'read'] as const },
       { key: 'stock-check', title: '物料盘点', icon: 'clipboard', path: '/stock-check', perm: ['materials.stock_check', 'read'] as const },
     ],
   },
