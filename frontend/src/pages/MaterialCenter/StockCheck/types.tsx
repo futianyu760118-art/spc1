@@ -209,3 +209,34 @@ export function DiffPair({ gain, loss }: { gain?: number | null; loss?: number |
     </span>
   )
 }
+
+export interface StockCheckWriteback {
+  id: number
+  check_id: number
+  bill_type: 'gain' | 'loss_transfer'
+  wh_id: number
+  wh_code?: string | null
+  wh_name?: string | null
+  status: 'pending' | 'success' | 'failed'
+  erp_bill_no?: string | null
+  k3_inter_id?: number | null
+  item_count: number
+  total_qty: number
+  error_msg?: string | null
+  retry_count: number
+  created_by?: string | null
+  created_at?: string | null
+  written_at?: string | null
+}
+
+export interface WritebackSkippedItem {
+  material_code?: string | null
+  material_name?: string | null
+  unit?: string | null
+  diff_qty: number
+}
+
+export interface WritebackOverview {
+  writebacks: StockCheckWriteback[]
+  skipped_items: WritebackSkippedItem[]
+}

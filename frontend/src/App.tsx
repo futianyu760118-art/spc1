@@ -53,6 +53,7 @@ import WritebackConfig from './pages/BasicDataCenter/WritebackConfig'
 import WritebackMonitor from './pages/WritebackMonitor/index'
 import Customers from './pages/BasicDataCenter/Customers'
 import Suppliers from './pages/BasicDataCenter/Suppliers'
+import SupplierMaterialMap from './pages/BasicDataCenter/SupplierMaterialMap'
 import Materials from './pages/BasicDataCenter/Materials'
 import SKUs from './pages/BasicDataCenter/SKUs'
 import Products from './pages/BasicDataCenter/Products'
@@ -250,6 +251,7 @@ export default function App() {
                             <Route path="masterdata" element={<Navigate to="/basicdata/customers" replace/>}/>
                             <Route path="basicdata/customers" element={<Customers/>} key="customers"/>
                             <Route path="basicdata/suppliers" element={<Suppliers/>} key="suppliers"/>
+                            <Route path="basicdata/supplier-material-map" element={<SupplierMaterialMap/>} key="supplier-material-map"/>
                             <Route path="basicdata/materials" element={<Materials/>} key="materials"/>
                             <Route path="basicdata/skus" element={<SKUs/>} key="skus"/>
                             <Route path="basicdata/products" element={<Products/>} key="products"/>

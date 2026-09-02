@@ -31,6 +31,7 @@ async def list_audit_logs(
     sort_order: Optional[str] = Query(None, description="排序方向 asc/desc"),
     action: Optional[str] = Query(None, description="操作类型筛选，逗号分隔"),
     table_name: Optional[str] = Query(None, description="表名筛选，逗号分隔"),
+    record_id: Optional[int] = Query(None, description="记录ID筛选（如单条数据的操作历史）"),
     operator: Optional[str] = Query(None, description="操作人筛选，逗号分隔"),
     current_user: dict = Depends(PermissionChecker("audit", "read")),
     db: AsyncSession = Depends(get_db),
@@ -56,6 +57,8 @@ async def list_audit_logs(
         tables = [t.strip() for t in table_name.split(",") if t.strip()]
         if tables:
             query = query.where(AuditLog.table_name.in_(tables))
+    if record_id is not None:
+        query = query.where(AuditLog.record_id == record_id)
     if operator:
         operators = [o.strip() for o in operator.split(",") if o.strip()]
         if operators:

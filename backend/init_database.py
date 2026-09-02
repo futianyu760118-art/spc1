@@ -333,6 +333,9 @@ class DatabaseInitializer:
                 "stock_qty": "NUMERIC(15,2)",
                 "audit_date": "DATE",
             },
+            "subcontract_order_detail": {
+                "price": "NUMERIC(15,4)",
+            },
             "scm_inventory": {
                 "unit_price": "NUMERIC(15,6) NOT NULL DEFAULT 0",
                 "ending_balance": "NUMERIC(15,2) NOT NULL DEFAULT 0",
@@ -456,6 +459,16 @@ class DatabaseInitializer:
                     print(f"  Drop {table}.{col} skipped: {e}")
         print(f"Column migration completed ({added} statements executed)")
 
+        # 委外订单明细 price 字段备注（ADD COLUMN 语法不带 COMMENT，单独幂等执行）
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "COMMENT ON COLUMN subcontract_order_detail.price IS '单价'"
+                ))
+            print("  subcontract_order_detail.price comment ensured")
+        except Exception as e:
+            print(f"  subcontract_order_detail.price comment skipped: {e}")
+
         # 数据供给旧通用查询模型已下线：删除死表（幂等，每条独立事务）
         for dead_table in ("data_supply_config", "field_mapping"):
             try:
@@ -548,6 +561,23 @@ class DatabaseInitializer:
 
         # 创建唯一约束
         async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE sale_order DROP CONSTRAINT IF EXISTS uq_sale_order"
+                ))
+                await conn.execute(text(
+                    "DROP INDEX IF EXISTS uq_sale_order"
+                ))
+                print("  Old constraint uq_sale_order dropped")
+            except Exception as e:
+                print(f"  Old constraint drop skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sale_order_erp_id ON sale_order (erp_id) WHERE erp_id IS NOT NULL"
+                ))
+                print("  Unique constraint uq_sale_order_erp_id ensured")
+            except Exception as e:
+                print(f"  sale_order erp_id unique constraint skipped: {e}")
             try:
                 await conn.execute(text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_sale_order_line_order_erp ON sale_order_line (order_no, erp_line_id)"
@@ -2069,7 +2099,7 @@ ORDER BY FModifyDate DESC
                     SyncSqlConfig(
                         sync_type="subcontract_order_details",
                         description="委外订单明细 — 从ERP委外订单明细表拉取（幂等键: erp_order_id+detail_id）",
-                        sql_text="-- TODO: 配置 ERP 委外订单明细查询 SQL，返回字段需包含: erp_order_id, detail_id, line_no, unit_id, material_id, qty, delivery_qty, received_qty, returned_qty, amount, mrp_closed_flag, sale_order_line_no, sale_order_id, sale_order_no\nSELECT NULL AS erp_order_id, NULL AS detail_id, NULL AS line_no, NULL AS unit_id, NULL AS material_id, NULL AS qty, NULL AS delivery_qty, NULL AS received_qty, NULL AS returned_qty, NULL AS amount, NULL AS mrp_closed_flag, NULL AS sale_order_line_no, NULL AS sale_order_id, NULL AS sale_order_no WHERE 1 = 0 AND :since IS NOT NULL",
+                        sql_text="-- TODO: 配置 ERP 委外订单明细查询 SQL，返回字段需包含: erp_order_id, detail_id, line_no, unit_id, material_id, qty, delivery_qty, received_qty, returned_qty, price, amount, mrp_closed_flag, sale_order_line_no, sale_order_id, sale_order_no\nSELECT NULL AS erp_order_id, NULL AS detail_id, NULL AS line_no, NULL AS unit_id, NULL AS material_id, NULL AS qty, NULL AS delivery_qty, NULL AS received_qty, NULL AS returned_qty, NULL AS price, NULL AS amount, NULL AS mrp_closed_flag, NULL AS sale_order_line_no, NULL AS sale_order_id, NULL AS sale_order_no WHERE 1 = 0 AND :since IS NOT NULL",
                         field_mapping_json=None,
                         is_active=False,
                         sync_enabled=False,

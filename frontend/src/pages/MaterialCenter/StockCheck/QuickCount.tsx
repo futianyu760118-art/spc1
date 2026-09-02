@@ -189,8 +189,19 @@ export default function QuickCount() {
     if (!today) return
     setFinishing(true)
     try {
-      await materialApi.completeStockCheck(today.check_id)
-      message.success(`单 ${today.check_no} 已完结，下次录入将开新单`)
+      const res: any = await materialApi.completeStockCheck(today.check_id)
+      const ws = res.data?.writeback_summary
+      if (ws && Number(ws.total) > 0) {
+        if (Number(ws.failed) > 0) {
+          message.warning(`单 ${today.check_no} 已完结；K3 单据回写失败 ${ws.failed}/${ws.total} 张，请在盘点工作台重试`, 6)
+        } else if (Number(ws.success) < Number(ws.total)) {
+          message.info(`单 ${today.check_no} 已完结；K3 单据回写未完成（${ws.success}/${ws.total}），请在盘点工作台查看`, 6)
+        } else {
+          message.success(`单 ${today.check_no} 已完结；已生成 K3 盘盈/盘亏单据 ${ws.success}/${ws.total} 张，待仓管员在 K3 审核`, 6)
+        }
+      } else {
+        message.success(`单 ${today.check_no} 已完结，下次录入将开新单`)
+      }
       setFinishedInfo({ id: today.check_id, no: today.check_no })
       setToday(null)
     } catch (e: any) {

@@ -221,6 +221,8 @@ class StockCheckOut(BaseModel):
     co_checkers: Optional[List[Dict[str, Any]]] = None  # [{user_id, name}]
     can_edit: Optional[bool] = None
     items: List[StockCheckItemOut] = []
+    # 盘点完结时的 K3 回写摘要 {total, success, failed, pending};仅 complete 响应携带
+    writeback_summary: Optional[Dict[str, Any]] = None
 
     model_config = {"from_attributes": True}
 
@@ -287,7 +289,7 @@ class StockCheckMyItemOut(BaseModel):
 
 class MaterialHistoryItem(BaseModel):
     check_no: str
-    order_no: str
+    order_no: Optional[str] = None
     customer: Optional[str] = None
     status: str
     check_date: Optional[date] = None
@@ -366,3 +368,39 @@ class K3ImportResultOut(BaseModel):
     created: List[Dict[str, Any]] = []   # [{check_no, erp_bill_no, skipped_items}]
     skipped: List[str] = []              # 已导入过被跳过的 K3 单号
     failed: List[Dict[str, Any]] = []    # [{erp_bill_no, reason}]
+
+
+class StockCheckWritebackOut(BaseModel):
+    """盘点完结 K3 回写记录"""
+    model_config = {"from_attributes": True}
+
+    id: int
+    check_id: int
+    bill_type: str  # gain / loss_transfer
+    wh_id: int
+    wh_code: Optional[str] = None
+    wh_name: Optional[str] = None
+    status: str  # pending / success / failed
+    erp_bill_no: Optional[str] = None
+    k3_inter_id: Optional[int] = None
+    item_count: int = 0
+    total_qty: Decimal = Decimal("0")
+    error_msg: Optional[str] = None
+    retry_count: int = 0
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    written_at: Optional[datetime] = None
+
+
+class WritebackSkippedItemOut(BaseModel):
+    """因无仓库(wh_id=NULL)被跳过的盘差行"""
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    unit: Optional[str] = None
+    diff_qty: Decimal = Decimal("0")
+
+
+class WritebackOverviewOut(BaseModel):
+    """回写总览:记录列表 + 跳过行清单"""
+    writebacks: List[StockCheckWritebackOut] = []
+    skipped_items: List[WritebackSkippedItemOut] = []

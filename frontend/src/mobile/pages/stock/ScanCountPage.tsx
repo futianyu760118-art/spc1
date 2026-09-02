@@ -6,6 +6,7 @@ import { materialApi } from '@/services/api'
 import NavBarSimple from '../../components/NavBarSimple'
 import DigitPad from '../../components/DigitPad'
 import MIcon from '../../components/MIcon'
+import MDialog from '../../components/MDialog'
 
 interface ScanWh { wh_id: number; wh_code?: string | null; wh_name?: string | null }
 interface ResolvedWh extends ScanWh { system_qty?: number | null }
@@ -41,6 +42,8 @@ export default function ScanCountPage() {
 
   const [whList, setWhList] = useState<ScanWh[]>([])
   const [whId, setWhId] = useState<number | null>(null)
+  const [whPicking, setWhPicking] = useState(false)
+  const [camRequested, setCamRequested] = useState(false)
   const [manualCode, setManualCode] = useState('')
   const [mat, setMat] = useState<Resolved | null>(null)
   const [value, setValue] = useState('')
@@ -65,14 +68,17 @@ export default function ScanCountPage() {
         const saved = raw == null || raw === '' ? null : Number(raw)
         setWhId(saved != null && list.some((x) => x.wh_id === saved) ? saved : list[0]?.wh_id ?? null)
         setToday(t.data)
+        // 进页先弹仓库选择，选中(用户手势)后再开摄像头，避免 iOS 无手势时相机黑屏/不弹权限
+        if (list.length > 0) setWhPicking(true)
       } catch {
         /* 拦截器已 toast */
       }
     })()
   }, [])
 
-  // 摄像头生命周期：挂载启动、卸载释放；解码回调只走 ref，避免闭包过期
+  // 摄像头生命周期：选完仓库(camRequested)才启动、卸载释放；解码回调只走 ref，避免闭包过期
   useEffect(() => {
+    if (!camRequested) return
     let stopped = false
     let startPromise: Promise<unknown> | null = null
     void (async () => {
@@ -117,13 +123,20 @@ export default function ScanCountPage() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [camRequested])
 
   function resumeCamera() {
     const sc = scannerRef.current
     if (!sc) return
     // 库的 resume() 类型声明为 void(运行时实际返回 Promise)，用 Promise.resolve 统一接住拒绝
     try { Promise.resolve(sc.resume()).catch(() => {}) } catch { /* camera 已释放则忽略 */ }
+  }
+
+  // 弹窗里选中仓库 → 记住选择并立刻启动摄像头扫码
+  function confirmWh(w: ScanWh) {
+    pickWh(w)
+    setWhPicking(false)
+    setCamRequested(true)
   }
 
   function clearCard() {
@@ -259,8 +272,17 @@ export default function ScanCountPage() {
 
         <div className="m-card scan-cam">
           <div id="scan-viewport" className={camState === 'on' ? '' : 'scan-cam__hide'} />
-          {camState === 'init' && <div className="scan-cam__tip">相机启动中…</div>}
-          {camState === 'error' && (
+          {!camRequested && (
+            <button
+              className="scan-cam__idle"
+              onClick={() => (whList.length > 0 ? setWhPicking(true) : Toast.show('暂无仓库数据'))}
+            >
+              <MIcon name="scan" size={26} />
+              <div>点击选择仓库，开启摄像头扫码</div>
+            </button>
+          )}
+          {camRequested && camState === 'init' && <div className="scan-cam__tip">相机启动中…</div>}
+          {camRequested && camState === 'error' && (
             <div className="scan-cam__err">
               <MIcon name="warn" size={26} />
               <div>相机不可用（需 HTTPS 并授权摄像头）。请用下方手动输入编码。</div>
@@ -357,6 +379,21 @@ export default function ScanCountPage() {
       ) : (
         <div className="scan-idle">扫码或输入编码后录入实盘数</div>
       )}
+
+      <MDialog visible={whPicking} title="选择盘点仓库" onClose={() => setWhPicking(false)}>
+        <div className="scan-pick">
+          {whList.map((w) => (
+            <button
+              key={w.wh_id}
+              className={`scan-pick__item${w.wh_id === whId ? ' on' : ''}`}
+              onClick={() => confirmWh(w)}
+            >
+              <span className="scan-pick__name">{w.wh_name || w.wh_code || `WH#${w.wh_id}`}</span>
+              {w.wh_name && w.wh_code ? <span className="scan-pick__code">{w.wh_code}</span> : null}
+            </button>
+          ))}
+        </div>
+      </MDialog>
     </div>
   )
 }

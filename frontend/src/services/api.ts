@@ -320,6 +320,10 @@ export const materialApi = {
     api.post(`/materials/stock-check/${checkId}/complete`, { expected_version }),
   cancelStockCheck: (checkId: number, expected_version?: number) =>
     api.post(`/materials/stock-check/${checkId}/cancel`, { expected_version }),
+  getStockCheckWritebacks: (checkId: number) =>
+    api.get(`/materials/stock-check/${checkId}/writebacks`),
+  retryStockCheckWritebacks: (checkId: number) =>
+    api.post(`/materials/stock-check/${checkId}/writebacks/retry`),
   getMaterialHistory: (params: { material_id: number }) =>
     api.get('/materials/stock-check/material-history', { params }),
   listMaterialCandidates: (params: { keyword?: string; wh_id?: string | number; page?: number; page_size?: number } = {}) =>
@@ -749,6 +753,7 @@ export const notificationApi = {
 // ============ 用户管理 (基础数据与集成中心) ============
 export const userApi = {
   list: (params?: any) => api.get('/basicdata/users', { params }),
+  stats: () => api.get('/basicdata/users/stats'),
   roles: (params?: Record<string, any>) => api.get('/basicdata/users/roles', { params }),
   employeeOptions: (params?: { keyword?: string }) => api.get('/basicdata/users/employee-options', { params }),
   createRole: (data: { role_code: string; role_name: string; permissions?: Record<string, string[]> }) =>

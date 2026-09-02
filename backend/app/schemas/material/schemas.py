@@ -498,6 +498,7 @@ class SubcontractOrderDetailOut(BaseModel):
     delivery_qty: Optional[float] = None
     received_qty: Optional[float] = None
     returned_qty: Optional[float] = None
+    price: Optional[float] = None
     amount: Optional[float] = None
     mrp_closed_flag: Optional[int] = None
     sale_order_line_no: Optional[int] = None
@@ -548,6 +549,8 @@ class SubcontractOrderDetailCreate(BaseModel):
     material_id: Optional[int] = None
     qty: Optional[float] = None
     delivery_qty: Optional[float] = None
+    price: Optional[float] = None
+    amount: Optional[float] = None
     sale_order_no: Optional[str] = None
     sale_order_id: Optional[int] = None
 
@@ -580,6 +583,8 @@ class SubcontractOrderDetailUpdate(BaseModel):
     material_id: Optional[int] = None
     qty: Optional[float] = None
     delivery_qty: Optional[float] = None
+    price: Optional[float] = None
+    amount: Optional[float] = None
     sale_order_no: Optional[str] = None
     sale_order_id: Optional[int] = None
 

@@ -6,7 +6,7 @@ from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, cast, String, not_
+from sqlalchemy import select, func, or_, and_, cast, String, not_
 from sqlalchemy.orm import aliased
 
 from app.core.database import get_db
@@ -17,6 +17,7 @@ from app.schemas.common import ResponseModel
 from app.schemas.basicdata.schemas import (
     CustomerCreate, CustomerUpdate, CustomerOut,
     SupplierCreate, SupplierUpdate, SupplierOut,
+    SupplierMatchRequest, SupplierMatchItem, SupplierMatchResult,
     MaterialCreate, MaterialUpdate, MaterialOut, MaterialTreeNode,
     SKUCreate, SKUUpdate, SKUOut,
     ProductCreate, ProductUpdate, ProductOut,
@@ -320,17 +321,39 @@ async def list_customers(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.get("/customers/{customer_id}", response_model=CustomerOut)
+@router.get("/customers/stats", response_model=ResponseModel[dict])
+async def get_customer_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "read"))
+):
+    """客户统计：总数 / 按等级 / 停用数"""
+    result = await db.execute(
+        select(Customer.customer_level, Customer.status, func.count())
+        .group_by(Customer.customer_level, Customer.status)
+    )
+    total = 0
+    disabled = 0
+    by_level: Dict[str, int] = {"A": 0, "B": 0, "C": 0, "": 0}
+    for level, status_val, cnt in result.all():
+        total += cnt
+        if status_val == 0:
+            disabled += cnt
+        key = level or ""
+        by_level[key] = by_level.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_level": by_level, "disabled": disabled})
+
+
+@router.get("/customers/{customer_id}", response_model=ResponseModel[CustomerOut])
 async def get_customer(customer_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个客户"""
     result = await db.execute(select(Customer).filter(Customer.id == customer_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="客户不存在")
-    return item
+    return ResponseModel(data=CustomerOut.model_validate(item))
 
 
-@router.post("/customers", response_model=CustomerOut)
+@router.post("/customers", response_model=ResponseModel[CustomerOut])
 async def create_customer(customer: CustomerCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "create"))):
     """创建客户"""
     # 检查编码唯一性
@@ -345,10 +368,10 @@ async def create_customer(customer: CustomerCreate, db: AsyncSession = Depends(g
     await log_audit(db, "customer", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=CustomerOut.model_validate(db_item))
 
 
-@router.put("/customers/{customer_id}", response_model=CustomerOut)
+@router.put("/customers/{customer_id}", response_model=ResponseModel[CustomerOut])
 async def update_customer(customer_id: int, customer: CustomerUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "update"))):
     """更新客户"""
     result = await db.execute(select(Customer).filter(Customer.id == customer_id))
@@ -362,10 +385,10 @@ async def update_customer(customer_id: int, customer: CustomerUpdate, db: AsyncS
         setattr(db_item, field, value)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=CustomerOut.model_validate(db_item))
 
 
-@router.delete("/customers/{customer_id}")
+@router.delete("/customers/{customer_id}", response_model=ResponseModel[dict])
 async def delete_customer(customer_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "delete"))):
     """删除客户"""
     result = await db.execute(select(Customer).filter(Customer.id == customer_id))
@@ -374,12 +397,71 @@ async def delete_customer(customer_id: int, db: AsyncSession = Depends(get_db), 
         raise HTTPException(status_code=404, detail="客户不存在")
     
     await log_audit(db, "customer", db_item.id, "delete", operator=current_user["username"])
-    await db.delete(db_item)
+    db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ── Supplier ──
+def _norm_supplier_name(name: Optional[str]) -> str:
+    """供应商名称归一化：全角括号→半角、去首尾空格"""
+    return (name or "").replace("（", "(").replace("）", ")").strip()
+
+
+@router.post("/suppliers/match", response_model=ResponseModel[SupplierMatchResult])
+async def match_suppliers(
+    req: SupplierMatchRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "read")),
+):
+    """按名称批量匹配供应商：归一化后先精确(name/short)再模糊(LIKE)，供"供应商物料对照"页使用"""
+    names: List[str] = []
+    seen = set()
+    for n in req.names:
+        norm = _norm_supplier_name(n)
+        if norm and norm not in seen:
+            seen.add(norm)
+            names.append(norm)
+    if not names:
+        return ResponseModel(data=SupplierMatchResult(matched=[], unmatched=[]))
+    if len(names) > 200:
+        raise HTTPException(status_code=400, detail="单次最多匹配 200 家供应商名称")
+
+    result = await db.execute(select(Supplier))
+    suppliers = result.scalars().all()
+    matched: List[SupplierMatchItem] = []
+    matched_ids: set = set()
+    unmatched: List[str] = []
+    for name in names:
+        exact = [
+            s for s in suppliers
+            if _norm_supplier_name(s.supplier_name) == name
+            or _norm_supplier_name(s.supplier_short) == name
+        ]
+        hits = exact or [
+            s for s in suppliers
+            if name in _norm_supplier_name(s.supplier_name)
+            or name in _norm_supplier_name(s.supplier_short)
+        ]
+        if not hits:
+            unmatched.append(name)
+            continue
+        for s in hits:
+            if s.id in matched_ids:
+                continue
+            matched_ids.add(s.id)
+            matched.append(SupplierMatchItem(
+                input_name=name,
+                supplier_id=s.id,
+                supplier_name=s.supplier_name,
+                supplier_code=s.supplier_code,
+                supplier_short=s.supplier_short,
+                erp_supply_id=s.erp_supply_id,
+                ambiguous=len(hits) > 1,
+            ))
+    return ResponseModel(data=SupplierMatchResult(matched=matched, unmatched=unmatched))
+
+
 @router.get("/suppliers", response_model=ResponseModel[dict])
 async def list_suppliers(
     page: int = Query(1, ge=1),
@@ -389,6 +471,7 @@ async def list_suppliers(
     sort_order: Optional[str] = Query(None),
     supplier_type: Optional[str] = Query(None, description="供应商类型筛选，逗号分隔"),
     status: Optional[str] = Query(None, description="状态筛选，逗号分隔"),
+    no_erp: bool = Query(False, description="仅未关联ERP(erp_supply_id 为空)"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "read"))
 ):
@@ -412,6 +495,8 @@ async def list_suppliers(
         statuses = [int(s.strip()) for s in status.split(",") if s.strip().isdigit()]
         if statuses:
             query = query.where(Supplier.status.in_(statuses))
+    if no_erp:
+        query = query.where(Supplier.erp_supply_id.is_(None))
 
     count_q = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_q)).scalar() or 0
@@ -421,17 +506,46 @@ async def list_suppliers(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.get("/suppliers/{supplier_id}", response_model=SupplierOut)
+@router.get("/suppliers/stats", response_model=ResponseModel[dict])
+async def get_supplier_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "read"))
+):
+    """供应商统计：总数 / 按类型 / 未关联ERP / 停用数"""
+    result = await db.execute(
+        select(
+            Supplier.supplier_type,
+            Supplier.erp_supply_id,
+            Supplier.status,
+            func.count(),
+        ).group_by(Supplier.supplier_type, Supplier.erp_supply_id, Supplier.status)
+    )
+    total = 0
+    no_erp = 0
+    disabled = 0
+    by_type: Dict[str, int] = {}
+    for stype, erp_id, status_val, cnt in result.all():
+        total += cnt
+        if erp_id is None:
+            no_erp += cnt
+        if status_val == 0:
+            disabled += cnt
+        key = stype or ""
+        by_type[key] = by_type.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_type": by_type, "no_erp": no_erp, "disabled": disabled})
+
+
+@router.get("/suppliers/{supplier_id}", response_model=ResponseModel[SupplierOut])
 async def get_supplier(supplier_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个供应商"""
     result = await db.execute(select(Supplier).filter(Supplier.id == supplier_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="供应商不存在")
-    return item
+    return ResponseModel(data=SupplierOut.model_validate(item))
 
 
-@router.post("/suppliers", response_model=SupplierOut)
+@router.post("/suppliers", response_model=ResponseModel[SupplierOut])
 async def create_supplier(supplier: SupplierCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "create"))):
     """创建供应商"""
     result = await db.execute(select(Supplier).filter(Supplier.supplier_code == supplier.supplier_code))
@@ -445,10 +559,10 @@ async def create_supplier(supplier: SupplierCreate, db: AsyncSession = Depends(g
     await log_audit(db, "supplier", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=SupplierOut.model_validate(db_item))
 
 
-@router.put("/suppliers/{supplier_id}", response_model=SupplierOut)
+@router.put("/suppliers/{supplier_id}", response_model=ResponseModel[SupplierOut])
 async def update_supplier(supplier_id: int, supplier: SupplierUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "update"))):
     """更新供应商"""
     result = await db.execute(select(Supplier).filter(Supplier.id == supplier_id))
@@ -462,10 +576,10 @@ async def update_supplier(supplier_id: int, supplier: SupplierUpdate, db: AsyncS
         setattr(db_item, field, value)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=SupplierOut.model_validate(db_item))
 
 
-@router.delete("/suppliers/{supplier_id}")
+@router.delete("/suppliers/{supplier_id}", response_model=ResponseModel[dict])
 async def delete_supplier(supplier_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "delete"))):
     """删除供应商"""
     result = await db.execute(select(Supplier).filter(Supplier.id == supplier_id))
@@ -474,9 +588,9 @@ async def delete_supplier(supplier_id: int, db: AsyncSession = Depends(get_db), 
         raise HTTPException(status_code=404, detail="供应商不存在")
     
     await log_audit(db, "supplier", db_item.id, "delete", operator=current_user["username"])
-    await db.delete(db_item)
+    db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ── Material ──
@@ -525,6 +639,7 @@ async def list_materials(
     status: Optional[str] = Query(None, description="状态筛选，逗号分隔"),
     material_property: Optional[str] = Query(None, description="物料属性筛选，逗号分隔(1外购/2自制/3委外/5虚拟件/9组装件)"),
     data_source: Optional[str] = Query(None, description="数据来源筛选，逗号分隔(erp/manual/excel)"),
+    ids: Optional[str] = Query(None, description="内部ID筛选，逗号分隔，上限200"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data.materials", "read"))
 ):
@@ -543,6 +658,13 @@ async def list_materials(
         'last_outbound_date': Material.last_outbound_date,
     }
     query = select(Material).filter(Material.is_deleted == 0)
+    if ids:
+        id_list = list(dict.fromkeys(int(v.strip()) for v in ids.split(",") if v.strip().isdigit()))
+        if not id_list:
+            raise HTTPException(status_code=400, detail="ids 参数无效")
+        if len(id_list) > 200:
+            raise HTTPException(status_code=400, detail="ids 数量超过上限 200")
+        query = query.where(Material.id.in_(id_list))
     if parent_id is not None:
         query = query.filter(Material.parent_id == parent_id)
     if keyword:
@@ -603,6 +725,52 @@ async def get_material_stats(
     return ResponseModel(data={
         "total": total, "disabled": disabled, "by_property": by_property, "types": types,
     })
+
+
+@router.get("/materials/by-suppliers", response_model=ResponseModel[dict])
+async def list_materials_by_suppliers(
+    erp_supply_ids: str = Query(..., description="供应商ERP内部ID(erp_supply_id)，逗号分隔"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.materials", "read")),
+):
+    """按供应商查物料明细（供应商物料对照页）。注意 Material.supplier_id 存的是 Supplier.erp_supply_id"""
+    ids = list(dict.fromkeys(
+        int(x.strip()) for x in erp_supply_ids.split(",") if x.strip().isdigit()
+    ))
+    if not ids:
+        raise HTTPException(status_code=400, detail="erp_supply_ids 不能为空")
+    if len(ids) > 200:
+        raise HTTPException(status_code=400, detail="单次最多 200 家供应商")
+
+    query = (
+        select(Material, Supplier.supplier_name, Supplier.supplier_code)
+        .join(Supplier, Material.supplier_id == Supplier.erp_supply_id, isouter=True)
+        .filter(Material.is_deleted == 0, Material.supplier_id.in_(ids))
+        .order_by(Supplier.supplier_name, Material.material_code)
+    )
+    result = await db.execute(query)
+    rows = result.all()
+    truncated = len(rows) > 5000
+    if truncated:
+        rows = rows[:5000]
+    items = [
+        {
+            "erp_material_id": m.erp_material_id,
+            "material_code": m.material_code,
+            "material_name": m.material_name,
+            "spec_model": m.spec_model,
+            "material_type": m.material_type,
+            "brand": m.brand,
+            "material_property": m.material_property,
+            "order_unit_price": m.order_unit_price,
+            "data_source": m.data_source,
+            "supplier_name": sname,
+            "supplier_code": scode,
+        }
+        for m, sname, scode in rows
+    ]
+    msg = "结果超过 5000 条已截断，请缩小供应商范围" if truncated else "success"
+    return ResponseModel(message=msg, data={"items": items, "total": len(items)})
 
 
 @router.get("/materials/{erp_material_id}", response_model=ResponseModel[MaterialOut])
@@ -700,6 +868,8 @@ async def list_skus(
     keyword: Optional[str] = Query(None, description="搜索编码/名称"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query(None),
+    has_barcode: Optional[bool] = Query(None, description="有条码筛选:true=仅有条码,false=仅缺条码"),
+    ids: Optional[str] = Query(None, description="关联物料ID(material_id)筛选，逗号分隔，上限200"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "read"))
 ):
@@ -714,6 +884,18 @@ async def list_skus(
     if keyword:
         like = f"%{keyword}%"
         query = query.where(or_(SKU.sku_code.ilike(like), SKU.sku_name.ilike(like)))
+    if has_barcode is True:
+        query = query.where(SKU.barcode.isnot(None), SKU.barcode != "")
+    elif has_barcode is False:
+        query = query.where(or_(SKU.barcode.is_(None), SKU.barcode == ""))
+    if ids:
+        material_ids = list(dict.fromkeys(
+            int(v.strip()) for v in ids.split(",") if v.strip().isdigit()
+        ))
+        if material_ids:
+            if len(material_ids) > 200:
+                raise HTTPException(status_code=400, detail="单次最多 200 个物料ID")
+            query = query.where(SKU.material_id.in_(material_ids))
 
     count_q = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_q)).scalar() or 0
@@ -723,17 +905,34 @@ async def list_skus(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.get("/skus/{sku_id}", response_model=SKUOut)
+@router.get("/skus/stats", response_model=ResponseModel[dict])
+async def get_sku_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "read"))
+):
+    """SKU统计：总数 / 有条码 / 缺条码"""
+    has_barcode = and_(SKU.barcode.isnot(None), SKU.barcode != "")
+    result = await db.execute(select(has_barcode, func.count()).group_by(has_barcode))
+    total = 0
+    with_barcode = 0
+    for flag, cnt in result.all():
+        total += cnt
+        if flag:
+            with_barcode += cnt
+    return ResponseModel(data={"total": total, "with_barcode": with_barcode, "without_barcode": total - with_barcode})
+
+
+@router.get("/skus/{sku_id}", response_model=ResponseModel[SKUOut])
 async def get_sku(sku_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个SKU"""
     result = await db.execute(select(SKU).filter(SKU.id == sku_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="SKU不存在")
-    return item
+    return ResponseModel(data=SKUOut.model_validate(item))
 
 
-@router.post("/skus", response_model=SKUOut)
+@router.post("/skus", response_model=ResponseModel[SKUOut])
 async def create_sku(sku: SKUCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "create"))):
     """创建SKU"""
     result = await db.execute(select(SKU).filter(SKU.sku_code == sku.sku_code))
@@ -747,10 +946,10 @@ async def create_sku(sku: SKUCreate, db: AsyncSession = Depends(get_db), current
     await log_audit(db, "sku", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=SKUOut.model_validate(db_item))
 
 
-@router.put("/skus/{sku_id}", response_model=SKUOut)
+@router.put("/skus/{sku_id}", response_model=ResponseModel[SKUOut])
 async def update_sku(sku_id: int, sku: SKUUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "update"))):
     """更新SKU"""
     result = await db.execute(select(SKU).filter(SKU.id == sku_id))
@@ -764,10 +963,10 @@ async def update_sku(sku_id: int, sku: SKUUpdate, db: AsyncSession = Depends(get
         setattr(db_item, field, value)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=SKUOut.model_validate(db_item))
 
 
-@router.delete("/skus/{sku_id}")
+@router.delete("/skus/{sku_id}", response_model=ResponseModel[dict])
 async def delete_sku(sku_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "delete"))):
     """删除SKU"""
     result = await db.execute(select(SKU).filter(SKU.id == sku_id))
@@ -776,9 +975,9 @@ async def delete_sku(sku_id: int, db: AsyncSession = Depends(get_db), current_us
         raise HTTPException(status_code=404, detail="SKU不存在")
     
     await log_audit(db, "sku", db_item.id, "delete", operator=current_user["username"])
-    await db.delete(db_item)
+    db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ── Product ──
@@ -789,6 +988,7 @@ async def list_products(
     keyword: Optional[str] = Query(None, description="搜索编码"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query(None),
+    product_line: Optional[str] = Query(None, description="产品线精确筛选"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data.products", "read"))
 ):
@@ -803,6 +1003,8 @@ async def list_products(
     if keyword:
         like = f"%{keyword}%"
         query = query.where(Product.product_code.ilike(like))
+    if product_line:
+        query = query.where(Product.product_line == product_line)
 
     count_q = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_q)).scalar() or 0
@@ -812,17 +1014,40 @@ async def list_products(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.get("/products/{product_id}", response_model=ProductOut)
+@router.get("/products/stats", response_model=ResponseModel[dict])
+async def get_product_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.products", "read"))
+):
+    """产品统计：总数 / 按产品线 / 缺默认仓库"""
+    missing_wh = or_(Product.default_warehouse.is_(None), Product.default_warehouse == "")
+    result = await db.execute(
+        select(Product.product_line, missing_wh, func.count())
+        .group_by(Product.product_line, missing_wh)
+    )
+    total = 0
+    missing_default_warehouse = 0
+    by_product_line: Dict[str, int] = {}
+    for line, missing, cnt in result.all():
+        total += cnt
+        if missing:
+            missing_default_warehouse += cnt
+        key = line or ""
+        by_product_line[key] = by_product_line.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_product_line": by_product_line, "missing_default_warehouse": missing_default_warehouse})
+
+
+@router.get("/products/{product_id}", response_model=ResponseModel[ProductOut])
 async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个产品"""
     result = await db.execute(select(Product).filter(Product.id == product_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="产品不存在")
-    return item
+    return ResponseModel(data=ProductOut.model_validate(item))
 
 
-@router.post("/products", response_model=ProductOut)
+@router.post("/products", response_model=ResponseModel[ProductOut])
 async def create_product(product: ProductCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.products", "create"))):
     """创建产品"""
     result = await db.execute(select(Product).filter(Product.product_code == product.product_code))
@@ -836,10 +1061,10 @@ async def create_product(product: ProductCreate, db: AsyncSession = Depends(get_
     await log_audit(db, "product", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=ProductOut.model_validate(db_item))
 
 
-@router.put("/products/{product_id}", response_model=ProductOut)
+@router.put("/products/{product_id}", response_model=ResponseModel[ProductOut])
 async def update_product(product_id: int, product: ProductUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.products", "update"))):
     """更新产品"""
     result = await db.execute(select(Product).filter(Product.id == product_id))
@@ -853,10 +1078,10 @@ async def update_product(product_id: int, product: ProductUpdate, db: AsyncSessi
         setattr(db_item, field, value)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=ProductOut.model_validate(db_item))
 
 
-@router.delete("/products/{product_id}")
+@router.delete("/products/{product_id}", response_model=ResponseModel[dict])
 async def delete_product(product_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.products", "delete"))):
     """删除产品"""
     result = await db.execute(select(Product).filter(Product.id == product_id))
@@ -865,9 +1090,9 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db), cu
         raise HTTPException(status_code=404, detail="产品不存在")
     
     await log_audit(db, "product", db_item.id, "delete", operator=current_user["username"])
-    await db.delete(db_item)
+    db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ── Warehouse ──
@@ -911,17 +1136,42 @@ async def list_warehouses(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.get("/warehouses/{warehouse_id}", response_model=WarehouseOut)
+@router.get("/warehouses/stats", response_model=ResponseModel[dict])
+async def get_warehouse_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "read"))
+):
+    """仓库统计：总数 / 按类型 / 停用数 / 未删库位数"""
+    result = await db.execute(
+        select(Warehouse.wh_type, Warehouse.is_enabled, func.count())
+        .group_by(Warehouse.wh_type, Warehouse.is_enabled)
+    )
+    total = 0
+    disabled = 0
+    by_type: Dict[str, int] = {}
+    for wtype, enabled_val, cnt in result.all():
+        total += cnt
+        if enabled_val == 0:
+            disabled += cnt
+        key = wtype or ""
+        by_type[key] = by_type.get(key, 0) + cnt
+    location_count = (await db.execute(
+        select(func.count()).select_from(Location).where(Location.is_deleted == 0)
+    )).scalar() or 0
+    return ResponseModel(data={"total": total, "by_type": by_type, "disabled": disabled, "location_count": location_count})
+
+
+@router.get("/warehouses/{warehouse_id}", response_model=ResponseModel[WarehouseOut])
 async def get_warehouse(warehouse_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个仓库"""
     result = await db.execute(select(Warehouse).filter(Warehouse.id == warehouse_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="仓库不存在")
-    return item
+    return ResponseModel(data=WarehouseOut.model_validate(item))
 
 
-@router.post("/warehouses", response_model=WarehouseOut)
+@router.post("/warehouses", response_model=ResponseModel[WarehouseOut])
 async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "create"))):
     """创建仓库"""
     result = await db.execute(select(Warehouse).filter(Warehouse.wh_code == warehouse.wh_code))
@@ -935,10 +1185,10 @@ async def create_warehouse(warehouse: WarehouseCreate, db: AsyncSession = Depend
     await log_audit(db, "warehouse", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=WarehouseOut.model_validate(db_item))
 
 
-@router.put("/warehouses/{warehouse_id}", response_model=WarehouseOut)
+@router.put("/warehouses/{warehouse_id}", response_model=ResponseModel[WarehouseOut])
 async def update_warehouse(warehouse_id: int, warehouse: WarehouseUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "update"))):
     """更新仓库"""
     result = await db.execute(select(Warehouse).filter(Warehouse.id == warehouse_id))
@@ -952,10 +1202,10 @@ async def update_warehouse(warehouse_id: int, warehouse: WarehouseUpdate, db: As
         setattr(db_item, field, value)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=WarehouseOut.model_validate(db_item))
 
 
-@router.delete("/warehouses/{warehouse_id}")
+@router.delete("/warehouses/{warehouse_id}", response_model=ResponseModel[dict])
 async def delete_warehouse(warehouse_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "delete"))):
     """删除仓库"""
     result = await db.execute(select(Warehouse).filter(Warehouse.id == warehouse_id))
@@ -964,9 +1214,9 @@ async def delete_warehouse(warehouse_id: int, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=404, detail="仓库不存在")
     
     await log_audit(db, "warehouse", db_item.id, "delete", operator=current_user["username"])
-    await db.delete(db_item)
+    db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ── Location ──
@@ -1016,17 +1266,85 @@ async def list_locations(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.get("/locations/{location_id}", response_model=LocationOut)
+@router.get("/locations/stats", response_model=ResponseModel[dict])
+async def get_location_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "read"))
+):
+    """库位统计（含软删）：总数 / 按层级 / 软删数 / 按来源"""
+    result = await db.execute(
+        select(Location.depth, Location.is_deleted, Location.data_source, func.count())
+        .group_by(Location.depth, Location.is_deleted, Location.data_source)
+    )
+    total = 0
+    deleted = 0
+    by_depth: Dict[str, int] = {}
+    by_source: Dict[str, int] = {}
+    for depth, deleted_val, source, cnt in result.all():
+        total += cnt
+        if deleted_val == 1:
+            deleted += cnt
+        by_depth[str(depth)] = by_depth.get(str(depth), 0) + cnt
+        key = source or ""
+        by_source[key] = by_source.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_depth": by_depth, "deleted": deleted, "by_source": by_source})
+
+
+@router.get("/locations/tree", response_model=ResponseModel[dict])
+async def get_location_tree(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "read"))
+):
+    """查询库位树形结构（含软删，按 depth→location_id 排序）"""
+    result = await db.execute(
+        select(Location).order_by(Location.depth, Location.location_id)
+    )
+    all_items = result.scalars().all()
+
+    node_map: dict[int, dict] = {}
+    for item in all_items:
+        node_map[item.location_id] = {
+            "id": item.id,
+            "location_id": item.location_id,
+            "location_code": item.location_code,
+            "location_name": item.location_name,
+            "location_full_name": item.location_full_name,
+            "depth": item.depth,
+            "detail_flag": item.detail_flag,
+            "parent_id": item.parent_id,
+            "data_source": item.data_source,
+            "system_type": item.system_type,
+            "is_deleted": item.is_deleted,
+            "children": [],
+        }
+
+    roots: List[dict] = []
+    for item in all_items:
+        node = node_map.get(item.location_id)
+        if not node:
+            continue
+        if item.parent_id is None or item.parent_id == "":
+            roots.append(node)
+        else:
+            parent = node_map.get(item.parent_id)
+            if parent:
+                parent["children"].append(node)
+            else:
+                roots.append(node)
+    return ResponseModel(data={"tree": roots, "total": len(all_items)})
+
+
+@router.get("/locations/{location_id}", response_model=ResponseModel[LocationOut])
 async def get_location(location_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个库位"""
     result = await db.execute(select(Location).filter(Location.id == location_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="库位不存在")
-    return item
+    return ResponseModel(data=LocationOut.model_validate(item))
 
 
-@router.post("/locations", response_model=LocationOut)
+@router.post("/locations", response_model=ResponseModel[LocationOut])
 async def create_location(location: LocationCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "create"))):
     """创建库位"""
     result = await db.execute(select(Location).filter(Location.location_id == location.location_id))
@@ -1040,10 +1358,10 @@ async def create_location(location: LocationCreate, db: AsyncSession = Depends(g
     await log_audit(db, "location", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=LocationOut.model_validate(db_item))
 
 
-@router.put("/locations/{location_id}", response_model=LocationOut)
+@router.put("/locations/{location_id}", response_model=ResponseModel[LocationOut])
 async def update_location(location_id: int, location: LocationUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "update"))):
     """更新库位"""
     result = await db.execute(select(Location).filter(Location.id == location_id))
@@ -1057,10 +1375,10 @@ async def update_location(location_id: int, location: LocationUpdate, db: AsyncS
         setattr(db_item, field, value)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=LocationOut.model_validate(db_item))
 
 
-@router.delete("/locations/{location_id}")
+@router.delete("/locations/{location_id}", response_model=ResponseModel[dict])
 async def delete_location(location_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "delete"))):
     """删除库位"""
     result = await db.execute(select(Location).filter(Location.id == location_id))
@@ -1069,9 +1387,9 @@ async def delete_location(location_id: int, db: AsyncSession = Depends(get_db), 
         raise HTTPException(status_code=404, detail="库位不存在")
     
     await log_audit(db, "location", db_item.id, "delete", operator=current_user["username"])
-    await db.delete(db_item)
+    db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ── Process ──
@@ -1116,17 +1434,51 @@ async def list_processes(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
-@router.get("/processes/{process_id}", response_model=ProcessOut)
+@router.get("/processes/stats", response_model=ResponseModel[dict])
+async def get_process_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "read"))
+):
+    """工序统计：总数 / 质检点 / 分组数 / 缺标准工时"""
+    result = await db.execute(
+        select(
+            Process.is_qc_point,
+            Process.standard_hour,
+            func.count(),
+        ).group_by(Process.is_qc_point, Process.standard_hour)
+    )
+    total = 0
+    qc_points = 0
+    missing_standard_hour = 0
+    for qc_val, std_hour, cnt in result.all():
+        total += cnt
+        if qc_val == 1:
+            qc_points += cnt
+        if std_hour is None:
+            missing_standard_hour += cnt
+    groups = (await db.execute(
+        select(func.count(func.distinct(Process.process_group)))
+    )).scalar() or 0
+    group_rows = await db.execute(
+        select(Process.process_group, func.count()).group_by(Process.process_group)
+    )
+    by_group: Dict[str, int] = {}
+    for gname, gcnt in group_rows.all():
+        by_group[gname or "未分组"] = gcnt
+    return ResponseModel(data={"total": total, "qc_points": qc_points, "groups": groups, "missing_standard_hour": missing_standard_hour, "by_group": by_group})
+
+
+@router.get("/processes/{process_id}", response_model=ResponseModel[ProcessOut])
 async def get_process(process_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个工序"""
     result = await db.execute(select(Process).filter(Process.id == process_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="工序不存在")
-    return item
+    return ResponseModel(data=ProcessOut.model_validate(item))
 
 
-@router.post("/processes", response_model=ProcessOut)
+@router.post("/processes", response_model=ResponseModel[ProcessOut])
 async def create_process(process: ProcessCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "create"))):
     """创建工序"""
     result = await db.execute(select(Process).filter(Process.process_code == process.process_code))
@@ -1140,10 +1492,10 @@ async def create_process(process: ProcessCreate, db: AsyncSession = Depends(get_
     await log_audit(db, "process", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=ProcessOut.model_validate(db_item))
 
 
-@router.put("/processes/{process_id}", response_model=ProcessOut)
+@router.put("/processes/{process_id}", response_model=ResponseModel[ProcessOut])
 async def update_process(process_id: int, process: ProcessUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "update"))):
     """更新工序"""
     result = await db.execute(select(Process).filter(Process.id == process_id))
@@ -1157,10 +1509,10 @@ async def update_process(process_id: int, process: ProcessUpdate, db: AsyncSessi
         setattr(db_item, field, value)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=ProcessOut.model_validate(db_item))
 
 
-@router.delete("/processes/{process_id}")
+@router.delete("/processes/{process_id}", response_model=ResponseModel[dict])
 async def delete_process(process_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "delete"))):
     """删除工序"""
     result = await db.execute(select(Process).filter(Process.id == process_id))
@@ -1169,9 +1521,9 @@ async def delete_process(process_id: int, db: AsyncSession = Depends(get_db), cu
         raise HTTPException(status_code=404, detail="工序不存在")
     
     await log_audit(db, "process", db_item.id, "delete", operator=current_user["username"])
-    await db.delete(db_item)
+    db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ── Organization ──
@@ -1272,6 +1624,28 @@ async def list_organizations(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
+@router.get("/organizations/stats", response_model=ResponseModel[dict])
+async def get_organization_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "read"))
+):
+    """组织统计：总数 / 按类型 / 缺负责人"""
+    result = await db.execute(
+        select(Organization.org_type, Organization.leader_id.is_(None), func.count())
+        .group_by(Organization.org_type, Organization.leader_id.is_(None))
+    )
+    total = 0
+    missing_leader = 0
+    by_type: Dict[str, int] = {}
+    for otype, missing_flag, cnt in result.all():
+        total += cnt
+        if missing_flag:
+            missing_leader += cnt
+        key = otype or ""
+        by_type[key] = by_type.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_type": by_type, "missing_leader": missing_leader})
+
+
 @router.get("/organizations/{org_id}", response_model=OrganizationWithLeaderOut)
 async def get_organization(org_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "read"))):
     """查询单个组织（含负责人姓名）"""
@@ -1289,52 +1663,52 @@ async def get_organization(org_id: int, db: AsyncSession = Depends(get_db), curr
     return org_out
 
 
-@router.post("/organizations", response_model=OrganizationOut)
+@router.post("/organizations", response_model=ResponseModel[OrganizationOut])
 async def create_organization(org: OrganizationCreate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "create"))):
     """创建组织"""
     result = await db.execute(select(Organization).filter(Organization.org_code == org.org_code))
     existing = result.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=400, detail="组织编码已存在")
-    
+
     db_item = Organization(**org.model_dump())
     db.add(db_item)
     await db.flush()
     await log_audit(db, "organization", db_item.id, "create", operator=current_user["username"])
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=OrganizationOut.model_validate(db_item))
 
 
-@router.put("/organizations/{org_id}", response_model=OrganizationOut)
+@router.put("/organizations/{org_id}", response_model=ResponseModel[OrganizationOut])
 async def update_organization(org_id: int, org: OrganizationUpdate, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "update"))):
     """更新组织"""
     result = await db.execute(select(Organization).filter(Organization.id == org_id))
     db_item = result.scalar_one_or_none()
     if not db_item:
         raise HTTPException(status_code=404, detail="组织不存在")
-    
+
     update_data = org.model_dump(exclude_unset=True)
     await log_audit(db, "organization", db_item.id, "update", old_obj=db_item, update_data=update_data, operator=current_user["username"])
     for field, value in update_data.items():
         setattr(db_item, field, value)
     await db.commit()
     await db.refresh(db_item)
-    return db_item
+    return ResponseModel(data=OrganizationOut.model_validate(db_item))
 
 
-@router.delete("/organizations/{org_id}")
+@router.delete("/organizations/{org_id}", response_model=ResponseModel[dict])
 async def delete_organization(org_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "delete"))):
     """删除组织"""
     result = await db.execute(select(Organization).filter(Organization.id == org_id))
     db_item = result.scalar_one_or_none()
     if not db_item:
         raise HTTPException(status_code=404, detail="组织不存在")
-    
+
     await log_audit(db, "organization", db_item.id, "delete", operator=current_user["username"])
     await db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 # ── Employee ──
@@ -1377,6 +1751,25 @@ async def list_positions(
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
     items = [_position_out(position) for position in result.scalars().all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/positions/stats", response_model=ResponseModel[dict])
+async def get_position_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.positions", "read"))
+):
+    """岗位统计：总数 / 启用 / 停用"""
+    result = await db.execute(select(Position.status, func.count()).group_by(Position.status))
+    total = 0
+    enabled = 0
+    disabled = 0
+    for st, cnt in result.all():
+        total += cnt
+        if st == 1:
+            enabled += cnt
+        elif st == 0:
+            disabled += cnt
+    return ResponseModel(data={"total": total, "enabled": enabled, "disabled": disabled})
 
 
 @router.get("/positions/{position_id}", response_model=PositionOut)
@@ -1438,6 +1831,22 @@ async def list_employees(
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
     items = [_employee_out(employee, position_name, mgr_name) for employee, position_name, mgr_name in result.all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/employees/stats", response_model=ResponseModel[dict])
+async def get_employee_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "read"))
+):
+    """人员统计：总数 / 按状态（8 态全覆盖）"""
+    result = await db.execute(select(Employee.status, func.count()).group_by(Employee.status))
+    by_status: Dict[str, int] = {str(i): 0 for i in range(8)}
+    total = 0
+    for st, cnt in result.all():
+        total += cnt
+        key = str(st)
+        by_status[key] = by_status.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_status": by_status})
 
 
 @router.get("/employees/{employee_id}", response_model=EmployeeOut)
@@ -1528,14 +1937,14 @@ async def update_employee(employee_id: int, employee: EmployeeUpdate, db: AsyncS
     return _employee_out(db_item, position_name, manager_name)
 
 
-@router.delete("/employees/{employee_id}")
+@router.delete("/employees/{employee_id}", response_model=ResponseModel[dict])
 async def delete_employee(employee_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "delete"))):
     """删除人员"""
     result = await db.execute(select(Employee).filter(Employee.id == employee_id))
     db_item = result.scalar_one_or_none()
     if not db_item:
         raise HTTPException(status_code=404, detail="人员不存在")
-    
+
     # 上下级权限检查：非 admin 只能删除自己或下级
     if not _can_manage_employee(current_user, db_item):
         raise HTTPException(status_code=403, detail="无权删除该员工信息")
@@ -1543,7 +1952,7 @@ async def delete_employee(employee_id: int, db: AsyncSession = Depends(get_db), 
     await log_audit(db, "employee", db_item.id, "delete", operator=current_user["username"])
     await db.delete(db_item)
     await db.commit()
-    return {"message": "删除成功"}
+    return ResponseModel(message="删除成功")
 
 
 @router.get("/organizations/{org_identifier}/employees", response_model=ResponseModel[dict])

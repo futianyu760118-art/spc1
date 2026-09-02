@@ -467,7 +467,7 @@ async def create_stock_check_from_order(
     co_checker_user_ids: 共同盘点人(sys_user.id)列表，可与创建人共同修改盘点单。
     recent_days: 近 N 天内已盘视为"近期已盘"免盘;None=用配置默认。
     """
-    order = (await db.execute(select(SaleOrder.id).where(SaleOrder.order_no == order_no))).scalar_one_or_none()
+    order = (await db.execute(select(SaleOrder.id).where(SaleOrder.order_no == order_no).limit(1))).scalar_one_or_none()
     if not order:
         raise ValueError(f"订单 {order_no} 不存在")
 

@@ -189,10 +189,11 @@ export default function ScrapInventory() {
     setCollapsed(false)
   }
 
+  /** 导出：默认跟随当前筛选结果（状态 chips + 关键字），可显式指定目标（选中/仅有库存） */
   const doExport = async (format: 'xlsx' | 'csv', target?: string[]) => {
-    const list = target && target.length ? target : codes
+    const list = target && target.length ? target : filteredCodes
     if (!list.length) {
-      message.warning('请先查询')
+      message.warning('当前筛选下没有可导出的数据')
       return
     }
     await exportPostData('/api/v1/materials/scrap-inventory/export', { codes: list, format }, `报废物料库存.${format}`)
@@ -220,6 +221,8 @@ export default function ScrapInventory() {
     () => rows.filter(r => r.status === STATUS_HAS).map(r => r.material_code),
     [rows],
   )
+  /** 当前筛选（状态 chips + 搜索关键字）下的代码列表，导出默认口径 */
+  const filteredCodes = useMemo(() => filtered.map(r => r.material_code), [filtered])
   const whTotal = useMemo(() => {
     const s = new Set<string>()
     rows.filter(r => r.status === STATUS_HAS).forEach(r => r.warehouses.forEach(w => s.add(w.wh_name || w.wh_code || `#${w.wh_id}`)))
@@ -449,8 +452,18 @@ export default function ScrapInventory() {
             <ReloadOutlined />
           </span>
           <span className="vsep" />
-          <Button icon={<FileTextOutlined />} size="small" disabled={!codes.length} loading={exporting} onClick={() => doExport('csv')}>导出 CSV</Button>
-          <Button type="primary" size="small" icon={<FileExcelOutlined />} disabled={!codes.length} loading={exporting} onClick={() => doExport('xlsx')}>导出 Excel</Button>
+          <Button
+            icon={<FileTextOutlined />} size="small"
+            disabled={!filteredCodes.length} loading={exporting}
+            title={`导出当前筛选结果（${filteredCodes.length} 项）`}
+            onClick={() => doExport('csv')}
+          >导出 CSV</Button>
+          <Button
+            type="primary" size="small" icon={<FileExcelOutlined />}
+            disabled={!filteredCodes.length} loading={exporting}
+            title={`导出当前筛选结果（${filteredCodes.length} 项）`}
+            onClick={() => doExport('xlsx')}
+          >导出 Excel</Button>
         </div>
       </div>
 

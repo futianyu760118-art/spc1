@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Table, Input, Button, message, Modal, Card, Row, Col, InputNumber,
   Spin, Tour, Drawer, Empty, Tooltip, Segmented, Select, Dropdown,
+  Alert, Tag,
 } from 'antd'
 import {
   SearchOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined,
@@ -28,7 +29,7 @@ import { useStockCheckSync } from '@/hooks/useStockCheckSync'
 import ConflictModal, { ConflictDraft } from './ConflictModal'
 import { useAuthStore } from '@/store/auth'
 import { STATUS_MAP, AVATAR_COLORS, checkTypeTag, AvatarStack, ScTag } from './types'
-import type { StockCheck, StockCheckItem, MaterialCandidate, MaterialHistoryItem } from './types'
+import type { StockCheck, StockCheckItem, MaterialCandidate, MaterialHistoryItem, StockCheckWriteback, WritebackOverview } from './types'
 
 const STOCK_CHECK_EXPORT_OPTIONS: ExportColumnOption[] = [
   { field: 'material_code', label: '物料编码' },
@@ -487,7 +488,19 @@ export default function StockCheckWorkbench() {
           setActiveCheck(res.data)
           setItems(res.data.items || [])
           captureBaseline(res.data.items || [])
-          message.success('已完结')
+          const ws = res.data?.writeback_summary
+          if (ws && Number(ws.total) > 0) {
+            if (Number(ws.failed) > 0) {
+              message.warning(`已完结；K3 单据回写失败 ${ws.failed}/${ws.total} 张，可在下方「K3 回写」卡片重试`, 6)
+            } else if (Number(ws.success) < Number(ws.total)) {
+              message.info(`已完结；K3 单据回写未完成（${ws.success}/${ws.total}），请在「K3 回写」卡片查看`, 6)
+            } else {
+              message.success(`已完结；已生成 K3 单据 ${ws.success}/${ws.total} 张，待仓管员在 K3 审核`, 6)
+            }
+          } else {
+            message.success('已完结')
+          }
+          if (activeCheck?.id) loadWritebacks(activeCheck.id)
         } catch (e: any) {
           const code = e?.response?.data?.detail?.code ?? e?.response?.data?.code
           if (code === 409) {
@@ -524,6 +537,47 @@ export default function StockCheckWorkbench() {
       },
     })
   }, [activeCheck, loadCheck])
+
+  // ===== K3 回写卡片 =====
+  const [wbOverview, setWbOverview] = useState<WritebackOverview | null>(null)
+  const [wbLoading, setWbLoading] = useState(false)
+  const [wbRetrying, setWbRetrying] = useState(false)
+
+  const loadWritebacks = useCallback(async (checkId: number) => {
+    setWbLoading(true)
+    try {
+      const res: any = await materialApi.getStockCheckWritebacks(checkId)
+      setWbOverview(res.data)
+    } catch {
+      setWbOverview(null)
+    } finally {
+      setWbLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeCheck?.id && activeCheck.status === 'completed') {
+      loadWritebacks(activeCheck.id)
+    } else {
+      setWbOverview(null)
+    }
+  }, [activeCheck?.id, activeCheck?.status, loadWritebacks])
+
+  const retryWritebacks = useCallback(async () => {
+    if (!activeCheck?.id) return
+    setWbRetrying(true)
+    try {
+      const res: any = await materialApi.retryStockCheckWritebacks(activeCheck.id)
+      setWbOverview(res.data)
+      const failed = (res.data?.writebacks || []).filter((w: StockCheckWriteback) => w.status === 'failed').length
+      if (failed > 0) message.warning(`仍有 ${failed} 张单据回写失败，请检查失败原因`)
+      else message.success('K3 单据回写成功')
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e.message || '重试失败')
+    } finally {
+      setWbRetrying(false)
+    }
+  }, [activeCheck?.id])
 
   // ===== 补入子BOM / 刷新仓库 / 协同人 =====
   const handleRefreshBom = useCallback(async () => {
@@ -1256,6 +1310,52 @@ export default function StockCheckWorkbench() {
           </span>
         )}
       </div>
+
+      {/* ===== K3 回写卡片（已完结盘点单） ===== */}
+      {activeCheck?.status === 'completed' && (
+        <Card size="small" title="K3 回写" style={{ marginTop: 12 }}
+          extra={
+            wbOverview && wbOverview.writebacks.some((w) => w.status === 'failed') ? (
+              <Button size="small" loading={wbRetrying} onClick={retryWritebacks}>重试失败单据</Button>
+            ) : null
+          }
+        >
+          <Alert type="info" showIcon style={{ marginBottom: 8 }}
+            message="盘盈生成 K3 盘盈入库单、盘亏生成调拨单（调入库存检查不良仓）；单据为未审核状态，需仓管员在 K3 中审核后库存才会调整，并经 ERP 同步回流本系统。" />
+          {wbOverview && wbOverview.skipped_items.length > 0 && (
+            <Alert type="warning" showIcon style={{ marginBottom: 8 }}
+              message="以下盘差行无仓库信息，未生成 K3 单据"
+              description={wbOverview.skipped_items.map((s, i) => (
+                <span key={i}>
+                  {s.material_code || s.material_name || '-'}（差异 {s.diff_qty}）{i < wbOverview.skipped_items.length - 1 ? '、' : ''}
+                </span>
+              ))} />
+          )}
+          <Table size="small" rowKey="id" loading={wbLoading}
+            dataSource={wbOverview?.writebacks || []} pagination={false}
+            columns={[
+              {
+                title: '类型', dataIndex: 'bill_type', width: 110,
+                render: (v: string) => (v === 'gain' ? '盘盈入库单' : '盘亏调拨单'),
+              },
+              { title: '仓库', dataIndex: 'wh_name', width: 140, render: (v: string, r: StockCheckWriteback) => v || r.wh_code || r.wh_id },
+              { title: '明细行数', dataIndex: 'item_count', width: 90 },
+              { title: '数量合计', dataIndex: 'total_qty', width: 110 },
+              {
+                title: '状态', dataIndex: 'status', width: 90,
+                render: (v: string) =>
+                  v === 'success' ? <Tag color="success">已生成</Tag> :
+                  v === 'failed' ? <Tag color="error">失败</Tag> :
+                  <Tag color="default">待写入</Tag>,
+              },
+              { title: 'K3 单号', dataIndex: 'erp_bill_no', width: 130, render: (v: string) => v || '-' },
+              {
+                title: '失败原因', dataIndex: 'error_msg', ellipsis: true,
+                render: (v: string) => v || '-',
+              },
+            ]} />
+        </Card>
+      )}
 
       {/* ===== 进度卡带 ===== */}
       <Row gutter={[10, 10]} style={{ marginBottom: 12 }}>

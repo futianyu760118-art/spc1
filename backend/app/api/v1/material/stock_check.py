@@ -1,6 +1,7 @@
 """物料齐套中心 — 物料盘点 API (scm_inventory_check)"""
 
 import json
+import logging
 from datetime import date
 from typing import Optional, List
 
@@ -38,6 +39,8 @@ from app.schemas.material.stock_check import (
     K3BillOut,
     K3ImportRequest,
     K3ImportResultOut,
+    StockCheckWritebackOut,
+    WritebackOverviewOut,
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.material.stock_check_service import (
@@ -81,7 +84,14 @@ from app.services.material.stock_check_k3_service import (
     list_k3_gain_loss_bills,
     import_k3_bills_as_stock_checks,
 )
+from app.services.material.stock_check_k3_writeback_service import (
+    plan_writebacks,
+    execute_pending_writebacks,
+    get_writeback_overview,
+)
 from app.services.material.stock_check_broker import subscribe_stream, set_presence, clear_presence
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -638,6 +648,7 @@ async def complete(
         head = await complete_stock_check(
             db, check_id, current_user, expected_version=body.expected_version,
         )
+        writebacks = await plan_writebacks(db, head)
     except StockCheckPermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except StockCheckConflictError as e:
@@ -651,9 +662,19 @@ async def complete(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # 完结+回写计划先落库;K3 写入 best-effort,失败不阻断完结
+    await db.commit()
+    summary = {"total": 0, "success": 0, "failed": 0, "pending": 0}
+    if writebacks:
+        try:
+            summary = await execute_pending_writebacks(db, check_id, current_user)
+        except Exception:
+            logger.exception(f"盘点单 {check_id} K3 回写异常(可稍后重试)")
+            summary = {"total": len(writebacks), "success": 0, "failed": 0, "pending": len(writebacks)}
     head_out = await get_stock_check_with_items(db, check_id)
-    await db.refresh(head_out)
-    return ResponseModel(data=await _to_check_out(db, head_out, current_user))
+    out = await _to_check_out(db, head_out, current_user)
+    out.writeback_summary = summary
+    return ResponseModel(data=out)
 
 
 @router.post("/stock-check/{check_id}/cancel", response_model=ResponseModel[StockCheckOut])
@@ -683,6 +704,40 @@ async def cancel(
     head_out = await get_stock_check_with_items(db, check_id)
     await db.refresh(head_out)
     return ResponseModel(data=await _to_check_out(db, head_out, current_user))
+
+
+@router.get("/stock-check/{check_id}/writebacks", response_model=ResponseModel[WritebackOverviewOut])
+async def get_writebacks(
+    check_id: int,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """盘点单 K3 回写记录总览(含无仓库被跳过的盘差行清单)"""
+    head = await db.get(StockCheck, check_id)
+    if not head:
+        raise HTTPException(status_code=404, detail="盘点单不存在")
+    overview = await get_writeback_overview(db, check_id)
+    return ResponseModel(data=WritebackOverviewOut.model_validate(overview))
+
+
+@router.post("/stock-check/{check_id}/writebacks/retry", response_model=ResponseModel[WritebackOverviewOut])
+async def retry_writebacks(
+    check_id: int,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """重试 pending/failed 的 K3 回写(success 不重复生成)"""
+    head = await db.get(StockCheck, check_id)
+    if not head:
+        raise HTTPException(status_code=404, detail="盘点单不存在")
+    if head.status != "completed":
+        raise HTTPException(status_code=400, detail="仅已完结的盘点单可重试 K3 回写")
+    try:
+        await execute_pending_writebacks(db, check_id, current_user)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    overview = await get_writeback_overview(db, check_id)
+    return ResponseModel(data=WritebackOverviewOut.model_validate(overview))
 
 
 @router.put("/stock-check/{check_id}/co-checkers", response_model=ResponseModel[StockCheckOut])

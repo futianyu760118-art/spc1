@@ -1,15 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Table, Button, Input, InputNumber, message, Space, Row, Col, Tabs, Tag, Tooltip, Popover, Checkbox, Select, DatePicker } from 'antd'
+import { Table, Button, Input, InputNumber, message, Space, Tabs, Tag, Tooltip, Popover, Checkbox, Select, DatePicker, Segmented, Card } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, SettingOutlined, HolderOutlined,
-  DatabaseOutlined, AuditOutlined, InboxOutlined, LockOutlined,
-  FileDoneOutlined, CarOutlined, WalletOutlined, DownloadOutlined,
+  InfoCircleOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import api from '../../services/api'
 import { useAuthStore } from '../../store/auth'
 import { useExport } from '../../hooks/useExport'
 import dayjs from 'dayjs'
 import ExportColumnSelector, { type ExportColumnOption } from '../../components/ExportColumnSelector'
+
 
 interface InventoryItem {
   id: number
@@ -189,6 +189,13 @@ const BYWH_EXPORT_OPTIONS: ExportColumnOption[] = [
   { field: 'recent_checked', label: '近期已盘' },
 ]
 
+const FORMULA_NOTE = (
+  <div className="f-note" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 'calc(11.5px * var(--font-size-scale))', marginBottom: 12 }}>
+    <InfoCircleOutlined style={{ flexShrink: 0 }} />
+    <span>核算口径：<b>结存数量 = 库存量 − 锁定数量</b>；期末余额 = Σ(结存 × 库存单价)；在途库存取未到货采购单合计。统计 Tab 合并库位维度、单价为加权单价。</span>
+  </div>
+)
+
 /** 实测容器高度，扣除表头/分页实测高度，得出表格体 scroll.y，保证窗口不出现滚动条 */
 function useTableScrollY(wrapRef: React.RefObject<HTMLDivElement | null>, deps: unknown[] = []) {
   const [scrollY, setScrollY] = useState<number>(400)
@@ -299,42 +306,37 @@ function StatSummary({
   recentDays: number
 }) {
   const num2 = (v: number) => v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  const countedTitle = recentDays >= 99999 ? '已盘数（全部历史）' : recentDays === 0 ? '已盘数（仅当天）' : `已盘数（近${recentDays}天）`
+  const countedTitle = recentDays >= 99999 ? '已盘（全部历史）' : recentDays === 0 ? '已盘（仅当天）' : `近 ${recentDays} 天已盘`
+  const pct = stats.totalMaterials > 0 ? ((stats.countedMaterials / stats.totalMaterials) * 100).toFixed(1) : '0.0'
   const cards = [
-    { icon: <DatabaseOutlined />, color: '#6366f1', title: '总物料数', value: stats.totalMaterials.toLocaleString() },
-    { icon: <AuditOutlined />, color: '#16a34a', title: countedTitle, value: stats.countedMaterials.toLocaleString() },
-    { icon: <InboxOutlined />, color: '#f59e0b', title: '库存量合计', value: num2(totals.onHand) },
-    { icon: <LockOutlined />, color: '#ef4444', title: '锁定数量合计', value: num2(totals.locked) },
-    { icon: <FileDoneOutlined />, color: '#0ea5e9', title: '结存数量合计', value: num2(totals.balance) },
-    { icon: <CarOutlined />, color: '#8b5cf6', title: '在途库存合计', value: num2(totals.inTransit) },
-    { icon: <WalletOutlined />, color: '#10b981', title: '期末余额合计', value: num2(totals.endingBalance) },
+    { color: '#5b5bd6', title: '库存物料数', value: stats.totalMaterials.toLocaleString(), sub: '按物料×仓库去重' },
+    { color: '#16a34a', title: countedTitle, value: stats.countedMaterials.toLocaleString(), sub: `${pct}% · 口径随右侧切换` },
+    { color: '#0284c7', title: '库存量合计', value: num2(totals.onHand), sub: '含锁定' },
+    { color: '#d97706', title: '锁定数量', value: num2(totals.locked), sub: '已分配工单' },
+    { color: '#8b5cf6', title: '结存数量', value: num2(totals.balance), sub: '= 库存 − 锁定' },
+    { color: '#06b6d4', title: '在途库存', value: num2(totals.inTransit), sub: '在途采购单未到货' },
+    { color: '#f59e0b', title: '期末余额', value: num2(totals.endingBalance), sub: 'Σ 结存 × 单价' },
   ]
   return (
-    <Row gutter={[12, 8]} style={{ marginTop: 12 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 10, marginBottom: 12 }}>
       {cards.map((c, i) => (
-        <Col key={i}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '8px 14px', background: `${c.color}10`, borderRadius: 8, border: `1px solid ${c.color}22`,
-          }}>
-            <div style={{
-              width: 34, height: 34, borderRadius: 8, background: `${c.color}18`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 16, color: c.color,
-            }}>{c.icon}</div>
-            <div>
-              <div style={{ fontSize: 12, color: '#64748b', lineHeight: '16px' }}>{c.title}</div>
-              <div style={{ fontSize: 'calc(1rem * var(--font-size-scale))', fontWeight: 700, color: '#1e293b', lineHeight: '22px' }}>{c.value}</div>
-            </div>
-          </div>
-        </Col>
+        <Card
+          key={i}
+          size="small"
+          styles={{ body: { padding: '10px 12px', minWidth: 0 } }}
+          style={{ borderLeft: `3px solid ${c.color}`, minWidth: 0 }}
+        >
+          <div style={{ fontSize: 'calc(12.5px * var(--font-size-scale))', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.title}</div>
+          <div style={{ fontSize: 'calc(20px * var(--font-size-scale))', fontWeight: 650, fontVariantNumeric: 'tabular-nums', lineHeight: 1.25, marginTop: 2 }}>{c.value}</div>
+          <div style={{ fontSize: 'calc(11.5px * var(--font-size-scale))', color: '#94a3b8', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.sub}</div>
+        </Card>
       ))}
-    </Row>
+    </div>
   )
 }
 
 function SearchBar({
-  keyword, setKeyword, onRefresh, onSearch, placeholder, extra,
+  keyword, setKeyword, onRefresh, onSearch, placeholder, extra, left,
 }: {
   keyword: string
   setKeyword: (v: string) => void
@@ -342,67 +344,54 @@ function SearchBar({
   onSearch: () => void
   placeholder: string
   extra?: React.ReactNode
+  left?: React.ReactNode
 }) {
   return (
-    <Row gutter={[12, 12]} align="middle">
-      <Col>
+    <div className="sc-toolbar">
+      <span className="sc-search">
         <Input
           placeholder={placeholder}
-          prefix={<SearchOutlined />}
+          prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
           onPressEnter={onSearch}
           style={{ width: 240 }}
           allowClear
         />
-      </Col>
-      <Col flex="auto" />
-      <Col>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={onRefresh}>刷新</Button>
-          {extra}
-        </Space>
-      </Col>
-    </Row>
+      </span>
+      {left}
+      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        {extra}
+        <Tooltip title="刷新">
+          <Button icon={<ReloadOutlined />} onClick={onRefresh} />
+        </Tooltip>
+      </span>
+    </div>
   )
 }
 
-/** 近期已盘天数: 可选可输;0=仅当天;99999=不限(全部历史); 防抖 400ms 生效 */
+/** 近期已盘天数: 0=仅当天;99999=不限(全部历史); 防抖 400ms 生效 */
 function RecentDaysControl({
   value, onChange,
 }: { value: number; onChange: (v: number) => void }) {
   const options = [
-    { value: 1, label: '1 天' },
-    { value: 3, label: '3 天' },
-    { value: 7, label: '7 天' },
-    { value: 15, label: '15 天' },
-    { value: 30, label: '30 天' },
-    { value: 90, label: '90 天' },
-    { value: 99999, label: '不限（全部历史）' },
+    { value: 1, label: '1天' },
+    { value: 3, label: '3天' },
+    { value: 7, label: '7天' },
+    { value: 15, label: '15天' },
+    { value: 30, label: '30天' },
+    { value: 90, label: '90天' },
+    { value: 99999, label: '不限' },
   ]
   if (!options.some((o) => o.value === value)) {
-    options.push({ value, label: value === 0 ? '0 天（仅当天）' : `${value} 天` })
+    options.push({ value, label: value === 0 ? '0天' : `${value}天` })
   }
   return (
     <Tooltip title="「近期已盘」= 近 N 天内盘点过;0=仅当天;不限=全部历史;修改后自动刷新">
-      <Space size={4}>
-        <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>近</span>
-        <Select
-          size="small"
-          showSearch
-          value={value}
-          options={options}
-          style={{ width: 130 }}
-          onSelect={(v) => onChange(Number(v))}
-          onSearch={(text) => {
-            const t = text.replace(/[^\d]/g, '')
-            if (t === '') return
-            onChange(Math.max(0, Math.min(99999, Number(t))))
-          }}
-          filterOption={() => true}
-        />
-        <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>天已盘</span>
-      </Space>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 'calc(11.5px * var(--font-size-scale))', color: '#94a3b8', whiteSpace: 'nowrap' }}>近期已盘</span>
+        <Segmented size="small" value={value} options={options} onChange={(v) => onChange(Number(v))} />
+      </span>
     </Tooltip>
   )
 }
@@ -585,7 +574,15 @@ function InventoryDetail() {
     { title: '批次号', dataIndex: 'batch_no', key: 'batch_no', width: 100, sorter: true, filters: optList(filterOptions.batch_nos), filterSearch: true },
     timeCol('last_inbound_at', '最后入库时间'),
     timeCol('last_outbound_at', '最后出库时间'),
-    timeCol('last_picking_at', '最后领料时间'),
+    {
+      title: '呆滞天数', dataIndex: 'last_outbound_at', key: 'days_in_stock', width: 100, align: 'right' as const, sorter: true,
+      render: (v: string | null | undefined, r: InventoryItem) => {
+        const ref = v || r.last_inbound_at
+        if (!ref) return '-'
+        const diff = Math.floor((Date.now() - new Date(ref).getTime()) / 86400000)
+        return diff < 0 ? '-' : diff
+      },
+    },
     {
       title: '近期已盘', dataIndex: 'recent_checked', key: 'recent_checked', width: 90, align: 'center' as const,
       filters: [{ text: '是', value: 'true' }, { text: '否', value: 'false' }],
@@ -609,16 +606,18 @@ function InventoryDetail() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 12, flexShrink: 0 }}>
+      <div style={{ flexShrink: 0 }}>
+        <StatSummary totals={totals} stats={stats} recentDays={recentDays} />
         <SearchBar
           keyword={keyword}
           setKeyword={setKeyword}
           onSearch={() => fetchData(1, pagination.pageSize)}
           onRefresh={() => fetchData(pagination.current, pagination.pageSize)}
           placeholder="搜索物料编码/名称/仓库"
-          extra={<Space><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => setExportColumnModalOpen(true)}>导出</Button><RecentDaysControl value={recentDays} onChange={setRecentDays} /><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
+          left={<RecentDaysControl value={recentDays} onChange={setRecentDays} />}
+          extra={<Space><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => setExportColumnModalOpen(true)}>导出</Button><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
         />
-        <StatSummary totals={totals} stats={stats} recentDays={recentDays} />
+        {FORMULA_NOTE}
       </div>
 
       <div ref={tableWrapRef} className="card-modern" style={{ padding: '0 0 4px', flex: 1, minHeight: 0 }}>
@@ -815,7 +814,15 @@ function InventoryByWarehouse() {
     { title: '期末余额', dataIndex: 'ending_balance', key: 'ending_balance', width: 130, align: 'right' as const, sorter: true, render: moneyFmt },
     timeCol('last_inbound_at', '最后入库时间'),
     timeCol('last_outbound_at', '最后出库时间'),
-    timeCol('last_picking_at', '最后领料时间'),
+    {
+      title: '呆滞天数', dataIndex: 'last_outbound_at', key: 'days_in_stock', width: 100, align: 'right' as const, sorter: true,
+      render: (v: string | null | undefined, r: InventoryByWhItem) => {
+        const ref = v || r.last_inbound_at
+        if (!ref) return '-'
+        const diff = Math.floor((Date.now() - new Date(ref).getTime()) / 86400000)
+        return diff < 0 ? '-' : diff
+      },
+    },
     {
       title: '近期已盘', dataIndex: 'recent_checked', key: 'recent_checked', width: 90, align: 'center' as const,
       filters: [{ text: '是', value: 'true' }, { text: '否', value: 'false' }],
@@ -835,16 +842,18 @@ function InventoryByWarehouse() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 12, flexShrink: 0 }}>
+      <div style={{ flexShrink: 0 }}>
+        <StatSummary totals={totals} stats={stats} recentDays={recentDays} />
         <SearchBar
           keyword={keyword}
           setKeyword={setKeyword}
           onSearch={() => fetchData(1, pagination.pageSize)}
           onRefresh={() => fetchData(pagination.current, pagination.pageSize)}
           placeholder="搜索物料编码/名称/仓库"
-          extra={<Space><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => setExportColumnModalOpen(true)}>导出</Button><RecentDaysControl value={recentDays} onChange={setRecentDays} /><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
+          left={<RecentDaysControl value={recentDays} onChange={setRecentDays} />}
+          extra={<Space><Button icon={<DownloadOutlined />} loading={exporting} onClick={() => setExportColumnModalOpen(true)}>导出</Button><ColumnSettings columns={allColumns} config={colConfig} onChange={setColConfig} /></Space>}
         />
-        <StatSummary totals={totals} stats={stats} recentDays={recentDays} />
+        {FORMULA_NOTE}
       </div>
 
       <div ref={tableWrapRef} className="card-modern" style={{ padding: '0 0 4px', flex: 1, minHeight: 0 }}>
@@ -879,7 +888,7 @@ export default function Inventory() {
   const [activeKey, setActiveKey] = useState('detail')
 
   return (
-    <div style={{ height: 'calc(100vh - 104px)', overflow: 'hidden' }}>
+    <div className="sc-page" style={{ height: 'calc(100vh - 104px)', overflow: 'hidden' }}>
       <Tabs
         className="inv-page-tabs"
         activeKey={activeKey}
