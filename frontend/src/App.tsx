@@ -161,10 +161,9 @@ export default function App() {
     return (
         <ConfigProvider
             theme={{
-            token: {
-                fontSize: 14 * fontSizeScale,
-                fontFamily: 'var(--app-font)',
-            },
+                token: {
+                    fontSize: 14 * fontSizeScale,
+                },
             }}
         >
             <AntdApp>

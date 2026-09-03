@@ -32,6 +32,8 @@ interface Material {
   is_deleted: number
   material_property?: number | null
   data_source?: string | null
+  supplier_id?: number | null
+  supplier_name?: string | null
   order_unit_price?: number | string | null
   last_outbound_date?: string | null
   create_time?: string | null
@@ -641,6 +643,10 @@ export default function Materials() {
       sorter: true,
       sortOrder: sortBy === 'brand' ? (sortOrder === 'asc' ? 'ascend' : 'descend') : null,
       render: (v: string) => v || <span className="sc-note">—</span>,
+    },
+    {
+      title: '供应商', dataIndex: 'supplier_name', key: 'supplier_name', width: 160, ellipsis: true,
+      render: (v: string | null | undefined) => v || <span className="sc-note">—</span>,
     },
     {
       title: '采/产', key: 'pp', width: 76,

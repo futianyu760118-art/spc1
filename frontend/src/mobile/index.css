@@ -1021,7 +1021,8 @@ body,
 .scan-wh__empty { font-size: 13px; color: var(--spc-text3); }
 
 .scan-cam { position: relative; overflow: hidden; padding: 0; background: #000; }
-.scan-cam video { display: block; width: 100%; }
+.scan-cam__viewport { width: 100%; aspect-ratio: 4 / 3; background: #000; }
+.scan-cam video { display: block; width: 100% !important; height: 100% !important; object-fit: cover; }
 .scan-cam__hide { display: none; }
 .scan-cam__tip { padding: 28px 0; text-align: center; font-size: 13px; color: var(--spc-text3); }
 .scan-cam__tip--overlay {

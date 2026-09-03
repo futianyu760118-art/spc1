@@ -191,6 +191,7 @@ class MaterialOut(MaterialBase):
     data_source: Optional[str] = None
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
+    supplier_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

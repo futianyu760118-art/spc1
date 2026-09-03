@@ -271,7 +271,7 @@ export default function ScanCountPage() {
         </div>
 
         <div className="m-card scan-cam">
-          <div id="scan-viewport" className={camState === 'on' ? '' : 'scan-cam__hide'} />
+          <div id="scan-viewport" className={`scan-cam__viewport ${!camRequested || camState === 'error' ? 'scan-cam__hide' : ''}`} />
           {!camRequested && (
             <button
               className="scan-cam__idle"
@@ -281,7 +281,7 @@ export default function ScanCountPage() {
               <div>点击选择仓库，开启摄像头扫码</div>
             </button>
           )}
-          {camRequested && camState === 'init' && <div className="scan-cam__tip">相机启动中…</div>}
+          {camRequested && camState === 'init' && <div className="scan-cam__tip scan-cam__tip--overlay">相机启动中…</div>}
           {camRequested && camState === 'error' && (
             <div className="scan-cam__err">
               <MIcon name="warn" size={26} />

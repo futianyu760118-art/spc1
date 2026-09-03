@@ -298,7 +298,6 @@ const allMenuItems: PermissionAwareItem[] = [
         children: [
           { key: '/basicdata/customers', icon: <UserOutlined />, label: '客户', permission: 'basicdata.data' },
           { key: '/basicdata/suppliers', icon: <ShoppingCartOutlined />, label: '供应商', permission: 'basicdata.data' },
-          { key: '/basicdata/supplier-material-map', icon: <SwapOutlined />, label: '供应商物料对照', permission: 'basicdata.data.suppliers' },
           { key: '/basicdata/materials', icon: <AppstoreOutlined />, label: '物料', permission: 'basicdata.data' },
           { key: '/basicdata/skus', icon: <ContainerOutlined />, label: 'SKU', permission: 'basicdata.data' },
           { key: '/basicdata/products', icon: <FileTextOutlined />, label: '产品', permission: 'basicdata.data' },
@@ -309,6 +308,7 @@ const allMenuItems: PermissionAwareItem[] = [
           { key: '/basicdata/positions', icon: <IdcardOutlined />, label: '岗位', permission: 'basicdata.data' },
           { key: '/basicdata/employees', icon: <UserOutlined />, label: '人员', permission: 'basicdata.data' },
           { key: '/basicdata/inventory', icon: <StockOutlined />, label: '库存', permission: 'basicdata.data' },
+          { key: '/basicdata/supplier-material-map', icon: <SwapOutlined />, label: '供应商物料对照', permission: 'basicdata.data' },
         ],
       },
       { key: '/users', icon: <UserOutlined />, label: '用户管理', permission: 'users' },
@@ -482,7 +482,6 @@ const pathToGroupKey: Record<string, string> = {
   '/import': 'basicdata-center',
   '/basicdata/customers': 'basicdata-management',
   '/basicdata/suppliers': 'basicdata-management',
-  '/basicdata/supplier-material-map': 'basicdata-management',
   '/basicdata/materials': 'basicdata-management',
   '/basicdata/skus': 'basicdata-management',
   '/basicdata/products': 'basicdata-management',
@@ -493,6 +492,7 @@ const pathToGroupKey: Record<string, string> = {
   '/basicdata/positions': 'basicdata-management',
   '/basicdata/employees': 'basicdata-management',
   '/basicdata/inventory': 'basicdata-management',
+  '/basicdata/supplier-material-map': 'basicdata-management',
   '/users': 'basicdata-center',
   '/roles': 'basicdata-center',
   '/audit': 'basicdata-center',
@@ -562,7 +562,6 @@ const pathToPermission: Record<string, string> = {
   '/permissions': 'permissions',
   '/basicdata/customers': 'basicdata.data',
   '/basicdata/suppliers': 'basicdata.data',
-  '/basicdata/supplier-material-map': 'basicdata.data.suppliers',
   '/basicdata/materials': 'basicdata.data',
   '/basicdata/skus': 'basicdata.data',
   '/basicdata/products': 'basicdata.data',
@@ -573,6 +572,7 @@ const pathToPermission: Record<string, string> = {
   '/basicdata/positions': 'basicdata.data',
   '/basicdata/employees': 'basicdata.data',
   '/basicdata/inventory': 'basicdata.data',
+  '/basicdata/supplier-material-map': 'basicdata.data',
   '/basicdata/feedback': 'basicdata.feedback',
   '/basicdata/files': 'basicdata.files',
   '/basicdata/data-supply': 'basicdata.data_supply',
@@ -635,25 +635,13 @@ export default function MainLayout() {
           ? { ...item, children: [...v2ExtraItems, ...(item.children || [])] }
           : item
       )
-      // 基础数据：注入供应商物料对照（与"供应商"菜单同权限 basicdata.data.suppliers，不在后端权限树里）
-      const bdExtraItems: PermissionAwareItem[] = [
-        { key: '/basicdata/supplier-material-map', icon: <SwapOutlined />, label: '供应商物料对照', permission: 'basicdata.data.suppliers' },
-      ]
-      const withBasicdata = merged.map(item => {
-        if (item.permission !== 'basicdata.data') return item
-        const children = [...(item.children || [])]
-        const supIdx = children.findIndex(c => c.permission === 'basicdata.data.suppliers')
-        if (supIdx >= 0) children.splice(supIdx + 1, 0, ...bdExtraItems)
-        else children.push(...bdExtraItems)
-        return { ...item, children }
-      })
       // 采购中心：若权限树已有则注入子菜单，否则新增整个模块
       const purchaseChildren: PermissionAwareItem[] = [
         { key: '/purchase/price-change', icon: <FileTextOutlined />, label: '调价单管理', permission: 'purchase.price_change' },
         { key: '/purchase/price-change/pending', icon: <ClockCircleOutlined />, label: '待我审批', permission: 'purchase.price_change.pending' },
         { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置', permission: 'purchase.price_change.config' },
       ]
-      const existingPurchase = findPurchase(withBasicdata)
+      const existingPurchase = findPurchase(merged)
       if (existingPurchase) {
         const existingKeys = new Set((existingPurchase.children || []).map(c => c.key))
         const newChildren = purchaseChildren.filter(c => !existingKeys.has(c.key))
@@ -661,7 +649,7 @@ export default function MainLayout() {
           existingPurchase.children = [...(existingPurchase.children || []), ...newChildren]
         }
       } else {
-        withBasicdata.push({
+        merged.push({
           key: 'purchase-center',
           icon: <AccountBookOutlined />,
           label: '采购中心',
@@ -669,7 +657,7 @@ export default function MainLayout() {
           children: purchaseChildren,
         })
       }
-      return withBasicdata
+      return merged
     }
     return allMenuItems
   }, [permLoaded, permTree])
@@ -684,12 +672,7 @@ export default function MainLayout() {
 
   const dynamicPathToGroupKey = useMemo(() => {
     if (permLoaded && permTree.length > 0) {
-      const map = { ...getPathToGroupKey() }
-      // 注入页面不在权限树里，组键从同组兄弟路由继承
-      if (!map['/basicdata/supplier-material-map'] && map['/basicdata/suppliers']) {
-        map['/basicdata/supplier-material-map'] = map['/basicdata/suppliers']
-      }
-      return map
+      return getPathToGroupKey()
     }
     return pathToGroupKey
   }, [permLoaded, permTree, getPathToGroupKey])
