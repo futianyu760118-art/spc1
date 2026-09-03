@@ -150,6 +150,86 @@ function TimeFilterDropdown({ value, onApply }: { value?: TimeFilterValue; onApp
   )
 }
 
+/** 呆滞天数筛选: 参考时间 = 最后出库时间(无则最后入库时间), 空/未来时间显示 '-' 不计入 */
+type DormantFilterValue = { relation: 'gt' | 'lt'; days: number }
+
+const dormantParams = (v?: DormantFilterValue | null): Record<string, number> => {
+  if (!v) return {}
+  return v.relation === 'gt' ? { days_in_stock_gt: v.days } : { days_in_stock_lt: v.days }
+}
+
+function DormantFilterDropdown({ value, onApply }: { value?: DormantFilterValue; onApply: (v?: DormantFilterValue) => void }) {
+  const [relation, setRelation] = useState<'gt' | 'lt'>(value?.relation ?? 'gt')
+  const [days, setDays] = useState<number | null>(value?.days ?? null)
+
+  const apply = (clear?: boolean) => {
+    if (clear) { onApply(undefined); return }
+    if (days != null && days >= 0) onApply({ relation, days })
+    else onApply(undefined)
+  }
+
+  return (
+    <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8, width: 232 }}>
+      <Select
+        size="small"
+        value={relation}
+        onChange={setRelation}
+        options={[
+          { value: 'gt', label: '大于 N 天' },
+          { value: 'lt', label: '小于 N 天' },
+        ]}
+      />
+      <InputNumber
+        size="small" min={0} max={100000} style={{ width: '100%' }} addonAfter="天"
+        value={days ?? undefined} onChange={(v) => setDays(v ?? null)} placeholder="N"
+      />
+      <span style={{ fontSize: 12, color: '#94a3b8' }}>
+        按呆滞天数(最后出库时间,无则最后入库时间)距今天数过滤；从未收发(显示 '-')的行不计入。
+      </span>
+      <Space style={{ justifyContent: 'flex-end' }}>
+        <Button size="small" onClick={() => apply(true)}>清除</Button>
+        <Button size="small" type="primary" onClick={() => apply()}>确定</Button>
+      </Space>
+    </div>
+  )
+}
+
+const dormantDaysOf = (outbound?: string | null, inbound?: string | null): number | null => {
+  const ref = outbound || inbound
+  if (!ref) return null
+  const diff = Math.floor((Date.now() - new Date(ref).getTime()) / 86400000)
+  return diff < 0 ? null : diff
+}
+
+const dormantCellStyle = (days: number): React.CSSProperties => {
+  if (days >= 180) return { color: '#c62828', fontWeight: 700 }
+  if (days >= 90) return { color: '#e53935', fontWeight: 700 }
+  if (days >= 30) return { color: '#ef6c00', fontWeight: 600 }
+  return { fontVariantNumeric: 'tabular-nums' }
+}
+
+/** 呆滞天数列: 排序沿用最后出库时间字段; 表头带 大于/小于 N 天 下拉筛选; 数值分级着色 */
+function dormantColumn(
+  value: DormantFilterValue | undefined,
+  apply: (v?: DormantFilterValue) => void,
+): any {
+  return {
+    title: '呆滞天数', dataIndex: 'last_outbound_at', key: 'days_in_stock', width: 100, align: 'right' as const, sorter: true,
+    filtered: !!value,
+    filterDropdown: (dp: any) => (
+      <DormantFilterDropdown
+        value={value}
+        onApply={(v) => { apply(v); dp?.confirm?.({ closeDropdown: true }) }}
+      />
+    ),
+    render: (v: string | null | undefined, r: { last_inbound_at?: string | null }) => {
+      const days = dormantDaysOf(v, r.last_inbound_at)
+      if (days == null) return '-'
+      return <span style={dormantCellStyle(days)}>{days}</span>
+    },
+  }
+}
+
 /** 导出字段选项（key 与后端导出列一致） */
 const DETAIL_EXPORT_OPTIONS: ExportColumnOption[] = [
   { field: 'material_code', label: '物料编码' },
@@ -167,6 +247,7 @@ const DETAIL_EXPORT_OPTIONS: ExportColumnOption[] = [
   { field: 'last_inbound_at', label: '最后入库时间' },
   { field: 'last_outbound_at', label: '最后出库时间' },
   { field: 'last_picking_at', label: '最后领料时间' },
+  { field: 'days_in_stock', label: '呆滞天数' },
   { field: 'recent_checked', label: '近期已盘' },
   { field: 'updated_at', label: '更新时间' },
 ]
@@ -186,6 +267,7 @@ const BYWH_EXPORT_OPTIONS: ExportColumnOption[] = [
   { field: 'last_inbound_at', label: '最后入库时间' },
   { field: 'last_outbound_at', label: '最后出库时间' },
   { field: 'last_picking_at', label: '最后领料时间' },
+  { field: 'days_in_stock', label: '呆滞天数' },
   { field: 'recent_checked', label: '近期已盘' },
 ]
 
@@ -424,6 +506,13 @@ function InventoryDetail() {
     setTimeFilters(next)
     fetchData(1, pagination.pageSize, { timeFilters: next })
   }
+  const [dormantFilter, setDormantFilter] = useState<DormantFilterValue | null>(null)
+  const applyDormant = (v?: DormantFilterValue) => {
+    const next = v ?? null
+    setDormantFilter(next)
+    fetchData(1, pagination.pageSize, { dormant: next })
+  }
+  const dormantCol = dormantColumn(dormantFilter ?? undefined, applyDormant)
   const timeCol = (field: TimeFilterField, title: string): any => ({
     title, dataIndex: field, key: field, width: 140, sorter: true, render: dtFmt,
     filtered: !!timeFilters[field],
@@ -461,7 +550,7 @@ function InventoryDetail() {
   const fetchData = useCallback(async (
     page = 1,
     pageSize = 20,
-    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters },
+    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters; dormant?: DormantFilterValue | null },
   ) => {
     setLoading(true)
     try {
@@ -469,6 +558,7 @@ function InventoryDetail() {
       const f = override?.filters ?? filters
       const params: any = { page, page_size: pageSize }
       Object.assign(params, timeFilterParams(override?.timeFilters ?? timeFilters))
+      Object.assign(params, dormantParams(override?.dormant !== undefined ? override.dormant : dormantFilter))
       if (keyword) params.keyword = keyword
       if (s.sort_by) params.sort_by = s.sort_by
       if (s.sort_order) params.sort_order = s.sort_order
@@ -506,7 +596,7 @@ function InventoryDetail() {
     } finally {
       setLoading(false)
     }
-  }, [keyword, sortInfo, filters, recentDays, timeFilters]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, sortInfo, filters, recentDays, timeFilters, dormantFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useRecentDaysDebounce(recentDays, () => fetchData(1, pagination.pageSize))
 
@@ -547,6 +637,7 @@ function InventoryDetail() {
     setExportColumnModalOpen(false)
     const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
     Object.assign(params, timeFilterParams(timeFilters))
+    Object.assign(params, dormantParams(dormantFilter ?? undefined))
     if (keyword) params.keyword = keyword
     if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
     if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
@@ -574,15 +665,7 @@ function InventoryDetail() {
     { title: '批次号', dataIndex: 'batch_no', key: 'batch_no', width: 100, sorter: true, filters: optList(filterOptions.batch_nos), filterSearch: true },
     timeCol('last_inbound_at', '最后入库时间'),
     timeCol('last_outbound_at', '最后出库时间'),
-    {
-      title: '呆滞天数', dataIndex: 'last_outbound_at', key: 'days_in_stock', width: 100, align: 'right' as const, sorter: true,
-      render: (v: string | null | undefined, r: InventoryItem) => {
-        const ref = v || r.last_inbound_at
-        if (!ref) return '-'
-        const diff = Math.floor((Date.now() - new Date(ref).getTime()) / 86400000)
-        return diff < 0 ? '-' : diff
-      },
-    },
+    dormantCol,
     {
       title: '近期已盘', dataIndex: 'recent_checked', key: 'recent_checked', width: 90, align: 'center' as const,
       filters: [{ text: '是', value: 'true' }, { text: '否', value: 'false' }],
@@ -666,6 +749,13 @@ function InventoryByWarehouse() {
     setTimeFilters(next)
     fetchData(1, pagination.pageSize, { timeFilters: next })
   }
+  const [dormantFilter, setDormantFilter] = useState<DormantFilterValue | null>(null)
+  const applyDormant = (v?: DormantFilterValue) => {
+    const next = v ?? null
+    setDormantFilter(next)
+    fetchData(1, pagination.pageSize, { dormant: next })
+  }
+  const dormantCol = dormantColumn(dormantFilter ?? undefined, applyDormant)
   const timeCol = (field: TimeFilterField, title: string): any => ({
     title, dataIndex: field, key: field, width: 140, sorter: true, render: dtFmt,
     filtered: !!timeFilters[field],
@@ -703,7 +793,7 @@ function InventoryByWarehouse() {
   const fetchData = useCallback(async (
     page = 1,
     pageSize = 20,
-    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters },
+    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters; dormant?: DormantFilterValue | null },
   ) => {
     setLoading(true)
     try {
@@ -711,6 +801,7 @@ function InventoryByWarehouse() {
       const f = override?.filters ?? filters
       const params: any = { page, page_size: pageSize }
       Object.assign(params, timeFilterParams(override?.timeFilters ?? timeFilters))
+      Object.assign(params, dormantParams(override?.dormant !== undefined ? override.dormant : dormantFilter))
       if (keyword) params.keyword = keyword
       if (s.sort_by) params.sort_by = s.sort_by
       if (s.sort_order) params.sort_order = s.sort_order
@@ -746,7 +837,7 @@ function InventoryByWarehouse() {
     } finally {
       setLoading(false)
     }
-  }, [keyword, sortInfo, filters, recentDays, timeFilters]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, sortInfo, filters, recentDays, timeFilters, dormantFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useRecentDaysDebounce(recentDays, () => fetchData(1, pagination.pageSize))
 
@@ -786,6 +877,7 @@ function InventoryByWarehouse() {
     setExportColumnModalOpen(false)
     const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
     Object.assign(params, timeFilterParams(timeFilters))
+    Object.assign(params, dormantParams(dormantFilter ?? undefined))
     if (keyword) params.keyword = keyword
     if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
     if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
@@ -814,15 +906,7 @@ function InventoryByWarehouse() {
     { title: '期末余额', dataIndex: 'ending_balance', key: 'ending_balance', width: 130, align: 'right' as const, sorter: true, render: moneyFmt },
     timeCol('last_inbound_at', '最后入库时间'),
     timeCol('last_outbound_at', '最后出库时间'),
-    {
-      title: '呆滞天数', dataIndex: 'last_outbound_at', key: 'days_in_stock', width: 100, align: 'right' as const, sorter: true,
-      render: (v: string | null | undefined, r: InventoryByWhItem) => {
-        const ref = v || r.last_inbound_at
-        if (!ref) return '-'
-        const diff = Math.floor((Date.now() - new Date(ref).getTime()) / 86400000)
-        return diff < 0 ? '-' : diff
-      },
-    },
+    dormantCol,
     {
       title: '近期已盘', dataIndex: 'recent_checked', key: 'recent_checked', width: 90, align: 'center' as const,
       filters: [{ text: '是', value: 'true' }, { text: '否', value: 'false' }],

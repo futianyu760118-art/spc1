@@ -4,6 +4,9 @@
 
 :root {
   --font-size-scale: 1;
+  /* 统一字体管理：全站唯一字体族 token（body / .sc-page / 各页 scoped 样式 / AntD 主题均引用此变量） */
+  --app-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', system-ui, sans-serif;
   --text-primary: #0f172a;
   --text-secondary: #475569;
   --text-muted: #94a3b8;
@@ -15,8 +18,7 @@
 
 body {
   margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC',
-    'Microsoft YaHei', sans-serif;
+  font-family: var(--app-font);
   background: var(--bg-page);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
@@ -644,7 +646,7 @@ body {
    token 对照 docs/prototype/redesign/styles.css（靛蓝精致版），整体字号上调一档并接入全局缩放 --font-size-scale：
    主色 #5b5bd6(hover #4c4dc2) · 成功 #16a34a · 危险 #dc2626 · 警示 #d97706 · 信息 #0284c7
    文字 #0f172a/#475569/#94a3b8 · 边框 #e2e8f0 · 正文 14px · 表格 13.5px(th 12px) */
-.sc-page { font-size: calc(14px * var(--font-size-scale)); color: #0f172a; font-family: 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; }
+.sc-page { font-size: calc(14px * var(--font-size-scale)); color: #0f172a; font-family: var(--app-font); }
 .sc-page button, .sc-page input, .sc-page select, .sc-page textarea { font-family: inherit; }
 
 /* 二级小字（物料名称副行/时间副行等，接替 TSX 内联 fontSize:11） */
@@ -1374,3 +1376,111 @@ a.si-wh-link:hover { color: #4c4dc2; }
 /* 密度切换：更紧的行距 + 隐藏副行（原型 body:has(#cb-dense)） */
 .um-dense .ant-table-tbody > tr > td { padding-top: 4px; padding-bottom: 4px; }
 .um-dense .um-pos-sub, .um-dense .sc-mat-code { display: none; }
+
+/* ===== 集成与系统 · 原型复刻补充（audit/shares/files/announcements 等，docs/prototype/redesign/sys-*.html） ===== */
+
+/* 说明条（原型 .info-strip：蓝底信息 / 中性灰 / 危险） */
+.sys-strip {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 9px 14px; border-radius: 10px;
+  font-size: calc(13px * var(--font-size-scale)); line-height: 1.6;
+  background: #f0f9ff; border: 1px solid #bae6fd; color: #075985;
+}
+.sys-strip b { color: #0c4a6e; }
+.sys-strip code { font-size: calc(12px * var(--font-size-scale)); background: rgba(255,255,255,.7); border-radius: 4px; padding: 0 5px; }
+.sys-strip .vsep { width: 1px; height: 14px; background: #bae6fd; flex-shrink: 0; }
+.sys-strip.gray { background: #f8fafc; border-color: #e2e8f0; color: #475569; }
+.sys-strip.gray .vsep { background: #e2e8f0; }
+.sys-strip .life { margin-left: auto; color: #16a34a; font-weight: 500; white-space: nowrap; }
+
+/* 标签补充色：企微青 / 系统紫已由 sc-tag-purple 覆盖（审计日志 action 等） */
+.sc-tag-cyan { color: #0e7490; background: #ecfeff; }
+
+/* 审计变更列：旧值 → 新值 双 chip（原型 .chg/.val） */
+.sys-chg { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.sys-val {
+  display: inline-block; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 1px 8px; border-radius: 6px; font-size: calc(12px * var(--font-size-scale)); vertical-align: middle;
+}
+.sys-val.old { background: #f1f5f9; color: #64748b; }
+.sys-val.new { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+.sys-val.danger { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+.sys-val.plain { background: #f8fafc; color: #94a3b8; border: 1px dashed #e2e8f0; }
+.sys-val.rec { background: #f0f9ff; color: #0284c7; max-width: 320px; }
+.sys-arr { color: #94a3b8; font-size: calc(11px * var(--font-size-scale)); flex-shrink: 0; }
+
+/* 操作人组合列（原型 .op）：24px 头像 + 姓名/归属副行 */
+.sys-op { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.sys-op-name { font-weight: 500; color: #0f172a; line-height: 1.35; }
+.sys-op-sub { font-size: calc(11px * var(--font-size-scale)); color: #94a3b8; margin-top: 1px; }
+.sys-op-sub .sc-tag { height: 16px; padding: 0 6px; font-size: calc(10px * var(--font-size-scale)); margin-right: 2px; }
+.sys-op-sub .sys { color: #8b5cf6; font-weight: 600; }
+.sys-op-sub .api { color: #94a3b8; }
+
+/* 时间双行列（原型 .tm：主时间 + 相对时间） */
+.sys-tm { line-height: 1.4; }
+.sys-tm .ago { font-size: calc(11px * var(--font-size-scale)); color: #94a3b8; margin-top: 1px; }
+
+/* 文件类型块（原型 .fx：36px 圆角色块，图片态用图标） */
+.sys-fx {
+  width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; color: #fff; letter-spacing: 0.02em; line-height: 1;
+}
+.sys-file { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.sys-file .link { color: #0f172a; font-weight: 500; cursor: pointer; }
+.sys-file .link:hover { color: #4c4dc2; text-decoration: underline; }
+.sys-file .key { font-size: calc(10.5px * var(--font-size-scale)); color: #94a3b8; font-variant-numeric: tabular-nums; margin-top: 1px; }
+.sys-file .fname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* 文件业务域 namespace 标签色 */
+.sys-ns-feedback { color: #d97706; background: #fffbeb; }
+.sys-ns-quality { color: #dc2626; background: #fef2f2; }
+.sys-ns-npi { color: #8b5cf6; background: #f5f3ff; }
+.sys-ns-price { color: #0284c7; background: #f0f9ff; }
+.sys-ns-misc { color: #64748b; background: #f1f5f9; }
+
+/* 紧急公告横幅（原型 .urgent-banner） */
+.sys-urgent {
+  display: flex; gap: 12px; align-items: center; margin-bottom: 12px;
+  background: linear-gradient(90deg, #fef2f2, #fff7f7);
+  border: 1px solid #fecaca; border-radius: 10px; padding: 12px 16px;
+}
+.sys-urgent-ico {
+  width: 34px; height: 34px; border-radius: 8px; background: #dc2626; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 17px;
+}
+.sys-urgent-body { flex: 1; min-width: 0; }
+.sys-urgent-title { font-size: calc(14px * var(--font-size-scale)); font-weight: 600; color: #0f172a; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sys-urgent-desc { font-size: calc(12px * var(--font-size-scale)); color: #475569; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sys-urgent-time { font-size: calc(11px * var(--font-size-scale)); color: #94a3b8; white-space: nowrap; }
+
+/* 已读进度（公告 已读/通知 列） */
+.sys-read-cell { display: inline-flex; align-items: center; gap: 8px; }
+.sys-read-cell .ant-progress { width: 80px; margin: 0; }
+.sys-read-cell .n { font-variant-numeric: tabular-nums; color: #475569; font-size: calc(12.5px * var(--font-size-scale)); }
+
+/* 发布确认预估块（原型 .pub-est） */
+.sys-pub-est { display: flex; gap: 10px; margin: 14px 0; }
+.sys-pub-est .pe { flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; text-align: center; }
+.sys-pub-est .pe .v { font-size: calc(18px * var(--font-size-scale)); font-weight: 650; font-variant-numeric: tabular-nums; }
+.sys-pub-est .pe .v small { font-size: calc(11px * var(--font-size-scale)); color: #94a3b8; font-weight: 500; }
+.sys-pub-est .pe .k { font-size: calc(11px * var(--font-size-scale)); color: #94a3b8; margin-top: 2px; }
+
+/* 有效期派生标签（分享管理）已过期/已撤销 状态用 sc-tag-warn / sc-tag-danger；数值与样式行内补充 */
+.sys-exp-over { color: #d97706; background: #fffbeb; border: 1px dashed #fde68a; font-variant-numeric: tabular-nums; }
+.sys-exp-date { color: #475569; background: #f1f5f9; font-variant-numeric: tabular-nums; }
+
+/* 分享目标页组合列（原型 .tgt） */
+.sys-tgt-main { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: #0f172a; }
+.sys-tgt-link { font-size: calc(11.5px * var(--font-size-scale)); color: #94a3b8; margin-top: 1px; font-variant-numeric: tabular-nums; }
+.sys-tgt-link .tok { font-family: Consolas, Menlo, monospace; }
+
+/* 审计·详情抽屉：JSON 前后对照框（原型 .ctx-box） */
+.sys-ctx { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sys-ctx .box { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; min-width: 0; }
+.sys-ctx .hd { font-size: calc(11px * var(--font-size-scale)); font-weight: 600; padding: 5px 10px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; }
+.sys-ctx .hd.old { background: #f8fafc; color: #94a3b8; }
+.sys-ctx .hd.new { background: #f0fdf4; color: #16a34a; }
+.sys-ctx pre { font-family: Consolas, Menlo, monospace; font-size: calc(11px * var(--font-size-scale)); line-height: 1.7; padding: 10px 12px; color: #475569; margin: 0; overflow-x: auto; white-space: pre; }
+.sys-ctx .k { color: #8b5cf6; } .sys-ctx .s { color: #16a34a; }

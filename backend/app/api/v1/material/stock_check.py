@@ -41,6 +41,7 @@ from app.schemas.material.stock_check import (
     K3ImportResultOut,
     StockCheckWritebackOut,
     WritebackOverviewOut,
+    TaskCoverageOut,
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.material.stock_check_service import (
@@ -74,6 +75,7 @@ from app.services.material.stock_check_service import (
     get_stock_check_stats,
     get_stock_check_kpi,
     list_my_stock_check_items,
+    get_task_material_coverage,
     _user_can_edit,
     _current_user_id,
     _resolve_user_names,
@@ -214,6 +216,46 @@ async def list_material_candidates_view(
         page_size=page_size,
         items=[MaterialCandidateOut(**it) for it in items],
     ))
+
+
+@router.get("/stock-check/task-coverage", response_model=ResponseModel[TaskCoverageOut])
+async def get_task_stock_coverage_view(
+    start_date: date = Query(..., description="计划开工日期-起"),
+    end_date: date = Query(..., description="计划开工日期-止"),
+    status: str = Query("all", pattern="^(all|checked|unchecked)$"),
+    keyword: Optional[str] = Query(None, description="物料编码/名称/规格"),
+    wh_id: Optional[int] = Query(None, description="按仓库过滤行"),
+    wh_ids: Optional[str] = Query(None, description="按仓库多选过滤行(逗号分隔; -1 表示 (未入库) 合成行)"),
+    unstocked: bool = Query(False, description="仅看(未入库)合成行(wh_id 为空)"),
+    sort_by: Optional[str] = Query(None, description="排序列: material_code/material_name/spec_model/wh_name/system_qty/req_qty/task_count/recent_check_date"),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    current_user: dict = Depends(PermissionChecker("materials.task_stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """生产任务单物料盘点覆盖: 按计划开工日期范围查未关闭任务单所需物料的已盘/未盘状态（平铺行 + 仓库汇总）。"""
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+    allowed_sorts = ("material_code", "material_name", "spec_model", "wh_name", "system_qty", "req_qty", "task_count", "recent_check_date", "is_checked")
+    if sort_by is not None and sort_by not in allowed_sorts:
+        raise HTTPException(status_code=400, detail=f"sort_by 仅支持: {', '.join(allowed_sorts)}")
+    ids: Optional[List[int]] = None
+    if wh_ids:
+        parts = [p.strip() for p in wh_ids.split(",") if p.strip()]
+        try:
+            ids = [int(p) for p in parts]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="wh_ids 需为逗号分隔的仓库ID")
+    data = await get_task_material_coverage(
+        db, start_date=start_date, end_date=end_date,
+        status=status, keyword=keyword, page=page, page_size=page_size,
+        wh_id=None if unstocked else wh_id,
+        wh_ids=None if unstocked else ids,
+        unstocked=unstocked,
+        sort_by=sort_by, sort_order=sort_order,
+    )
+    return ResponseModel(data=TaskCoverageOut(**data))
 
 
 @router.get("/stock-check/counted-warehouses", response_model=ResponseModel[List[dict]])

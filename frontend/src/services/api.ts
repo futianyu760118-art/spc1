@@ -292,6 +292,19 @@ export const materialApi = {
   getStockCheckStats: (params: { check_type?: string; date_from?: string; date_to?: string; status?: string } = {}) =>
     api.get('/materials/stock-check/stats', { params }),
   getStockCheckKpi: () => api.get('/materials/stock-check/kpi'),
+  getTaskStockCoverage: (params: {
+    start_date: string
+    end_date: string
+    status?: 'all' | 'checked' | 'unchecked'
+    keyword?: string
+    wh_id?: number
+    wh_ids?: string
+    unstocked?: boolean
+    sort_by?: string
+    sort_order?: 'asc' | 'desc'
+    page?: number
+    page_size?: number
+  }) => api.get('/materials/stock-check/task-coverage', { params }),
   getStockChecksByOrder: (orderNo: string) =>
     api.get(`/materials/stock-check/by-order/${orderNo}`),
   getStockCheck: (checkId: number) =>
@@ -669,6 +682,7 @@ export const statusDictApi = {
 // ============ 审计日志 (基础数据与集成中心) ============
 export const auditApi = {
   list: (params: Record<string, any>) => api.get('/basicdata/audit/logs', { params }),
+  stats: (params: Record<string, any> = {}) => api.get('/basicdata/audit/logs/stats', { params }),
 }
 
 // ============ Pilot ============
@@ -735,6 +749,7 @@ export const assistantApi = {
 // ============ 公告管理 (基础数据与集成中心) ============
 export const announcementApi = {
   list: (params: Record<string, any> = {}) => api.get('/basicdata/announcements', { params }),
+  stats: () => api.get('/basicdata/announcements/stats'),
   create: (data: Record<string, any>) => api.post('/basicdata/announcements', data),
   update: (id: number, data: Record<string, any>) => api.put(`/basicdata/announcements/${id}`, data),
   remove: (id: number) => api.delete(`/basicdata/announcements/${id}`),

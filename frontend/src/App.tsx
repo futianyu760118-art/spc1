@@ -18,6 +18,7 @@ import OrderDetail from './pages/OrderDelivery/OrderDetail/index'
 import StockCheck from './pages/MaterialCenter/StockCheck/index'
 import StockCheckWorkbench from './pages/MaterialCenter/StockCheck/Workbench'
 import QuickCount from './pages/MaterialCenter/StockCheck/QuickCount'
+import TaskStockCoverage from './pages/MaterialCenter/TaskStockCoverage'
 import SubcontractOrders from './pages/MaterialCenter/SubcontractOrders/index'
 import ScrapInventory from './pages/MaterialCenter/ScrapInventory'
 import IssueLedger from './pages/ExceptionCenter/IssueLedger/index'
@@ -160,9 +161,10 @@ export default function App() {
     return (
         <ConfigProvider
             theme={{
-                token: {
-                    fontSize: 14 * fontSizeScale,
-                },
+            token: {
+                fontSize: 14 * fontSizeScale,
+                fontFamily: 'var(--app-font)',
+            },
             }}
         >
             <AntdApp>
@@ -195,6 +197,7 @@ export default function App() {
                             <Route path="stock-check" element={<StockCheck />} />
                             <Route path="stock-check/:checkId" element={<StockCheckWorkbench />} />
                             <Route path="quick-stock-check" element={<QuickCount />} />
+                            <Route path="task-stock-check" element={<TaskStockCoverage />} />
                             <Route path="subcontract-orders" element={<SubcontractOrders/>}/>
                             <Route path="scrap-inventory" element={<ScrapInventory/>}/>
                             <Route path="kit-analysis" element={<KitAnalysis/>}/>

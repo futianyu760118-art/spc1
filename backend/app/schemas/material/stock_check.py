@@ -404,3 +404,66 @@ class WritebackOverviewOut(BaseModel):
     """回写总览:记录列表 + 跳过行清单"""
     writebacks: List[StockCheckWritebackOut] = []
     skipped_items: List[WritebackSkippedItemOut] = []
+
+
+class TaskCoverageItemOut(BaseModel):
+    """任务盘点覆盖: 一行 = 物料×仓库"""
+    material_id: int
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    spec_model: Optional[str] = None
+    unit: Optional[str] = None
+    wh_id: Optional[int] = None
+    wh_name: Optional[str] = None
+    system_qty: Optional[Decimal] = None
+    req_qty: Optional[Decimal] = None
+    is_checked: bool = False
+    recent_check_no: Optional[str] = None
+    recent_check_date: Optional[date] = None
+    task_nos: List[str] = []
+
+
+class TaskCoverageStatsOut(BaseModel):
+    task_count: int = 0
+    product_count: int = 0
+    row_count: int = 0
+    checked_count: int = 0
+    unchecked_count: int = 0
+    checked_rate: Optional[float] = None
+
+
+class TaskCoverageNoBomTaskOut(BaseModel):
+    """范围内无法解析根 BOM 的任务单(警示列表)"""
+    task_no: Optional[str] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+
+
+class TaskCoveragePreviewItemOut(BaseModel):
+    """仓库执行包卡片内的未盘行预览（Top N）"""
+    material_id: int
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    system_qty: Optional[Decimal] = None
+    req_qty: Optional[Decimal] = None
+
+
+class TaskCoverageWarehouseOut(BaseModel):
+    """任务盘点覆盖 · 仓库汇总（执行包视图数据源）"""
+    wh_id: Optional[int] = None
+    wh_name: Optional[str] = None
+    row_count: int = 0
+    checked_count: int = 0
+    unchecked_count: int = 0
+    preview_items: List[TaskCoveragePreviewItemOut] = []
+
+
+class TaskCoverageOut(BaseModel):
+    stats: TaskCoverageStatsOut
+    items: List[TaskCoverageItemOut]
+    total: int
+    page: int
+    page_size: int
+    no_bom_tasks: List[TaskCoverageNoBomTaskOut] = []
+    warehouses: List[TaskCoverageWarehouseOut] = []
+    unstocked_count: int = 0

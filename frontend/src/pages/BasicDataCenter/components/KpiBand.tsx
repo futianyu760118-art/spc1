@@ -6,6 +6,7 @@ export interface KpiItem {
   value: ReactNode
   sub?: string
   go?: string
+  icon?: ReactNode
   accent?: 'brand' | 'success' | 'warning' | 'danger' | 'info' | 'purple' | 'gray'
   onClick?: () => void
 }
@@ -32,7 +33,7 @@ export default function KpiBand({ items }: { items: KpiItem[] }) {
       }}
     >
       {items.map((it, i) => {
-        const [c] = ACCENTS[it.accent ?? 'brand']
+        const [c, bg] = ACCENTS[it.accent ?? 'brand']
         const clickable = !!it.onClick
         return (
           <Card
@@ -43,33 +44,55 @@ export default function KpiBand({ items }: { items: KpiItem[] }) {
             style={{ borderLeft: `3px solid ${c}`, cursor: clickable ? 'pointer' : undefined }}
             onClick={it.onClick}
           >
-            <div style={{ fontSize: 'calc(12.5px * var(--font-size-scale))', color: '#94a3b8' }}>{it.label}</div>
-            <div
-              style={{
-                fontSize: 'calc(20px * var(--font-size-scale))',
-                fontWeight: 650,
-                fontVariantNumeric: 'tabular-nums',
-                lineHeight: 1.25,
-                marginTop: 2,
-              }}
-            >
-              {it.value}
-            </div>
-            {(it.go ?? it.sub) && (
-              <div
-                style={{
-                  fontSize: 'calc(11.5px * var(--font-size-scale))',
-                  marginTop: 2,
-                  color: it.go ? c : '#94a3b8',
-                  fontWeight: it.go ? 500 : 400,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                {it.go ?? it.sub}
+            <div style={{ display: it.icon ? 'flex' : 'block', alignItems: 'center', gap: it.icon ? 12 : 0 }}>
+              {it.icon && (
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 8,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    color: c,
+                    background: bg,
+                    fontSize: 18,
+                  }}
+                >
+                  {it.icon}
+                </div>
+              )}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 'calc(12.5px * var(--font-size-scale))', color: '#94a3b8' }}>{it.label}</div>
+                <div
+                  style={{
+                    fontSize: 'calc(20px * var(--font-size-scale))',
+                    fontWeight: 650,
+                    fontVariantNumeric: 'tabular-nums',
+                    lineHeight: 1.25,
+                    marginTop: 2,
+                  }}
+                >
+                  {it.value}
+                </div>
+                {(it.go ?? it.sub) && (
+                  <div
+                    style={{
+                      fontSize: 'calc(11.5px * var(--font-size-scale))',
+                      marginTop: 2,
+                      color: it.go ? c : '#94a3b8',
+                      fontWeight: it.go ? 500 : 400,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {it.go ?? it.sub}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </Card>
         )
       })}

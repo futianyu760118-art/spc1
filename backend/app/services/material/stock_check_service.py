@@ -11,12 +11,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import get_settings
+from app.models.basicdata.bom import Bom
+from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.material import Material
 from app.models.basicdata.sku import SKU
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.models.order.sale_order import SaleOrder
-from app.services.order.order_materials_service import get_order_product_materials, MATERIAL_PROPERTY_LABELS
+from app.models.production.production_task_order import ProductionTaskOrder
+from app.services.order.order_materials_service import (
+    get_order_product_materials,
+    MATERIAL_PROPERTY_LABELS,
+    MAX_BOM_LEVEL,
+)
 from app.services.material.stock_check_broker import publish_event
 
 
@@ -446,6 +453,476 @@ def _resolve_recent_days(recent_days: Optional[int]) -> int:
     if int(recent_days) < 0:
         return RECENT_DAYS_UNLIMITED
     return max(0, int(recent_days))
+
+
+async def _resolve_task_root_boms_batched(
+    db: AsyncSession,
+    pairs: List[Tuple[Optional[int], Optional[str]]],
+) -> Dict[Tuple[Optional[int], Optional[str]], Optional[str]]:
+    """批量解析任务单根 BOM（固定 5 次查询），规则与单条解析一致：
+    str(bom_id) 直查 scm_bom（需有明细行，作废空 BOM 落入回退）；
+    失败回退 产品 material_code → erp_material_id → Bom.material_id，
+    候选优先「已审核且未作废/未禁用且有明细行」。"""
+    out: Dict[Tuple[Optional[int], Optional[str]], Optional[str]] = {}
+    if not pairs:
+        return out
+
+    # 1) bom_id 直查命中
+    direct_ids = {str(b) for (b, _) in pairs if b is not None}
+    direct_hits: set = set()
+    if direct_ids:
+        res = await db.execute(select(Bom.bom_id).where(Bom.bom_id.in_(direct_ids)))
+        direct_hits = {r[0] for r in res.all()}
+
+    # 2) 直查命中的明细存在性（无明细的空 BOM 需落入回退，不能直接采用）
+    direct_with_details: set = set()
+    if direct_hits:
+        res = await db.execute(
+            select(BomDetail.bom_id).where(BomDetail.bom_id.in_(direct_hits)).distinct()
+        )
+        direct_with_details = {r[0] for r in res.all()}
+
+    # 3) 需要回退的物料编码 → erp_material_id
+    #    （无 bom_id / 直查未命中 / 直查命中但无明细 的三种情况都走回退）
+    need_fb = [
+        (b, mc) for (b, mc) in pairs
+        if mc and (b is None or str(b) not in direct_hits or str(b) not in direct_with_details)
+    ]
+    mid_by_code: Dict[str, int] = {}
+    codes = list({mc for (_, mc) in need_fb})
+    if codes:
+        res = await db.execute(
+            select(Material.material_code, Material.erp_material_id)
+            .where(Material.material_code.in_(codes))
+            .order_by(Material.erp_material_id)
+        )
+        for code, mid in res.all():
+            mid_by_code.setdefault(code, int(mid))
+
+    # 4) 回退候选 BOM 行
+    fb_mids = set(mid_by_code.values())
+    cands_by_mid: Dict[int, List[Bom]] = {}
+    if fb_mids:
+        res = await db.execute(select(Bom).where(Bom.material_id.in_(fb_mids)))
+        for b in res.scalars().all():
+            cands_by_mid.setdefault(b.material_id, []).append(b)
+
+    # 5) 回退候选的明细存在性
+    probe_ids = {b.bom_id for lst in cands_by_mid.values() for b in lst}
+    with_details: set = set(direct_with_details)
+    if probe_ids:
+        res = await db.execute(
+            select(BomDetail.bom_id).where(BomDetail.bom_id.in_(probe_ids)).distinct()
+        )
+        with_details.update(r[0] for r in res.all())
+
+    def _pick(mid: int) -> Optional[str]:
+        boms = cands_by_mid.get(mid) or []
+        wd = [b for b in boms if b.bom_id in with_details]
+        if not wd:
+            return None
+        clean = [b for b in wd if not b.void_flag and not b.disabled_status]
+        pool = clean if clean else wd
+        pool.sort(key=lambda b: (-(b.is_audited or 0), b.bom_id))
+        return pool[0].bom_id
+
+    # 6) 逐 pair 判定（直查命中且有明细 → 用之；否则回退按物料选 BOM）
+    for (b, mc) in pairs:
+        if b is not None:
+            bid = str(b)
+            if bid in direct_with_details:
+                out[(b, mc)] = bid
+                continue
+        out[(b, mc)] = _pick(mid_by_code[mc]) if mc in mid_by_code else None
+    return out
+
+
+async def _expand_boms_batched(
+    db: AsyncSession,
+    root_factors: Dict[str, Decimal],
+) -> Tuple[Dict[int, Dict], Dict[str, set], Dict[str, Dict[int, Decimal]], Dict[str, int]]:
+    """批量展开多个根 BOM（跨根按层 BFS 共享查询）。
+
+    返回 (物料聚合, 根→物料集合, 根→物料→产品内需求量, 根→BOM 最大层级)。
+    需求公式与 _expand_bom_tree 对齐：req(N) = N.standard_qty × factor，
+    factor(child) = req(parent)，factor(root) = 该根的任务量合计。
+    visited 按 (root, bom_id) 防环；深度上限 MAX_BOM_LEVEL；
+    子件候选 BOM 选择规则同 _expand_bom_tree：有明细 > 未作废未禁用 > 已审核优先。
+    """
+    mat_out: Dict[int, Dict] = {}
+    root_mids: Dict[str, set] = {}
+
+    detail_cache: Dict[str, List[BomDetail]] = {}
+    master_by_mid: Dict[int, Material] = {}
+    sub_bom_by_mid: Dict[int, Optional[str]] = {}
+    known_detail_bom_ids: set = set(root_factors.keys())
+
+    visited: set = set()
+    # 不预标记根 visited：由每层开始时统一标记（与 _expand_bom_tree 语义一致：
+    # 同层重复出现的子 BOM 各自按自身因子展开，跨层重复才去重）
+    pending: List[Tuple[str, str, Decimal, int]] = [
+        (root, root, factor, 1) for root, factor in root_factors.items()
+    ]
+
+    while pending:
+        # 层开始：确定本层活跃项（跳过已在前序层展开过的 (root, bom_id) 与超深项）
+        active_keys = {
+            (root, bid) for (root, bid, _, lvl) in pending
+            if lvl <= MAX_BOM_LEVEL and (root, bid) not in visited
+        }
+        if not active_keys:
+            break
+        visited.update(active_keys)
+        active = [p for p in pending if (p[0], p[1]) in active_keys]
+
+        # 本层待展开 bom_id 的明细行（增量缓存）
+        level_bom_ids = {bid for (_, bid, _, _) in active if bid not in detail_cache}
+        if level_bom_ids:
+            res = await db.execute(
+                select(BomDetail)
+                .where(BomDetail.bom_id.in_(level_bom_ids))
+                .order_by(BomDetail.bom_id, BomDetail.line_no)
+            )
+            for d in res.scalars().all():
+                detail_cache.setdefault(d.bom_id, []).append(d)
+            # 注意：known_detail_bom_ids 此处意为「已探查明细的 bom_id」；
+            # 由于 pending 中的 bom_id 必有明细（根经解析器过滤、子件经 with_details 筛选），
+            # 即使该 bom_id 实际无明细行，此集合也只是保守地把无明细候选当作"可展开"，不影响正确性。
+            for bid in level_bom_ids:
+                detail_cache.setdefault(bid, [])
+                known_detail_bom_ids.add(bid)
+
+        # 本层子件主数据（增量缓存）
+        child_mids = {
+            d.material_id
+            for (_, bid, _, _) in active
+            for d in detail_cache.get(bid, []) if d.material_id
+        }
+        new_mids = child_mids - master_by_mid.keys()
+        if new_mids:
+            res = await db.execute(
+                select(Material).where(Material.erp_material_id.in_(new_mids))
+            )
+            for m in res.scalars().all():
+                master_by_mid[m.erp_material_id] = m
+
+        # 子件可展开子 BOM 解析（每物料只解析一次，增量缓存）
+        need_resolve = child_mids - sub_bom_by_mid.keys()
+        if need_resolve:
+            res = await db.execute(select(Bom).where(Bom.material_id.in_(need_resolve)))
+            cands: Dict[int, List[Bom]] = {}
+            for b in res.scalars().all():
+                cands.setdefault(b.material_id, []).append(b)
+            unknown = [
+                b.bom_id for boms in cands.values() for b in boms
+                if b.bom_id not in known_detail_bom_ids
+            ]
+            if unknown:
+                res2 = await db.execute(
+                    select(BomDetail.bom_id).where(BomDetail.bom_id.in_(unknown)).distinct()
+                )
+                known_detail_bom_ids.update(row[0] for row in res2.all())
+            for mid in need_resolve:
+                boms = cands.get(mid) or []
+                with_details = [b for b in boms if b.bom_id in known_detail_bom_ids]
+                if not with_details:
+                    sub_bom_by_mid[mid] = None
+                    continue
+                clean = [b for b in with_details if not b.void_flag and not b.disabled_status]
+                pool = clean if clean else with_details
+                pool.sort(key=lambda b: (-(b.is_audited or 0), b.bom_id))
+                sub_bom_by_mid[mid] = pool[0].bom_id
+
+        # 展开本层：聚合需求量 + 记录根→物料映射 + 入队子层
+        next_pending: List[Tuple[str, str, Decimal, int]] = []
+        for root, bid, factor, lvl in active:
+            for d in detail_cache.get(bid, []):
+                if not d.material_id:
+                    continue
+                mid = d.material_id
+                if d.standard_qty is not None and factor is not None:
+                    req: Optional[Decimal] = d.standard_qty * factor
+                else:
+                    req = d.standard_qty
+                m = mat_out.get(mid)
+                if m is None:
+                    master = master_by_mid.get(mid)
+                    m = {
+                        "material_id": mid,
+                        "material_code": master.material_code if master else None,
+                        "material_name": master.material_name if master else None,
+                        "spec_model": master.spec_model if master else None,
+                        "unit": master.unit_of_measure if master else None,
+                        "req_qty": Decimal("0"),
+                    }
+                    mat_out[mid] = m
+                if req is not None:
+                    m["req_qty"] += req
+                root_mids.setdefault(root, set()).add(mid)
+                sub_bid = sub_bom_by_mid.get(mid)
+                if sub_bid:
+                    # 仅挡跨层重复：visited 目前覆盖 ≤ 本层的 (root, bom_id)，
+                    # 同层两个父件指向同一子 BOM 时会各自入队、各自按自身因子展开（对齐参考实现）
+                    if (root, sub_bid) not in visited:
+                        next_pending.append((root, sub_bid, req if req is not None else Decimal("0"), lvl + 1))
+        pending = next_pending
+
+    return mat_out, root_mids
+
+
+async def _compute_task_coverage_base(db: AsyncSession, *, start_date: date, end_date: date) -> Dict:
+    """任务盘点覆盖公共计算（纯读底座），供平铺行视图使用。
+
+    计划开工日期在 [start_date, end_date] 的未关闭任务单 → 根 BOM 批量解析
+    → 批量展开 → 库存按仓拆行 → 近 N 天已盘标注（与免盘标同口径）。
+    """
+    task_rows = (await db.execute(
+        select(
+            ProductionTaskOrder.task_no,
+            ProductionTaskOrder.material_code,
+            ProductionTaskOrder.material_name,
+            ProductionTaskOrder.task_qty,
+            ProductionTaskOrder.bom_id,
+        )
+        .where(
+            ProductionTaskOrder.planned_start_date >= start_date,
+            ProductionTaskOrder.planned_start_date <= end_date,
+            or_(
+                ProductionTaskOrder.is_closed.is_(None),
+                ProductionTaskOrder.is_closed != 1,
+            ),
+        )
+        .order_by(ProductionTaskOrder.planned_start_date, ProductionTaskOrder.task_no)
+    )).all()
+
+    # 根 BOM 批量解析（固定次数查询，避免逐任务单串行往返）
+    distinct_pairs = list({(t.bom_id, t.material_code) for t in task_rows})
+    root_res = await _resolve_task_root_boms_batched(db, distinct_pairs)
+    no_bom_tasks: List[Dict] = []
+    bom_groups: Dict[str, Dict] = {}
+    for t in task_rows:
+        root = root_res.get((t.bom_id, t.material_code))
+        if not root:
+            no_bom_tasks.append({
+                "task_no": t.task_no,
+                "material_code": t.material_code,
+                "material_name": t.material_name,
+            })
+            continue
+        g = bom_groups.setdefault(root, {
+            "qty": Decimal("0"),
+            "task_nos": [],
+        })
+        g["qty"] += Decimal(str(t.task_qty or 0))
+        if t.task_no and t.task_no not in g["task_nos"]:
+            g["task_nos"].append(t.task_no)
+
+    # BOM 批量展开（跨根按层 BFS 共享查询，避免逐根展开的串行 DB 往返），聚合物料与根→物料映射
+    root_factors = {root: g["qty"] for root, g in bom_groups.items()}
+    mat_raw, root_mids = await _expand_boms_batched(db, root_factors)
+
+    mat_rows: Dict[int, Dict] = {}
+    for mid, m in mat_raw.items():
+        m["task_nos"] = []
+        mat_rows[mid] = m
+    for root, mids in root_mids.items():
+        for tn in bom_groups[root]["task_nos"]:
+            for mid in mids:
+                tns = mat_rows[mid]["task_nos"]
+                if tn not in tns:
+                    tns.append(tn)
+
+    # 拆「物料×仓库」行 + 即时库存快照（无库存 → 「(未入库)」合成行）
+    unique_mids = list(mat_rows.keys())
+    stock_map = await _get_stock_by_warehouse(db, unique_mids)
+    warehouses_by_mid = _split_stock_by_warehouse(stock_map, unique_mids)
+
+    dedup_keys: List[Tuple[Optional[int], Optional[int]]] = []
+    row_meta: Dict[Tuple[int, Optional[int]], Dict] = {}
+    for mid, m in mat_rows.items():
+        warehouses = warehouses_by_mid.get(mid, [])
+        if warehouses:
+            for wh_id, wh_name, sys_q, _sys_t in warehouses:
+                k = (mid, wh_id)
+                if k in row_meta:
+                    continue
+                row_meta[k] = {**m, "wh_id": wh_id, "wh_name": wh_name, "system_qty": sys_q}
+                dedup_keys.append(k)
+        else:
+            k = (mid, None)
+            row_meta[k] = {**m, "wh_id": None, "wh_name": "(未入库)", "system_qty": Decimal("0")}
+            dedup_keys.append(k)
+
+    # 近 N 天已盘标注（N=配置默认，与免盘标同口径）
+    skip_days = _resolve_recent_days(None)
+    today = date.today()
+    recent_map = await _get_recent_checked_by_warehouse(db, dedup_keys)
+
+    def _is_checked(recent: Optional[Dict]) -> bool:
+        return bool(
+            recent is not None
+            and recent["check_date"] is not None
+            and (today - recent["check_date"]).days <= skip_days
+        )
+
+    flat_rows: List[Dict] = []
+    for k in dedup_keys:
+        meta = row_meta[k]
+        recent = recent_map.get(k)
+        flat_rows.append({
+            "material_id": meta["material_id"],
+            "material_code": meta["material_code"],
+            "material_name": meta["material_name"],
+            "spec_model": meta["spec_model"],
+            "unit": meta["unit"],
+            "wh_id": meta["wh_id"],
+            "wh_name": meta["wh_name"],
+            "system_qty": meta["system_qty"],
+            "req_qty": meta["req_qty"],
+            "is_checked": _is_checked(recent),
+            "recent_check_no": recent["check_no"] if recent else None,
+            "recent_check_date": recent["check_date"] if recent else None,
+            "task_nos": meta["task_nos"],
+        })
+
+    return {
+        "task_rows": task_rows,
+        "no_bom_tasks": no_bom_tasks,
+        "bom_groups": bom_groups,
+        "mat_rows": mat_rows,
+        "warehouses_by_mid": warehouses_by_mid,
+        "recent_map": recent_map,
+        "flat_rows": flat_rows,
+    }
+
+
+async def get_task_material_coverage(
+    db: AsyncSession,
+    *,
+    start_date: date,
+    end_date: date,
+    status: str = "all",
+    keyword: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+    wh_id: Optional[int] = None,
+    wh_ids: Optional[List[int]] = None,
+    unstocked: bool = False,
+    sort_by: Optional[str] = None,
+    sort_order: str = "asc",
+) -> Dict:
+    """任务盘点覆盖 · 平铺「物料×仓库」行视图（纯读）。返回 dict 直接喂 TaskCoverageOut。
+
+    sort_by 取值：material_code/material_name/spec_model/wh_name/system_qty/req_qty/
+    task_count(关联任务单数)/recent_check_date；None=默认(未盘优先+物料编码)。
+    """
+    b = await _compute_task_coverage_base(db, start_date=start_date, end_date=end_date)
+    rows = b["flat_rows"]
+
+    # 统计（过滤前口径，反映整个范围）
+    checked_count = sum(1 for r in rows if r["is_checked"])
+    stats = {
+        "task_count": len(b["task_rows"]),
+        "product_count": len(b["bom_groups"]),
+        "row_count": len(rows),
+        "checked_count": checked_count,
+        "unchecked_count": len(rows) - checked_count,
+        "checked_rate": round(checked_count / len(rows), 4) if rows else None,
+    }
+
+    # 仓库汇总（C 视图数据源；过滤前口径）+ (未入库) 合成行计数
+    wh_acc: Dict[Optional[int], Dict] = {}
+    for r in rows:
+        acc = wh_acc.get(r["wh_id"])
+        if acc is None:
+            acc = {
+                "wh_id": r["wh_id"], "wh_name": r["wh_name"],
+                "row_count": 0, "checked_count": 0, "unchecked_rows": [],
+            }
+            wh_acc[r["wh_id"]] = acc
+        acc["row_count"] += 1
+        if r["is_checked"]:
+            acc["checked_count"] += 1
+        else:
+            acc["unchecked_rows"].append(r)
+    unstocked_acc = wh_acc.pop(None, None)
+    warehouses: List[Dict] = []
+    for acc in wh_acc.values():
+        previews = sorted(
+            acc["unchecked_rows"], key=lambda r: r["req_qty"] or Decimal("0"), reverse=True
+        )[:4]
+        warehouses.append({
+            "wh_id": acc["wh_id"],
+            "wh_name": acc["wh_name"],
+            "row_count": acc["row_count"],
+            "checked_count": acc["checked_count"],
+            "unchecked_count": acc["row_count"] - acc["checked_count"],
+            "preview_items": [
+                {
+                    "material_id": p["material_id"],
+                    "material_code": p["material_code"],
+                    "material_name": p["material_name"],
+                    "system_qty": p["system_qty"],
+                    "req_qty": p["req_qty"],
+                }
+                for p in previews
+            ],
+        })
+    warehouses.sort(key=lambda w: w["unchecked_count"], reverse=True)
+
+    # 过滤 + 排序 + 内存分页
+    filtered = rows
+    if unstocked:
+        filtered = [r for r in filtered if r["wh_id"] is None]
+    elif wh_ids:
+        wset = set(wh_ids)
+        if -1 in wset:
+            # -1 哨兵 = (未入库) 合成行；与仓库多选可混合
+            filtered = [r for r in filtered if r["wh_id"] in wset or r["wh_id"] is None]
+        else:
+            filtered = [r for r in filtered if r["wh_id"] in wset]
+    elif wh_id is not None:
+        filtered = [r for r in filtered if r["wh_id"] == wh_id]
+    if status == "checked":
+        filtered = [r for r in filtered if r["is_checked"]]
+    elif status == "unchecked":
+        filtered = [r for r in filtered if not r["is_checked"]]
+    kw = (keyword or "").strip().lower()
+    if kw:
+        filtered = [
+            r for r in filtered
+            if kw in (r["material_code"] or "").lower()
+            or kw in (r["material_name"] or "").lower()
+            or kw in (r["spec_model"] or "").lower()
+        ]
+    if sort_by:
+        rev = str(sort_order).lower() == "desc"
+        if sort_by == "task_count":
+            filtered.sort(key=lambda r: len(r["task_nos"] or []), reverse=rev)
+        elif sort_by == "recent_check_date":
+            filtered.sort(key=lambda r: r["recent_check_date"] or date.min, reverse=rev)
+        elif sort_by == "is_checked":
+            filtered.sort(key=lambda r: r["is_checked"], reverse=rev)
+        elif sort_by in ("system_qty", "req_qty"):
+            filtered.sort(key=lambda r: Decimal(str(r[sort_by] or 0)), reverse=rev)
+        else:
+            filtered.sort(key=lambda r: (r[sort_by] or "").lower(), reverse=rev)
+    else:
+        filtered.sort(key=lambda r: (r["is_checked"], r["material_code"] or "", r["wh_name"] or ""))
+    total = len(filtered)
+    start_idx = (page - 1) * page_size
+    page_rows = filtered[start_idx:start_idx + page_size]
+
+    return {
+        "stats": stats,
+        "items": page_rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "no_bom_tasks": b["no_bom_tasks"],
+        "warehouses": warehouses,
+        "unstocked_count": unstocked_acc["row_count"] if unstocked_acc else 0,
+    }
 
 
 async def create_stock_check_from_order(

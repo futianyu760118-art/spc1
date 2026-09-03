@@ -189,8 +189,10 @@ def _inventory_time_query_params(
     last_picking_at_end: Optional[str] = Query(None, description="最后领料时间 止(YYYY-MM-DD 或 ISO 时间,日期取当天末)"),
     last_picking_at_within_days: Optional[int] = Query(None, ge=0, le=100000, description="最后领料时间在最近 N 天内"),
     last_picking_at_over_days: Optional[int] = Query(None, ge=0, le=100000, description="最后领料时间距今超过 N 天(含从未领料)"),
+    days_in_stock_gt: Optional[int] = Query(None, ge=0, le=100000, description="呆滞天数大于 N 天(参考=最后出库时间,无则最后入库时间;两时间皆空的 '-' 行不计入)"),
+    days_in_stock_lt: Optional[int] = Query(None, ge=0, le=100000, description="呆滞天数小于 N 天(参考同上;两时间皆空的 '-' 行不计入)"),
 ) -> dict:
-    """三个收发时间字段的筛选参数(依赖注入,列表/导出共用)。"""
+    """收发时间字段筛选参数(依赖注入,列表/导出共用),另含呆滞天数 大于/小于 N 天 阈值。"""
     return {
         "last_inbound_at_start": last_inbound_at_start,
         "last_inbound_at_end": last_inbound_at_end,
@@ -204,6 +206,8 @@ def _inventory_time_query_params(
         "last_picking_at_end": last_picking_at_end,
         "last_picking_at_within_days": last_picking_at_within_days,
         "last_picking_at_over_days": last_picking_at_over_days,
+        "days_in_stock_gt": days_in_stock_gt,
+        "days_in_stock_lt": days_in_stock_lt,
     }
 
 
@@ -249,6 +253,37 @@ def _inventory_time_conds(getter, params: Optional[dict] = None) -> list:
         if over_days is not None:
             conds.append(or_(col <= now - timedelta(days=int(over_days)), col.is_(None)))
     return conds
+
+
+def _inventory_dormant_conds(getter, params: Optional[dict] = None) -> list:
+    """呆滞天数字段筛选条件(与前端单元格口径一致):
+    呆滞天数 = (now - COALESCE(最后出库时间, 最后入库时间)) 取整天数;两时间皆空或未来时间按 '-' 不计入筛选。
+    getter(field) 返回字段对应的 SQL 表达式(行级传 Inventory 列;按仓库聚合传 MAX 聚合表达式)。
+    - days_in_stock_gt: 呆滞天数 > N 天
+    - days_in_stock_lt: 呆滞天数 < N 天"""
+    if not params:
+        return []
+    gt = params.get("days_in_stock_gt")
+    lt = params.get("days_in_stock_lt")
+    if gt is None and lt is None:
+        return []
+    now = datetime.now()
+    ref = func.coalesce(getter("last_outbound_at"), getter("last_inbound_at"))
+    conds = [ref.isnot(None), ref <= now]
+    if gt is not None:
+        conds.append(ref <= now - timedelta(days=int(gt) + 1))
+    if lt is not None:
+        conds.append(ref > now - timedelta(days=int(lt)))
+    return conds
+
+
+def _inventory_dormant_days_export(out_at: Optional[datetime], in_at: Optional[datetime]) -> Optional[int]:
+    """呆滞天数导出值(与前端单元格口径一致): 参考 = 最后出库时间(无则最后入库), 取整天数; 两时间皆空/未来返回 None。"""
+    ref = out_at or in_at
+    if not ref:
+        return None
+    diff = int((datetime.now() - ref).total_seconds() // 86400)
+    return diff if diff >= 0 else None
 
 
 def _employee_out(employee: Employee, position_name: Optional[str] = None, manager_name: Optional[str] = None) -> EmployeeOut:
@@ -2067,11 +2102,12 @@ async def list_inventory(
     active_cond = _inventory_material_active_cond()
     nonzero_cond = _inventory_nonzero_qty_cond()
     time_conds = _inventory_time_conds(lambda f: getattr(Inventory, f), tf)
-    query = query.where(active_cond, nonzero_cond, *time_conds)
-    count_query = count_query.where(active_cond, nonzero_cond, *time_conds)
-    sums_query = sums_query.where(active_cond, nonzero_cond, *time_conds)
-    total_materials_query = total_materials_query.where(active_cond, nonzero_cond, *time_conds)
-    counted_materials_query = counted_materials_query.where(active_cond, nonzero_cond, *time_conds)
+    dormant_conds = _inventory_dormant_conds(lambda f: getattr(Inventory, f), tf)
+    query = query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
+    count_query = count_query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
+    sums_query = sums_query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
+    total_materials_query = total_materials_query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
+    counted_materials_query = counted_materials_query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
 
     if keyword:
         like = f"%{keyword}%"
@@ -2248,12 +2284,13 @@ async def list_inventory_by_warehouse(
         "last_picking_at": max_last_picking,
     }
     time_conds = _inventory_time_conds(lambda f: max_cols[f], tf)
+    dormant_conds = _inventory_dormant_conds(lambda f: max_cols[f], tf)
 
     groups = select(*group_cols, sum_qty, sum_locked, sum_balance, sum_transit, sum_ending, cnt_locations, max_last_inbound, max_last_outbound, max_last_picking).group_by(*group_cols)
     for f in filters:
         groups = groups.where(f)
-    # 组级排除零库存（防正负抵消为 0 的组）+ 组级时间筛选（作用于 MAX 聚合值，NULL 视为超过 N 天）
-    groups = groups.having(sum_qty != 0, *time_conds)
+    # 组级排除零库存（防正负抵消为 0 的组）+ 组级时间/呆滞筛选（作用于 MAX 聚合值，NULL 视为超过 N 天）
+    groups = groups.having(sum_qty != 0, *time_conds, *dormant_conds)
 
     sortable = {
         "material_code": Inventory.material_code,
@@ -2397,6 +2434,7 @@ INVENTORY_DETAIL_EXPORT_COLUMNS = [
     ExportColumn("last_inbound_at", "最后入库时间", 18),
     ExportColumn("last_outbound_at", "最后出库时间", 18),
     ExportColumn("last_picking_at", "最后领料时间", 18),
+    ExportColumn("days_in_stock", "呆滞天数", 10),
     ExportColumn("recent_checked", "近期已盘", 10),
     ExportColumn("updated_at", "更新时间", 18),
 ]
@@ -2416,6 +2454,7 @@ INVENTORY_BYWH_EXPORT_COLUMNS = [
     ExportColumn("last_inbound_at", "最后入库时间", 18),
     ExportColumn("last_outbound_at", "最后出库时间", 18),
     ExportColumn("last_picking_at", "最后领料时间", 18),
+    ExportColumn("days_in_stock", "呆滞天数", 10),
     ExportColumn("recent_checked", "近期已盘", 10),
 ]
 
@@ -2447,6 +2486,7 @@ async def export_inventory(
     if not selected_columns:
         raise HTTPException(status_code=400, detail="请选择至少一个有效导出字段")
     conds = _inventory_filter_conds(keyword, material_code, wh_code, wh_name, batch_no, recent_checked, recent_days, time_filters=tf)
+    conds.extend(_inventory_dormant_conds(lambda f: getattr(Inventory, f), tf))
     query = select(Inventory).where(*conds)
     query = _apply_sort(query, Inventory, sort_by, sort_order, SORTABLE_INVENTORY)
     items = (await db.execute(query)).scalars().all()
@@ -2474,6 +2514,7 @@ async def export_inventory(
             "last_inbound_at": inv.last_inbound_at.strftime("%Y-%m-%d %H:%M:%S") if inv.last_inbound_at else "",
             "last_outbound_at": inv.last_outbound_at.strftime("%Y-%m-%d %H:%M:%S") if inv.last_outbound_at else "",
             "last_picking_at": inv.last_picking_at.strftime("%Y-%m-%d %H:%M:%S") if inv.last_picking_at else "",
+            "days_in_stock": _inventory_dormant_days_export(inv.last_outbound_at, inv.last_inbound_at),
             "recent_checked": "是" if rc.get("checked") else "否",
             "updated_at": inv.updated_at.strftime("%Y-%m-%d %H:%M:%S") if inv.updated_at else "",
         })
@@ -2540,13 +2581,13 @@ async def export_inventory_by_warehouse(
     query = select(*group_cols, sum_qty, sum_locked, sum_balance, sum_transit, sum_ending, cnt_locations, max_last_inbound, max_last_outbound, max_last_picking).group_by(*group_cols)
     for f in filters:
         query = query.where(f)
-    # 组级时间筛选（作用于 MAX 聚合值，NULL 视为超过 N 天）
+    # 组级时间/呆滞筛选（作用于 MAX 聚合值，NULL 视为超过 N 天）
     max_cols = {
         "last_inbound_at": max_last_inbound,
         "last_outbound_at": max_last_outbound,
         "last_picking_at": max_last_picking,
     }
-    query = query.having(sum_qty != 0, *_inventory_time_conds(lambda f: max_cols[f], tf))
+    query = query.having(sum_qty != 0, *_inventory_time_conds(lambda f: max_cols[f], tf), *_inventory_dormant_conds(lambda f: max_cols[f], tf))
 
     sortable = {
         "material_code": Inventory.material_code,
@@ -2587,6 +2628,7 @@ async def export_inventory_by_warehouse(
             "last_inbound_at": last_in.strftime("%Y-%m-%d %H:%M:%S") if last_in else "",
             "last_outbound_at": last_out.strftime("%Y-%m-%d %H:%M:%S") if last_out else "",
             "last_picking_at": last_pick.strftime("%Y-%m-%d %H:%M:%S") if last_pick else "",
+            "days_in_stock": _inventory_dormant_days_export(last_out, last_in),
             "qty_on_hand": qty_f,
             "locked_qty": float(locked or 0),
             "balance_qty": float(balance or 0),
