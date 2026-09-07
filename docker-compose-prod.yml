@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: spc_db
       TZ: Asia/Shanghai
+    ports:
+      - "15432:5432"
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:

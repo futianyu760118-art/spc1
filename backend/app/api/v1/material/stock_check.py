@@ -42,6 +42,7 @@ from app.schemas.material.stock_check import (
     StockCheckWritebackOut,
     WritebackOverviewOut,
     TaskCoverageOut,
+    StockCheckExportBody,
 )
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.services.material.stock_check_service import (
@@ -229,6 +230,7 @@ async def get_task_stock_coverage_view(
     unstocked: bool = Query(False, description="仅看(未入库)合成行(wh_id 为空)"),
     sort_by: Optional[str] = Query(None, description="排序列: material_code/material_name/spec_model/wh_name/system_qty/req_qty/task_count/recent_check_date"),
     sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    include_sample: bool = Query(False, description="包含样品单(HJY开头销售订单)对应的任务，默认排除"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     current_user: dict = Depends(PermissionChecker("materials.task_stock_check", "read")),
@@ -254,6 +256,7 @@ async def get_task_stock_coverage_view(
         wh_ids=None if unstocked else ids,
         unstocked=unstocked,
         sort_by=sort_by, sort_order=sort_order,
+        include_sample=include_sample,
     )
     return ResponseModel(data=TaskCoverageOut(**data))
 
@@ -1027,20 +1030,18 @@ async def remove_item(
     return ResponseModel(data={"removed": True, "check_id": head.id})
 
 
-@router.get("/stock-check/{check_id}/export")
-async def export_stock_check(
+async def _export_check_file(
+    db: AsyncSession,
     check_id: int,
-    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
-    columns: Optional[str] = Query(None, description="逗号分隔的导出字段 key,省略=全部"),
-    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
-    db: AsyncSession = Depends(get_db),
-):
-    """导出单个盘点单的明细(支持 xlsx/csv 与字段选择)。"""
+    fmt: str,
+    selected_keys: List[str],
+    item_ids: Optional[List[int]] = None,
+) -> StreamingResponse:
+    """盘点单明细导出公共实现。item_ids 非空时只导出这些行(前端客户端筛选后的可见行)。"""
     head = await get_stock_check_with_items(db, check_id)
     if not head:
         raise HTTPException(status_code=404, detail="盘点单不存在")
 
-    selected_keys = [c.strip() for c in columns.split(",") if c.strip()] if columns else []
     allowed = {c.key for c in STOCK_CHECK_EXPORT_COLUMNS}
     invalid = [k for k in selected_keys if k not in allowed]
     if invalid:
@@ -1049,8 +1050,15 @@ async def export_stock_check(
     if not selected_columns:
         raise HTTPException(status_code=400, detail="请选择至少一个有效导出字段")
 
+    export_items = head.items
+    if item_ids is not None:
+        id_set = {int(i) for i in item_ids}
+        export_items = [it for it in head.items if it.id in id_set]
+        if not export_items:
+            raise HTTPException(status_code=400, detail="所选明细行不存在或已被移除")
+
     export_rows = []
-    for it in head.items:
+    for it in export_items:
         snap_time = it.system_qty_time or head.created_at
         export_rows.append({
             "material_code": it.material_code or "",
@@ -1066,14 +1074,15 @@ async def export_stock_check(
             "req_qty": it.req_qty if it.req_qty is not None else "",
             "actual_qty": it.actual_qty if it.actual_qty is not None else "",
             "diff_qty": it.diff_qty if it.diff_qty is not None else "",
-            "is_checked": "是" if it.is_checked == 1 else "否",
+            # 已盘口径与头表汇总一致: is_checked=1 或 近期已盘免盘行(recent 标记未撤销)
+            "is_checked": "是" if (it.is_checked == 1 or it.recent_checked_check_no) else "否",
             "checked_by": it.checked_by or "",
             "checked_at": it.checked_at.strftime("%Y-%m-%d %H:%M") if it.checked_at else "",
             "remark": it.remark or "",
         })
 
     svc = GenericExportService(selected_columns, export_rows, sheet_name="物料盘点明细")
-    if format == "csv":
+    if fmt == "csv":
         output = svc.to_csv()
         return StreamingResponse(
             output,
@@ -1086,6 +1095,33 @@ async def export_stock_check(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=stock_check_{check_id}.xlsx"},
     )
+
+
+@router.get("/stock-check/{check_id}/export")
+async def export_stock_check(
+    check_id: int,
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    columns: Optional[str] = Query(None, description="逗号分隔的导出字段 key,省略=全部"),
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """导出单个盘点单的全部明细(支持 xlsx/csv 与字段选择)。"""
+    selected_keys = [c.strip() for c in columns.split(",") if c.strip()] if columns else []
+    return await _export_check_file(db, check_id, format, selected_keys)
+
+
+@router.post("/stock-check/{check_id}/export")
+async def export_stock_check_filtered(
+    check_id: int,
+    body: StockCheckExportBody,
+    current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """导出单个盘点单的明细(POST 版): 页面筛选为客户端筛选,传 item_ids 只导出当前可见行。"""
+    if body.format not in ("xlsx", "csv"):
+        raise HTTPException(status_code=400, detail="format 仅支持 xlsx/csv")
+    selected_keys = [c.strip() for c in (body.columns or []) if c.strip()]
+    return await _export_check_file(db, check_id, body.format, selected_keys, item_ids=body.item_ids)
 
 
 @router.post("/stock-check/{check_id}/refresh-warehouses", response_model=ResponseModel[dict])

@@ -6,7 +6,7 @@ from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, cast, String, not_
+from sqlalchemy import select, func, or_, and_, cast, String, not_
 from sqlalchemy.orm import aliased
 
 from app.core.database import get_db
@@ -320,6 +320,28 @@ async def list_customers(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
+@router.get("/customers/stats", response_model=ResponseModel[dict])
+async def get_customer_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.customers", "read"))
+):
+    """客户统计：总数 / 按等级 / 停用数"""
+    result = await db.execute(
+        select(Customer.customer_level, Customer.status, func.count())
+        .group_by(Customer.customer_level, Customer.status)
+    )
+    total = 0
+    disabled = 0
+    by_level: Dict[str, int] = {"A": 0, "B": 0, "C": 0, "": 0}
+    for level, status_val, cnt in result.all():
+        total += cnt
+        if status_val == 0:
+            disabled += cnt
+        key = level or ""
+        by_level[key] = by_level.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_level": by_level, "disabled": disabled})
+
+
 @router.get("/customers/{customer_id}", response_model=CustomerOut)
 async def get_customer(customer_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个客户"""
@@ -419,6 +441,35 @@ async def list_suppliers(
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
     items = [SupplierOut.model_validate(r) for r in result.scalars().all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/suppliers/stats", response_model=ResponseModel[dict])
+async def get_supplier_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.suppliers", "read"))
+):
+    """供应商统计：总数 / 按类型 / 未关联ERP / 停用数"""
+    result = await db.execute(
+        select(
+            Supplier.supplier_type,
+            Supplier.erp_supply_id,
+            Supplier.status,
+            func.count(),
+        ).group_by(Supplier.supplier_type, Supplier.erp_supply_id, Supplier.status)
+    )
+    total = 0
+    no_erp = 0
+    disabled = 0
+    by_type: Dict[str, int] = {}
+    for stype, erp_id, status_val, cnt in result.all():
+        total += cnt
+        if erp_id is None:
+            no_erp += cnt
+        if status_val == 0:
+            disabled += cnt
+        key = stype or ""
+        by_type[key] = by_type.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_type": by_type, "no_erp": no_erp, "disabled": disabled})
 
 
 @router.get("/suppliers/{supplier_id}", response_model=SupplierOut)
@@ -813,6 +864,23 @@ async def list_skus(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
+@router.get("/skus/stats", response_model=ResponseModel[dict])
+async def get_sku_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.skus", "read"))
+):
+    """SKU统计：总数 / 有条码 / 缺条码"""
+    has_barcode = and_(SKU.barcode.isnot(None), SKU.barcode != "")
+    result = await db.execute(select(has_barcode, func.count()).group_by(has_barcode))
+    total = 0
+    with_barcode = 0
+    for flag, cnt in result.all():
+        total += cnt
+        if flag:
+            with_barcode += cnt
+    return ResponseModel(data={"total": total, "with_barcode": with_barcode, "without_barcode": total - with_barcode})
+
+
 @router.get("/skus/{sku_id}", response_model=SKUOut)
 async def get_sku(sku_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个SKU"""
@@ -900,6 +968,29 @@ async def list_products(
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
     items = [ProductOut.model_validate(r) for r in result.scalars().all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/products/stats", response_model=ResponseModel[dict])
+async def get_product_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.products", "read"))
+):
+    """产品统计：总数 / 按产品线 / 缺默认仓库"""
+    missing_wh = or_(Product.default_warehouse.is_(None), Product.default_warehouse == "")
+    result = await db.execute(
+        select(Product.product_line, missing_wh, func.count())
+        .group_by(Product.product_line, missing_wh)
+    )
+    total = 0
+    missing_default_warehouse = 0
+    by_product_line: Dict[str, int] = {}
+    for line, missing, cnt in result.all():
+        total += cnt
+        if missing:
+            missing_default_warehouse += cnt
+        key = line or ""
+        by_product_line[key] = by_product_line.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_product_line": by_product_line, "missing_default_warehouse": missing_default_warehouse})
 
 
 @router.get("/products/{product_id}", response_model=ProductOut)
@@ -999,6 +1090,31 @@ async def list_warehouses(
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
     items = [WarehouseOut.model_validate(r) for r in result.scalars().all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/warehouses/stats", response_model=ResponseModel[dict])
+async def get_warehouse_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.warehouses", "read"))
+):
+    """仓库统计：总数 / 按类型 / 停用数 / 未删库位数"""
+    result = await db.execute(
+        select(Warehouse.wh_type, Warehouse.is_enabled, func.count())
+        .group_by(Warehouse.wh_type, Warehouse.is_enabled)
+    )
+    total = 0
+    disabled = 0
+    by_type: Dict[str, int] = {}
+    for wtype, enabled_val, cnt in result.all():
+        total += cnt
+        if enabled_val == 0:
+            disabled += cnt
+        key = wtype or ""
+        by_type[key] = by_type.get(key, 0) + cnt
+    location_count = (await db.execute(
+        select(func.count()).select_from(Location).where(Location.is_deleted == 0)
+    )).scalar() or 0
+    return ResponseModel(data={"total": total, "by_type": by_type, "disabled": disabled, "location_count": location_count})
 
 
 @router.get("/warehouses/{warehouse_id}", response_model=WarehouseOut)
@@ -1106,6 +1222,74 @@ async def list_locations(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
+@router.get("/locations/stats", response_model=ResponseModel[dict])
+async def get_location_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "read"))
+):
+    """库位统计（含软删）：总数 / 按层级 / 软删数 / 按来源"""
+    result = await db.execute(
+        select(Location.depth, Location.is_deleted, Location.data_source, func.count())
+        .group_by(Location.depth, Location.is_deleted, Location.data_source)
+    )
+    total = 0
+    deleted = 0
+    by_depth: Dict[str, int] = {}
+    by_source: Dict[str, int] = {}
+    for depth, deleted_val, source, cnt in result.all():
+        total += cnt
+        if deleted_val == 1:
+            deleted += cnt
+        by_depth[str(depth)] = by_depth.get(str(depth), 0) + cnt
+        key = source or ""
+        by_source[key] = by_source.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_depth": by_depth, "deleted": deleted, "by_source": by_source})
+
+
+@router.get("/locations/tree", response_model=ResponseModel[dict])
+async def get_location_tree(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.locations", "read"))
+):
+    """查询库位树形结构（含软删，按 depth→location_id 排序）"""
+    result = await db.execute(
+        select(Location).order_by(Location.depth, Location.location_id)
+    )
+    all_items = result.scalars().all()
+
+    node_map: dict[int, dict] = {}
+    for item in all_items:
+        node_map[item.location_id] = {
+            "id": item.id,
+            "location_id": item.location_id,
+            "location_code": item.location_code,
+            "location_name": item.location_name,
+            "location_full_name": item.location_full_name,
+            "depth": item.depth,
+            "detail_flag": item.detail_flag,
+            "parent_id": item.parent_id,
+            "data_source": item.data_source,
+            "system_type": item.system_type,
+            "is_deleted": item.is_deleted,
+            "children": [],
+        }
+
+    roots: List[dict] = []
+    for item in all_items:
+        node = node_map.get(item.location_id)
+        if not node:
+            continue
+        if item.parent_id is None or item.parent_id == "":
+            roots.append(node)
+        else:
+            parent = node_map.get(item.parent_id)
+            if parent:
+                parent["children"].append(node)
+            else:
+                roots.append(node)
+    return ResponseModel(data={"tree": roots, "total": len(all_items)})
+
+
 @router.get("/locations/{location_id}", response_model=LocationOut)
 async def get_location(location_id: int, db: AsyncSession = Depends(get_db)):
     """查询单个库位"""
@@ -1204,6 +1388,40 @@ async def list_processes(
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
     items = [ProcessOut.model_validate(r) for r in result.scalars().all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/processes/stats", response_model=ResponseModel[dict])
+async def get_process_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.processes", "read"))
+):
+    """工序统计：总数 / 质检点 / 分组数 / 缺标准工时"""
+    result = await db.execute(
+        select(
+            Process.is_qc_point,
+            Process.standard_hour,
+            func.count(),
+        ).group_by(Process.is_qc_point, Process.standard_hour)
+    )
+    total = 0
+    qc_points = 0
+    missing_standard_hour = 0
+    for qc_val, std_hour, cnt in result.all():
+        total += cnt
+        if qc_val == 1:
+            qc_points += cnt
+        if std_hour is None:
+            missing_standard_hour += cnt
+    groups = (await db.execute(
+        select(func.count(func.distinct(Process.process_group)))
+    )).scalar() or 0
+    group_rows = await db.execute(
+        select(Process.process_group, func.count()).group_by(Process.process_group)
+    )
+    by_group: Dict[str, int] = {}
+    for gname, gcnt in group_rows.all():
+        by_group[gname or "未分组"] = gcnt
+    return ResponseModel(data={"total": total, "qc_points": qc_points, "groups": groups, "missing_standard_hour": missing_standard_hour, "by_group": by_group})
 
 
 @router.get("/processes/{process_id}", response_model=ProcessOut)
@@ -1362,6 +1580,28 @@ async def list_organizations(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
+@router.get("/organizations/stats", response_model=ResponseModel[dict])
+async def get_organization_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "read"))
+):
+    """组织统计：总数 / 按类型 / 缺负责人"""
+    result = await db.execute(
+        select(Organization.org_type, Organization.leader_id.is_(None), func.count())
+        .group_by(Organization.org_type, Organization.leader_id.is_(None))
+    )
+    total = 0
+    missing_leader = 0
+    by_type: Dict[str, int] = {}
+    for otype, missing_flag, cnt in result.all():
+        total += cnt
+        if missing_flag:
+            missing_leader += cnt
+        key = otype or ""
+        by_type[key] = by_type.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_type": by_type, "missing_leader": missing_leader})
+
+
 @router.get("/organizations/{org_id}", response_model=OrganizationWithLeaderOut)
 async def get_organization(org_id: int, db: AsyncSession = Depends(get_db), current_user: dict = Depends(PermissionChecker("basicdata.data.organizations", "read"))):
     """查询单个组织（含负责人姓名）"""
@@ -1469,6 +1709,25 @@ async def list_positions(
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
 
 
+@router.get("/positions/stats", response_model=ResponseModel[dict])
+async def get_position_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.positions", "read"))
+):
+    """岗位统计：总数 / 启用 / 停用"""
+    result = await db.execute(select(Position.status, func.count()).group_by(Position.status))
+    total = 0
+    enabled = 0
+    disabled = 0
+    for st, cnt in result.all():
+        total += cnt
+        if st == 1:
+            enabled += cnt
+        elif st == 0:
+            disabled += cnt
+    return ResponseModel(data={"total": total, "enabled": enabled, "disabled": disabled})
+
+
 @router.get("/positions/{position_id}", response_model=PositionOut)
 async def get_position(
     position_id: int,
@@ -1528,6 +1787,22 @@ async def list_employees(
     result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
     items = [_employee_out(employee, position_name, mgr_name) for employee, position_name, mgr_name in result.all()]
     return ResponseModel(data={"items": items, "total": total, "page": page, "page_size": page_size})
+
+
+@router.get("/employees/stats", response_model=ResponseModel[dict])
+async def get_employee_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.employees", "read"))
+):
+    """人员统计：总数 / 按状态（8 态全覆盖）"""
+    result = await db.execute(select(Employee.status, func.count()).group_by(Employee.status))
+    by_status: Dict[str, int] = {str(i): 0 for i in range(8)}
+    total = 0
+    for st, cnt in result.all():
+        total += cnt
+        key = str(st)
+        by_status[key] = by_status.get(key, 0) + cnt
+    return ResponseModel(data={"total": total, "by_status": by_status})
 
 
 @router.get("/employees/{employee_id}", response_model=EmployeeOut)

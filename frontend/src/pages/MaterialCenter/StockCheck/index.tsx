@@ -159,12 +159,14 @@ export default function StockCheckPage() {
         sort_by: params.sort_by ?? 'updated_at',
         sort_order: params.sort_order ?? 'desc',
         status: statusFilter.length ? statusFilter.join(',') : undefined,
+        check_type: typeFilter && typeFilter !== 'k3' ? typeFilter : undefined,
+        source: typeFilter === 'k3' ? 'k3' : undefined,
         date_from: dateFrom,
         date_to: dateTo,
       })
       return { items: res.data?.items || [], total: res.data?.total || 0 }
     },
-    extraDeps: [appliedKeyword, statusFilter, dateFrom, dateTo],
+    extraDeps: [appliedKeyword, statusFilter, typeFilter, dateFrom, dateTo],
   })
 
   // ===== Tab 2 · 物料台账 =====
@@ -394,29 +396,72 @@ export default function StockCheckPage() {
     )
   }
 
-  // ===== 工具栏导出（当前 Tab 当前页 → CSV）=====
-  const handleToolbarExport = () => {
-    if (activeTab === 'checks') {
-      const rows = recentTableProps.dataSource as StockCheck[]
-      if (!rows.length) { message.info('当前无数据可导出'); return }
-      exportCsv('盘点单台账.csv',
-        ['盘点单号', '类型', '关联订单', '状态', '已盘', '应盘', '盘盈', '盘亏', '创建人', '更新时间'],
-        rows.map((r) => [
-          r.check_no, checkTypeTag(r.check_type, r.source).label, r.order_no || '',
-          STATUS_MAP[r.status || '']?.label || r.status || '',
-          r.checked_materials ?? 0, r.total_materials ?? 0, r.gain_count ?? 0, r.loss_count ?? 0,
-          r.created_by || '', r.updated_at ? formatDateTime(r.updated_at) : '',
-        ]))
-    } else {
-      const rows = ledgerTableProps.dataSource as LedgerRow[]
-      if (!rows.length) { message.info('当前无数据可导出'); return }
-      exportCsv('物料盘点台账.csv',
-        ['物料编码', '物料名称', '规格', '仓库', '应盘', '系统快照', '实盘', '差异', '所属盘点单', '盘点人', '盘点时间'],
-        rows.map((r) => [
-          r.material_code || '', r.material_name || '', r.spec_model || '', r.wh_name || '',
-          r.req_qty ?? '', r.system_qty ?? '', r.actual_qty ?? '', r.diff_qty ?? '',
-          r.check_no || '', r.counted_by || '', r.counted_at ? formatDateTime(r.counted_at) : '',
-        ]))
+  // ===== 工具栏导出（当前 Tab 按筛选条件全量拉取 → CSV）=====
+  const [exportingAll, setExportingAll] = useState(false)
+  const fetchAllPages = async (fetchPage: (p: number) => Promise<{ items: any[]; total: number }>): Promise<any[]> => {
+    const all: any[] = []
+    let p = 1
+    for (;;) {
+      const res = await fetchPage(p)
+      const batch = res.items || []
+      all.push(...batch)
+      if (all.length >= (res.total ?? 0) || batch.length === 0 || p >= 50) break
+      p++
+    }
+    return all
+  }
+
+  const handleToolbarExport = async () => {
+    setExportingAll(true)
+    try {
+      if (activeTab === 'checks') {
+        const rows = (await fetchAllPages((p) =>
+          materialApi.getRecentStockChecks({
+            page: p, page_size: 100,
+            keyword: appliedKeyword || undefined,
+            sort_by: 'updated_at', sort_order: 'desc',
+            status: statusFilter.length ? statusFilter.join(',') : undefined,
+            check_type: typeFilter && typeFilter !== 'k3' ? typeFilter : undefined,
+            source: typeFilter === 'k3' ? 'k3' : undefined,
+            date_from: dateFrom,
+            date_to: dateTo,
+          }).then((res: any) => ({ items: res.data?.items || [], total: res.data?.total || 0 })),
+        )) as StockCheck[]
+        if (!rows.length) { message.info('当前筛选无数据可导出'); return }
+        exportCsv('盘点单台账.csv',
+          ['盘点单号', '类型', '关联订单', '状态', '已盘', '应盘', '盘盈', '盘亏', '创建人', '更新时间'],
+          rows.map((r) => [
+            r.check_no, checkTypeTag(r.check_type, r.source).label, r.order_no || '',
+            STATUS_MAP[r.status || '']?.label || r.status || '',
+            r.checked_materials ?? 0, r.total_materials ?? 0, r.gain_count ?? 0, r.loss_count ?? 0,
+            r.created_by || '', r.updated_at ? formatDateTime(r.updated_at) : '',
+          ]))
+      } else {
+        const rows = (await fetchAllPages((p) =>
+          materialApi.listCountedMaterials({
+            page: p, page_size: 100,
+            keyword: appliedKeyword || undefined,
+            sort_by: 'diff_qty', sort_order: 'desc',
+            wh_id: (ledgerFilters.wh_name as string[] | undefined)?.[0],
+            date_from: dateFrom,
+            date_to: dateTo,
+            only_mine: onlyMine || undefined,
+            diff_only: diffOnly || undefined,
+          }).then((res: any) => ({ items: res.data?.items || [], total: Number(res.data?.total || 0) })),
+        )) as LedgerRow[]
+        if (!rows.length) { message.info('当前筛选无数据可导出'); return }
+        exportCsv('物料盘点台账.csv',
+          ['物料编码', '物料名称', '规格', '仓库', '应盘', '系统快照', '实盘', '差异', '所属盘点单', '盘点人', '盘点时间'],
+          rows.map((r) => [
+            r.material_code || '', r.material_name || '', r.spec_model || '', r.wh_name || '',
+            r.req_qty ?? '', r.system_qty ?? '', r.actual_qty ?? '', r.diff_qty ?? '',
+            r.check_no || '', r.counted_by || '', r.counted_at ? formatDateTime(r.counted_at) : '',
+          ]))
+      }
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e?.message || '导出失败')
+    } finally {
+      setExportingAll(false)
     }
   }
 
@@ -724,7 +769,7 @@ export default function StockCheckPage() {
               统计图表
             </Button>
           )}
-          <Button icon={<DownloadOutlined />} onClick={handleToolbarExport}>导出</Button>
+          <Button icon={<DownloadOutlined />} loading={exportingAll} onClick={handleToolbarExport}>导出</Button>
           <span style={{ width: 1, height: 20, background: '#e2e8f0' }} />
           <Button icon={<ThunderboltOutlined style={{ color: '#faad14' }} />} onClick={() => navigate('/quick-stock-check')}>
             快捷盘点

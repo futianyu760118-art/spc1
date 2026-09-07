@@ -40,6 +40,7 @@ SORTABLE_COLUMNS = {
     'order_no': SaleOrder.order_no,
     'order_qty': SaleOrder.order_qty,
     'order_amount': SaleOrder.order_amount,
+    'completed_qty': SaleOrder.completed_qty,
     'order_date': SaleOrder.order_date,
     'promised_date': SaleOrder.promised_date,
     'shipping_plan': SaleOrder.shipping_plan,

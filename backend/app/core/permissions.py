@@ -15,6 +15,8 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "finance.data": ["read"],
         "materials.scrap_inventory": ["read"],
         "materials.task_stock_check": ["read"],
+        # 部署版本管理：admin 全量（其它角色按需在角色管理授权 read / manage）
+        "deploy_versions": ["read", "manage"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],

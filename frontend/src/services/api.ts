@@ -302,6 +302,7 @@ export const materialApi = {
     unstocked?: boolean
     sort_by?: string
     sort_order?: 'asc' | 'desc'
+    include_sample?: boolean
     page?: number
     page_size?: number
   }) => api.get('/materials/stock-check/task-coverage', { params }),
@@ -843,6 +844,11 @@ export const wecomApi = {
   listDepartments: () =>
     api.get<WecomDepartment[], WecomDepartment[]>('/wecom/departments'),
   testConnection: () => api.post('/wecom/test-connection'),
+  jsapiConfig: (url: string) =>
+    api.get<
+      { appId: string; timestamp: number; nonceStr: string; signature: string; jsApiList: string[] },
+      { appId: string; timestamp: number; nonceStr: string; signature: string; jsApiList: string[] }
+    >('/wecom/jsapi-config', { params: { url } }),
 }
 
 

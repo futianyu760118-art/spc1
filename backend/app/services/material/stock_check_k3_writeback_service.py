@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.models.material.inventory_check import StockCheck, StockCheckItem
 from app.models.material.stock_check_writeback import StockCheckK3Writeback
 from app.services.material.stock_check_k3_service import (
@@ -30,6 +31,11 @@ from app.services.material.stock_check_k3_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 回写目标账套: K3_WRITE_DB 优先, 留空(或空串)回落 K3_DB(同步账套)。
+# 同步(读生产)与回写(测试期写测试账套)分离, 避免验证期污染生产数据;
+# 回写路径的全部读写(取号/单号/插入/补偿/物料单位)都必须落在同一目标账套。
+K3_WRITE_DB = get_settings().K3_WRITE_DB or K3_DB
 
 WRITEBACK_TIMEOUT = 15  # 单张单据写入超时(秒);超时即记 failed,不拖垮完结请求
 
@@ -120,7 +126,7 @@ async def get_writeback_overview(db: AsyncSession, check_id: int) -> Dict:
 def _next_k3_bill_no_sync(conn, prefix: str) -> str:
     """按 K3 现有单号规则生成下一号: prefix + 数字后缀零填充(位数对齐现有最大号)。"""
     mx = conn.execute(text(
-        f"SELECT MAX(FBillNo) FROM {K3_DB}.dbo.ICStockBill WHERE FBillNo LIKE :p"
+        f"SELECT MAX(FBillNo) FROM {K3_WRITE_DB}.dbo.ICStockBill WHERE FBillNo LIKE :p"
     ), {"p": prefix + "%"}).scalar()
     width, next_seq = 10, 1
     if mx:
@@ -132,7 +138,7 @@ def _next_k3_bill_no_sync(conn, prefix: str) -> str:
 
 
 INSERT_HEAD_SQL = f"""
-INSERT INTO {K3_DB}.dbo.ICStockBill
+INSERT INTO {K3_WRITE_DB}.dbo.ICStockBill
     (FInterID, FBrNo, FBrID, FBillNo, FDate, FTranType, FNote, FExplanation,
      FBillerID, FCheckerID, FCancellation, FFManagerID, FSManagerID,
      FInventoryType, FRefType)
@@ -143,7 +149,7 @@ VALUES
 """
 
 INSERT_ENTRY_SQL = f"""
-INSERT INTO {K3_DB}.dbo.ICStockBillEntry
+INSERT INTO {K3_WRITE_DB}.dbo.ICStockBillEntry
     (FInterID, FEntryID, FBrNo, FItemID, FUnitID, FQty, FQtyMust, FQtyActual,
      FPrice, FAmount, FDCStockID, FSCStockID, FBatchNo)
 VALUES
@@ -153,8 +159,48 @@ VALUES
 
 GAIN_PREFIX, TRANSFER_PREFIX = "YADJ", "CHG"
 
-# K3 取号(MAX+1)无原子性: 进程内锁把「取号→插入→补偿」整体串行化(单 worker 部署下足够)
+# 写路径进程内锁: 把「预检→取号→插入→补偿」整体串行化(单 worker 部署下足够)。
+# 取号与 K3 客户端同源(ICMaxNum 原子推进), 跨进程天然不撞号; 锁只防本服务并发完结/重试互踩。
 _K3_WRITE_LOCK = threading.Lock()
+
+# 与 K3 客户端同源原子取号: 单条 UPDATE 链式赋值推 ICMaxNum(成对预留, 与 K3 客户端
+# IC_MaxNum 每用户成对占号的实证足迹一致), 返回预留对中的低号。
+# 反面教训(2026-09 生产事故): MAX(FInterID)+1 直插不推计数器, K3 客户端下次保存取到
+# 已占用 ID → 主键重复报错, 单据被迫人工删除重录。
+ALLOC_INTER_ID_SQL = f"""
+SET NOCOUNT ON;
+DECLARE @n INT;
+UPDATE {K3_WRITE_DB}.dbo.ICMaxNum SET @n = FMaxNum = FMaxNum + 2 WHERE FTableName = 'ICStockBill';
+SELECT ISNULL(@n, 0) AS new_max;
+"""
+
+# 写入前预检: 计数器落后于实际 MAX(FInterID) 说明有人绕过计数器直插过单据,
+# 此时继续写入迟早与 K3 客户端撞号, 直接拒绝并给出修复指引。
+CHECK_COUNTER_SQL = f"""
+SELECT c.FMaxNum, (SELECT MAX(b.FInterID) FROM {K3_WRITE_DB}.dbo.ICStockBill b) AS max_id
+FROM {K3_WRITE_DB}.dbo.ICMaxNum c WHERE c.FTableName = 'ICStockBill'
+"""
+
+
+def _alloc_inter_id_sync(conn) -> int:
+    """原子推 ICMaxNum 并返回新 FInterID(成对预留中的低号)。计数器行缺失/取号失败即抛错。"""
+    new_max = int(conn.execute(text(ALLOC_INTER_ID_SQL)).scalar() or 0)
+    if new_max < 2:
+        raise RuntimeError(f"K3 ICMaxNum 缺少 ICStockBill 计数器行(或取号失败), 拒绝写入({K3_WRITE_DB})")
+    return new_max - 1
+
+
+def _check_counter_synced(conn) -> None:
+    """预检: ICMaxNum.FMaxNum 必须 >= MAX(FInterID), 否则拒绝回写(把撞号拦在写入之前)。"""
+    row = conn.execute(text(CHECK_COUNTER_SQL)).mappings().first()
+    if row is None:
+        raise RuntimeError(f"K3 ICMaxNum 缺少 ICStockBill 计数器行, 拒绝回写({K3_WRITE_DB})")
+    fmax, max_id = int(row["FMaxNum"] or 0), int(row["max_id"] or 0)
+    if fmax < max_id:
+        raise RuntimeError(
+            f"K3 计数器落后(FMaxNum={fmax} < MAX(FInterID)={max_id}), "
+            f"继续写入会与 K3 客户端撞 ID; 请先将 ICMaxNum.FMaxNum 推到 MAX 以上再重试"
+        )
 
 
 def _write_bill_sync(rec: StockCheckK3Writeback, entries: List[dict]) -> Tuple[str, int]:
@@ -163,16 +209,15 @@ def _write_bill_sync(rec: StockCheckK3Writeback, entries: List[dict]) -> Tuple[s
     连接经链接服务器(k3sv)访问 K3: 显式事务内跨链接服务器 INSERT 会报
     7395(OLE DB 提供程序不支持嵌套事务), 故写路径用 AUTOCOMMIT 逐句提交,
     失败时以补偿删除清理残留(未审核单无下游影响, 删除安全)。
-    取号(MAX+1)无原子性, 以进程内锁把「取号→插入→补偿」整体串行化,
-    避免并发完结/重试撞号与补偿误删(单 worker 部署下已足够)。
+    取号与 K3 客户端同源(ICMaxNum 原子推进+成对预留), 跨进程不撞号;
+    写入失败补偿删单时不回退计数器 —— 跳号对 K3 无害, 回退反而有并发风险。
     """
     inter_id: Optional[int] = None
     bill_no: Optional[str] = None
     with _K3_WRITE_LOCK, _get_k3_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         try:
-            inter_id = int(conn.execute(text(
-                f"SELECT ISNULL(MAX(FInterID), 0) + 1 FROM {K3_DB}.dbo.ICStockBill"
-            )).scalar())
+            _check_counter_synced(conn)
+            inter_id = _alloc_inter_id_sync(conn)
             # FDetailID 是 IDENTITY 自增列(链接服务器下显式插入报 7344 无列权限), 交给 SQL Server 生成
             is_gain = rec.bill_type == "gain"
             prefix = GAIN_PREFIX if is_gain else TRANSFER_PREFIX
@@ -200,10 +245,10 @@ def _write_bill_sync(rec: StockCheckK3Writeback, entries: List[dict]) -> Tuple[s
             if inter_id is not None:
                 try:
                     conn.execute(text(
-                        f"DELETE FROM {K3_DB}.dbo.ICStockBillEntry WHERE FInterID = :i"
+                        f"DELETE FROM {K3_WRITE_DB}.dbo.ICStockBillEntry WHERE FInterID = :i"
                     ), {"i": inter_id})
                     conn.execute(text(
-                        f"DELETE FROM {K3_DB}.dbo.ICStockBill WHERE FInterID = :i AND FBillNo = :b"
+                        f"DELETE FROM {K3_WRITE_DB}.dbo.ICStockBill WHERE FInterID = :i AND FBillNo = :b"
                     ), {"i": inter_id, "b": bill_no})
                 except Exception:
                     raise RuntimeError(
@@ -220,7 +265,7 @@ def _load_unit_ids_sync(item_ids: List[int]) -> Dict[int, int]:
     ids = ",".join(str(int(i)) for i in item_ids)
     with _get_k3_engine().connect() as conn:
         rows = conn.execute(text(
-            f"SELECT FItemID, FUnitID FROM {K3_DB}.dbo.t_ICItem WHERE FItemID IN ({ids})"
+            f"SELECT FItemID, FUnitID FROM {K3_WRITE_DB}.dbo.t_ICItem WHERE FItemID IN ({ids})"
         )).mappings().all()
     return {int(r["FItemID"]): int(r["FUnitID"] or 0) for r in rows}
 
@@ -248,7 +293,8 @@ async def _execute_one(db: AsyncSession, rec: StockCheckK3Writeback, head: Stock
         unit_ids = await asyncio.to_thread(
             _load_unit_ids_sync, [int(it.material_id) for it in diff_rows])
         fdate = head.check_date
-        fnote = f"盘点单 {head.check_no} 完结自动生成"
+        # FNote 加 ASCII 前缀, 保证跨编码环境可按 "SPC %" 检索中台写入的单据
+        fnote = f"SPC {head.check_no} 盘点完结自动生成"
         entries = []
         for it in diff_rows:
             diff = Decimal(str(it.diff_qty or 0))

@@ -134,6 +134,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'basicdata.files': <FolderOpenOutlined />,
   'basicdata.data_supply': <ApiOutlined />,
   announcements: <NotificationOutlined />,
+  deploy_versions: <RocketOutlined />,
   users: <UserOutlined />,
   roles: <SafetyOutlined />,
   audit: <AuditOutlined />,
@@ -321,6 +322,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
       { key: '/basicdata/files', icon: <FolderOpenOutlined />, label: '文件管理', permission: 'basicdata.files' },
       { key: '/announcements', icon: <NotificationOutlined />, label: '公告管理', permission: 'announcements' },
+      { key: '/deploy-versions', icon: <RocketOutlined />, label: '部署版本', permission: 'deploy_versions' },
     ],
   },
   {
@@ -502,6 +504,7 @@ const pathToGroupKey: Record<string, string> = {
   '/basicdata/files': 'basicdata-center',
   '/basicdata/data-supply': 'basicdata-center',
   '/announcements': 'basicdata-center',
+  '/deploy-versions': 'basicdata-center',
 }
 
 const pathToPermission: Record<string, string> = {
@@ -577,6 +580,7 @@ const pathToPermission: Record<string, string> = {
   '/basicdata/files': 'basicdata.files',
   '/basicdata/data-supply': 'basicdata.data_supply',
   '/announcements': 'announcements',
+  '/deploy-versions': 'deploy_versions',
   '/purchase/price-change': 'purchase.price_change',
   '/purchase/price-change/new': 'purchase.price_change',
   '/purchase/price-change/pending': 'purchase.price_change.pending',

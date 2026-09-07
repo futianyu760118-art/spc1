@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import assistant, basicdata, common, dashboard, exception, external, masterdata, material, meeting, npi, order, production, purchase, rules, writeback
+from app.api.v1 import assistant, basicdata, common, dashboard, exception, external, masterdata, material, meeting, npi, order, production, purchase, rules, system, writeback
 
 api_router = APIRouter()
 
@@ -69,6 +69,9 @@ api_router.include_router(basicdata.wecom_share_router, prefix="/share", tags=["
 
 # 权限定义
 api_router.include_router(basicdata.permissions_router, prefix="/permissions", tags=["权限定义"])
+
+# 部署版本管理（部署运维 · 部署版本）
+api_router.include_router(system.deploy_versions_router, prefix="/system/deploy", tags=["部署运维·部署版本"])
 
 # 数据供给
 api_router.include_router(basicdata.data_supply_router, prefix="/basicdata/data-supply", tags=["数据供给"])

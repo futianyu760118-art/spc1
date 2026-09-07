@@ -275,6 +275,31 @@ export default function StockCheckWorkbench() {
     },
   })
 
+  // ===== 现已入库的「(未入库)」行自动按仓库拆分/归属 =====
+  // 后端 refresh-warehouses 仅处理 wh_id=NULL 且未录数据的行:
+  // 单仓 → 原行归属该仓;多仓 → 原行归属库存最大的仓,其余仓各 INSERT 一行(即"分成两行")。
+  // 自己触发的 SSE 事件不回显(origin 过滤),拆分成功后需主动重载。
+  const whAutoRefreshRef = useRef(false)
+  useEffect(() => {
+    const cid = activeCheck?.id
+    if (!cid) return
+    if (activeCheck.status !== 'open' && activeCheck.status !== 'in_progress') return
+    if (activeCheck.can_edit === false) return
+    const splittable = items.some((it) => it.wh_id == null && it.actual_qty == null && it.live_wh_names)
+    if (!splittable || whAutoRefreshRef.current) return
+    whAutoRefreshRef.current = true
+    materialApi.refreshStockCheckWarehouses(cid).then((res: any) => {
+      const s = res?.data || {}
+      const n = (s.updated || 0) + (s.inserted || 0)
+      if (n > 0) {
+        if ((s.split || 0) > 0) message.info(`检测到现已多仓入库的明细,已自动按仓库拆分(更新 ${s.updated} 行、新增 ${s.inserted} 行)`)
+        else message.info('检测到现已入库的明细,已自动归属到对应仓库')
+        loadCheck(cid)
+      }
+    }).catch(() => { /* 静默:无权限/并发已处理时不打扰 */ })
+      .finally(() => { whAutoRefreshRef.current = false })
+  }, [items, activeCheck, loadCheck])
+
   // 存在感:聚焦即声明编辑某行(立即广播 + 心跳续命);离开停心跳并延迟清除 presence。
   // 用 150ms 防抖避免 Ant InputNumber blur/focus 时序抖动导致误清:
   // 若 blur 后 150ms 内又 focus 回同一行,取消清除。
@@ -762,7 +787,7 @@ export default function StockCheckWorkbench() {
   }, [])
 
   // ===== 导出 =====
-  const { exporting, exportData } = useExport()
+  const { exporting, exportPostData } = useExport()
   const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx')
   const [exportColumnModalOpen, setExportColumnModalOpen] = useState(false)
 
@@ -774,10 +799,13 @@ export default function StockCheckWorkbench() {
   const handleExportColumnConfirm = (selectedColumns: string[]) => {
     setExportColumnModalOpen(false)
     if (!activeCheck) return
+    // 页面筛选(搜索/产品/仓库/分段Tab/表头筛选)均为客户端筛选,导出时把当前可见行 id 传给后端
+    const ids = exportableItems.map((it) => it.id)
+    if (!ids.length) { message.info('当前筛选下无数据可导出'); return }
     const ext = exportFormat === 'csv' ? 'csv' : 'xlsx'
-    exportData(
+    exportPostData(
       `/api/v1/materials/stock-check/${activeCheck.id}/export`,
-      { format: exportFormat, columns: selectedColumns.join(',') },
+      { format: exportFormat, columns: selectedColumns, item_ids: ids },
       `物料盘点明细_${activeCheck.check_no}.${ext}`,
     )
   }
@@ -799,9 +827,9 @@ export default function StockCheckWorkbench() {
         (it.material_name || '').toLowerCase().includes(kw))
     }
     if (whFilter !== 'all') {
-      list = list.filter((it) => whFilter === '__none__'
-        ? (it.wh_id == null || !it.wh_name)
-        : it.wh_name === whFilter)
+      // 与仓库列展示同口径(warehouse_display): 「(未入库)」行现已入库的按实时仓库名参与筛选,
+      // 仅真正仍无库存的行留在「(未入库)」分组
+      list = list.filter((it) => (it.warehouse_display || it.wh_name || '(未入库)') === whFilter)
     }
     return list
   }, [items, searchText, productFilter, productMaterialMap, whFilter, activeCheck])
@@ -820,16 +848,27 @@ export default function StockCheckWorkbench() {
     return searchedItems.filter((it) => it.diff_qty != null && Number(it.diff_qty) !== 0)
   }, [searchedItems, segFilter])
 
+  // 表头列筛选(物料编码/仓库/盘点人)是 antd 表内状态,onChange 时同步一份,导出时按同口径复筛
+  const [columnFilters, setColumnFilters] = useState<Record<string, unknown>>({})
+  const exportableItems = useMemo(() => {
+    const inFilter = (key: string, val: string | null | undefined) => {
+      const fs = (columnFilters[key] as Array<unknown> | null | undefined) ?? []
+      return !fs.length || (val != null && fs.includes(val))
+    }
+    return tableItems.filter((it) =>
+      inFilter('material_code', it.material_code) &&
+      inFilter('wh_name', it.warehouse_display || it.wh_name || '(未入库)') &&
+      inFilter('checked_by', it.checked_by))
+  }, [tableItems, columnFilters])
+
   const whOptions = useMemo(() => {
+    // 同 warehouse_display 口径: 现已入库的「(未入库)」行按其实时仓库名(可能是多仓顿号拼接)归组
     const s = new Set<string>()
-    let hasNone = false
     for (const it of items) {
-      if (it.wh_id == null || !it.wh_name) { hasNone = true; continue }
-      s.add(it.wh_name)
+      s.add(it.warehouse_display || it.wh_name || '(未入库)')
     }
     const opts = [{ value: 'all', label: '全部仓库' }]
     for (const n of Array.from(s).sort()) opts.push({ value: n, label: n })
-    if (hasNone) opts.push({ value: '__none__', label: '(未入库)' })
     return opts
   }, [items])
 
@@ -929,7 +968,7 @@ export default function StockCheckWorkbench() {
     [items],
   )
   const whFilterOptions = useMemo(
-    () => Array.from(new Set(items.map((i) => i.wh_name).filter(Boolean))).map((v) => ({ text: v as string, value: v as string })),
+    () => Array.from(new Set(items.map((i) => i.warehouse_display || i.wh_name || '(未入库)'))).map((v) => ({ text: v, value: v })),
     [items],
   )
   const checkerFilterOptions = useMemo(
@@ -961,9 +1000,10 @@ export default function StockCheckWorkbench() {
     },
     {
       title: '仓库', dataIndex: 'wh_name', width: 130, ellipsis: true,
-      sorter: (a: StockCheckItem, b: StockCheckItem) => (a.wh_name || '').localeCompare(b.wh_name || ''),
+      sorter: (a: StockCheckItem, b: StockCheckItem) =>
+        (a.warehouse_display || a.wh_name || '(未入库)').localeCompare(b.warehouse_display || b.wh_name || '(未入库)'),
       filters: whFilterOptions,
-      onFilter: (v: any, r: StockCheckItem) => r.wh_name === v,
+      onFilter: (v: any, r: StockCheckItem) => (r.warehouse_display || r.wh_name || '(未入库)') === v,
       render: (v: any, r: StockCheckItem) => {
         if (r.wh_id == null && r.live_wh_names) {
           return (
@@ -1431,6 +1471,7 @@ export default function StockCheckWorkbench() {
               columns={columns as any}
               pagination={false}
               scroll={{ x: 1300, y: 560 }}
+              onChange={(_pagination, filters) => setColumnFilters(filters as Record<string, unknown>)}
               rowClassName={(r: StockCheckItem) => (r.actual_qty == null && !hasRecentMark(r) ? 'sc-unchecked' : '')}
               rowSelection={readonly ? undefined : {
                 selectedRowKeys: selectedKeys,

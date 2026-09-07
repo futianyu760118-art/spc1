@@ -421,6 +421,7 @@ class TaskCoverageItemOut(BaseModel):
     recent_check_no: Optional[str] = None
     recent_check_date: Optional[date] = None
     task_nos: List[str] = []
+    order_nos: List[str] = []
 
 
 class TaskCoverageStatsOut(BaseModel):
@@ -467,3 +468,10 @@ class TaskCoverageOut(BaseModel):
     no_bom_tasks: List[TaskCoverageNoBomTaskOut] = []
     warehouses: List[TaskCoverageWarehouseOut] = []
     unstocked_count: int = 0
+
+
+class StockCheckExportBody(BaseModel):
+    """盘点单明细导出(POST): 前端页面筛选为客户端筛选,导出时传当前可见行 item_ids"""
+    format: str = "xlsx"
+    columns: Optional[List[str]] = None
+    item_ids: Optional[List[int]] = None

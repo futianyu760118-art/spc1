@@ -1484,3 +1484,132 @@ a.si-wh-link:hover { color: #4c4dc2; }
 .sys-ctx .hd.new { background: #f0fdf4; color: #16a34a; }
 .sys-ctx pre { font-family: Consolas, Menlo, monospace; font-size: calc(11px * var(--font-size-scale)); line-height: 1.7; padding: 10px 12px; color: #475569; margin: 0; overflow-x: auto; white-space: pre; }
 .sys-ctx .k { color: #8b5cf6; } .sys-ctx .s { color: #16a34a; }
+
+/* ===== 订单总控台 · 原型复刻补充（.sc-page 作用域，docs/prototype/redesign/orders-v5.html） ===== */
+
+/* 卡片头（原型 .card-head：标题 + 图例 + 右侧统计） */
+.sc-page .sc-card-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid #f1f5f9;
+}
+.sc-page .sc-card-head h3 { font-size: calc(14px * var(--font-size-scale)); font-weight: 600; margin: 0; }
+.sc-page .sc-card-head .sc-hint { font-size: calc(12px * var(--font-size-scale)); color: #94a3b8; }
+.sc-page .sc-legend {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: calc(12px * var(--font-size-scale)); color: #94a3b8;
+}
+.sc-page .sc-legend b { color: #0f172a; }
+.sc-page .sc-legend .ic-edit { color: #a3a9f5; font-size: calc(11px * var(--font-size-scale)); }
+.sc-page .sc-legend .ic-ro { color: #cbd5e1; font-size: calc(11px * var(--font-size-scale)); }
+
+/* 表头 ✎/🔒 标记：th 左侧预留区绝对定位伪元素——不进标题流，与标题文字、右侧筛选/排序图标完全隔离 */
+.sc-page .order-list-card .ant-table-thead > tr > th.sc-hed,
+.sc-page .order-list-card .ant-table-thead > tr > th.sc-hro {
+  position: relative;
+  padding-left: 24px;
+}
+.sc-page .order-list-card .ant-table-thead > tr > th.sc-hed::before {
+  content: "\270E";
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+  font-size: calc(10px * var(--font-size-scale)); color: #a3a9f5; line-height: 1;
+}
+.sc-page .order-list-card .ant-table-thead > tr > th.sc-hro::before {
+  content: "\1F512";
+  position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+  font-size: calc(9px * var(--font-size-scale)); line-height: 1;
+  filter: grayscale(1); opacity: .55;
+}
+
+/* 可编辑单元格（原型 .editable 悬停范式：靛蓝底 + 1px 描边圆角 + 右侧悬浮 ✎） */
+.sc-page .sc-edit {
+  position: relative; cursor: pointer;
+  padding: 3px 6px; margin: -3px -6px;
+  border-radius: 5px; min-height: 22px;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.sc-page .sc-edit:hover {
+  background: #eef0fe;
+  box-shadow: inset 0 0 0 1px #c6cbfa;
+}
+.sc-page .sc-edit:hover::after {
+  content: "\270E"; position: absolute; right: 3px; top: 50%; transform: translateY(-50%);
+  font-size: calc(10px * var(--font-size-scale)); color: #5b5bd6; pointer-events: none;
+}
+/* 空值 ＋ 待填写占位 */
+.sc-page .sc-edit .sc-fill-ph {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 18px; padding: 0 5px;
+  border: 1px dashed #cbd5e1; border-radius: 5px;
+  color: #94a3b8; font-size: calc(10.5px * var(--font-size-scale)); line-height: 1; font-weight: 600;
+}
+.sc-page .sc-edit:hover .sc-fill-ph { border-color: #a3a9f5; color: #5b5bd6; background: #fff; }
+/* 手工修改圆点 + 保存绿闪 */
+.sc-page .sc-mdot {
+  display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+  background: #a3a9f5; margin-left: 4px; vertical-align: 2px;
+}
+@keyframes sc-cellsaved { 0% { background: #f0fdf4; } 100% { background: transparent; } }
+.sc-page .sc-edit.saved { animation: sc-cellsaved 1.6s ease; }
+
+/* 高亮可编辑列：✎ 列铺底色（单元格 + 表头），肉眼即辨 */
+.sc-page.sc-hl .table-modern .sc-edit { background: #eef0fe; border-radius: 0; }
+.sc-page.sc-hl .table-modern .sc-edit:hover { background: #e0e2fd; }
+.sc-page.sc-hl .table-modern .ant-table-thead > tr > th.sc-hed { background: #eef0fe !important; }
+.sc-page.sc-hl .table-modern .ant-table-thead > tr > th.sc-hed::before { color: #4c4dc2; }
+
+/* 行内操作（原型 .row-actions：详情/盘点/编辑） */
+.sc-page .sc-row-actions { display: inline-flex; gap: 2px; }
+.sc-page .sc-row-actions a { padding: 2px 6px; border-radius: 5px; font-size: calc(12px * var(--font-size-scale)); color: #475569; cursor: pointer; }
+.sc-page .sc-row-actions a:hover { background: #f1f5f9; color: #4c4dc2; }
+
+/* 编辑提示条（原型 .edit-tip：虚线靛蓝软底，可关闭） */
+.sc-page .sc-edit-tip {
+  display: flex; align-items: center; gap: 10px;
+  background: #eef0fe; border: 1px dashed #c6cbfa; border-radius: 8px;
+  padding: 8px 14px; margin-bottom: 12px;
+  font-size: calc(12px * var(--font-size-scale)); color: #475569; line-height: 1.8;
+}
+.sc-page .sc-edit-tip b { color: #0f172a; }
+.sc-page .sc-edit-tip .ic { color: #5b5bd6; flex-shrink: 0; }
+.sc-page .sc-edit-tip .x { margin-left: auto; flex-shrink: 0; color: #64748b; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+.sc-page .sc-edit-tip .x:hover { background: #e0e2fd; color: #0f172a; }
+
+/* 列设置抽屉分组行（原型 .grp-row） */
+.sc-page .sc-grp-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: calc(12.5px * var(--font-size-scale)); color: #0f172a; }
+.sc-page .sc-grp-row .cnt { font-size: calc(10.5px * var(--font-size-scale)); color: #94a3b8; background: #f1f5f9; border-radius: 99px; padding: 1px 7px; font-variant-numeric: tabular-nums; }
+.sc-page .sc-grp-row .edn { font-size: calc(10.5px * var(--font-size-scale)); color: #4c4dc2; background: #eef0fe; border-radius: 99px; padding: 1px 7px; }
+.sc-page .sc-grp-row .ant-switch { margin-left: auto; }
+
+/* 列设置按钮上的「扩展 N」小徽标 */
+.sc-page .sc-extdot {
+  margin-left: 6px; color: #4c4dc2; background: #eef0fe;
+  border-radius: 99px; padding: 1px 7px; font-size: calc(10px * var(--font-size-scale)); line-height: 1.6; font-weight: 500;
+}
+
+/* 订单编辑弹窗（原型 form-grid 形态） */
+.sc-page .sc-frm-sec {
+  font-size: calc(11px * var(--font-size-scale)); font-weight: 700; color: #94a3b8;
+  letter-spacing: .04em; margin: 14px 0 6px;
+}
+.sc-page .sc-frm-sec:first-child { margin-top: 0; }
+.sc-page .sc-frm-label {
+  display: block; font-size: calc(11.5px * var(--font-size-scale));
+  color: #64748b; font-weight: 500; margin-bottom: 4px;
+}
+.sc-page .sc-frm-ro {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+  background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 6px;
+}
+.sc-page .sc-frm-ro .k { font-size: calc(11.5px * var(--font-size-scale)); color: #94a3b8; }
+.sc-page .sc-frm-ro .v { font-size: calc(13px * var(--font-size-scale)); color: #0f172a; font-weight: 500; margin-top: 2px; }
+
+/* 订单总控台：表格体右侧不常驻滚动条（内容不超高时不占位，悬停才浮现 6px 细条） */
+.sc-page .order-list-card .ant-table-body { overflow-y: auto !important; }
+.sc-page .order-list-card .ant-table-body::-webkit-scrollbar:vertical { width: 6px; }
+.sc-page .order-list-card .ant-table-body::-webkit-scrollbar-track:vertical { background: transparent; }
+.sc-page .order-list-card .ant-table-body::-webkit-scrollbar-thumb:vertical { background: transparent; border-radius: 3px; }
+.sc-page .order-list-card .ant-table-body:hover::-webkit-scrollbar-thumb:vertical { background: #cbd5e1; }
+.sc-page .order-list-card .ant-table-body:hover::-webkit-scrollbar-thumb:vertical:hover { background: #94a3b8; }
+.sc-page .order-list-card .ant-table-body { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.sc-page .order-list-card .ant-table-body:hover { scrollbar-color: #cbd5e1 transparent; }

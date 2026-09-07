@@ -308,6 +308,17 @@
 .tsc .range-pill .cnt { color: var(--brand-600); background: var(--brand-50); border-radius: var(--r-full); padding: 0 8px; line-height: 18px; font-size: calc(11px * var(--font-size-scale)); font-weight: 500; }
 .tsc .range-pill .sep { color: var(--gray-300); }
 
+.tsc .smp-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+  font-size: var(--fs-12); color: var(--text-2); cursor: pointer;
+  user-select: none; white-space: nowrap; transition: border-color .15s, color .15s, background .15s;
+}
+.tsc .smp-toggle input[type="checkbox"] { margin: 0; accent-color: var(--brand-500); cursor: pointer; }
+.tsc .smp-toggle.on { border-color: var(--brand-400); background: var(--brand-50); }
+.tsc .smp-toggle.on span { color: var(--brand-600); font-weight: 500; }
+
 .tsc .nb-alert {
   display: flex; align-items: flex-start; gap: 9px;
   padding: 10px 14px; margin-bottom: 12px;
@@ -331,6 +342,10 @@
 .tsc .ck-recent { font-size: calc(10.5px * var(--font-size-scale)); color: var(--text-3); margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tsc .task-n { font-size: calc(11px * var(--font-size-scale)); color: var(--text-3); font-variant-numeric: tabular-nums; }
 .tsc .task-n b { color: var(--gray-600); font-weight: 600; }
+.tsc .order-n {
+  font-size: calc(11px * var(--font-size-scale)); color: var(--text-3); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 230px;
+}
 
 .tsc .batch-bar {
   position: sticky; bottom: 16px; z-index: 30;

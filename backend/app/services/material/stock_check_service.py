@@ -209,6 +209,21 @@ def _split_stock_by_warehouse(
     return grouped
 
 
+# 订单盘点不纳入的特殊仓(非正常存货仓,按 wh_name 精确匹配):
+# 库存检查不良仓(K3 盘亏调拨目标仓)、赠品仓库
+ORDER_CHECK_EXCLUDED_WH_NAMES = {"库存检查不良仓", "赠品仓库"}
+
+
+def _exclude_order_check_warehouses(
+    warehouses_by_mid: Dict[int, List[Tuple[int, str, Decimal, Optional[datetime]]]],
+) -> Dict[int, List[Tuple[int, str, Decimal, Optional[datetime]]]]:
+    """剔除订单盘点不纳入的仓;物料仅存在于排除仓时列表为空,由调用方回退「(未入库)」行。"""
+    return {
+        mid: [w for w in whs if (w[1] or "").strip() not in ORDER_CHECK_EXCLUDED_WH_NAMES]
+        for mid, whs in warehouses_by_mid.items()
+    }
+
+
 async def _get_recent_checked_by_warehouse(
     db: AsyncSession,
     keys: List[Tuple[Optional[int], Optional[int]]],
@@ -670,12 +685,41 @@ async def _expand_boms_batched(
     return mat_out, root_mids
 
 
-async def _compute_task_coverage_base(db: AsyncSession, *, start_date: date, end_date: date) -> Dict:
+async def _compute_task_coverage_base(
+    db: AsyncSession, *, start_date: date, end_date: date, include_sample: bool = False
+) -> Dict:
     """任务盘点覆盖公共计算（纯读底座），供平铺行视图使用。
 
     计划开工日期在 [start_date, end_date] 的未关闭任务单 → 根 BOM 批量解析
     → 批量展开 → 库存按仓拆行 → 近 N 天已盘标注（与免盘标同口径）。
+
+    include_sample=False(默认): 排除样品单任务。
+    生产任务单不冗余订单号(sale_order_no 为空)，须经 sale_order.erp_id = task.sale_order_id
+    关联销售订单，剔除 order_no 以 HJY 开头的样品单对应的任务单。
     """
+    conditions = [
+        ProductionTaskOrder.planned_start_date >= start_date,
+        ProductionTaskOrder.planned_start_date <= end_date,
+        or_(
+            ProductionTaskOrder.is_closed.is_(None),
+            ProductionTaskOrder.is_closed != 1,
+        ),
+    ]
+    if not include_sample:
+        # 排除样品单任务：样品单 = order_no 以 HJY 开头的销售订单(经 erp_id 关联)。
+        # 外层已 outerjoin sale_order 带订单号，不能用关联子查询(会被 auto-correlation 清空 FROM)。
+        # 用 NOT IN，但子查询必须排除 erp_id IS NULL —— 否则含 NULL 时 NOT IN 恒为 UNKNOWN，
+        # 会把所有带 sale_order_id 的任务都排除。
+        sample_erp_ids = select(SaleOrder.erp_id).where(
+            SaleOrder.order_no.ilike("HJY%"),
+            SaleOrder.erp_id.is_not(None),
+        )
+        conditions.append(
+            or_(
+                ProductionTaskOrder.sale_order_id.is_(None),
+                ProductionTaskOrder.sale_order_id.notin_(sample_erp_ids),
+            )
+        )
     task_rows = (await db.execute(
         select(
             ProductionTaskOrder.task_no,
@@ -683,17 +727,17 @@ async def _compute_task_coverage_base(db: AsyncSession, *, start_date: date, end
             ProductionTaskOrder.material_name,
             ProductionTaskOrder.task_qty,
             ProductionTaskOrder.bom_id,
+            SaleOrder.order_no.label("sale_order_no"),
         )
-        .where(
-            ProductionTaskOrder.planned_start_date >= start_date,
-            ProductionTaskOrder.planned_start_date <= end_date,
-            or_(
-                ProductionTaskOrder.is_closed.is_(None),
-                ProductionTaskOrder.is_closed != 1,
-            ),
-        )
+        .outerjoin(SaleOrder, SaleOrder.erp_id == ProductionTaskOrder.sale_order_id)
+        .where(*conditions)
         .order_by(ProductionTaskOrder.planned_start_date, ProductionTaskOrder.task_no)
     )).all()
+
+    # 任务单号 → 销售订单号（含样品单 HJY；无关联订单的任务该值为 None）
+    task_order_no: Dict[str, Optional[str]] = {
+        t.task_no: t.sale_order_no for t in task_rows if t.task_no and t.sale_order_no
+    }
 
     # 根 BOM 批量解析（固定次数查询，避免逐任务单串行往返）
     distinct_pairs = list({(t.bom_id, t.material_code) for t in task_rows})
@@ -769,6 +813,14 @@ async def _compute_task_coverage_base(db: AsyncSession, *, start_date: date, end
     for k in dedup_keys:
         meta = row_meta[k]
         recent = recent_map.get(k)
+        task_nos = meta["task_nos"]
+        order_nos: List[str] = []
+        seen_orders = set()
+        for tn in task_nos:
+            o = task_order_no.get(tn)
+            if o and o not in seen_orders:
+                seen_orders.add(o)
+                order_nos.append(o)
         flat_rows.append({
             "material_id": meta["material_id"],
             "material_code": meta["material_code"],
@@ -782,7 +834,8 @@ async def _compute_task_coverage_base(db: AsyncSession, *, start_date: date, end
             "is_checked": _is_checked(recent),
             "recent_check_no": recent["check_no"] if recent else None,
             "recent_check_date": recent["check_date"] if recent else None,
-            "task_nos": meta["task_nos"],
+            "task_nos": task_nos,
+            "order_nos": order_nos,
         })
 
     return {
@@ -810,13 +863,18 @@ async def get_task_material_coverage(
     unstocked: bool = False,
     sort_by: Optional[str] = None,
     sort_order: str = "asc",
+    include_sample: bool = False,
 ) -> Dict:
     """任务盘点覆盖 · 平铺「物料×仓库」行视图（纯读）。返回 dict 直接喂 TaskCoverageOut。
 
     sort_by 取值：material_code/material_name/spec_model/wh_name/system_qty/req_qty/
     task_count(关联任务单数)/recent_check_date；None=默认(未盘优先+物料编码)。
+
+    include_sample=False(默认): 排除样品单(HJY 开头销售订单)对应的任务单及其物料。
     """
-    b = await _compute_task_coverage_base(db, start_date=start_date, end_date=end_date)
+    b = await _compute_task_coverage_base(
+        db, start_date=start_date, end_date=end_date, include_sample=include_sample
+    )
     rows = b["flat_rows"]
 
     # 统计（过滤前口径，反映整个范围）
@@ -981,7 +1039,8 @@ async def create_stock_check_from_order(
             seen.add(mid)
             unique_mids.append(mid)
     stock_map = await _get_stock_by_warehouse(db, unique_mids)
-    warehouses_by_mid = _split_stock_by_warehouse(stock_map, unique_mids)
+    warehouses_by_mid = _exclude_order_check_warehouses(
+        _split_stock_by_warehouse(stock_map, unique_mids))
 
     # 记录本次盘点覆盖的产品行(用于"该订单哪些产品已盘点"的可追溯性)
     covered_products = [
@@ -2427,7 +2486,8 @@ async def refresh_order_bom(
         return head
 
     stock_map = await _get_stock_by_warehouse(db, list(added_mids))
-    warehouses_by_mid = _split_stock_by_warehouse(stock_map, list(added_mids))
+    warehouses_by_mid = _exclude_order_check_warehouses(
+        _split_stock_by_warehouse(stock_map, list(added_mids)))
 
     # 收敛新增 (material_id, wh_id)，跳过已存在的
     new_keys: List[Tuple[int, Optional[int]]] = []
@@ -2626,6 +2686,12 @@ async def refresh_check_warehouses(db: AsyncSession, check_id: int, current_user
             "qty": Decimal(str(r.qty or 0)),
             "updated_at": r.wh_updated,
         })
+    if head.check_type == "order":
+        # 订单盘点不纳入特殊仓(库存检查不良仓/赠品仓库),与建单/刷BOM口径一致
+        wh_map = {
+            mid: [w for w in whs if w["wh_name"] not in ORDER_CHECK_EXCLUDED_WH_NAMES]
+            for mid, whs in wh_map.items()
+        }
     for mid in wh_map:
         wh_map[mid].sort(key=lambda w: (-w["qty"], w["wh_id"]))
 

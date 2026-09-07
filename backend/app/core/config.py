@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     ERP_SYNC_QUERY_TIMEOUT: int = 600  # 单次 ERP 查询超时(秒)，防止无限挂起
     ERP_SYNC_ENABLED: bool = False  # 是否启用 ERP 同步
     ERP_SYNC_DEFAULT_PASSWORD: str = "admin123"  # 自动创建用户的默认密码
+    # K3 账套(链接服务器四段名前缀)。同步/读取(盘点单导入预览、物料单位等)用 K3_DB,
+    # 默认生产账套; 回写用 K3_WRITE_DB, 留空(或空串)回落 K3_DB。
+    # 测试验证期可保持同步读生产、只把回写指到测试账套:
+    #   K3_DB=k3sv.AIS20161019115614
+    #   K3_WRITE_DB=k3sv.AIS20240905142145
+    K3_DB: str = "k3sv.AIS20161019115614"
+    K3_WRITE_DB: Optional[str] = None
     UPPH_MATCH_MODE: str="bom_code"
 
     erp_db_url_write: Optional[str] = None
@@ -49,6 +56,12 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours
+
+    # Deploy Agent（同机服务，默认 127.0.0.1:8901）
+    DEPLOY_AGENT_URL: str = "http://127.0.0.1:8901"
+    DEPLOY_AGENT_TIMEOUT_CONNECT: float = 5.0
+    # action 调用长时间（如 build 30 分钟），不限制 read 超时
+    DEPLOY_AGENT_TIMEOUT_ACTION: float = 600.0
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]

@@ -3,6 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import { Toast } from 'antd-mobile'
 import type { Html5Qrcode } from 'html5-qrcode'
 import { materialApi } from '@/services/api'
+import {
+  currentJsapiUrl,
+  isInWecom,
+  scanViaWecom,
+  wxConfig,
+} from '../../services/wecomScan'
 import NavBarSimple from '../../components/NavBarSimple'
 import DigitPad from '../../components/DigitPad'
 import MIcon from '../../components/MIcon'
@@ -52,6 +58,14 @@ export default function ScanCountPage() {
   const [today, setToday] = useState<Today | null>(null)
   const [camState, setCamState] = useState<'init' | 'on' | 'error'>('init')
 
+  // 企微内置 H5：getUserMedia 视频流可显示但不可解码，必须走 wx.scanQRCode JSAPI
+  const [scanMode, setScanMode] = useState<'camera' | 'wecom' | null>(null)
+  const [wecomReady, setWecomReady] = useState(false)
+  const [wecomInitializing, setWecomInitializing] = useState(false)
+  const [wecomScanning, setWecomScanning] = useState(false)
+  const [wecomError, setWecomError] = useState<string | null>(null)
+  const [continuous, setContinuous] = useState(false)
+
   useEffect(() => { whIdRef.current = whId }, [whId])
 
   useEffect(() => {
@@ -74,6 +88,25 @@ export default function ScanCountPage() {
         /* 拦截器已 toast */
       }
     })()
+  }, [])
+
+  // 探测运行环境：企微内置 H5 → 走 wx.scanQRCode；其它 → 走 html5-qrcode
+  useEffect(() => {
+    if (!isInWecom()) {
+      setScanMode('camera')
+      return
+    }
+    setScanMode('wecom')
+    setWecomInitializing(true)
+    wxConfig(currentJsapiUrl())
+      .then(() => setWecomReady(true))
+      .catch((e) => {
+        const msg = e?.message || '企微扫一扫初始化失败'
+        // 后端签名 endpoint 503/超时 / JSSDK 加载失败 都归到 wecomError；
+        // axios 拦截器已 toast 通用网络错误，这里只显示 JSAPI 域相关提示。
+        setWecomError(msg.includes('网络') ? `${msg}\n（首次调用需后端向企微拉取 ticket，若长时间未恢复请联系管理员）` : msg)
+      })
+      .finally(() => setWecomInitializing(false))
   }, [])
 
   // 摄像头生命周期：选完仓库(camRequested)才启动、卸载释放；解码回调只走 ref，避免闭包过期
@@ -132,18 +165,39 @@ export default function ScanCountPage() {
     try { Promise.resolve(sc.resume()).catch(() => {}) } catch { /* camera 已释放则忽略 */ }
   }
 
-  // 弹窗里选中仓库 → 记住选择并立刻启动摄像头扫码
+  // 弹窗里选中仓库 → 记住选择并立刻启动摄像头扫码（WeCom 环境下不启摄像头，等用户点扫一扫）
   function confirmWh(w: ScanWh) {
     pickWh(w)
     setWhPicking(false)
-    setCamRequested(true)
+    if (scanMode !== 'wecom') setCamRequested(true)
   }
 
   function clearCard() {
     setMat(null)
     setValue('')
-    resumeCamera()
+    if (scanMode === 'camera') resumeCamera()
   }
+
+  async function doWecomScan() {
+    if (!wecomReady || wecomScanning) return
+    setWecomScanning(true)
+    try {
+      const text = await scanViaWecom()
+      if (text) await handleCode(text)
+    } catch (e: any) {
+      Toast.show({ icon: 'fail', content: e?.message || '企微扫一扫失败' })
+    } finally {
+      setWecomScanning(false)
+    }
+  }
+
+  // 连续扫码：扫完一张且卡片关闭后，自动再拉起企微扫一扫
+  useEffect(() => {
+    if (scanMode !== 'wecom' || !continuous || !wecomReady) return
+    if (mat || wecomScanning) return
+    void doWecomScan()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mat, continuous, wecomReady, scanMode])
 
   async function handleCode(raw: string) {
     const code = raw.trim()
@@ -270,26 +324,61 @@ export default function ScanCountPage() {
           )}
         </div>
 
-        <div className="m-card scan-cam">
-          <div id="scan-viewport" className={`scan-cam__viewport ${!camRequested || camState === 'error' ? 'scan-cam__hide' : ''}`} />
-          {!camRequested && (
-            <button
-              className="scan-cam__idle"
-              onClick={() => (whList.length > 0 ? setWhPicking(true) : Toast.show('暂无仓库数据'))}
-            >
+        {scanMode === 'wecom' ? (
+          <div className="m-card scan-cam scan-cam--wecom">
+            <div className="scan-cam__idle">
               <MIcon name="scan" size={26} />
-              <div>点击选择仓库，开启摄像头扫码</div>
-            </button>
-          )}
-          {camRequested && camState === 'init' && <div className="scan-cam__tip scan-cam__tip--overlay">相机启动中…</div>}
-          {camRequested && camState === 'error' && (
-            <div className="scan-cam__err">
-              <MIcon name="warn" size={26} />
-              <div>相机不可用（需 HTTPS 并授权摄像头）。请用下方手动输入编码。</div>
+              {wecomInitializing && <div>企微扫一扫初始化中…</div>}
+              {wecomError && (
+                <div className="scan-cam__err">
+                  <MIcon name="warn" size={26} />
+                  <div>{wecomError}<br />请确认企微管理后台已为本应用配置 JSAPI 域名。</div>
+                </div>
+              )}
+              {wecomReady && !wecomError && (
+                <>
+                  <button
+                    className="scan-cam__scanbtn"
+                    onClick={() => void doWecomScan()}
+                    disabled={wecomScanning}
+                  >
+                    <MIcon name="scan" size={18} />
+                    <span>{wecomScanning ? '已调起企微扫一扫…' : '点击调起企微扫一扫'}</span>
+                  </button>
+                  <label className="scan-cam__continuous">
+                    <input
+                      type="checkbox"
+                      checked={continuous}
+                      onChange={(e) => setContinuous(e.target.checked)}
+                    />
+                    <span>连续扫码（每扫完一张自动再拉起）</span>
+                  </label>
+                </>
+              )}
             </div>
-          )}
-          {resolving && <div className="scan-cam__tip scan-cam__tip--overlay">识别中…</div>}
-        </div>
+          </div>
+        ) : (
+          <div className="m-card scan-cam">
+            <div id="scan-viewport" className={`scan-cam__viewport ${!camRequested || camState === 'error' ? 'scan-cam__hide' : ''}`} />
+            {!camRequested && (
+              <button
+                className="scan-cam__idle"
+                onClick={() => (whList.length > 0 ? setWhPicking(true) : Toast.show('暂无仓库数据'))}
+              >
+                <MIcon name="scan" size={26} />
+                <div>点击选择仓库，开启摄像头扫码</div>
+              </button>
+            )}
+            {camRequested && camState === 'init' && <div className="scan-cam__tip scan-cam__tip--overlay">相机启动中…</div>}
+            {camRequested && camState === 'error' && (
+              <div className="scan-cam__err">
+                <MIcon name="warn" size={26} />
+                <div>相机不可用（需 HTTPS 并授权摄像头）。请用下方手动输入编码。</div>
+              </div>
+            )}
+            {resolving && <div className="scan-cam__tip scan-cam__tip--overlay">识别中…</div>}
+          </div>
+        )}
 
         <div className="m-card scan-manual">
           <input

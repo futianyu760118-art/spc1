@@ -19,6 +19,7 @@ interface CoverageItem {
   recent_check_no?: string | null
   recent_check_date?: string | null
   task_nos?: string[]
+  order_nos?: string[]
 }
 
 interface CoverageStats {
@@ -71,6 +72,7 @@ const TSC_COLS: TscCol[] = [
   { key: 'req_qty', title: '需求总量', sortKey: 'req_qty', align: 'right' },
   { key: 'is_checked', title: '盘点状态', sortKey: 'is_checked', filter: 'status' },
   { key: 'task_count', title: '关联任务单', sortKey: 'task_count' },
+  { key: 'order_nos', title: '关联订单', width: 230 },
 ]
 
 const PAGE_SIZES = [20, 50, 100, 200]
@@ -116,6 +118,11 @@ const fmtQty = (v: number | string | null | undefined) =>
 const fmtMD = (v: string | null | undefined) => (v ? dayjs(v).format('MM-DD') : '—')
 
 const pct = (n: number | null | undefined) => (n == null ? '—' : `${(n * 100).toFixed(1)}%`)
+
+const formatOrders = (orders: string[]) => {
+  const shown = orders.slice(0, 2).join(', ')
+  return orders.length > 2 ? `${shown} 等 ${orders.length} 单` : shown
+}
 
 const rateCls = (rate: number | null | undefined) =>
   rate == null ? '' : rate >= 0.5 ? 'v-good' : rate >= 0.25 ? 'v-mid' : 'v-bad'
@@ -203,6 +210,7 @@ export default function TaskStockCoverage() {
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().startOf('day'), dayjs().endOf('month')])
 
   const [status, setStatus] = useState<'all' | 'checked' | 'unchecked'>('unchecked')
+  const [includeSample, setIncludeSample] = useState(false)
   const [kwInput, setKwInput] = useState('')
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
@@ -237,6 +245,7 @@ export default function TaskStockCoverage() {
       const res: any = await materialApi.getTaskStockCoverage({
         start_date: startStr, end_date: endStr, status, keyword: keyword || undefined,
         wh_ids: whFilter.length ? whFilter.join(',') : undefined,
+        include_sample: includeSample,
         sort_by: sortBy || undefined, sort_order: sortOrder,
         page, page_size: pageSize,
       })
@@ -253,13 +262,14 @@ export default function TaskStockCoverage() {
     } finally {
       setLoadingA(false)
     }
-  }, [startStr, endStr, status, keyword, page, pageSize, whFilter, sortBy, sortOrder])
+  }, [startStr, endStr, status, keyword, page, pageSize, whFilter, sortBy, sortOrder, includeSample])
 
   const loadC = useCallback(async () => {
     setLoadingC(true)
     try {
       const res: any = await materialApi.getTaskStockCoverage({
         start_date: startStr, end_date: endStr, page: 1, page_size: 1,
+        include_sample: includeSample,
       })
       setStats(res.data?.stats ?? null)
       setWarehouses(res.data?.warehouses ?? [])
@@ -270,14 +280,14 @@ export default function TaskStockCoverage() {
     } finally {
       setLoadingC(false)
     }
-  }, [startStr, endStr])
+  }, [startStr, endStr, includeSample])
 
   useEffect(() => { if (view === 'A') loadA() }, [view, loadA])
   useEffect(() => { if (view === 'C') loadC() }, [view, loadC])
 
   useEffect(() => {
     setPage(1); setSelKeys(new Set()); rowMapRef.current = new Map()
-  }, [startStr, endStr, status, keyword, whFilter])
+  }, [startStr, endStr, status, keyword, whFilter, includeSample])
 
   const clickSort = (col: string) => {
     if (sortBy !== col) { setSortBy(col); setSortOrder('asc') }
@@ -341,7 +351,8 @@ export default function TaskStockCoverage() {
     let p = 1
     for (;;) {
       const res: any = await materialApi.getTaskStockCoverage({
-        start_date: startStr, end_date: endStr, page: p, page_size: 200, ...params,
+        start_date: startStr, end_date: endStr, page: p, page_size: 200,
+        include_sample: includeSample, ...params,
       })
       const batch: CoverageItem[] = res.data?.items ?? []
       all.push(...batch)
@@ -352,10 +363,11 @@ export default function TaskStockCoverage() {
   }
 
   const exportRowsCsv = (rows: CoverageItem[], filename: string) => {
-    downloadCsv(filename, ['物料编码', '物料名称', '规格', '单位', '仓库', '当前库存', '需求总量', '状态', '最近盘点单', '最近盘点日期', '关联任务单'], rows.map((r) => [
+    downloadCsv(filename, ['物料编码', '物料名称', '规格', '单位', '仓库', '当前库存', '需求总量', '状态', '最近盘点单', '最近盘点日期', '关联任务单', '关联订单'], rows.map((r) => [
       r.material_code, r.material_name, r.spec_model, r.unit, r.wh_name,
       r.system_qty == null ? null : Number(r.system_qty), r.req_qty == null ? null : Number(r.req_qty),
       r.is_checked ? '已盘' : '未盘', r.recent_check_no, r.recent_check_date, (r.task_nos || []).join(' '),
+      (r.order_nos || []).join(' '),
     ]))
   }
 
@@ -458,6 +470,13 @@ export default function TaskStockCoverage() {
     </div>
   )
 
+  const SampleToggle = (
+    <label className={`smp-toggle${includeSample ? ' on' : ''}`} title="样品单 = 销售订单号以 HJY 开头">
+      <input type="checkbox" checked={includeSample} onChange={(e) => setIncludeSample(e.target.checked)} />
+      <span>包含样品单</span>
+    </label>
+  )
+
   const ViewSwitch = (
     <div className="toolbar" style={{ marginBottom: 12 }}>
       <div className="segmented">
@@ -478,6 +497,7 @@ export default function TaskStockCoverage() {
       <div className={`variant${view === 'A' ? ' show' : ''}`}>
         <div className="toolbar">
           {RangePill}
+          {SampleToggle}
           <div className="segmented">
             <span className={status === 'all' ? 'active' : ''} onClick={() => setStatus('all')}>全部 {stats ? stats.row_count.toLocaleString() : ''}</span>
             <span className={status === 'unchecked' ? 'active' : ''} onClick={() => setStatus('unchecked')}>未盘 <b style={{ color: 'var(--danger)' }}>{stats ? stats.unchecked_count.toLocaleString() : ''}</b></span>
@@ -524,10 +544,14 @@ export default function TaskStockCoverage() {
                   return (
                     <th key={c.key} className={c.align === 'right' ? 'num' : ''} style={c.width ? { width: c.width } : undefined}>
                       <span className="th-cell">
-                        <button type="button" className="th-sortbtn" title="点击排序" onClick={() => clickSort(c.sortKey!)}>
+                        {c.sortKey ? (
+                          <button type="button" className="th-sortbtn" title="点击排序" onClick={() => clickSort(c.sortKey!)}>
+                            <span className="th-label">{c.title}</span>
+                            <span className={`th-sort${sortBy === c.sortKey ? (sortOrder === 'asc' ? ' asc' : ' desc') : ''}`}><i className="up" /><i className="dn" /></span>
+                          </button>
+                        ) : (
                           <span className="th-label">{c.title}</span>
-                          <span className={`th-sort${sortBy === c.sortKey ? (sortOrder === 'asc' ? ' asc' : ' desc') : ''}`}><i className="up" /><i className="dn" /></span>
-                        </button>
+                        )}
                         {c.filter === 'wh' && (
                           <>
                             <button type="button" className={`th-fbtn${whActive ? ' on' : ''}`} title="按仓库筛选" onClick={(e) => { e.stopPropagation(); setOpenMenu(openMenu === 'wh' ? null : 'wh') }}>
@@ -603,6 +627,11 @@ export default function TaskStockCoverage() {
                         )}
                       </td>
                       <td className="task-n"><b>{r.task_nos?.length ?? 0}</b> 单 · {(r.task_nos || []).slice(0, 1).join('')}{(r.task_nos?.length ?? 0) > 1 ? ' 等' : ''}</td>
+                      <td className="order-n" title={(r.order_nos || []).join('\n')}>
+                        {(r.order_nos || []).length > 0
+                          ? <>{formatOrders(r.order_nos || [])}</>
+                          : '—'}
+                      </td>
                       <td></td>
                     </tr>
                   )
@@ -613,6 +642,7 @@ export default function TaskStockCoverage() {
                   <td></td>
                   <td className="num">—</td>
                   <td className="num">{pageReqSum.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                  <td></td>
                   <td></td>
                   <td></td>
                   <td></td>
@@ -660,6 +690,7 @@ export default function TaskStockCoverage() {
       <div className={`variant${view === 'C' ? ' show' : ''}`}>
         <div className="toolbar">
           {RangePill}
+          {SampleToggle}
           <span className="hint-line">按仓库拆分盘点任务包 · 仓管员按仓领取 · 一仓一单</span>
           <div className="right">
             <button className="btn btn-secondary btn-sm" onClick={handleExportC} disabled={busy}><I id="export" />导出全量</button>

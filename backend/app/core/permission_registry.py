@@ -279,3 +279,11 @@ declare_permission("purchase.price_change.archive_delete", "调价单归档删�
 # 财务数据
 declare_permission("finance", "财务数据", module="finance", sort_order=12)
 declare_permission("finance.data", "科目余额", module="finance", parent_code="finance", actions=["read"], route_path="/finance/subject-balances", sort_order=1)
+
+# 部署运维（2026-09-04）— 生产环境部署 / 回退 / 切换任意版本为当前
+declare_permission(
+    "deploy_versions", "部署版本管理",
+    module="basicdata", parent_code="basicdata",
+    actions=["read", "manage"],
+    route_path="/deploy-versions", sort_order=12,
+)

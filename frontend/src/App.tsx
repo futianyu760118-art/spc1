@@ -87,6 +87,7 @@ import NPICenter from './pages/NPICenter/index'
 import Login from './pages/Login'
 import Profile from './pages/Profile'
 import ShareAccess from './pages/ShareAccess'
+import DeployVersions from './pages/SystemCenter/DeployVersions'
 import PriceChangeList from './pages/Purchase/PriceChange/list'
 import PriceChangeNew from './pages/Purchase/PriceChange/new'
 import PriceChangeDetail from './pages/Purchase/PriceChange/detail'
@@ -268,6 +269,9 @@ export default function App() {
                             <Route path="basicdata/files" element={<FileManagement/>} key="files"/>
                             <Route path="basicdata/data-supply" element={<DataSupply/>} key="data-supply"/>
                             <Route path="announcements" element={<AnnouncementManagement/>} key="announcements"/>
+                            {/* 兼容旧权限 route_path：/sys/deploy-versions → /deploy-versions */}
+                            <Route path="sys/deploy-versions" element={<Navigate to="/deploy-versions" replace/>}/>
+                            <Route path="deploy-versions" element={<DeployVersions/>} key="deploy-versions"/>
                             <Route path="purchase/price-change" element={<PriceChangeList/>}/>
                             <Route path="purchase/price-change/new" element={<PriceChangeNew/>}/>
                             <Route path="purchase/price-change/pending" element={<PriceChangePending/>}/>
