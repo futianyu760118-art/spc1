@@ -555,17 +555,20 @@ async def _resolve_task_root_boms_batched(
 async def _expand_boms_batched(
     db: AsyncSession,
     root_factors: Dict[str, Decimal],
-) -> Tuple[Dict[int, Dict], Dict[str, set], Dict[str, Dict[int, Decimal]], Dict[str, int]]:
+) -> Tuple[Dict[int, Dict], Dict[str, set], Dict[str, Dict[int, Decimal]]]:
     """批量展开多个根 BOM（跨根按层 BFS 共享查询）。
 
-    返回 (物料聚合, 根→物料集合, 根→物料→产品内需求量, 根→BOM 最大层级)。
+    返回 (物料聚合, 根→物料集合, 根→物料→需求量)。
     需求公式与 _expand_bom_tree 对齐：req(N) = N.standard_qty × factor，
     factor(child) = req(parent)，factor(root) = 该根的任务量合计。
+    root_qty 与总聚合同口径累积（对 factor 线性），无额外 DB 查询，
+    供「物料×订单」钻取按根(订单)拆分需求量使用。
     visited 按 (root, bom_id) 防环；深度上限 MAX_BOM_LEVEL；
     子件候选 BOM 选择规则同 _expand_bom_tree：有明细 > 未作废未禁用 > 已审核优先。
     """
     mat_out: Dict[int, Dict] = {}
     root_mids: Dict[str, set] = {}
+    root_qty: Dict[str, Dict[int, Decimal]] = {}
 
     detail_cache: Dict[str, List[BomDetail]] = {}
     master_by_mid: Dict[int, Material] = {}
@@ -673,6 +676,8 @@ async def _expand_boms_batched(
                     mat_out[mid] = m
                 if req is not None:
                     m["req_qty"] += req
+                    rq = root_qty.setdefault(root, {})
+                    rq[mid] = rq.get(mid, Decimal("0")) + req
                 root_mids.setdefault(root, set()).add(mid)
                 sub_bid = sub_bom_by_mid.get(mid)
                 if sub_bid:
@@ -682,16 +687,18 @@ async def _expand_boms_batched(
                         next_pending.append((root, sub_bid, req if req is not None else Decimal("0"), lvl + 1))
         pending = next_pending
 
-    return mat_out, root_mids
+    return mat_out, root_mids, root_qty
 
 
 async def _compute_task_coverage_base(
-    db: AsyncSession, *, start_date: date, end_date: date, include_sample: bool = False
+    db: AsyncSession, *, start_date: date, end_date: date, include_sample: bool = False,
+    recent_days: Optional[int] = None,
 ) -> Dict:
     """任务盘点覆盖公共计算（纯读底座），供平铺行视图使用。
 
     计划开工日期在 [start_date, end_date] 的未关闭任务单 → 根 BOM 批量解析
-    → 批量展开 → 库存按仓拆行 → 近 N 天已盘标注（与免盘标同口径）。
+    → 批量展开 → 库存按仓拆行 → 近 N 天已盘标注（与免盘标同口径；
+    N=recent_days：None=配置默认 STOCK_CHECK_RECENT_SKIP_DAYS，负数/99999=不限全部历史）。
 
     include_sample=False(默认): 排除样品单任务。
     生产任务单不冗余订单号(sale_order_no 为空)，须经 sale_order.erp_id = task.sale_order_id
@@ -756,14 +763,23 @@ async def _compute_task_coverage_base(
         g = bom_groups.setdefault(root, {
             "qty": Decimal("0"),
             "task_nos": [],
+            "order_qty": {},
+            "order_tasks": {},
         })
         g["qty"] += Decimal(str(t.task_qty or 0))
         if t.task_no and t.task_no not in g["task_nos"]:
             g["task_nos"].append(t.task_no)
+        # 同根下按销售订单拆分任务量（None = 未关联订单），供订单维度需求量归并
+        ono = task_order_no.get(t.task_no)
+        g["order_qty"][ono] = g["order_qty"].get(ono, Decimal("0")) + Decimal(str(t.task_qty or 0))
+        if t.task_no:
+            otns = g["order_tasks"].setdefault(ono, [])
+            if t.task_no not in otns:
+                otns.append(t.task_no)
 
     # BOM 批量展开（跨根按层 BFS 共享查询，避免逐根展开的串行 DB 往返），聚合物料与根→物料映射
     root_factors = {root: g["qty"] for root, g in bom_groups.items()}
-    mat_raw, root_mids = await _expand_boms_batched(db, root_factors)
+    mat_raw, root_mids, root_qty = await _expand_boms_batched(db, root_factors)
 
     mat_rows: Dict[int, Dict] = {}
     for mid, m in mat_raw.items():
@@ -775,6 +791,29 @@ async def _compute_task_coverage_base(
                 tns = mat_rows[mid]["task_nos"]
                 if tn not in tns:
                     tns.append(tn)
+
+    # 物料 × 订单 需求量明细（钻取数据源）：
+    # 展开对根因子线性，故按「该订单在该根下的任务量占比」拆分根需求量是精确拆分而非估算：
+    # order_req(mid, o) = root_qty[root][mid] × order_qty[root][o] / qty[root]，Σ订单 = 总需求量。
+    # Decimal 除法仅 28 位精度，为使 Σ订单 严格相等，最大占比订单承接舍入余数。
+    mat_order_rows: Dict[int, Dict[Optional[str], Dict]] = {}
+    for root, rq in root_qty.items():
+        g = bom_groups.get(root)
+        if not g or not rq or not g["qty"]:
+            continue
+        onos_desc = sorted(g["order_qty"].keys(), key=lambda o: g["order_qty"][o], reverse=True)
+        for mid, q in rq.items():
+            tail = sum(
+                (q * (g["order_qty"][ono] / g["qty"]) for ono in onos_desc[1:]),
+                Decimal("0"),
+            )
+            for ono in onos_desc:
+                part = (q - tail) if ono == onos_desc[0] else q * (g["order_qty"][ono] / g["qty"])
+                acc = mat_order_rows.setdefault(mid, {}).setdefault(ono, {"req_qty": Decimal("0"), "task_nos": []})
+                acc["req_qty"] += part
+                for tn in g["order_tasks"].get(ono, []):
+                    if tn not in acc["task_nos"]:
+                        acc["task_nos"].append(tn)
 
     # 拆「物料×仓库」行 + 即时库存快照（无库存 → 「(未入库)」合成行）
     unique_mids = list(mat_rows.keys())
@@ -797,8 +836,8 @@ async def _compute_task_coverage_base(
             row_meta[k] = {**m, "wh_id": None, "wh_name": "(未入库)", "system_qty": Decimal("0")}
             dedup_keys.append(k)
 
-    # 近 N 天已盘标注（N=配置默认，与免盘标同口径）
-    skip_days = _resolve_recent_days(None)
+    # 近 N 天已盘标注（N=recent_days 解析结果；None=配置默认，负数=不限，与免盘标同口径）
+    skip_days = _resolve_recent_days(recent_days)
     today = date.today()
     recent_map = await _get_recent_checked_by_warehouse(db, dedup_keys)
 
@@ -846,6 +885,7 @@ async def _compute_task_coverage_base(
         "warehouses_by_mid": warehouses_by_mid,
         "recent_map": recent_map,
         "flat_rows": flat_rows,
+        "mat_order_rows": mat_order_rows,
     }
 
 
@@ -864,6 +904,7 @@ async def get_task_material_coverage(
     sort_by: Optional[str] = None,
     sort_order: str = "asc",
     include_sample: bool = False,
+    recent_days: Optional[int] = None,
 ) -> Dict:
     """任务盘点覆盖 · 平铺「物料×仓库」行视图（纯读）。返回 dict 直接喂 TaskCoverageOut。
 
@@ -871,9 +912,12 @@ async def get_task_material_coverage(
     task_count(关联任务单数)/recent_check_date；None=默认(未盘优先+物料编码)。
 
     include_sample=False(默认): 排除样品单(HJY 开头销售订单)对应的任务单及其物料。
+    recent_days: 「已盘」判定窗口(距今天)；None=配置默认(7)，负数/99999=不限全部历史
+    (与库存页「近期已盘」口径一致)。
     """
     b = await _compute_task_coverage_base(
-        db, start_date=start_date, end_date=end_date, include_sample=include_sample
+        db, start_date=start_date, end_date=end_date, include_sample=include_sample,
+        recent_days=recent_days,
     )
     rows = b["flat_rows"]
 
@@ -980,6 +1024,52 @@ async def get_task_material_coverage(
         "no_bom_tasks": b["no_bom_tasks"],
         "warehouses": warehouses,
         "unstocked_count": unstocked_acc["row_count"] if unstocked_acc else 0,
+    }
+
+
+async def get_task_material_order_breakdown(
+    db: AsyncSession,
+    *,
+    start_date: date,
+    end_date: date,
+    material_id: int,
+    include_sample: bool = False,
+) -> Optional[Dict]:
+    """任务盘点覆盖 · 单物料「订单 × 需求量」明细（点击物料代码钻取，纯读）。
+
+    与平铺行视图共用同一计算底座（日期范围/样品单口径一致）；
+    按销售订单归并需求量（同订单多任务/多产品求和），无关联销售订单
+    的部分单列为 no_order_qty；orders 按需求量降序。
+    物料不在该范围的需求内时返回 None（由 API 层转 404）。
+    """
+    b = await _compute_task_coverage_base(
+        db, start_date=start_date, end_date=end_date, include_sample=include_sample
+    )
+    m = b["mat_rows"].get(material_id)
+    if m is None:
+        return None
+    breakdown = b["mat_order_rows"].get(material_id, {})
+    orders: List[Dict] = []
+    no_order_qty = Decimal("0")
+    for ono, acc in breakdown.items():
+        if ono is None:
+            no_order_qty += acc["req_qty"]
+        else:
+            orders.append({
+                "order_no": ono,
+                "req_qty": acc["req_qty"],
+                "task_nos": acc["task_nos"],
+            })
+    orders.sort(key=lambda x: x["req_qty"], reverse=True)
+    return {
+        "material_id": material_id,
+        "material_code": m.get("material_code"),
+        "material_name": m.get("material_name"),
+        "spec_model": m.get("spec_model"),
+        "unit": m.get("unit"),
+        "req_qty": m.get("req_qty"),
+        "orders": orders,
+        "no_order_qty": no_order_qty,
     }
 
 
@@ -1657,7 +1747,7 @@ async def remove_item_from_check(
     item_id: int,
     current_user: dict,
 ) -> StockCheck:
-    """从进行中的手动盘点单移除一条明细。已录入数据(is_checked=1 或 actual_qty 非空)的行禁删。"""
+    """从进行中的手动/订单盘点单移除一条未盘明细。已录入数据(is_checked=1 或 actual_qty 非空)的行禁删。"""
     item = (await db.execute(select(StockCheckItem).where(StockCheckItem.id == item_id).with_for_update())).scalar_one_or_none()
     if not item:
         raise ValueError(f"盘点行 {item_id} 不存在")
@@ -1666,8 +1756,8 @@ async def remove_item_from_check(
         raise ValueError(f"盘点单 {item.check_id} 不存在")
     if not _user_can_edit(head, current_user):
         raise StockCheckPermissionError("无修改权限：仅创建人、共同盘点人或管理员可修改")
-    if head.check_type != "manual":
-        raise ValueError("仅手动盘点单支持自由移除明细")
+    if head.check_type not in ("manual", "order"):
+        raise ValueError("仅手动/订单盘点单支持移除未盘明细")
     if head.status in ("completed", "cancelled"):
         raise ValueError(f"已{head.status}的盘点单不能移除明细")
     if item.is_checked or item.actual_qty is not None:

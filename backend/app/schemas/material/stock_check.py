@@ -470,6 +470,25 @@ class TaskCoverageOut(BaseModel):
     unstocked_count: int = 0
 
 
+class TaskCoverageMaterialOrderOut(BaseModel):
+    """单物料订单需求明细: 一行 = 销售订单"""
+    order_no: str
+    req_qty: Decimal = Decimal("0")
+    task_nos: List[str] = []
+
+
+class TaskCoverageMaterialOrdersOut(BaseModel):
+    """任务盘点覆盖 · 单物料「订单×需求量」钻取结果"""
+    material_id: int
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    spec_model: Optional[str] = None
+    unit: Optional[str] = None
+    req_qty: Optional[Decimal] = None
+    orders: List[TaskCoverageMaterialOrderOut] = []
+    no_order_qty: Decimal = Decimal("0")
+
+
 class StockCheckExportBody(BaseModel):
     """盘点单明细导出(POST): 前端页面筛选为客户端筛选,导出时传当前可见行 item_ids"""
     format: str = "xlsx"

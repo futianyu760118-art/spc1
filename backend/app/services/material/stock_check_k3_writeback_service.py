@@ -137,24 +137,27 @@ def _next_k3_bill_no_sync(conn, prefix: str) -> str:
     return f"{prefix}{str(next_seq).zfill(width)}"
 
 
+# K3 客户端序时簿可见性关键列形态(测试账套 e2e 实证 2026-09-08, 对照原生未审核单):
+# - 未审核约定 FCheckerID=NULL(非 0): 客户端「未审核」过滤为 IS NULL, 写 0 会被当成已审核
+# - FDeptID/FEmpID 及体表仓位/序列号列用 0 占位而非 NULL: 序时簿 join 基础资料表时 NULL 整行被过滤
 INSERT_HEAD_SQL = f"""
 INSERT INTO {K3_WRITE_DB}.dbo.ICStockBill
     (FInterID, FBrNo, FBrID, FBillNo, FDate, FTranType, FNote, FExplanation,
      FBillerID, FCheckerID, FCancellation, FFManagerID, FSManagerID,
-     FInventoryType, FRefType)
+     FDeptID, FEmpID, FInventoryType, FRefType)
 VALUES
     (:FInterID, '0', :FBrID, :FBillNo, :FDate, :FTranType, :FNote, :FExplanation,
-     :FBillerID, 0, 0, :FManagerID, :FManagerID,
-     :FInventoryType, :FRefType)
+     :FBillerID, NULL, 0, :FManagerID, :FManagerID,
+     0, 0, :FInventoryType, :FRefType)
 """
 
 INSERT_ENTRY_SQL = f"""
 INSERT INTO {K3_WRITE_DB}.dbo.ICStockBillEntry
     (FInterID, FEntryID, FBrNo, FItemID, FUnitID, FQty, FQtyMust, FQtyActual,
-     FPrice, FAmount, FDCStockID, FSCStockID, FBatchNo)
+     FPrice, FAmount, FDCStockID, FSCStockID, FBatchNo, FDCSPID, FSCSPID, FSnListID)
 VALUES
     (:FInterID, :FEntryID, '0', :FItemID, :FUnitID, :FQty, :FQtyMust, :FQtyActual,
-     0, 0, :FDCStockID, :FSCStockID, '')
+     0, 0, :FDCStockID, :FSCStockID, '', 0, 0, 0)
 """
 
 GAIN_PREFIX, TRANSFER_PREFIX = "YADJ", "CHG"
@@ -203,6 +206,31 @@ def _check_counter_synced(conn) -> None:
         )
 
 
+def _check_master_data_sync(conn, item_ids: set, stock_ids: set) -> None:
+    """预检: 回写涉及的物料/仓库必须在目标账套存在(t_ICItem/t_Stock)。
+
+    序时簿按基础资料 join 显示, 缺失会导致"写入成功但客户端整行不可见"
+    (测试账套实证 2026-09-08: 调入仓 92852 缺失时调拨单序时簿查不到)。
+    """
+    missing = []
+    if item_ids:
+        ids = ",".join(str(int(i)) for i in sorted(item_ids))
+        found = {int(r[0]) for r in conn.execute(text(
+            f"SELECT FItemID FROM {K3_WRITE_DB}.dbo.t_ICItem WHERE FItemID IN ({ids})"))}
+        missing += [f"物料{i}" for i in sorted(item_ids - found)]
+    stocks = {int(s) for s in stock_ids if s}
+    if stocks:
+        ids = ",".join(str(i) for i in sorted(stocks))
+        found = {int(r[0]) for r in conn.execute(text(
+            f"SELECT FItemID FROM {K3_WRITE_DB}.dbo.t_Stock WHERE FItemID IN ({ids})"))}
+        missing += [f"仓库{i}" for i in sorted(stocks - found)]
+    if missing:
+        raise RuntimeError(
+            f"K3 回写目标账套({K3_WRITE_DB})缺少基础资料: {', '.join(missing)}; "
+            f"单据写入后 K3 客户端序时簿将不可见, 请先在 K3 维护后重试"
+        )
+
+
 def _write_bill_sync(rec: StockCheckK3Writeback, entries: List[dict]) -> Tuple[str, int]:
     """同步写一张 K3 未审核单(头+体)。entries 由调用方按明细行构造。
 
@@ -217,6 +245,9 @@ def _write_bill_sync(rec: StockCheckK3Writeback, entries: List[dict]) -> Tuple[s
     with _K3_WRITE_LOCK, _get_k3_engine().connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         try:
             _check_counter_synced(conn)
+            item_ids = {int(e["item_id"]) for e in entries}
+            stock_ids = {int(e["dc_stock"] or 0) for e in entries} | {int(e["sc_stock"] or 0) for e in entries}
+            _check_master_data_sync(conn, item_ids, stock_ids)
             inter_id = _alloc_inter_id_sync(conn)
             # FDetailID 是 IDENTITY 自增列(链接服务器下显式插入报 7344 无列权限), 交给 SQL Server 生成
             is_gain = rec.bill_type == "gain"
@@ -292,6 +323,14 @@ async def _execute_one(db: AsyncSession, rec: StockCheckK3Writeback, head: Stock
             return
         unit_ids = await asyncio.to_thread(
             _load_unit_ids_sync, [int(it.material_id) for it in diff_rows])
+        no_unit = sorted({int(it.material_id) for it in diff_rows
+                          if unit_ids.get(int(it.material_id), 0) == 0})
+        if no_unit:
+            rec.status = "failed"
+            rec.error_msg = (
+                f"物料 {no_unit} 在 K3 目标账套无计量单位(t_ICItem 缺失或 FUnitID 为空), 拒绝回写"
+            )
+            return
         fdate = head.check_date
         # FNote 加 ASCII 前缀, 保证跨编码环境可按 "SPC %" 检索中台写入的单据
         fnote = f"SPC {head.check_no} 盘点完结自动生成"

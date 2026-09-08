@@ -10,7 +10,7 @@ import {
   SearchOutlined, CheckCircleOutlined, StopOutlined, ArrowLeftOutlined,
   HistoryOutlined, PlusOutlined, DownOutlined, DownloadOutlined, DeleteOutlined,
   AppstoreOutlined, ClockCircleOutlined, ArrowUpOutlined, ArrowDownOutlined,
-  BarsOutlined, WarningOutlined,
+  BarsOutlined, WarningOutlined, FullscreenOutlined, FullscreenExitOutlined,
 } from '@ant-design/icons'
 import { useExport } from '@/hooks/useExport'
 import { materialApi, orderApi } from '@/services/api'
@@ -848,6 +848,65 @@ export default function StockCheckWorkbench() {
     return searchedItems.filter((it) => it.diff_qty != null && Number(it.diff_qty) !== 0)
   }, [searchedItems, segFilter])
 
+  // ===== 明细表自适应高度：整页收敛在视口内（窗口不出现滚动条），仅表格内部滚动 =====
+  const detailSectionRef = useRef<HTMLDivElement | null>(null)
+  const [detailMounted, setDetailMounted] = useState(false)
+  const attachDetailSection = useCallback((node: HTMLDivElement | null) => {
+    detailSectionRef.current = node
+    setDetailMounted((prev) => (prev === !!node ? prev : !!node))
+  }, [])
+  const [tableScrollY, setTableScrollY] = useState<number>(560)
+  const measureTableScrollY = useCallback(() => {
+    const el = detailSectionRef.current
+    if (!el || !el.clientHeight) return
+    const tableEl = el.querySelector<HTMLElement>('.ant-table')
+    const bodyEl = el.querySelector<HTMLElement>('.ant-table-body')
+    const pad = dirtyItems.length > 0 ? 56 : 8
+    const avail = el.clientHeight - pad - 4
+    if (avail < 140) return
+    // 表头 + 汇总行等固定骨架高度：由 DOM 实测得出（body 滚动容器高度之外的差值）
+    const chrome = tableEl && bodyEl && bodyEl.offsetHeight > 0
+      ? Math.max(50, tableEl.offsetHeight - bodyEl.offsetHeight)
+      : 92
+    const next = Math.max(160, Math.floor(avail - chrome))
+    setTableScrollY((prev) => (Math.abs(next - prev) >= 2 ? next : prev))
+  }, [dirtyItems.length])
+
+  useEffect(() => {
+    // 明细表在数据加载完成后才挂载：node 出现后再建立 ResizeObserver / resize 监听，
+    // 这样浏览器缩放、拖拽窗口等引起的视口变化才能持续驱动表格高度自适应
+    if (!detailMounted) return
+    measureTableScrollY()
+    const el = detailSectionRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => measureTableScrollY())
+    ro.observe(el)
+    window.addEventListener('resize', measureTableScrollY)
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', measureTableScrollY)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', measureTableScrollY)
+      vv?.removeEventListener('resize', measureTableScrollY)
+    }
+  }, [measureTableScrollY, detailMounted])
+
+  // ===== 页面内全屏模式（大屏）：隐藏信息卡/统计卡等上部区块，表格占满整个浏览器窗口 =====
+  const [fullscreen, setFullscreen] = useState(false)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  useEffect(() => {
+    if (loading) return
+    const raf = requestAnimationFrame(measureTableScrollY)
+    return () => cancelAnimationFrame(raf)
+  }, [loading, tableItems.length, activeCheck?.status, fullscreen, measureTableScrollY])
+
   // 表头列筛选(物料编码/仓库/盘点人)是 antd 表内状态,onChange 时同步一份,导出时按同口径复筛
   const [columnFilters, setColumnFilters] = useState<Record<string, unknown>>({})
   const exportableItems = useMemo(() => {
@@ -1142,7 +1201,7 @@ export default function StockCheckWorkbench() {
       render: (_: any, r: StockCheckItem) => {
         const recentMark = hasRecentMark(r)
         const canRemove = !readonly
-          && activeCheck?.check_type === 'manual'
+          && (activeCheck?.check_type === 'manual' || activeCheck?.check_type === 'order')
           && (activeCheck.status === 'in_progress' || activeCheck.status === 'open')
           && r.is_checked === 0
           && r.actual_qty == null
@@ -1236,9 +1295,26 @@ export default function StockCheckWorkbench() {
   ]
 
   return (
-    <div className="sc-page" style={{ paddingBottom: dirtyItems.length > 0 ? 56 : 0 }}>
+    <div
+      className="sc-page"
+      style={
+        fullscreen
+          ? {
+              position: 'fixed', inset: 0, zIndex: 9999,
+              background: '#f8fafc',
+              padding: '10px 20px 14px',
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            }
+          : {
+              // 整页收敛在视口内（窗口不出现滚动条），仅明细表内部滚动
+              height: 'calc(100vh - 104px)',
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            }
+      }
+    >
       {/* ===== 信息头卡 ===== */}
-      <Card styles={{ body: { padding: '16px 20px' } }} style={{ marginBottom: 12 }}>
+      {!fullscreen && (
+        <Card styles={{ body: { padding: '16px 20px' } }} style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/stock-check')}>返回</Button>
           <ScTag variant={STATUS_MAP[activeCheck.status || '']?.variant || 'wait'}>
@@ -1325,9 +1401,11 @@ export default function StockCheckWorkbench() {
             <Button type="link" size="small" icon={<PlusOutlined />} onClick={() => setAddPickerOpen(true)}>添加物料</Button>
           )}
         </div>
-      </Card>
+        </Card>
+      )}
 
       {/* ===== SSE 协同提示条 ===== */}
+      {!fullscreen && (
       <div
         className="sc-sync-bar"
         style={syncBanner ? { background: '#fffbeb', borderColor: '#fde68a', color: '#b45309' } : undefined}
@@ -1350,9 +1428,10 @@ export default function StockCheckWorkbench() {
           </span>
         )}
       </div>
+      )}
 
       {/* ===== K3 回写卡片（已完结盘点单） ===== */}
-      {activeCheck?.status === 'completed' && (
+      {!fullscreen && activeCheck?.status === 'completed' && (
         <Card size="small" title="K3 回写" style={{ marginTop: 12 }}
           extra={
             wbOverview && wbOverview.writebacks.some((w) => w.status === 'failed') ? (
@@ -1398,19 +1477,46 @@ export default function StockCheckWorkbench() {
       )}
 
       {/* ===== 进度卡带 ===== */}
-      <Row gutter={[10, 10]} style={{ marginBottom: 12 }}>
-        {statCards.map((c) => (
-          <Col key={c.label} xs={12} md={8} xl={4}>
-            <div className="sc-stat-card slim" style={{ '--accent': c.accent, '--accent-bg': c.accentBg, height: '100%' } as CSSProperties}>
-              <div className="sc-stat-icon">{c.icon}</div>
-              <div style={{ minWidth: 0 }}>
-                <div className="sc-stat-label">{c.label}</div>
-                <div className="sc-stat-value" style={{ ...c.valueStyle, whiteSpace: 'nowrap' }}>{c.value}</div>
+      {!fullscreen && (
+        <Row gutter={[10, 10]} style={{ marginBottom: 12 }}>
+          {statCards.map((c) => (
+            <Col key={c.label} xs={12} md={8} xl={4}>
+              <div className="sc-stat-card slim" style={{ '--accent': c.accent, '--accent-bg': c.accentBg, height: '100%' } as CSSProperties}>
+                <div className="sc-stat-icon">{c.icon}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="sc-stat-label">{c.label}</div>
+                  <div className="sc-stat-value" style={{ ...c.valueStyle, whiteSpace: 'nowrap' }}>{c.value}</div>
+                </div>
               </div>
-            </div>
-          </Col>
-        ))}
-      </Row>
+            </Col>
+          ))}
+        </Row>
+      )}
+
+      {/* ===== 全屏模式 · 摘要条 ===== */}
+      {fullscreen && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/stock-check')}>返回</Button>
+          <ScTag variant={STATUS_MAP[activeCheck.status || '']?.variant || 'wait'}>
+            {STATUS_MAP[activeCheck.status || '']?.label || activeCheck.status}
+          </ScTag>
+          <ScTag variant={typeTag.variant}>{typeTag.label}盘点</ScTag>
+          {(activeCheck.co_checkers || []).length > 0 && (
+            <ScTag variant="plain">
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#16a34a', display: 'inline-block' }} />
+              协同盘点
+            </ScTag>
+          )}
+          {activeCheck.can_edit === false && <ScTag variant="warn">只读（无修改权限）</ScTag>}
+          <span className="sc-mono" style={{ fontWeight: 600 }}>{activeCheck.check_no}</span>
+          {activeCheck.order_no && (
+            <Button type="link" size="small" className="sc-mono" style={{ padding: 0 }} onClick={() => navigate(`/orders/${activeCheck.order_no}`)}>
+              {activeCheck.order_no}
+            </Button>
+          )}
+          <span className="sc-note" style={{ marginLeft: 'auto', flexShrink: 0 }}>ESC 或右上角按钮退出全屏</span>
+        </div>
+      )}
 
       {/* ===== 工具条 ===== */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -1453,24 +1559,44 @@ export default function StockCheckWorkbench() {
             </Button>
           </span>
         )}
-        <span style={{ marginLeft: 'auto' }} data-tour="stock-check-actions">
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8 }} data-tour="stock-check-actions">
+          <Tooltip title={fullscreen ? '退出全屏 (ESC)' : '全屏'}>
+            <Button
+              icon={fullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+              onClick={() => setFullscreen((v) => !v)}
+            >
+              {fullscreen ? '退出全屏' : '全屏'}
+            </Button>
+          </Tooltip>
           <Button type="primary" icon={<CheckCircleOutlined />} disabled={readonly} onClick={handleComplete}>
             标记完成
           </Button>
         </span>
       </div>
 
-      {/* ===== 明细表 ===== */}
-      <div data-tour="stock-check-table">
-        <Card styles={{ body: { padding: 0 } }}>
-          <Spin spinning={loading}>
-            <Table
-              rowKey="id"
-              size="small"
-              dataSource={tableItems}
-              columns={columns as any}
-              pagination={false}
-              scroll={{ x: 1300, y: 560 }}
+      {/* ===== 明细表（占满剩余高度，表格内部滚动） ===== */}
+      <div
+        data-tour="stock-check-table"
+        ref={attachDetailSection}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          // 底部预留空间，避免 fixed 保存条遮挡表格内容
+          paddingBottom: dirtyItems.length > 0 ? 56 : 8,
+        }}
+      >
+        <Card styles={{ body: { padding: 0, flex: 1, minHeight: 0 } }} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <Spin spinning={loading}>
+              <Table
+                rowKey="id"
+                size="small"
+                dataSource={tableItems}
+                columns={columns as any}
+                pagination={false}
+                scroll={{ x: 1300, y: tableScrollY }}
               onChange={(_pagination, filters) => setColumnFilters(filters as Record<string, unknown>)}
               rowClassName={(r: StockCheckItem) => (r.actual_qty == null && !hasRecentMark(r) ? 'sc-unchecked' : '')}
               rowSelection={readonly ? undefined : {
@@ -1519,7 +1645,8 @@ export default function StockCheckWorkbench() {
                 )
               }}
             />
-          </Spin>
+            </Spin>
+          </div>
         </Card>
       </div>
 

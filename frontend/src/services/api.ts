@@ -303,9 +303,16 @@ export const materialApi = {
     sort_by?: string
     sort_order?: 'asc' | 'desc'
     include_sample?: boolean
+    recent_days?: number
     page?: number
     page_size?: number
   }) => api.get('/materials/stock-check/task-coverage', { params }),
+  getTaskCoverageMaterialOrders: (params: {
+    start_date: string
+    end_date: string
+    material_id: number
+    include_sample?: boolean
+  }) => api.get('/materials/stock-check/task-coverage/material-orders', { params }),
   getStockChecksByOrder: (orderNo: string) =>
     api.get(`/materials/stock-check/by-order/${orderNo}`),
   getStockCheck: (checkId: number) =>

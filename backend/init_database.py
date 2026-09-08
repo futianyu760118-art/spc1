@@ -1190,7 +1190,6 @@ class DatabaseInitializer:
                     role = existing.scalar_one_or_none()
                     if role:
                         role.role_name = role_data["role_name"]
-                        role.permissions = role_data["permissions"]
                     else:
                         session.add(SysRole(**role_data))
 
