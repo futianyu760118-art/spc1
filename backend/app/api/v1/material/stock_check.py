@@ -261,6 +261,102 @@ async def get_task_stock_coverage_view(
     return ResponseModel(data=TaskCoverageOut(**data))
 
 
+TASK_COVERAGE_EXPORT_COLUMNS = [
+    ExportColumn("material_code", "物料编码", 18),
+    ExportColumn("material_name", "物料名称", 26),
+    ExportColumn("spec_model", "规格", 18),
+    ExportColumn("unit", "单位", 8),
+    ExportColumn("wh_name", "仓库", 16),
+    ExportColumn("system_qty", "当前库存", 12),
+    ExportColumn("req_qty", "需求总量", 12),
+    ExportColumn("is_checked", "盘点状态", 10),
+    ExportColumn("recent_check_no", "最近盘点单", 18),
+    ExportColumn("recent_check_date", "最近盘点日期", 14),
+    ExportColumn("task_nos", "关联任务单", 36),
+    ExportColumn("order_nos", "关联订单", 36),
+]
+
+
+@router.get("/stock-check/task-coverage/export")
+async def export_task_stock_coverage(
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    columns: Optional[str] = Query(None, description="要导出的列 key，逗号分隔；不传则导出全部列"),
+    start_date: date = Query(..., description="计划开工日期-起"),
+    end_date: date = Query(..., description="计划开工日期-止"),
+    status: str = Query("all", pattern="^(all|checked|unchecked)$"),
+    keyword: Optional[str] = Query(None, description="物料编码/名称/规格"),
+    wh_id: Optional[int] = Query(None, description="按仓库过滤行"),
+    wh_ids: Optional[str] = Query(None, description="按仓库多选过滤行(逗号分隔; -1 表示 (未入库) 合成行)"),
+    unstocked: bool = Query(False, description="仅看(未入库)合成行(wh_id 为空)"),
+    sort_by: Optional[str] = Query(None, description="排序列: material_code/material_name/spec_model/wh_name/system_qty/req_qty/task_count/recent_check_date"),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    include_sample: bool = Query(False, description="包含样品单(HJY开头销售订单)对应的任务，默认排除"),
+    current_user: dict = Depends(PermissionChecker("materials.task_stock_check", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """任务盘点覆盖导出（支持格式 xlsx/csv + 列选择，跟随与列表视图一致的筛选，不分页截断）。"""
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+    allowed_sorts = ("material_code", "material_name", "spec_model", "wh_name", "system_qty", "req_qty", "task_count", "recent_check_date", "is_checked")
+    if sort_by is not None and sort_by not in allowed_sorts:
+        raise HTTPException(status_code=400, detail=f"sort_by 仅支持: {', '.join(allowed_sorts)}")
+    ids: Optional[List[int]] = None
+    if wh_ids:
+        parts = [p.strip() for p in wh_ids.split(",") if p.strip()]
+        try:
+            ids = [int(p) for p in parts]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="wh_ids 需为逗号分隔的仓库ID")
+    data = await get_task_material_coverage(
+        db, start_date=start_date, end_date=end_date,
+        status=status, keyword=keyword, page=1, page_size=1_000_000,
+        wh_id=None if unstocked else wh_id,
+        wh_ids=None if unstocked else ids,
+        unstocked=unstocked,
+        sort_by=sort_by, sort_order=sort_order,
+        include_sample=include_sample,
+    )
+
+    export_rows = []
+    for r in data["items"]:
+        export_rows.append({
+            "material_code": r["material_code"] or "",
+            "material_name": r["material_name"] or "",
+            "spec_model": r["spec_model"] or "",
+            "unit": r["unit"] or "",
+            "wh_name": r["wh_name"] or "",
+            "system_qty": float(r["system_qty"]) if r["system_qty"] is not None else "",
+            "req_qty": float(r["req_qty"]) if r["req_qty"] is not None else "",
+            "is_checked": "已盘" if r["is_checked"] else "未盘",
+            "recent_check_no": r["recent_check_no"] or "",
+            "recent_check_date": str(r["recent_check_date"]) if r["recent_check_date"] else "",
+            "task_nos": " ".join(r["task_nos"] or []),
+            "order_nos": " ".join(r["order_nos"] or []),
+        })
+
+    if columns:
+        selected_keys = [c.strip() for c in columns.split(",") if c.strip()]
+        export_columns = [col for col in TASK_COVERAGE_EXPORT_COLUMNS if col.key in selected_keys]
+    else:
+        export_columns = TASK_COVERAGE_EXPORT_COLUMNS
+
+    svc = GenericExportService(export_columns, export_rows, sheet_name="任务盘点")
+
+    if format == "csv":
+        output = svc.to_csv()
+        return StreamingResponse(
+            output,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=task_stock_coverage_export.csv"},
+        )
+    output = svc.to_xlsx()
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=task_stock_coverage_export.xlsx"},
+    )
+
+
 @router.get("/stock-check/counted-warehouses", response_model=ResponseModel[List[dict]])
 async def list_counted_warehouses_view(
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),

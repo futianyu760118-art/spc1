@@ -208,7 +208,7 @@ const dormantCellStyle = (days: number): React.CSSProperties => {
   return { fontVariantNumeric: 'tabular-nums' }
 }
 
-/** 呆滞天数列: 排序沿用最后出库时间字段; 表头带 大于/小于 N 天 下拉筛选; 数值分级着色 */
+/** 呆滞天数列: 排序按后端 days_in_stock(参考最后出库/无则最后入库), 保证与单元格天数一致; 表头带 大于/小于 N 天 下拉筛选; 数值分级着色 */
 function dormantColumn(
   value: DormantFilterValue | undefined,
   apply: (v?: DormantFilterValue) => void,
@@ -615,7 +615,7 @@ function InventoryDetail() {
   }, [colConfig])
 
   const handleTableChange = (_pag: any, tableFilters: any, sorter: any) => {
-    const sortField = sorter.field
+    const sortField = sorter?.column?.key === 'days_in_stock' ? 'days_in_stock' : sorter.field
     const sortOrder = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : undefined
     const newFilters: Record<string, string[]> = {}
     if (tableFilters.material_code?.length) newFilters.material_code = tableFilters.material_code
@@ -856,7 +856,7 @@ function InventoryByWarehouse() {
   }, [colConfig])
 
   const handleTableChange = (_pag: any, tableFilters: any, sorter: any) => {
-    const sortField = sorter.field
+    const sortField = sorter?.column?.key === 'days_in_stock' ? 'days_in_stock' : sorter.field
     const sortOrder = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : undefined
     const newFilters: Record<string, string[]> = {}
     if (tableFilters.material_code?.length) newFilters.material_code = tableFilters.material_code

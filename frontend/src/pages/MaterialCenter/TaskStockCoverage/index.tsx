@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { DatePicker, message } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
+import ExportColumnSelector, { type ExportColumnOption } from '@/components/ExportColumnSelector'
+import { useExport } from '@/hooks/useExport'
 import { materialApi } from '@/services/api'
 import './prototype.css'
 
@@ -76,6 +78,22 @@ const TSC_COLS: TscCol[] = [
 ]
 
 const PAGE_SIZES = [20, 50, 100, 200]
+
+/** 导出字段选项（field 与后端导出端点列 key 一致） */
+const EXPORT_FIELDS: ExportColumnOption[] = [
+  { field: 'material_code', label: '物料编码' },
+  { field: 'material_name', label: '物料名称' },
+  { field: 'spec_model', label: '规格' },
+  { field: 'unit', label: '单位' },
+  { field: 'wh_name', label: '仓库' },
+  { field: 'system_qty', label: '当前库存' },
+  { field: 'req_qty', label: '需求总量' },
+  { field: 'is_checked', label: '盘点状态' },
+  { field: 'recent_check_no', label: '最近盘点单' },
+  { field: 'recent_check_date', label: '最近盘点日期' },
+  { field: 'task_nos', label: '关联任务单' },
+  { field: 'order_nos', label: '关联订单' },
+]
 
 const WH_COLORS: Array<[string, string]> = [
   ['var(--brand-50)', 'var(--brand-600)'],
@@ -182,20 +200,6 @@ function pagesWindow(cur: number, total: number): Array<number | '…'> {
   if (hi < n - 1) out.push('…')
   out.push(n)
   return out
-}
-
-function downloadCsv(filename: string, headers: string[], rows: Array<Array<string | number | null | undefined>>) {
-  const esc = (v: string | number | null | undefined) => {
-    const s = v == null ? '' : String(v)
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-  }
-  const csv = '\uFEFF' + [headers.map(esc).join(','), ...rows.map((r) => r.map(esc).join(','))].join('\n')
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(a.href)
 }
 
 export default function TaskStockCoverage() {
@@ -362,27 +366,31 @@ export default function TaskStockCoverage() {
     return all
   }
 
-  const exportRowsCsv = (rows: CoverageItem[], filename: string) => {
-    downloadCsv(filename, ['物料编码', '物料名称', '规格', '单位', '仓库', '当前库存', '需求总量', '状态', '最近盘点单', '最近盘点日期', '关联任务单', '关联订单'], rows.map((r) => [
-      r.material_code, r.material_name, r.spec_model, r.unit, r.wh_name,
-      r.system_qty == null ? null : Number(r.system_qty), r.req_qty == null ? null : Number(r.req_qty),
-      r.is_checked ? '已盘' : '未盘', r.recent_check_no, r.recent_check_date, (r.task_nos || []).join(' '),
-      (r.order_nos || []).join(' '),
-    ]))
+  /* ── 导出（格式 + 选列弹窗 → 后端 /stock-check/task-coverage/export）── */
+  const { exporting, exportData } = useExport()
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exportScope, setExportScope] = useState<'A' | 'C'>('A')
+  const [exportFormat, setExportFormat] = useState<'xlsx' | 'csv'>('xlsx')
+
+  const openExportModal = (scope: 'A' | 'C') => {
+    setExportScope(scope)
+    setExportFormat('xlsx')
+    setExportOpen(true)
   }
 
-  const handleExportA = async () => {
-    setBusy(true)
-    try { exportRowsCsv(await fetchAllRows({ status, keyword: keyword || undefined }), `任务盘点_物料清单_${startStr}_${endStr}.csv`) }
-    catch (e: any) { message.error(e?.message || '导出失败') }
-    finally { setBusy(false) }
-  }
-
-  const handleExportC = async () => {
-    setBusy(true)
-    try { exportRowsCsv(await fetchAllRows({}), `任务盘点_全量_${startStr}_${endStr}.csv`) }
-    catch (e: any) { message.error(e?.message || '导出失败') }
-    finally { setBusy(false) }
+  const handleExportConfirm = (selectedColumns: string[]) => {
+    setExportOpen(false)
+    const ext = exportFormat === 'csv' ? 'csv' : 'xlsx'
+    const params: Record<string, any> = { format: exportFormat, start_date: startStr, end_date: endStr, include_sample: includeSample }
+    if (exportScope === 'A') {
+      params.status = status
+      if (keyword) params.keyword = keyword
+      if (whFilter.length) params.wh_ids = whFilter.join(',')
+      if (sortBy) { params.sort_by = sortBy; params.sort_order = sortOrder }
+    }
+    if (selectedColumns.length) params.columns = selectedColumns.join(',')
+    const label = exportScope === 'A' ? '物料清单' : '全量'
+    exportData('/api/v1/materials/stock-check/task-coverage/export', params, `任务盘点_${label}_${startStr}_${endStr}.${ext}`)
   }
 
   const openWhModal = async (wh: WarehouseSummary) => {
@@ -514,7 +522,7 @@ export default function TaskStockCoverage() {
           </div>
           <div className="right">
             <button className="btn btn-secondary btn-sm" onClick={loadA} disabled={loadingA}><I id="refresh" />刷新</button>
-            <button className="btn btn-secondary btn-sm" onClick={handleExportA} disabled={busy}><I id="export" />导出</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => openExportModal('A')} disabled={busy || exporting}><I id="export" />导出</button>
           </div>
         </div>
 
@@ -693,7 +701,7 @@ export default function TaskStockCoverage() {
           {SampleToggle}
           <span className="hint-line">按仓库拆分盘点任务包 · 仓管员按仓领取 · 一仓一单</span>
           <div className="right">
-            <button className="btn btn-secondary btn-sm" onClick={handleExportC} disabled={busy}><I id="export" />导出全量</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => openExportModal('C')} disabled={busy || exporting}><I id="export" />导出全量</button>
             <button className="btn btn-secondary btn-sm" onClick={createAllCheck} disabled={busy || creating}><I id="plus" sw={1.8} />跨仓创建一张盘点单</button>
           </div>
         </div>
@@ -815,6 +823,15 @@ export default function TaskStockCoverage() {
           </div>
         </div>
       )}
+
+      <ExportColumnSelector
+        open={exportOpen}
+        columns={EXPORT_FIELDS}
+        format={exportFormat}
+        onFormatChange={setExportFormat}
+        onConfirm={handleExportConfirm}
+        onCancel={() => setExportOpen(false)}
+      />
 
       {(busy || creating) && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'rgba(15,23,42,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-2)', fontSize: 'calc(13px * var(--font-size-scale))' }}>

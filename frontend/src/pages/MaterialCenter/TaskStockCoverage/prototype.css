@@ -160,7 +160,7 @@
   display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer; vertical-align: -2px;
 }
-.tsc .check svg { width: 10px; height: 10px; }
+.tsc .check svg { width: calc(10px * var(--font-size-scale)); height: calc(10px * var(--font-size-scale)); }
 .tsc .check.off { background: var(--surface); border: 1px solid var(--gray-300); box-shadow: none; }
 
 /* ---------- 表格 ---------- */
@@ -202,9 +202,9 @@
 .tsc .th-sortbtn:hover { color: var(--text-1); }
 .tsc .th-sortbtn .th-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .tsc .th-sort { display: inline-flex; flex-direction: column; justify-content: center; line-height: 0; gap: 1px; }
-.tsc .th-sort i { width: 0; height: 0; border-left: 3.5px solid transparent; border-right: 3.5px solid transparent; }
-.tsc .th-sort .up { border-bottom: 4px solid var(--gray-300); }
-.tsc .th-sort .dn { border-top: 4px solid var(--gray-300); }
+.tsc .th-sort i { width: 0; height: 0; border-left: calc(3.5px * var(--font-size-scale)) solid transparent; border-right: calc(3.5px * var(--font-size-scale)) solid transparent; }
+.tsc .th-sort .up { border-bottom: calc(4px * var(--font-size-scale)) solid var(--gray-300); }
+.tsc .th-sort .dn { border-top: calc(4px * var(--font-size-scale)) solid var(--gray-300); }
 .tsc .th-sort.asc .up { border-bottom-color: var(--brand-500); }
 .tsc .th-sort.desc .dn { border-top-color: var(--brand-500); }
 .tsc .th-fbtn {
@@ -215,6 +215,8 @@
 }
 .tsc .th-fbtn:hover { background: var(--gray-100); color: var(--text-3); }
 .tsc .th-fbtn.on { color: var(--brand-500); }
+/* 表头图标尺寸接入全局字号缩放（--font-size-scale；svg 尺寸由 CSS 覆盖行内属性） */
+.tsc .th-fbtn svg { width: calc(11px * var(--font-size-scale)); height: calc(11px * var(--font-size-scale)); }
 .tsc .th-menu {
   position: absolute; top: calc(100% + 4px); left: 0; z-index: 90;
   min-width: 224px; max-height: 320px; overflow: auto;
@@ -234,7 +236,7 @@
   display: inline-flex; align-items: center; justify-content: center;
 }
 .tsc .th-menu .tm-item.on .tm-check { background: var(--brand-500); border-color: var(--brand-500); }
-.tsc .th-menu .tm-item.on .tm-check svg { width: 9px; height: 9px; color: #fff; }
+.tsc .th-menu .tm-item.on .tm-check svg { width: calc(9px * var(--font-size-scale)); height: calc(9px * var(--font-size-scale)); color: #fff; }
 .tsc .th-menu .tm-ops { display: flex; gap: 6px; padding: 6px 9px 2px; border-top: 1px solid var(--gray-100); margin-top: 4px; }
 .tsc .th-menu .tm-ops a { font-size: var(--fs-12); cursor: pointer; padding: 2px 6px; border-radius: 5px; }
 .tsc .th-menu .tm-ops a:hover { background: var(--gray-100); }
