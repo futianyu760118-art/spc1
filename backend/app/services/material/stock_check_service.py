@@ -2838,7 +2838,8 @@ async def refresh_check_warehouses(db: AsyncSession, check_id: int, current_user
 
     await db.flush()
     await _refresh_check_aggregates(db, check_id)
-    head.version = int(head.version or 0) + 1
+    if stats["updated"] > 0 or stats["inserted"] > 0:
+        head.version = int(head.version or 0) + 1
     await db.flush()
     await publish_event(
         check_id,

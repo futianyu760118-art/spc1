@@ -521,20 +521,29 @@ export default function StockCheckPage() {
     },
     {
       title: '关联订单', dataIndex: 'order_no', width: 170, sorter: true,
+      onCell: () => ({ style: { maxWidth: 170, overflow: 'hidden' } }),
       render: (v: string | null) => v
-        ? <Button type="link" size="small" style={{ padding: 0, ...MONO }} onClick={() => navigate(`/orders/${v}`)}>{v}</Button>
+        ? <Tooltip title={v} mouseEnterDelay={0.3}>
+            <Button type="link" size="small" style={{ padding: 0, ...MONO, maxWidth: '100%', display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={() => navigate(`/orders/${v}`)}>{v}</Button>
+          </Tooltip>
         : <span className="sc-diff-flat">—</span>,
     },
     {
       title: '覆盖产品', dataIndex: 'covered_products', width: 150,
+      onCell: () => ({ style: { maxWidth: 150, overflow: 'hidden' } }),
       render: (_v: any, r: StockCheck) => {
         const ps = r.covered_products || []
         if (!ps.length) return <span className="sc-diff-flat">—</span>
+        const full = ps.map((p) => `${p.product_code || '—'}${p.bom_no ? ` (${p.bom_no})` : ''}`).join('、')
         if (ps.length === 1) {
           const p = ps[0]
-          return <span style={MONO}>{p.product_code || '—'}{p.order_qty != null ? ` ×${p.order_qty}` : ''}</span>
+          return <Tooltip title={full} mouseEnterDelay={0.3}>
+            <span style={{ ...MONO, display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{p.product_code || '—'}{p.order_qty != null ? ` ×${p.order_qty}` : ''}</span>
+          </Tooltip>
         }
-        return <span style={MONO}>{ps[0].product_code || '—'} 等 {ps.length} 款</span>
+        return <Tooltip title={full} mouseEnterDelay={0.3}>
+          <span style={{ ...MONO, display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{ps[0].product_code || '—'} 等 {ps.length} 款</span>
+        </Tooltip>
       },
     },
     {

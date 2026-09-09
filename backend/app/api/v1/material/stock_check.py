@@ -830,15 +830,9 @@ async def complete(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    # 完结+回写计划先落库;K3 写入 best-effort,失败不阻断完结
+    # 完结+回写计划先落库;K3 写入改为手动触发(工作台「K3 回写」卡片),完结请求不触 K3
     await db.commit()
-    summary = {"total": 0, "success": 0, "failed": 0, "pending": 0}
-    if writebacks:
-        try:
-            summary = await execute_pending_writebacks(db, check_id, current_user)
-        except Exception:
-            logger.exception(f"盘点单 {check_id} K3 回写异常(可稍后重试)")
-            summary = {"total": len(writebacks), "success": 0, "failed": 0, "pending": len(writebacks)}
+    summary = {"total": len(writebacks), "success": 0, "failed": 0, "pending": len(writebacks)}
     head_out = await get_stock_check_with_items(db, check_id)
     out = await _to_check_out(db, head_out, current_user)
     out.writeback_summary = summary

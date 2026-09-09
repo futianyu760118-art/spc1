@@ -515,13 +515,7 @@ export default function StockCheckWorkbench() {
           captureBaseline(res.data.items || [])
           const ws = res.data?.writeback_summary
           if (ws && Number(ws.total) > 0) {
-            if (Number(ws.failed) > 0) {
-              message.warning(`已完结；K3 单据回写失败 ${ws.failed}/${ws.total} 张，可在下方「K3 回写」卡片重试`, 6)
-            } else if (Number(ws.success) < Number(ws.total)) {
-              message.info(`已完结；K3 单据回写未完成（${ws.success}/${ws.total}），请在「K3 回写」卡片查看`, 6)
-            } else {
-              message.success(`已完结；已生成 K3 单据 ${ws.success}/${ws.total} 张，待仓管员在 K3 审核`, 6)
-            }
+            message.info(`已完结；K3 回写未触发（${ws.total} 张待手动提交），请在下方「K3 回写」卡片操作`, 6)
           } else {
             message.success('已完结')
           }
@@ -546,17 +540,30 @@ export default function StockCheckWorkbench() {
       content: '确认取消该盘点单?',
       okType: 'danger',
       onOk: async () => {
-        try {
-          const res: any = await materialApi.cancelStockCheck(activeCheck.id, activeCheck.version ?? undefined)
-          setActiveCheck(res.data)
-          message.success('已取消')
-        } catch (e: any) {
-          const code = e?.response?.data?.detail?.code ?? e?.response?.data?.code
-          if (code === 409) {
-            message.warning('盘点单状态刚被他人修改,正在刷新')
-            loadCheck(activeCheck.id)
-          } else {
-            message.error(e?.response?.data?.detail || e.message || '取消失败')
+        let curVersion: number | undefined = activeCheck.version ?? undefined
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const res: any = await materialApi.cancelStockCheck(activeCheck.id, curVersion)
+            setActiveCheck(res.data)
+            message.success('已取消')
+            return
+          } catch (e: any) {
+            const detail = e?.response?.data?.detail
+            const code = detail?.code ?? e?.response?.data?.code
+            if (attempt === 0 && code === 409) {
+              const sv = detail?.data?.server_version
+              if (typeof sv === 'number') {
+                curVersion = sv
+                continue
+              }
+            }
+            if (code === 409) {
+              message.warning('盘点单状态刚被他人修改,正在刷新')
+              loadCheck(activeCheck.id)
+            } else {
+              message.error(detail || e.message || '取消失败')
+            }
+            return
           }
         }
       },
@@ -1431,11 +1438,24 @@ export default function StockCheckWorkbench() {
       )}
 
       {/* ===== K3 回写卡片（已完结盘点单） ===== */}
-      {!fullscreen && activeCheck?.status === 'completed' && (
+      {!fullscreen && activeCheck?.status === 'completed' && (() => {
+        const wbs = wbOverview?.writebacks || []
+        const hasPending = wbs.some((w) => w.status === 'pending')
+        const hasFailed = wbs.some((w) => w.status === 'failed')
+        const hasSuccess = wbs.some((w) => w.status === 'success')
+        const pendingCount = wbs.filter((w) => w.status === 'pending').length
+        const failedCount = wbs.filter((w) => w.status === 'failed').length
+        const buttonLabel = hasPending && !hasSuccess
+          ? `提交 K3 回写（${pendingCount}）`
+          : hasFailed
+            ? `重试失败单据（${failedCount}）`
+            : '重新执行 K3 回写'
+        const showButton = hasPending || hasFailed
+        return (
         <Card size="small" title="K3 回写" style={{ marginTop: 12 }}
           extra={
-            wbOverview && wbOverview.writebacks.some((w) => w.status === 'failed') ? (
-              <Button size="small" loading={wbRetrying} onClick={retryWritebacks}>重试失败单据</Button>
+            showButton ? (
+              <Button size="small" type="primary" loading={wbRetrying} onClick={retryWritebacks}>{buttonLabel}</Button>
             ) : null
           }
         >
@@ -1474,7 +1494,8 @@ export default function StockCheckWorkbench() {
               },
             ]} />
         </Card>
-      )}
+        );
+      })()}
 
       {/* ===== 进度卡带 ===== */}
       {!fullscreen && (
