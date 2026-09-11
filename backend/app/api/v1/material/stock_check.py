@@ -82,6 +82,7 @@ from app.services.material.stock_check_service import (
     _user_can_edit,
     _current_user_id,
     _resolve_user_names,
+    writeback_todo_criterion,
     StockCheckPermissionError,
     StockCheckConflictError,
 )
@@ -492,6 +493,7 @@ async def recent(
     source: Optional[str] = Query(None, description="数据来源:k3/manual"),
     date_from: Optional[date] = Query(None, description="盘点日期起点 (YYYY-MM-DD)"),
     date_to: Optional[date] = Query(None, description="盘点日期终点 (YYYY-MM-DD)"),
+    writeback_todo: Optional[bool] = Query(None, description="仅看 K3 待回写(已完结且存在 pending/failed 回写记录)"),
     sort_by: Optional[str] = Query(None, description="排序字段:check_no/order_no/check_date/total_materials/checked_materials/total_diff_qty/created_at/updated_at"),
     sort_order: Optional[str] = Query(None, description="asc/desc,默认 desc"),
     current_user: dict = Depends(PermissionChecker("materials.stock_check", "read")),
@@ -510,6 +512,7 @@ async def recent(
         date_to=date_to,
         sort_by=sort_by,
         sort_order=sort_order,
+        writeback_todo=bool(writeback_todo),
     )
     await attach_list_extras(db, rows)
     filter_query = select(StockCheck)
@@ -530,6 +533,8 @@ async def recent(
         filter_query = filter_query.where(StockCheck.check_date >= date_from)
     if date_to:
         filter_query = filter_query.where(StockCheck.check_date <= date_to)
+    if writeback_todo:
+        filter_query = filter_query.where(*writeback_todo_criterion())
     total = (await db.execute(
         select(func.count()).select_from(filter_query.subquery())
     )).scalar() or 0

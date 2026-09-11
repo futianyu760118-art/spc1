@@ -175,6 +175,7 @@ class DatabaseInitializer:
                 "risk_factors": "JSONB",
                 "risk_assessed_at": "TIMESTAMP",
                 "is_closed": "INTEGER NOT NULL DEFAULT 0",
+                "is_deleted": "INTEGER NOT NULL DEFAULT 0",
             },
             "sale_order_line": {
                 "sale_order_id": "INTEGER REFERENCES sale_order(id)",

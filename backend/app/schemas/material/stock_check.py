@@ -250,6 +250,8 @@ class StockCheckListOut(BaseModel):
     gain_count: Optional[int] = None      # 已盘行 diff_qty>0 数
     loss_count: Optional[int] = None      # 已盘行 diff_qty<0 数
     co_checkers: Optional[List[Dict[str, Any]]] = None  # [{user_id, name}]
+    writeback_pending: Optional[int] = None   # K3 回写 pending 记录数(仅已完结单有)
+    writeback_failed: Optional[int] = None    # K3 回写 failed 记录数
 
     model_config = {"from_attributes": True}
 
@@ -331,6 +333,7 @@ class StockCheckKpi(BaseModel):
     pending_gain_count: int                # 已盘行 diff>0 总数(排除已取消单)
     pending_loss_count: int
     recent7_checked_materials: int         # 7 日内有 counted_at 的去重 material_id 数(排除已取消单)
+    writeback_todo_checks: int = 0         # 已完结且存在 pending/failed K3 回写的单数
 
 
 class StockCheckConflictOut(BaseModel):

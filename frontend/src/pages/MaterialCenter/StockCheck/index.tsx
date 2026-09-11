@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   Table, Input, Button, message, Modal, Row, Col, Spin, Popover, Tour,
-  Tooltip, DatePicker, Dropdown, Tabs, Progress, Checkbox, Badge,
+  Tooltip, DatePicker, Dropdown, Tabs, Progress, Checkbox, Badge, Tag,
 } from 'antd'
 import type { MenuProps } from 'antd'
 import {
@@ -113,6 +113,7 @@ export default function StockCheckPage() {
   const [searchText, setSearchText] = useState('')
   const [appliedKeyword, setAppliedKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState<string[]>(['in_progress'])
+  const [wbTodoOnly, setWbTodoOnly] = useState(false)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const [dateFrom, setDateFrom] = useState<string>()
   const [dateTo, setDateTo] = useState<string>()
@@ -159,6 +160,7 @@ export default function StockCheckPage() {
         sort_by: params.sort_by ?? 'updated_at',
         sort_order: params.sort_order ?? 'desc',
         status: statusFilter.length ? statusFilter.join(',') : undefined,
+        writeback_todo: wbTodoOnly || undefined,
         check_type: typeFilter && typeFilter !== 'k3' ? typeFilter : undefined,
         source: typeFilter === 'k3' ? 'k3' : undefined,
         date_from: dateFrom,
@@ -166,7 +168,7 @@ export default function StockCheckPage() {
       })
       return { items: res.data?.items || [], total: res.data?.total || 0 }
     },
-    extraDeps: [appliedKeyword, statusFilter, typeFilter, dateFrom, dateTo],
+    extraDeps: [appliedKeyword, statusFilter, wbTodoOnly, typeFilter, dateFrom, dateTo],
   })
 
   // ===== Tab 2 · 物料台账 =====
@@ -200,6 +202,8 @@ export default function StockCheckPage() {
   // 内容不变时返回原引用, 避免 extraDeps 变化导致翻页被重置回第 1 页。
   const handleRecentChange: typeof recentTableProps.onChange = (pagination, filters, sorter, extra) => {
     const s = ((filters.status as string[] | undefined) ?? []).filter(Boolean)
+    // 仅当用户真的改了状态列筛选才退出「K3 待回写」chip（纯翻页/排序不清筛选）
+    if (statusFilter.join(',') !== s.join(',')) setWbTodoOnly(false)
     setStatusFilter((prev) => (prev.join(',') === s.join(',') ? prev : s))
     const t = (filters.type as string[] | undefined)?.[0] ?? null
     setTypeFilter((prev) => (prev === t ? prev : t))
@@ -565,11 +569,21 @@ export default function StockCheckPage() {
       render: (_v: any, r: StockCheck) => <DiffPair gain={r.gain_count} loss={r.loss_count} />,
     },
     {
-      title: '状态', dataIndex: 'status', width: 100,
+      title: '状态', dataIndex: 'status', width: 150,
       filters: STATUS_OPTIONS,
       filterMultiple: true,
       filteredValue: statusFilter,
-      render: (v: string) => <ScTag variant={STATUS_MAP[v]?.variant || 'wait'}>{STATUS_MAP[v]?.label || v}</ScTag>,
+      render: (v: string, r: StockCheck) => {
+        const wbF = r.writeback_failed ?? 0
+        const wbP = r.writeback_pending ?? 0
+        return (
+          <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+            <ScTag variant={STATUS_MAP[v]?.variant || 'wait'}>{STATUS_MAP[v]?.label || v}</ScTag>
+            {v === 'completed' && wbF > 0 && <Tag color="error">回写失败 {wbF}</Tag>}
+            {v === 'completed' && wbF === 0 && wbP > 0 && <Tag color="warning">K3 待回写 {wbP}</Tag>}
+          </span>
+        )
+      },
     },
     {
       title: '协同人', dataIndex: 'co_checkers', width: 110,
@@ -578,14 +592,20 @@ export default function StockCheckPage() {
     { title: '创建人', dataIndex: 'created_by', width: 100, render: (v: string) => v || '—' },
     { title: '更新时间', dataIndex: 'updated_at', width: 140, sorter: true, render: (v: string) => (v ? <span className="sc-mono">{formatDateTime(v)}</span> : '-') },
     {
-      title: '操作', key: 'op', width: 180, fixed: 'right' as const,
+      title: '操作', key: 'op', width: 210, fixed: 'right' as const,
       render: (_v: any, r: StockCheck) => {
         const active = r.status === 'open' || r.status === 'in_progress'
+        const wbTodo = ((r.writeback_pending ?? 0) + (r.writeback_failed ?? 0)) > 0
         return (
           <span className="sc-row-act">
             <Button type="link" size="small" onClick={() => navigate(`/stock-check/${r.id}`)}>
               {active ? '继续盘点' : '查看'}
             </Button>
+            {r.status === 'completed' && wbTodo && (
+              <Button type="link" size="small" style={{ color: '#d97706' }} onClick={() => navigate(`/stock-check/${r.id}?wb=1`)}>
+                K3 回写
+              </Button>
+            )}
             <Button type="link" size="small" onClick={() => openRowExport(r)}>导出</Button>
             {active && (
               <Button type="link" size="small" danger onClick={() => handleCancelRow(r)}>取消</Button>
@@ -746,15 +766,24 @@ export default function StockCheckPage() {
             {STATUS_CHIP_ORDER.map((s) => (
               <span
                 key={s}
-                className={`sc-chip${statusFilter.includes(s) ? ' on' : ''}`}
-                onClick={() => { if (statusFilter.join(',') !== s) setStatusFilter([s]) }}
+                className={`sc-chip${!wbTodoOnly && statusFilter.includes(s) ? ' on' : ''}`}
+                onClick={() => { setWbTodoOnly(false); if (statusFilter.join(',') !== s) setStatusFilter([s]) }}
               >
                 {STATUS_MAP[s].label} <span className="n">{kpi?.status_counts?.[s] ?? 0}</span>
               </span>
             ))}
+            <span
+              className={`sc-chip${wbTodoOnly ? ' on' : ''}`}
+              onClick={() => { if (!wbTodoOnly) { setWbTodoOnly(true); setStatusFilter(['completed']) } }}
+            >
+              K3 待回写{' '}
+              <span className="n" style={((kpi?.writeback_todo_checks ?? 0) > 0) ? { color: '#dc2626', opacity: 1, fontWeight: 600 } : undefined}>
+                {kpi?.writeback_todo_checks ?? 0}
+              </span>
+            </span>
           </span>
         )}
-        <span className="sc-toolbar-hint">差异不调账，仅记录 · 库存快照每 15 分钟同步</span>
+        <span className="sc-toolbar-hint">盘点完结按盘差回写 K3 盘盈/调拨单 · 库存经 K3 审核与同步回流调整</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <Popover
             trigger="click"

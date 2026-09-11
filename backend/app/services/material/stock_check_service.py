@@ -17,6 +17,7 @@ from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.material import Material
 from app.models.basicdata.sku import SKU
 from app.models.material.inventory_check import StockCheck, StockCheckItem
+from app.models.material.stock_check_writeback import StockCheckK3Writeback
 from app.models.order.sale_order import SaleOrder
 from app.models.production.production_task_order import ProductionTaskOrder
 from app.services.order.order_materials_service import (
@@ -227,11 +228,13 @@ def _exclude_order_check_warehouses(
 async def _get_recent_checked_by_warehouse(
     db: AsyncSession,
     keys: List[Tuple[Optional[int], Optional[int]]],
+    exclude_check_id: int = 0,
 ) -> Dict[Tuple[Optional[int], Optional[int]], Dict]:
     """对每个 (material_id, wh_id)，查最近一条 actual_qty 非空且所在盘点单未取消的行。
 
     返回 {(mid, wh_id): {"actual_qty": Decimal, "check_no": str, "check_date": date}}。
     wh_id 为 None 时按 IS NULL 匹配（未入库合成行）。
+    exclude_check_id 非零时排除该盘点单(动态关联场景排除本单自身),0=不排除。
     PostgreSQL 用 DISTINCT ON 一次取齐。
     """
     if not keys:
@@ -250,10 +253,11 @@ async def _get_recent_checked_by_warehouse(
         WHERE ic.material_id = ANY(:mids)
           AND ic.actual_qty IS NOT NULL
           AND h.status <> 'cancelled'
+          AND (:excl = 0 OR ic.check_id <> :excl)
         ORDER BY ic.material_id, ic.wh_id, h.check_date DESC, h.created_at DESC
         """
     )
-    rows = (await db.execute(sql, {"mids": mids})).all()
+    rows = (await db.execute(sql, {"mids": mids, "excl": int(exclude_check_id or 0)})).all()
     out: Dict[Tuple[Optional[int], Optional[int]], Dict] = {}
     for r in rows:
         mid = int(r.mid) if r.mid is not None else None
@@ -337,6 +341,36 @@ async def enrich_live_qty(db: AsyncSession, items: List[StockCheckItem]) -> None
             it.snapshot_live = False
         # 仓库展示名: 含实时仓库名,供前端筛选/排序/展示(不落库)
         it.warehouse_display = it.live_wh_names or it.wh_name or "(未入库)"
+
+
+async def enrich_recent_marks(db: AsyncSession, check_id: int, items: List[StockCheckItem]) -> None:
+    """近期已盘动态关联(读时计算,不落库): 对未录实盘的行,按 (物料×仓库) 查最近一次
+    已盘记录(排除本单自身与已取消单),在默认窗口期内则覆盖展示标记 ——
+    新盘点单盘过的物料,打开任何老盘点单也能看到「近期已盘」标签。
+
+    - 仅覆盖 actual_qty IS NULL 的行;已录实盘的行(真实盘点已取代免盘)不动
+    - 覆盖用 set_committed_value,不写库;建单时的快照标记不受影响
+    - 窗口天数取配置默认(STOCK_CHECK_RECENT_SKIP_DAYS),与 KPI 口径一致
+    """
+    targets = [it for it in items if it.actual_qty is None and it.material_id is not None]
+    if not targets:
+        return
+    recent_map = await _get_recent_checked_by_warehouse(
+        db,
+        [(it.material_id, it.wh_id) for it in targets],
+        exclude_check_id=int(check_id),
+    )
+    skip_days = _resolve_recent_days(None)
+    today = date.today()
+    for it in targets:
+        recent = recent_map.get((it.material_id, it.wh_id))
+        if (
+            recent is not None
+            and recent["check_date"] is not None
+            and (today - recent["check_date"]).days <= skip_days
+        ):
+            set_committed_value(it, "recent_checked_check_no", recent["check_no"])
+            set_committed_value(it, "recent_checked_date", recent["check_date"])
 
 
 async def _freeze_snapshot_for_count(
@@ -2406,24 +2440,10 @@ async def complete_stock_check(
     total = (await db.execute(
         select(func.count(StockCheckItem.id)).where(StockCheckItem.check_id == check_id)
     )).scalar_one()
-    checked = (await db.execute(
-        select(func.count(StockCheckItem.id)).where(
-            StockCheckItem.check_id == check_id,
-            or_(
-                StockCheckItem.is_checked == 1,
-                StockCheckItem.recent_checked_check_no.isnot(None),
-            ),
-        )
-    )).scalar_one()
     if int(total or 0) == 0:
         raise ValueError("盘点单无物料行,无法完结")
-    if int(checked or 0) < int(total or 0):
-        raise ValueError(f"还有 {int(total) - int(checked)} 行未盘点,无法完结")
-
-    for item in head.items:
-        # 近期已盘免盘行(recent 标记未撤销且未录入实盘数)不强制录入
-        if item.actual_qty is None and not item.recent_checked_check_no:
-            raise ValueError(f"物料 {item.material_code or item.material_id} 还未录入实盘数,请先填写再完结")
+    # 允许部分盘点完结:未录实盘的行(含动态/快照「近期已盘」免盘行)视为放弃盘点,
+    # 保持 is_checked=0、diff=0,不参与 K3 回写分组,完结后不可再录入
 
     head.status = "completed"
     head.completed_at = datetime.now()
@@ -2860,6 +2880,7 @@ async def get_stock_check_with_items(db: AsyncSession, check_id: int) -> Optiona
     head.items = list(items_res.scalars().all())
     await enrich_items_assoc(db, head.items)
     await enrich_live_qty(db, head.items)
+    await enrich_recent_marks(db, head.id, head.items)
     return head
 
 
@@ -2876,6 +2897,7 @@ async def list_recent_stock_checks(
     date_to: Optional[date] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
+    writeback_todo: bool = False,
 ) -> List[StockCheck]:
     SORTABLE = {
         'check_no': StockCheck.check_no,
@@ -2907,6 +2929,8 @@ async def list_recent_stock_checks(
         query = query.where(StockCheck.check_date >= date_from)
     if date_to:
         query = query.where(StockCheck.check_date <= date_to)
+    if writeback_todo:
+        query = query.where(*writeback_todo_criterion())
     if sort_by and sort_by in SORTABLE:
         col = SORTABLE[sort_by]
         if sort_order == 'asc':
@@ -3106,6 +3130,12 @@ async def get_stock_check_kpi(db: AsyncSession) -> Dict:
         )
     )).scalar() or 0
 
+    # 5) K3 待回写单数: 已完结且存在 pending/failed 回写记录(台账页「K3 待回写」chip 计数)
+    writeback_todo = (await db.execute(
+        select(func.count(distinct(StockCheck.id)))
+        .where(*writeback_todo_criterion())
+    )).scalar() or 0
+
     return {
         "status_counts": status_counts,
         "in_progress_checks": status_counts["in_progress"],
@@ -3114,6 +3144,7 @@ async def get_stock_check_kpi(db: AsyncSession) -> Dict:
         "pending_gain_count": stats["gain_count"],
         "pending_loss_count": stats["loss_count"],
         "recent7_checked_materials": int(recent_checked),
+        "writeback_todo_checks": int(writeback_todo),
     }
 
 
@@ -3264,6 +3295,18 @@ async def list_my_stock_check_items(
     return int(total), items
 
 
+def writeback_todo_criterion() -> list:
+    """K3 待回写条件: 已完结盘点单存在 pending/failed 回写记录。
+    返回条件列表,调用方 .where(*writeback_todo_criterion()) 解包(列表/计数/KPI 共用)。"""
+    return [
+        StockCheck.status == 'completed',
+        select(StockCheckK3Writeback.id).where(
+            StockCheckK3Writeback.check_id == StockCheck.id,
+            StockCheckK3Writeback.status.in_(('pending', 'failed')),
+        ).exists(),
+    ]
+
+
 async def attach_list_extras(db: AsyncSession, rows: List[StockCheck]) -> None:
     """为列表行补充 盈/亏行数 与 协同人姓名(写回 ORM 对象的运行时属性)。"""
     ids = [r.id for r in rows]
@@ -3284,11 +3327,23 @@ async def attach_list_extras(db: AsyncSession, rows: List[StockCheck]) -> None:
         .group_by(StockCheckItem.check_id)
     )
     gain_map = {r.check_id: (int(r.gain or 0), int(r.loss or 0)) for r in res.all()}
+    # K3 回写计数: pending/failed 记录数(台账页「K3 待回写」角标/筛选)
+    wb_res = await db.execute(
+        select(
+            StockCheckK3Writeback.check_id,
+            func.sum(case((StockCheckK3Writeback.status == 'pending', 1), else_=0)).label('pending'),
+            func.sum(case((StockCheckK3Writeback.status == 'failed', 1), else_=0)).label('failed'),
+        )
+        .where(StockCheckK3Writeback.check_id.in_(ids))
+        .group_by(StockCheckK3Writeback.check_id)
+    )
+    wb_map = {r.check_id: (int(r.pending or 0), int(r.failed or 0)) for r in wb_res.all()}
     # 协同人姓名: 复用 _resolve_user_names,按批缓存避免重复查询
     name_cache: Dict[int, str] = {}
     for r in rows:
         g = gain_map.get(r.id, (0, 0))
         r.gain_count, r.loss_count = g
+        r.writeback_pending, r.writeback_failed = wb_map.get(r.id, (0, 0))
         uids = (r.co_checker_user_ids or [])
         need = [u for u in uids if u not in name_cache]
         if need:
