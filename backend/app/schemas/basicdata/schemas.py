@@ -456,7 +456,7 @@ class PositionOut(PositionBase):
 
 
 class EmployeeBase(BaseModel):
-    emp_code: str
+    emp_code: Optional[str] = None
     emp_name: str
     org_id: Optional[int] = None
     position_id: Optional[int] = None

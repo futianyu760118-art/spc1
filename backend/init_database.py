@@ -403,6 +403,7 @@ class DatabaseInitializer:
             "sys_user": {
                 "wecom_user_id": "VARCHAR(64)",
                 "channel_sessions": "JSONB",
+                "scm_employee_id": "BIGINT",
             },
         }
         # 删除已废弃的列
@@ -520,6 +521,18 @@ class DatabaseInitializer:
             print("  scm_inventory_check.order_no set to nullable")
         except Exception as e:
             print(f"  ALTER scm_inventory_check.order_no DROP NOT NULL skipped: {e}")
+
+        # scm_employee.emp_code 改为可空:
+        # ERP 同步不再用 oa_user_id / login_id / TEMP_xxx 兜底填充工号,
+        # 源数据缺工号时直接写 NULL。UNIQUE 约束在 PostgreSQL 允许多个 NULL,无需调整。
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE scm_employee ALTER COLUMN emp_code DROP NOT NULL"
+                ))
+            print("  scm_employee.emp_code set to nullable")
+        except Exception as e:
+            print(f"  ALTER scm_employee.emp_code DROP NOT NULL skipped: {e}")
 
         # 物料盘点单明细：移除唯一约束 uq_stock_check_item
         # 订单盘点改为按 BOM 每条明细一行后，同一物料可能在多行出现，旧约束(check_id,material_id,line_no)会冲突。
@@ -737,6 +750,37 @@ class DatabaseInitializer:
                 print(f"  backfill rows updated: {result.rowcount}")
             except Exception as e:
                 print(f"  inventory_check counted_by backfill skipped: {e}")
+
+    async def backfill_sys_user_scm_employee_id(self):
+        """按 sys_user.emp_code = scm_employee.emp_code 回填 sys_user.scm_employee_id。
+        用途: K3 回写等场景直接 sys_user.id → scm_employee_id → erp_user_id 一跳完成，
+        绕开 emp_code 字符串匹配。
+        幂等: WHERE sys_user.scm_employee_id IS NULL 跳过已处理行；emp_code 为空或
+        scm_employee 中无对应工号的用户保持 NULL（后续由用户管理界面手动补）。"""
+        print("Backfilling sys_user.scm_employee_id from emp_code...")
+        async with self.engine.begin() as conn:
+            try:
+                col_exists = (await conn.execute(text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='sys_user' AND column_name='scm_employee_id'"
+                ))).scalar_one_or_none()
+                if not col_exists:
+                    print("  sys_user.scm_employee_id column not present yet, skip backfill")
+                    return
+                result = await conn.execute(text(
+                    """
+                    UPDATE sys_user AS u
+                    SET scm_employee_id = e.id
+                    FROM scm_employee AS e
+                    WHERE u.scm_employee_id IS NULL
+                      AND u.emp_code IS NOT NULL
+                      AND u.emp_code <> ''
+                      AND e.emp_code = u.emp_code
+                    """
+                ))
+                print(f"  sys_user.scm_employee_id backfill rows updated: {result.rowcount}")
+            except Exception as e:
+                print(f"  sys_user.scm_employee_id backfill skipped: {e}")
 
     async def drop_pto_sale_order_id_fk(self):
         """production_task_order.sale_order_id 用于存放 ERP 的 FOrderInterID，
@@ -2292,6 +2336,7 @@ ORDER BY FModifyDate DESC
             await self.backfill_inventory_check_counted_by()
             await self.rebuild_mrp_plan_order()
             await self.backfill_sale_order_id()
+            await self.backfill_sys_user_scm_employee_id()
             await self.migrate_stock_check_permission()
             await self.seed_roles()
             await self.seed_users()

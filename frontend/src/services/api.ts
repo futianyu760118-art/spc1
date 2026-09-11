@@ -796,7 +796,7 @@ export const userApi = {
   syncRoles: () => api.post('/basicdata/users/sync-roles'),
   listUnprovisionedEmployees: (params?: { keyword?: string; org_name?: string; position_name?: string; page?: number; page_size?: number }) =>
     api.get('/basicdata/users/unprovisioned-employees', { params }),
-  batchProvision: (data: { emp_codes: string[]; role_id?: number; default_password?: string }) =>
+  batchProvision: (data: { emp_codes: string[]; role_id?: number; default_password?: string; usernames?: Record<string, string> }) =>
     api.post('/basicdata/users/batch-provision', data),
   batchToggleActive: (data: { user_ids?: number[]; is_active: boolean; filter?: { role_code?: string; is_active?: boolean; keyword?: string; org_name?: string; position_name?: string; supplier_name?: string } }) =>
     api.put('/basicdata/users/batch/toggle-active', data),

@@ -2304,22 +2304,14 @@ class ERPSyncService:
                         existing = result.scalar_one_or_none()
 
                     if not emp_code and not existing:
-                        # 如果是新记录且 emp_code 为空，尝试用 oa_user_id 或 login_id 填充
-                        if oa_user_id:
-                            emp_code = oa_user_id
-                            row_dict["emp_code"] = emp_code
-                            logger.info(f"[员工同步] 第{idx+1}条记录 emp_code 为空，使用 oa_user_id 填充: {emp_code}")
-                        elif login_id:
-                            emp_code = login_id
-                            row_dict["emp_code"] = emp_code
-                            logger.info(f"[员工同步] 第{idx+1}条记录 emp_code 为空，使用 login_id 填充: {emp_code}")
-                        else:
-                            # 所有标识都为空，生成临时 emp_code
-                            import uuid
-                            temp_emp_code = f"TEMP_{uuid.uuid4().hex[:8]}"
-                            emp_code = temp_emp_code
-                            row_dict["emp_code"] = emp_code
-                            logger.warning(f"[员工同步] 第{idx+1}条记录所有标识为空，生成临时 emp_code: {temp_emp_code}")
+                        # 源数据缺 emp_code: 直接写 NULL,不再用 oa_user_id / login_id / TEMP_xxx 兜底填充。
+                        # 后续关联靠 oa_user_id 或 login_id(两者 unique)反查。
+                        # 已存在但源 emp_code 为空的记录不会被覆盖(existing 分支已处理)。
+                        row_dict["emp_code"] = None
+                        logger.warning(
+                            f"[员工同步] 第{idx+1}条记录 emp_code 为空, 写入 NULL "
+                            f"(emp_name={emp_name}, oa_user_id={oa_user_id or '-'}, login_id={login_id or '-'})"
+                        )
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
                     row_dict = self._coerce_row_types(row_dict, Employee)

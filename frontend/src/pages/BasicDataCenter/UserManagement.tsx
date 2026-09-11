@@ -26,6 +26,8 @@ interface SupplierOption {
 }
 
 interface EmployeeOption {
+  id?: number
+  scm_employee_id?: number
   emp_code: string
   emp_name: string
   login_id?: string
@@ -53,6 +55,7 @@ interface UserItem {
   username: string
   display_name: string | null
   emp_code: string | null
+  scm_employee_id: number | null
   emp_name: string | null
   position_id: number | null
   position_name: string | null
@@ -573,8 +576,8 @@ export default function UserManagement() {
     })
     if (!editingUser) {
       form.setFieldsValue({
-        username: employee.login_id || employee.emp_code,
-        password: employee.emp_code,
+        username: employee.emp_name || employee.login_id || employee.emp_code,
+        password: employee.emp_code || employee.login_id || employee.emp_name,
       })
     }
     if (!employee.role_id) {
@@ -727,7 +730,8 @@ export default function UserManagement() {
       if (posName) params.position_name = posName
       const res: any = await userApi.listUnprovisionedEmployees(params)
       const data = res?.data || {}
-      setUnprovEmployees(data.items || [])
+      const items = data.items || []
+      setUnprovEmployees(items)
       setUnprovTotalCount(data.total || 0)
       setUnprovOrgOptions(data.org_options || [])
       setUnprovPosOptions(data.position_options || [])
@@ -757,15 +761,22 @@ export default function UserManagement() {
       const res: any = await userApi.batchProvision({
         emp_codes: unprovSelected,
         // role_id 不传 — 后端自动按员工岗位 + 组织匹配
+        // usernames 不传 — 后端默认取员工姓名
       })
       const data = res?.data || {}
       const created = data.created || 0
       const skipped = data.skipped || 0
       const errors = data.errors || []
       const defaultPwd = data.default_password || '默认密码'
+      const newUsers: any[] = data.new_users || []
       const parts = [`成功开通 ${created} 个用户`]
       if (skipped > 0) parts.push(`跳过 ${skipped} 个已存在用户`)
       parts.push(`默认密码：${defaultPwd}`)
+      if (newUsers.length > 0) {
+        const sample = newUsers.slice(0, 3).map(u => u.username).join(', ')
+        const more = newUsers.length > 3 ? ` 等 +${newUsers.length - 3}` : ''
+        parts.push(`账号示例：${sample}${more}`)
+      }
       if (errors.length > 0) {
         parts.push(`${errors.length} 条异常（详情见日志）`)
         message.warning(parts.join('，'))
@@ -1834,7 +1845,7 @@ export default function UserManagement() {
             { title: '工号', dataIndex: 'emp_code', width: 140, className: 'sc-mono' },
             { title: '姓名', dataIndex: 'emp_name', width: 100 },
             {
-              title: '登录账号', dataIndex: 'login_id', width: 140,
+              title: '登录账号', dataIndex: 'login_id', width: 120,
               render: (v: string) => v || <span className="sc-note">—</span>,
             },
             {
@@ -1862,7 +1873,9 @@ export default function UserManagement() {
           }}
         />
         <div className="f-note" style={{ marginTop: 12 }}>
-          开通规则：角色按「岗位→角色」映射自动分配；无映射岗位开通后需在角色管理中补配。默认密码为工号，建议首次登录后修改。
+          开通规则：角色按「岗位→角色」映射自动分配；无映射岗位开通后需在角色管理中补配。
+          「登录账号」默认取员工姓名；如与已存在账号冲突，会在错误列表中标出。
+          默认密码为工号，建议首次登录后修改。
         </div>
       </Modal>
 
