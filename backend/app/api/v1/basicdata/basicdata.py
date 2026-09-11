@@ -2003,7 +2003,7 @@ async def get_organization_employees(
     query = (
         select(Employee, Position.position_name)
         .outerjoin(Position, Employee.position_id == Position.id)
-        .where(Employee.org_id == employee_org_id, Employee.status != 5)
+        .where(Employee.org_id == employee_org_id)
     )
     if keyword:
         like = f"%{keyword}%"

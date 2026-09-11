@@ -286,6 +286,10 @@ class DatabaseInitializer:
                 "org_id": "VARCHAR(64)",
                 "position_id": "VARCHAR(64)",
             },
+            "scm_stock_check_k3_writeback": {
+                "counter_user_id": "BIGINT",
+                "manager_id": "BIGINT",
+            },
             "quality_issue": {
                 "erp_quality_id": "VARCHAR(64)",
                 "submit_dept": "VARCHAR(64)",
@@ -725,6 +729,34 @@ class DatabaseInitializer:
             except Exception as e:
                 print(f"  create partial index skipped: {e}")
         print("business_document index migration done")
+
+    async def migrate_stock_check_k3_writeback_counter_manager(self):
+        """盘点 K3 回写记录: 加 counter_user_id/manager_id 由 Task 2 migrate_columns 完成;此处
+        重建唯一约束以包含 counter_user_id(支持多盘点人拆单)。
+
+        幂等: 先 DROP 旧约束(若存在),再 ADD 新约束;PostgreSQL 唯一约束允许多 NULL,
+        旧记录 counter_user_id=NULL 与新约束不冲突。
+        """
+        print("Migrating scm_stock_check_k3_writeback unique constraint -> incl counter_user_id...")
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE scm_stock_check_k3_writeback "
+                    "DROP CONSTRAINT IF EXISTS uq_sckw_check_type_wh"
+                ))
+                print("  dropped old uq_sckw_check_type_wh (if existed)")
+            except Exception as e:
+                print(f"  drop old constraint skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "ALTER TABLE scm_stock_check_k3_writeback "
+                    "ADD CONSTRAINT uq_sckw_check_type_wh_user "
+                    "UNIQUE (check_id, bill_type, wh_id, counter_user_id)"
+                ))
+                print("  ensured uq_sckw_check_type_wh_user")
+            except Exception as e:
+                print(f"  add new constraint skipped: {e}")
+        print("scm_stock_check_k3_writeback unique constraint migration done")
 
     async def backfill_inventory_check_counted_by(self):
         """物料盘点明细 counted_by_user_id/counted_by/counted_at 历史回填。
@@ -2331,6 +2363,7 @@ ORDER BY FModifyDate DESC
             await self.migrate_columns()
             await self.drop_pto_sale_order_id_fk()
             await self.ensure_indexes()
+            await self.migrate_stock_check_k3_writeback_counter_manager()
             await self.migrate_production_daily_report_index()
             await self.migrate_business_document_soft_delete_index()
             await self.backfill_inventory_check_counted_by()

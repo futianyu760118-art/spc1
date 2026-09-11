@@ -50,10 +50,13 @@ K3_TRANSFER_REF_TYPE = 12561
 
 
 async def plan_writebacks(db: AsyncSession, head: StockCheck) -> List[StockCheckK3Writeback]:
-    """完结事务内调用:按盘差行分组生成 pending 回写记录。幂等(已有记录则跳过)。
+    """完结事务内调用:按盘差行×盘点人分组生成 pending 回写记录。幂等(已有记录则跳过)。
 
     - source='k3' 的单不回写(K3 单据已存在)
     - diff_qty=0 或 wh_id 为空的行不参与;后者由 overview 返回 skipped 清单
+    - 分组键: (bill_type, wh_id, counter_user_id);同一仓库同类型多盘点人 → 多张 K3 单
+    - counter_user_id=None 的明细落入 counter_user_id=NULL 的 fallback 桶(后续用常量 manager_id)
+    - manager_id 一次 JOIN sys_user→scm_employee 取 erp_user_id 落到记录上,避免执行时再查
     """
     if (head.source or "manual") == "k3":
         return []
@@ -64,16 +67,35 @@ async def plan_writebacks(db: AsyncSession, head: StockCheck) -> List[StockCheck
         return []
 
     items: List[StockCheckItem] = list(getattr(head, "items", None) or [])
-    groups: Dict[Tuple[str, int], dict] = {}
-    for it in items:
+    diff_items = [
+        it for it in items
+        if Decimal(str(it.diff_qty or 0)) != 0 and it.wh_id is not None
+    ]
+
+    # 一次 JOIN 查盘点人 → K3 员工 ID (counter_user_id -> erp_user_id)
+    from app.models.basicdata.user import SysUser
+    from app.models.basicdata.employee import Employee
+    user_ids = {int(it.counted_by_user_id) for it in diff_items if it.counted_by_user_id is not None}
+    manager_map: Dict[int, int] = {}
+    if user_ids:
+        rows = (await db.execute(
+            select(SysUser.id, Employee.erp_user_id)
+            .join(Employee, SysUser.scm_employee_id == Employee.id)
+            .where(SysUser.id.in_(user_ids), Employee.erp_user_id.is_not(None))
+        )).all()
+        manager_map = {int(uid): int(eid) for uid, eid in rows}
+
+    groups: Dict[Tuple[str, int, Optional[int]], dict] = {}
+    for it in diff_items:
         diff = Decimal(str(it.diff_qty or 0))
-        if diff == 0 or it.wh_id is None:
-            continue
         bill_type = "gain" if diff > 0 else "loss_transfer"
-        key = (bill_type, int(it.wh_id))
+        cid = int(it.counted_by_user_id) if it.counted_by_user_id is not None else None
+        key = (bill_type, int(it.wh_id), cid)
         g = groups.setdefault(key, {
             "bill_type": bill_type, "wh_id": int(it.wh_id),
             "wh_code": it.wh_code, "wh_name": it.wh_name,
+            "counter_user_id": cid,
+            "manager_id": manager_map.get(cid) if cid is not None else None,
             "item_count": 0, "total_qty": Decimal("0"),
         })
         g["item_count"] += 1
@@ -85,6 +107,8 @@ async def plan_writebacks(db: AsyncSession, head: StockCheck) -> List[StockCheck
         records.append(StockCheckK3Writeback(
             check_id=head.id, bill_type=g["bill_type"],
             wh_id=g["wh_id"], wh_code=g["wh_code"], wh_name=g["wh_name"],
+            counter_user_id=g["counter_user_id"],
+            manager_id=g["manager_id"],
             status="pending", item_count=g["item_count"], total_qty=g["total_qty"],
             created_by=creator,
         ))
@@ -166,6 +190,10 @@ GAIN_PREFIX, TRANSFER_PREFIX = "YADJ", "CHG"
 # 取号与 K3 客户端同源(ICMaxNum 原子推进), 跨进程天然不撞号; 锁只防本服务并发完结/重试互踩。
 _K3_WRITE_LOCK = threading.Lock()
 
+# Fallback 分组无盘点人 warning 去重: 每 (check_id, bill_type, wh_id) 仅打一次,
+# 防止 pending 记录 retry 时同一缺失映射反复刷日志(单 worker 部署内足够)。
+_WARNED_FALLBACKS: "set[tuple]" = set()
+
 # 与 K3 客户端同源原子取号: 单条 UPDATE 链式赋值推 ICMaxNum(成对预留, 与 K3 客户端
 # IC_MaxNum 每用户成对占号的实证足迹一致), 返回预留对中的低号。
 # 反面教训(2026-09 生产事故): MAX(FInterID)+1 直插不推计数器, K3 客户端下次保存取到
@@ -231,7 +259,7 @@ def _check_master_data_sync(conn, item_ids: set, stock_ids: set) -> None:
         )
 
 
-def _write_bill_sync(rec: StockCheckK3Writeback, entries: List[dict]) -> Tuple[str, int]:
+def _write_bill_sync(rec: StockCheckK3Writeback, entries: List[dict], manager_id: int) -> Tuple[str, int]:
     """同步写一张 K3 未审核单(头+体)。entries 由调用方按明细行构造。
 
     连接经链接服务器(k3sv)访问 K3: 显式事务内跨链接服务器 INSERT 会报
@@ -257,7 +285,7 @@ def _write_bill_sync(rec: StockCheckK3Writeback, entries: List[dict]) -> Tuple[s
                 "FInterID": inter_id, "FBrID": 0, "FBillNo": bill_no,
                 "FDate": entries[0]["fdate"], "FTranType": TRAN_TYPE_GAIN if is_gain else TRAN_TYPE_TRANSFER_LOSS,
                 "FNote": entries[0]["fnote"], "FExplanation": "",
-                "FBillerID": K3_DEFAULT_BILLER_ID, "FManagerID": K3_DEFAULT_MANAGER_ID,
+                "FBillerID": K3_DEFAULT_BILLER_ID, "FManagerID": int(manager_id),
                 "FInventoryType": K3_GAIN_INVENTORY_TYPE if is_gain else 0,
                 "FRefType": 0 if is_gain else K3_TRANSFER_REF_TYPE,
             })
@@ -308,6 +336,31 @@ async def _execute_one(db: AsyncSession, rec: StockCheckK3Writeback, head: Stock
     不中断同批其余记录,也不让 retry 端点 500。
     """
     try:
+        # manager_id 优先级: 记录上的 manager_id → fallback 到常量(NULL 组)
+        from app.models.basicdata.user import SysUser
+        if rec.counter_user_id is not None and rec.manager_id is None:
+            username = (await db.execute(
+                select(SysUser.username).where(SysUser.id == rec.counter_user_id)
+            )).scalar_one_or_none() or f"id={rec.counter_user_id}"
+            rec.status = "failed"
+            rec.error_msg = (
+                f"盘点人 {username}(sys_user.id={rec.counter_user_id}) 未关联 K3 员工 ID"
+                f"(scm_employee.erp_user_id 为空),请到 [员工管理] 维护映射后再重试"
+            )
+            rec.retry_count = int(rec.retry_count or 0) + 1
+            logger.warning(
+                f"K3 回写失败:盘点人缺映射 check={rec.check_id} type={rec.bill_type} "
+                f"wh={rec.wh_id} counter_user_id={rec.counter_user_id}"
+            )
+            return
+        if rec.counter_user_id is None:
+            fb_key = (rec.check_id, rec.bill_type, rec.wh_id)
+            if fb_key not in _WARNED_FALLBACKS:
+                _WARNED_FALLBACKS.add(fb_key)
+                logger.warning(
+                    f"K3 回写: 分组无盘点人, fallback 默认保管人={K3_DEFAULT_MANAGER_ID}; "
+                    f"check={rec.check_id} type={rec.bill_type} wh={rec.wh_id}, 建议补全映射"
+                )
         items = (await db.execute(
             select(StockCheckItem).where(
                 StockCheckItem.check_id == rec.check_id,
@@ -353,8 +406,10 @@ async def _execute_one(db: AsyncSession, rec: StockCheckK3Writeback, head: Stock
                     "dc_stock": BAD_STOCK_WH_ID, "sc_stock": rec.wh_id,
                     "fdate": fdate, "fnote": fnote,
                 })
+        manager_id_for_bill = rec.manager_id if rec.manager_id is not None else K3_DEFAULT_MANAGER_ID
         bill_no, inter_id = await asyncio.wait_for(
-            asyncio.to_thread(_write_bill_sync, rec, entries), timeout=WRITEBACK_TIMEOUT)
+            asyncio.to_thread(_write_bill_sync, rec, entries, manager_id_for_bill),
+            timeout=WRITEBACK_TIMEOUT)
         rec.status = "success"
         rec.erp_bill_no = bill_no
         rec.k3_inter_id = inter_id

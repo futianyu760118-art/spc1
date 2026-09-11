@@ -1111,7 +1111,7 @@ async def list_unprovisioned_employees(
         select(Employee, Position, Organization)
         .outerjoin(Position, Employee.position_id == Position.id)
         .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
-        .where(~exists(provisioned_exists), Employee.status != 5)
+        .where(~exists(provisioned_exists))
     )
 
     # 过滤条件：keyword 支持空格分隔多关键词（任一匹配即可）
@@ -1157,7 +1157,7 @@ async def list_unprovisioned_employees(
         .select_from(Employee)
         .outerjoin(Position, Employee.position_id == Position.id)
         .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
-        .where(~exists(provisioned_exists), Employee.status != 5)
+        .where(~exists(provisioned_exists))
     )
     options_result = await db.execute(options_query)
     all_position_names = set()
