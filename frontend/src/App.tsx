@@ -21,6 +21,7 @@ import QuickCount from './pages/MaterialCenter/StockCheck/QuickCount'
 import TaskStockCoverage from './pages/MaterialCenter/TaskStockCoverage'
 import SubcontractOrders from './pages/MaterialCenter/SubcontractOrders/index'
 import ScrapInventory from './pages/MaterialCenter/ScrapInventory'
+import InventoryBoard from './pages/MaterialCenter/InventoryBoard'
 import IssueLedger from './pages/ExceptionCenter/IssueLedger/index'
 import ExceptionPool from './pages/ExceptionCenter/ExceptionPool/index'
 import IssueLogView from './pages/ExceptionCenter/IssueLogView/index'
@@ -200,6 +201,7 @@ export default function App() {
                             <Route path="task-stock-check" element={<TaskStockCoverage />} />
                             <Route path="subcontract-orders" element={<SubcontractOrders/>}/>
                             <Route path="scrap-inventory" element={<ScrapInventory/>}/>
+                            <Route path="inventory-board" element={<InventoryBoard />} />
                             <Route path="kit-analysis" element={<KitAnalysis/>}/>
                             <Route path="supplier-risk" element={<SupplierRisk/>}/>
                             <Route path="supplier-payment" element={<SupplierPayment/>}/>
