@@ -216,6 +216,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/task-stock-check', icon: <AuditOutlined />, label: '任务盘点', permission: 'materials.task_stock_check' },
       { key: '/subcontract-orders', icon: <ProfileOutlined />, label: '委外订单', permission: 'materials.subcontract_orders' },
       { key: '/scrap-inventory', icon: <DeleteOutlined />, label: '报废物料库存查询', permission: 'materials.scrap_inventory' },
+      { key: '/inventory-board', icon: <AppstoreOutlined />, label: '库存看板', permission: 'materials.inventory_board' },
     ],
   },
   {
@@ -447,6 +448,7 @@ const pathToGroupKey: Record<string, string> = {
   '/supplier-payment': 'material-center',
   '/subcontract-orders': 'material-center',
   '/scrap-inventory': 'material-center',
+  '/inventory-board': 'material-center',
   '/production-dashboard': 'production-center',
   '/todo-workbench': 'production-center',
   '/change-events': 'production-center',
@@ -525,6 +527,7 @@ const pathToPermission: Record<string, string> = {
   '/supplier-payment': 'materials.supplier_payment',
   '/subcontract-orders': 'materials.subcontract_orders',
   '/scrap-inventory': 'materials.scrap_inventory',
+  '/inventory-board': 'materials.inventory_board',
   '/issues': 'exceptions.pool',
   '/issue-log': 'exceptions.issue_log',
   '/change-log': 'exceptions.change_log',
