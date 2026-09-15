@@ -210,3 +210,211 @@ async def get_inventory_overview(
         "warehouses": warehouses,
         "categories": categories,
     }
+
+
+from datetime import date, timedelta
+
+from sqlalchemy import and_, or_
+
+from app.models.material.inventory_check import StockCheck, StockCheckItem
+from app.schemas.material.inventory_board import (
+    ActiveCheckRow,
+    RecentDiffRow,
+    StockCheckBoardKpi,
+    StockCheckTrendPoint,
+)
+
+
+async def get_stock_check_overview(
+    db: AsyncSession,
+    trend_days: int = 30,
+    active_limit: int = 20,
+    diff_limit: int = 20,
+) -> dict:
+    """返回盘点 KPI / 进行中盘点单 / 趋势 / 近期差异"""
+
+    today = date.today()
+    first_of_month = today.replace(day=1)
+
+    # KPI: 进行中盘点单数 / 本月完成率 / 本月盘盈 / 本月盘亏
+    active_q = select(func.count(StockCheck.id)).where(
+        StockCheck.status.in_(("open", "in_progress"))
+    )
+    active_count = int((await db.execute(active_q)).scalar() or 0)
+
+    # 本月完成率 = 本月已完成 / 本月全部
+    month_total_q = select(func.count(StockCheck.id)).where(
+        StockCheck.check_date >= first_of_month
+    )
+    month_done_q = select(func.count(StockCheck.id)).where(
+        and_(
+            StockCheck.check_date >= first_of_month,
+            StockCheck.status == "completed",
+        )
+    )
+    month_total = int((await db.execute(month_total_q)).scalar() or 0)
+    month_done = int((await db.execute(month_done_q)).scalar() or 0)
+    completion_rate = (month_done / month_total) if month_total > 0 else 0.0
+
+    # 本月盘盈/盘亏（实际盘点数 vs 系统盘点数）
+    profit_expr = case(
+        (
+            and_(
+                StockCheckItem.actual_qty.isnot(None),
+                StockCheckItem.actual_qty > StockCheckItem.system_qty,
+            ),
+            StockCheckItem.actual_qty - StockCheckItem.system_qty,
+        ),
+        else_=0,
+    )
+    loss_expr = case(
+        (
+            and_(
+                StockCheckItem.actual_qty.isnot(None),
+                StockCheckItem.actual_qty < StockCheckItem.system_qty,
+            ),
+            StockCheckItem.system_qty - StockCheckItem.actual_qty,
+        ),
+        else_=0,
+    )
+    month_diff_q = (
+        select(
+            func.coalesce(func.sum(profit_expr), 0).label("profit"),
+            func.coalesce(func.sum(loss_expr), 0).label("loss"),
+        )
+        .select_from(StockCheckItem)
+        .join(StockCheck, StockCheckItem.check_id == StockCheck.id)
+        .where(StockCheck.check_date >= first_of_month)
+    )
+    md_row = (await db.execute(month_diff_q)).one()
+    kpi = StockCheckBoardKpi(
+        active_checks=active_count,
+        month_completion_rate=round(completion_rate, 4),
+        month_profit_qty=Decimal(md_row.profit or 0),
+        month_loss_qty=Decimal(md_row.loss or 0),
+    )
+
+    # 进行中盘点单
+    active_rows_q = (
+        select(StockCheck)
+        .where(StockCheck.status.in_(("open", "in_progress")))
+        .order_by(StockCheck.check_date.desc())
+        .limit(active_limit)
+    )
+    today_dt = datetime.now(timezone.utc)
+    active_rows = []
+    for sc in (await db.execute(active_rows_q)).scalars().all():
+        age = (today_dt.date() - sc.check_date).days
+        rate = (sc.checked_materials / sc.total_materials) if sc.total_materials else 0.0
+        active_rows.append(
+            ActiveCheckRow(
+                check_id=sc.id,
+                check_no=sc.check_no,
+                status=sc.status,
+                total_materials=sc.total_materials,
+                checked_materials=sc.checked_materials,
+                completion_rate=round(rate, 4),
+                check_date=sc.check_date,
+                age_days=age,
+                created_by=sc.created_by,
+                order_no=sc.order_no,
+            )
+        )
+
+    # 趋势（最近 N 天，按日期聚合完成单数 / 差异行数 / 差异总量）
+    days_back = today - timedelta(days=trend_days - 1)
+    trend_q = (
+        select(
+            StockCheck.check_date.label("d"),
+            func.count(func.distinct(StockCheck.id)).label("checks_completed"),
+            func.count(StockCheckItem.id).label("diff_items_count"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            and_(
+                                StockCheckItem.actual_qty.isnot(None),
+                                StockCheckItem.actual_qty != StockCheckItem.system_qty,
+                            ),
+                            StockCheckItem.actual_qty - StockCheckItem.system_qty,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("total_diff_qty"),
+        )
+        .select_from(StockCheck)
+        .outerjoin(
+            StockCheckItem,
+            and_(
+                StockCheckItem.check_id == StockCheck.id,
+                StockCheckItem.actual_qty.isnot(None),
+                StockCheckItem.actual_qty != StockCheckItem.system_qty,
+            ),
+        )
+        .where(StockCheck.check_date >= days_back)
+        .group_by(StockCheck.check_date)
+        .order_by(StockCheck.check_date)
+    )
+    trend_rows = (await db.execute(trend_q)).all()
+    # 补齐缺失日期为 0
+    trend_map = {r.d: r for r in trend_rows}
+    trend: List[StockCheckTrendPoint] = []
+    for i in range(trend_days):
+        d = days_back + timedelta(days=i)
+        r = trend_map.get(d)
+        trend.append(
+            StockCheckTrendPoint(
+                date=d,
+                checks_completed=int(r.checks_completed if r else 0),
+                diff_items_count=int(r.diff_items_count if r else 0),
+                total_diff_qty=Decimal(r.total_diff_qty if r else 0),
+            )
+        )
+
+    # 近期差异 Top N（按检查日期倒序，取有差异的行）
+    diff_q = (
+        select(
+            StockCheck.check_no,
+            StockCheck.check_date,
+            StockCheckItem.material_code,
+            StockCheckItem.material_name,
+            StockCheckItem.spec_model,
+            StockCheckItem.unit,
+            StockCheckItem.system_qty,
+            StockCheckItem.actual_qty,
+            (StockCheckItem.actual_qty - StockCheckItem.system_qty).label("diff_qty"),
+        )
+        .select_from(StockCheckItem)
+        .join(StockCheck, StockCheckItem.check_id == StockCheck.id)
+        .where(
+            and_(
+                StockCheckItem.actual_qty.isnot(None),
+                StockCheckItem.actual_qty != StockCheckItem.system_qty,
+            )
+        )
+        .order_by(StockCheck.check_date.desc(), StockCheckItem.id.desc())
+        .limit(diff_limit)
+    )
+    recent_diffs = [
+        RecentDiffRow(
+            check_no=r.check_no,
+            check_date=r.check_date,
+            material_code=r.material_code,
+            material_name=r.material_name,
+            spec_model=r.spec_model,
+            unit=r.unit,
+            system_qty=Decimal(r.system_qty or 0),
+            actual_qty=Decimal(r.actual_qty) if r.actual_qty is not None else None,
+            diff_qty=Decimal(r.diff_qty) if r.diff_qty is not None else None,
+        )
+        for r in (await db.execute(diff_q)).all()
+    ]
+
+    return {
+        "kpi": kpi,
+        "active_checks": active_rows,
+        "trend": trend,
+        "recent_diffs": recent_diffs,
+    }
