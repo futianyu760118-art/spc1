@@ -187,6 +187,7 @@ declare_permission("materials.stock_check", "物料盘点", module="materials", 
 declare_permission("materials.task_stock_check", "任务盘点", module="materials", parent_code="materials", route_path="/task-stock-check", sort_order=8)
 declare_permission("materials.subcontract_orders", "委外订单", module="materials", parent_code="materials", route_path="/subcontract-orders", sort_order=9)
 declare_permission("materials.scrap_inventory", "报废物料库存查询", module="materials", parent_code="materials", route_path="/scrap-inventory", sort_order=10)
+declare_permission("materials.inventory_board", "库存看板", module="materials", parent_code="materials", route_path="/inventory-board", sort_order=11)
 
 # 生产协同中心
 declare_permission("production", "生产协同中心", module="production", sort_order=5)
