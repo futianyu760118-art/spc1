@@ -237,6 +237,7 @@ export interface WritebackSkippedItem {
   material_name?: string | null
   unit?: string | null
   diff_qty: number
+  reason?: string | null
 }
 
 export interface WritebackOverview {

@@ -214,6 +214,10 @@ def _split_stock_by_warehouse(
 # 库存检查不良仓(K3 盘亏调拨目标仓)、赠品仓库
 ORDER_CHECK_EXCLUDED_WH_NAMES = {"库存检查不良仓", "赠品仓库"}
 
+# 手动/快捷盘点同样不纳入库存检查不良仓(K3 盘亏调拨目标仓,非盘点对象):
+# 不显示在候选列表,也不得加入盘点明细(建单/追加/快捷录入/Excel 导入口径一致)
+CHECK_EXCLUDED_WH_NAMES = {"库存检查不良仓"}
+
 
 def _exclude_order_check_warehouses(
     warehouses_by_mid: Dict[int, List[Tuple[int, str, Decimal, Optional[datetime]]]],
@@ -222,6 +226,20 @@ def _exclude_order_check_warehouses(
     return {
         mid: [w for w in whs if (w[1] or "").strip() not in ORDER_CHECK_EXCLUDED_WH_NAMES]
         for mid, whs in warehouses_by_mid.items()
+    }
+
+
+def _exclude_check_wh_from_stock_map(
+    stock_map: Dict[Tuple[int, int], Tuple[str, Decimal, Optional[datetime]]],
+) -> Dict[Tuple[int, int], Tuple[str, Decimal, Optional[datetime]]]:
+    """从 (物料,仓库) 库存快照中剔除手动/快捷盘点不纳入的仓(库存检查不良仓)。
+
+    用于 _build_manual_item_rows / Excel 导入的仓库解析:
+    显式选中被排除仓时查不到快照 → 行不生成(不添加到盘点明细)。
+    """
+    return {
+        key: val for key, val in stock_map.items()
+        if (val[0] or "").strip() not in CHECK_EXCLUDED_WH_NAMES
     }
 
 
@@ -1368,6 +1386,8 @@ async def create_stock_check_from_materials(
     await db.flush()
 
     item_rows = await _build_manual_item_rows(db, head.id, selections, unique_ids)
+    if not item_rows:
+        raise ValueError("所选物料均无可用库存行,请重新选择")
 
     # 可选: 按近期已盘窗口给行打免盘标记(None=不打,保持全部需盘点)
     await _mark_recent_checked(db, item_rows, recent_days)
@@ -1446,7 +1466,9 @@ async def _build_manual_item_rows(
         raise ValueError("所选物料均不存在或已删除,无法创建盘点单")
     mat_map = {m.erp_material_id: m for m in materials}
 
-    stock_map = await _get_stock_by_warehouse(db, [m.erp_material_id for m in materials])
+    stock_map = _exclude_check_wh_from_stock_map(
+        await _get_stock_by_warehouse(db, [m.erp_material_id for m in materials])
+    )
     warehouses_by_mid = _split_stock_by_warehouse(stock_map, [m.erp_material_id for m in materials])
 
     item_rows: List[StockCheckItem] = []
@@ -1944,6 +1966,9 @@ async def list_material_candidates(
             wh_name = (r.wh_name or "").strip() or f"WH#{r.whid}"
         else:
             wh_name = "(未入库)"
+        # 手动/快捷盘点不纳入库存检查不良仓,不显示
+        if has_inv and wh_name in CHECK_EXCLUDED_WH_NAMES:
+            continue
         # 过滤库存为0的记录
         system_qty = Decimal(str(r.wh_qty or 0)) if has_inv else Decimal("0")
         if system_qty == 0:
@@ -2796,12 +2821,17 @@ async def refresh_check_warehouses(db: AsyncSession, check_id: int, current_user
             "qty": Decimal(str(r.qty or 0)),
             "updated_at": r.wh_updated,
         })
-    if head.check_type == "order":
-        # 订单盘点不纳入特殊仓(库存检查不良仓/赠品仓库),与建单/刷BOM口径一致
-        wh_map = {
-            mid: [w for w in whs if w["wh_name"] not in ORDER_CHECK_EXCLUDED_WH_NAMES]
-            for mid, whs in wh_map.items()
-        }
+    # 盘点不纳入的特殊仓: 订单=库存检查不良仓/赠品仓库(与建单/刷BOM口径一致);
+    # 手动/快捷=库存检查不良仓(与建单/追加明细口径一致)
+    excluded_wh_names = (
+        ORDER_CHECK_EXCLUDED_WH_NAMES
+        if head.check_type == "order"
+        else CHECK_EXCLUDED_WH_NAMES
+    )
+    wh_map = {
+        mid: [w for w in whs if w["wh_name"] not in excluded_wh_names]
+        for mid, whs in wh_map.items()
+    }
     for mid in wh_map:
         wh_map[mid].sort(key=lambda w: (-w["qty"], w["wh_id"]))
 
@@ -3374,6 +3404,8 @@ async def list_scan_warehouses(db: AsyncSession) -> List[Dict]:
             "wh_name": (r.wh_name or "").strip() or f"WH#{r.wh_id}",
         }
         for r in rows
+        # 库存检查不良仓不纳入扫码盘点,不显示
+        if ((r.wh_name or "").strip() or f"WH#{r.wh_id}") not in CHECK_EXCLUDED_WH_NAMES
     ]
 
 
@@ -3434,6 +3466,8 @@ async def resolve_material_by_code(
             "system_qty": Decimal(str(r.wh_qty or 0)),
         }
         for r in inv_rows
+        # 库存检查不良仓不纳入扫码盘点,不显示
+        if ((r.wh_name or "").strip() or f"WH#{r.wh_id}") not in CHECK_EXCLUDED_WH_NAMES
     ]
 
     selected = next((w for w in warehouses if w["wh_id"] == wh_id), None) if wh_id is not None else None

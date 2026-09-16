@@ -1579,12 +1579,16 @@ export default function StockCheckWorkbench() {
             message="盘盈生成 K3 盘盈入库单、盘亏生成调拨单（调入库存检查不良仓）；单据为未审核状态，需仓管员在 K3 中审核后库存才会调整，并经 ERP 同步回流本系统。成功单据不会重复生成。" />
           {wbOverview && wbOverview.skipped_items.length > 0 && (
             <Alert type="warning" showIcon style={{ marginBottom: 8 }}
-              message="以下盘差行无仓库信息，未生成 K3 单据"
-              description={wbOverview.skipped_items.map((s, i) => (
-                <span key={i}>
-                  {s.material_code || s.material_name || '-'}（差异 {s.diff_qty}）{i < wbOverview.skipped_items.length - 1 ? '、' : ''}
-                </span>
-              ))} />
+              message="以下盘差行未生成 K3 单据"
+              description={
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {wbOverview.skipped_items.map((s, i) => (
+                    <li key={i} style={{ marginBottom: 2 }}>
+                      {s.material_code || s.material_name || '-'}（差异 {s.diff_qty}） — {s.reason || '原因未填写'}
+                    </li>
+                  ))}
+                </ul>
+              } />
           )}
           {todoCount > 0 ? (
             <Table size="small" rowKey="id" loading={wbLoading}

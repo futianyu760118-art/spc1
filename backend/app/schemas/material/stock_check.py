@@ -396,11 +396,12 @@ class StockCheckWritebackOut(BaseModel):
 
 
 class WritebackSkippedItemOut(BaseModel):
-    """因无仓库(wh_id=NULL)被跳过的盘差行"""
+    """被跳过的盘差行(wh_id=NULL 或 wh_name=库存检查不良仓),不生成 K3 单据"""
     material_code: Optional[str] = None
     material_name: Optional[str] = None
     unit: Optional[str] = None
     diff_qty: Decimal = Decimal("0")
+    reason: Optional[str] = None
 
 
 class WritebackOverviewOut(BaseModel):
