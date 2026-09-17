@@ -1,6 +1,6 @@
 """库存看板 — 库存聚合查询 service"""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
@@ -116,7 +116,7 @@ async def get_inventory_overview(
     ]
 
     # 库龄（基于 last_inbound_at）
-    now = datetime.now(timezone.utc)
+    now = datetime.now()
     age_expr = case(
         (Inventory.last_inbound_at.is_(None), 99999),
         else_=func.extract("day", now - Inventory.last_inbound_at),
@@ -301,7 +301,7 @@ async def get_stock_check_overview(
         .order_by(StockCheck.check_date.desc())
         .limit(active_limit)
     )
-    today_dt = datetime.now(timezone.utc)
+    today_dt = datetime.now()
     active_rows = []
     for sc in (await db.execute(active_rows_q)).scalars().all():
         age = (today_dt.date() - sc.check_date).days
