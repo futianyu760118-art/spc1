@@ -363,12 +363,12 @@ async def enrich_live_qty(db: AsyncSession, items: List[StockCheckItem]) -> None
 
 async def enrich_recent_marks(db: AsyncSession, check_id: int, items: List[StockCheckItem]) -> None:
     """近期已盘动态关联(读时计算,不落库): 对未录实盘的行,按 (物料×仓库) 查最近一次
-    已盘记录(排除本单自身与已取消单),在默认窗口期内则覆盖展示标记 ——
+    已盘记录(排除本单自身与已取消单),不限时间窗口一律覆盖展示标记 ——
     新盘点单盘过的物料,打开任何老盘点单也能看到「近期已盘」标签。
 
     - 仅覆盖 actual_qty IS NULL 的行;已录实盘的行(真实盘点已取代免盘)不动
     - 覆盖用 set_committed_value,不写库;建单时的快照标记不受影响
-    - 窗口天数取配置默认(STOCK_CHECK_RECENT_SKIP_DAYS),与 KPI 口径一致
+    - 不限窗口:只要其他任何单据(不论多久前)盘过即标记「近期已盘」
     """
     targets = [it for it in items if it.actual_qty is None and it.material_id is not None]
     if not targets:
@@ -378,15 +378,9 @@ async def enrich_recent_marks(db: AsyncSession, check_id: int, items: List[Stock
         [(it.material_id, it.wh_id) for it in targets],
         exclude_check_id=int(check_id),
     )
-    skip_days = _resolve_recent_days(None)
-    today = date.today()
     for it in targets:
         recent = recent_map.get((it.material_id, it.wh_id))
-        if (
-            recent is not None
-            and recent["check_date"] is not None
-            and (today - recent["check_date"]).days <= skip_days
-        ):
+        if recent is not None:
             set_committed_value(it, "recent_checked_check_no", recent["check_no"])
             set_committed_value(it, "recent_checked_date", recent["check_date"])
 
