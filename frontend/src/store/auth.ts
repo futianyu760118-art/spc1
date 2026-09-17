@@ -18,6 +18,7 @@ interface UserInfo {
   is_default_password: boolean
   login_version: number
   position_name?: string | null
+  wecom_user_id?: string | null
 }
 
 interface ShareUserInfo {
@@ -44,6 +45,7 @@ interface AuthState {
   currentUser: (UserInfo | ShareUserInfo) | null
   
   setAuth: (token: string, user: UserInfo | null) => void
+  updateUserField: (patch: Partial<UserInfo>) => void
   setShareAuth: (token: string, targetPath: string, sharePermissions?: string[]) => void
   exitShare: () => void
   logout: () => void
@@ -106,6 +108,7 @@ const sharePathToPermission: Record<string, string> = {
   '/sync-config': 'settings',
   '/basicdata/customers': 'basicdata.data',
   '/basicdata/suppliers': 'basicdata.data',
+  '/basicdata/supplier-material-map': 'basicdata.data.suppliers',
   '/basicdata/materials': 'basicdata.data',
   '/basicdata/skus': 'basicdata.data',
   '/basicdata/products': 'basicdata.data',
@@ -190,6 +193,17 @@ export const useAuthStore = create<AuthState>((set, get) => {
       } else {
         set({ originalToken: token, originalUser: user })
       }
+    },
+
+    updateUserField: (patch) => {
+      const state = get()
+      if (!state.originalUser) return
+      const updated = { ...state.originalUser, ...patch }
+      localStorage.setItem('user', JSON.stringify(updated))
+      set({
+        originalUser: updated,
+        currentUser: state.shareUser ? state.currentUser : updated,
+      })
     },
     
     setShareAuth: (token, targetPath, sharePermissions) => {

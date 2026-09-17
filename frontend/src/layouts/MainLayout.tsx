@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, Tabs, List, Tag, Typography, notification as antNotification } from 'antd'
 import {
@@ -24,6 +24,7 @@ import {
   ProjectOutlined,
   ToolOutlined,
   DatabaseOutlined,
+  DeleteOutlined,
   AppstoreOutlined,
   SwapOutlined,
   SendOutlined,
@@ -85,6 +86,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'orders.run_orders': <RocketOutlined />,
   'orders.risk_pool': <WarningOutlined />,
   'materials.stock_check': <AuditOutlined />,
+  'materials.task_stock_check': <AuditOutlined />,
   'materials.purchase_plan': <ShoppingCartOutlined />,
   'materials.issues': <WarningOutlined />,
   'materials.long_lead': <ContainerOutlined />,
@@ -132,6 +134,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'basicdata.files': <FolderOpenOutlined />,
   'basicdata.data_supply': <ApiOutlined />,
   announcements: <NotificationOutlined />,
+  deploy_versions: <RocketOutlined />,
   users: <UserOutlined />,
   roles: <SafetyOutlined />,
   audit: <AuditOutlined />,
@@ -210,7 +213,9 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/supplier-risk', icon: <AuditOutlined />, label: '供应商风险分析', permission: 'materials.supplier_risk' },
       { key: '/supplier-payment', icon: <AccountBookOutlined />, label: '供应商付款排程', permission: 'materials.supplier_payment' },
       { key: '/stock-check', icon: <AuditOutlined />, label: '物料盘点', permission: 'materials.stock_check' },
+      { key: '/task-stock-check', icon: <AuditOutlined />, label: '任务盘点', permission: 'materials.task_stock_check' },
       { key: '/subcontract-orders', icon: <ProfileOutlined />, label: '委外订单', permission: 'materials.subcontract_orders' },
+      { key: '/scrap-inventory', icon: <DeleteOutlined />, label: '报废物料库存查询', permission: 'materials.scrap_inventory' },
     ],
   },
   {
@@ -305,6 +310,7 @@ const allMenuItems: PermissionAwareItem[] = [
           { key: '/basicdata/positions', icon: <IdcardOutlined />, label: '岗位', permission: 'basicdata.data' },
           { key: '/basicdata/employees', icon: <UserOutlined />, label: '人员', permission: 'basicdata.data' },
           { key: '/basicdata/inventory', icon: <StockOutlined />, label: '库存', permission: 'basicdata.data' },
+          { key: '/basicdata/supplier-material-map', icon: <SwapOutlined />, label: '供应商物料对照', permission: 'basicdata.data' },
         ],
       },
       { key: '/users', icon: <UserOutlined />, label: '用户管理', permission: 'users' },
@@ -317,6 +323,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
       { key: '/basicdata/files', icon: <FolderOpenOutlined />, label: '文件管理', permission: 'basicdata.files' },
       { key: '/announcements', icon: <NotificationOutlined />, label: '公告管理', permission: 'announcements' },
+      { key: '/deploy-versions', icon: <RocketOutlined />, label: '部署版本', permission: 'deploy_versions' },
     ],
   },
   {
@@ -383,6 +390,38 @@ function toAntdItems(items: PermissionAwareItem[]): any[] {
   }))
 }
 
+// 当前路径是否命中菜单项（精确或子路径，如 /orders/SO-123 命中 /orders）
+function pathMatches(key: string, pathname: string): boolean {
+  return pathname === key || pathname.startsWith(key + '/')
+}
+
+// 菜单树中当前激活的叶子项 key
+function findActiveKey(items: PermissionAwareItem[], pathname: string): string | null {
+  for (const item of items) {
+    if (item.children && item.children.length > 0) {
+      const found = findActiveKey(item.children, pathname)
+      if (found) return found
+    } else if (pathMatches(item.key, pathname)) {
+      return item.key
+    }
+  }
+  return null
+}
+
+// 面包屑：一级分组名 + 当前页名（顶级页面 root 固定为「供应链中台」）
+type CrumbInfo = { root: string; page: string }
+function findCrumb(items: PermissionAwareItem[], pathname: string, rootLabel?: string): CrumbInfo | null {
+  for (const item of items) {
+    if (item.children && item.children.length > 0) {
+      const found = findCrumb(item.children, pathname, rootLabel || item.label)
+      if (found) return found
+    } else if (pathMatches(item.key, pathname)) {
+      return { root: rootLabel || '供应链中台', page: item.label }
+    }
+  }
+  return null
+}
+
 function findPurchase(menuItems: PermissionAwareItem[]): PermissionAwareItem | undefined {
   for (const item of menuItems) {
     if (item.label === '采购中心') return item
@@ -399,6 +438,8 @@ const pathToGroupKey: Record<string, string> = {
   '/run-orders': 'order-delivery',
   '/order-risk-pool': 'order-delivery',
   '/stock-check': 'material-center',
+  '/quick-stock-check': 'material-center',
+  '/task-stock-check': 'material-center',
   '/purchase-plan': 'material-center',
   '/material-issues': 'material-center',
   '/long-lead-materials': 'material-center',
@@ -406,6 +447,7 @@ const pathToGroupKey: Record<string, string> = {
   '/supplier-risk': 'material-center',
   '/supplier-payment': 'material-center',
   '/subcontract-orders': 'material-center',
+  '/scrap-inventory': 'material-center',
   '/production-dashboard': 'production-center',
   '/todo-workbench': 'production-center',
   '/change-events': 'production-center',
@@ -454,6 +496,7 @@ const pathToGroupKey: Record<string, string> = {
   '/basicdata/positions': 'basicdata-management',
   '/basicdata/employees': 'basicdata-management',
   '/basicdata/inventory': 'basicdata-management',
+  '/basicdata/supplier-material-map': 'basicdata-management',
   '/users': 'basicdata-center',
   '/roles': 'basicdata-center',
   '/audit': 'basicdata-center',
@@ -463,6 +506,7 @@ const pathToGroupKey: Record<string, string> = {
   '/basicdata/files': 'basicdata-center',
   '/basicdata/data-supply': 'basicdata-center',
   '/announcements': 'basicdata-center',
+  '/deploy-versions': 'basicdata-center',
 }
 
 const pathToPermission: Record<string, string> = {
@@ -473,6 +517,8 @@ const pathToPermission: Record<string, string> = {
   '/domestic-shipment': 'orders.list',
   '/order-risk-pool': 'orders.risk_pool',
   '/stock-check': 'materials.stock_check',
+  '/quick-stock-check': 'materials.stock_check',
+  '/task-stock-check': 'materials.task_stock_check',
   '/purchase-plan': 'materials.purchase_plan',
   '/material-issues': 'materials.issues',
   '/long-lead-materials': 'materials.long_lead',
@@ -480,6 +526,7 @@ const pathToPermission: Record<string, string> = {
   '/supplier-risk': 'materials.supplier_risk',
   '/supplier-payment': 'materials.supplier_payment',
   '/subcontract-orders': 'materials.subcontract_orders',
+  '/scrap-inventory': 'materials.scrap_inventory',
   '/issues': 'exceptions.pool',
   '/issue-log': 'exceptions.issue_log',
   '/change-log': 'exceptions.change_log',
@@ -531,10 +578,12 @@ const pathToPermission: Record<string, string> = {
   '/basicdata/positions': 'basicdata.data',
   '/basicdata/employees': 'basicdata.data',
   '/basicdata/inventory': 'basicdata.data',
+  '/basicdata/supplier-material-map': 'basicdata.data',
   '/basicdata/feedback': 'basicdata.feedback',
   '/basicdata/files': 'basicdata.files',
   '/basicdata/data-supply': 'basicdata.data_supply',
   '/announcements': 'announcements',
+  '/deploy-versions': 'deploy_versions',
   '/purchase/price-change': 'purchase.price_change',
   '/purchase/price-change/new': 'purchase.price_change',
   '/purchase/price-change/pending': 'purchase.price_change.pending',
@@ -546,6 +595,7 @@ function getRequiredPermission(pathname: string, dynamicMap?: Record<string, str
   if (dynamicMap && dynamicMap[pathname]) return dynamicMap[pathname]
   if (pathToPermission[pathname]) return pathToPermission[pathname]
   if (pathname.startsWith('/orders/')) return 'orders.list'
+  if (pathname.startsWith('/stock-check/')) return 'materials.stock_check'
   return undefined
 }
 
@@ -561,8 +611,6 @@ export default function MainLayout() {
   const [notifLoading, setNotifLoading] = useState(false)
   const [unreadTotal, setUnreadTotal] = useState(0)
   const [unreadByType, setUnreadByType] = useState<Record<string, number>>({})
-  const [pwdModalOpen, setPwdModalOpen] = useState(false)
-  const [pwdForm] = Form.useForm()
   const [forcePwdModalOpen, setForcePwdModalOpen] = useState(false)
   const [forcePwdForm] = Form.useForm()
   const [forcePwdDismissable, setForcePwdDismissable] = useState(false)
@@ -797,22 +845,6 @@ export default function MainLayout() {
     fetchUnreadCount()
   }
 
-  const handleChangePassword = async () => {
-    try {
-      const values = await pwdForm.validateFields()
-      await authApi.changePassword(values.old_password, values.new_password)
-      message.success('密码修改成功')
-      setPwdModalOpen(false)
-      pwdForm.resetFields()
-      const user = useAuthStore.getState().currentUser
-      if (user && 'is_default_password' in user) {
-        useAuthStore.getState().setAuth(useAuthStore.getState().originalToken!, { ...user, is_default_password: false } as any)
-      }
-    } catch (e: any) {
-      // 错误已由全局拦截器提示
-    }
-  }
-
   const handleForceChangePassword = async () => {
     try {
       const values = await forcePwdForm.validateFields()
@@ -831,30 +863,48 @@ export default function MainLayout() {
     }
   }
 
-  const menuItems = useMemo(() => {
+  // 过滤后的导航树（侧边栏渲染 + 面包屑推导共用）
+  const navTree = useMemo(() => {
     if (isShareUser()) {
       const targetPath = getShareTargetPath()
       if (targetPath) {
-        return toAntdItems(filterMenuByPath(dynamicMenuItems, targetPath, hasPermission))
+        return filterMenuByPath(dynamicMenuItems, targetPath, hasPermission)
       }
       return []
     }
     if (isSupplierUser()) {
-      return toAntdItems(filterSupplierPortalMenu(dynamicMenuItems, hasPermission))
+      return filterSupplierPortalMenu(dynamicMenuItems, hasPermission)
     }
-    const filtered = filterMenuByPermission(dynamicMenuItems, hasPermission)
-    return toAntdItems(filtered)
+    return filterMenuByPermission(dynamicMenuItems, hasPermission)
   }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
   const canViewCurrentPage = !requiredPermission || hasPermission(requiredPermission, 'read')
+
+  const menuItems = toAntdItems(navTree)
+
   const openKeys = useMemo(() => {
+    // 动态子路由（如 /stock-check/:checkId）回退到父路径的分组，保持菜单组展开
     const gk = dynamicPathToGroupKey[location.pathname]
+      || (location.pathname.startsWith('/stock-check/') ? dynamicPathToGroupKey['/stock-check'] : undefined)
     return gk ? [gk] : []
   }, [location.pathname, dynamicPathToGroupKey])
 
+  const crumb = useMemo(() => {
+    const extraPageNames: Record<string, string> = {
+      '/profile': '个人中心',
+    }
+    return findCrumb(navTree, location.pathname) || { root: '供应链中台', page: extraPageNames[location.pathname] || '' }
+  }, [navTree, location.pathname])
+
+  const userDisplayName = currentUser && 'display_name' in currentUser
+    ? (currentUser.display_name || currentUser.username)
+    : '用户'
+  const userInitial = (userDisplayName || '用').charAt(0)
+  const userPosition = currentUser && 'position_name' in currentUser && currentUser.position_name ? currentUser.position_name : ''
+
   return (
-    <Layout className="min-h-screen" style={{ background: '#f0f4f8' }}>
+    <Layout className="min-h-screen" style={{ background: '#f8fafc' }}>
       {!isShareUser() && (
         <Sider
           trigger={null}
@@ -891,7 +941,7 @@ export default function MainLayout() {
           <Menu
             theme="dark"
             mode="inline"
-            selectedKeys={[location.pathname]}
+            selectedKeys={[findActiveKey(navTree, location.pathname) || location.pathname]}
             defaultOpenKeys={openKeys}
             items={menuItems}
             onClick={({ key }) => navigate(key)}
@@ -899,19 +949,24 @@ export default function MainLayout() {
         </Sider>
       )}
 
-      <Layout style={{ marginLeft: !isShareUser() && collapsed ? 80 : (!isShareUser() ? 256 : 0), transition: 'margin-left .2s', minHeight: '100vh' }}>
-        <div className="header-bar" style={{ position: 'sticky', top: 0, zIndex: 9 }}>
+      <Layout style={{ marginLeft: !isShareUser() && collapsed ? 80 : (!isShareUser() ? 256 : 0), transition: 'margin-left .2s', minHeight: '100vh', background: 'transparent' }}>
+        <div className="topbar-v2">
           {!isShareUser() && (
-            <Space size="middle">
-              <Button
-                type="text"
-                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                onClick={() => setCollapsed(!collapsed)}
-                style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', width: 36, height: 36, borderRadius: 10 }}
-              />
-            </Space>
+            <div className="tbv2-collapse" onClick={() => setCollapsed(!collapsed)} title={collapsed ? '展开侧栏' : '收起侧栏'}>
+              {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            </div>
           )}
-          <Space size="middle">
+          <div className="tbv2-crumb">
+            {crumb.root !== crumb.page && (
+              <>
+                <span className="tbv2-crumb-root">{crumb.root}</span>
+                <span>/</span>
+              </>
+            )}
+            <b>{crumb.page || crumb.root}</b>
+          </div>
+          <div className="tbv2-actions">
+            {!isShareUser() && !isSupplierUser() && canUseTopbar.aiSearch && <TopBarAssistant />}
             {!isShareUser() && !isSupplierUser() && canUseTopbar.share && <ShareButton />}
             {!isSupplierUser() && canUseTopbar.feedback && <FeedbackButton />}
             {canUseTopbar.fontSize && <FontSizeSetting />}
@@ -950,7 +1005,13 @@ export default function MainLayout() {
                         <List.Item
                           key={item.id}
                           style={{ cursor: 'pointer', padding: '10px 4px', opacity: item.is_read ? 0.55 : 1 }}
-                          onClick={() => { if (!item.is_read) handleMarkRead(item.id) }}
+                          onClick={() => {
+                            if (!item.is_read) handleMarkRead(item.id)
+                            if (item.type === 'feedback' && item.ref_id) {
+                              setBellOpen(false)
+                              navigate(`/basicdata/feedback?id=${item.ref_id}`)
+                            }
+                          }}
                         >
                           <List.Item.Meta
                             title={
@@ -961,7 +1022,19 @@ export default function MainLayout() {
                                 {item.priority === 'important' && <Tag color="gold" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', lineHeight: '18px' }}>重要</Tag>}
                               </Space>
                             }
-                            description={<Typography.Text type="secondary" style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>{item.created_at}</Typography.Text>}
+                            description={
+                              <>
+                                {item.content && (
+                                  <Typography.Paragraph
+                                    ellipsis={{ rows: 2 }}
+                                    style={{ margin: 0, fontSize: 'calc(0.8125rem * var(--font-size-scale))', color: 'rgba(0,0,0,0.65)' }}
+                                  >
+                                    {item.content}
+                                  </Typography.Paragraph>
+                                )}
+                                <Typography.Text type="secondary" style={{ fontSize: 'calc(0.8125rem * var(--font-size-scale))' }}>{item.created_at}</Typography.Text>
+                              </>
+                            }
                           />
                         </List.Item>
                       )}
@@ -973,14 +1046,17 @@ export default function MainLayout() {
                   </div>
                 }
               >
-                <Badge count={unreadTotal} size="small" offset={[-4, 4]}>
-                  <Button type="text" icon={<BellOutlined />} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', width: 36, height: 36, borderRadius: 10, color: '#64748b' }} />
-                </Badge>
+                <div className="tbv2-icon-btn" title="通知中心">
+                  <Badge count={unreadTotal} size="small" offset={[3, -3]}>
+                    <BellOutlined style={{ fontSize: 16, color: '#475569' }} />
+                  </Badge>
+                </div>
               </Popover>
             )}
             {isShareUser() ? (
               <Button
                 type="primary"
+                size="small"
                 icon={<LogoutOutlined />}
                 onClick={() => { exitShare(); navigate('/dashboard') }}
               >
@@ -990,69 +1066,26 @@ export default function MainLayout() {
               <Dropdown
                 menu={{
                   items: [
-                    { key: 'change-pwd', icon: <KeyOutlined />, label: '修改密码' },
+                    { key: 'profile', icon: <IdcardOutlined />, label: '个人中心' },
                     { type: 'divider' as const },
                     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
                   ],
                   onClick: ({ key }) => {
+                    if (key === 'profile') { navigate('/profile') }
                     if (key === 'logout') { logout(); navigate('/login') }
-                    if (key === 'change-pwd') { pwdForm.resetFields(); setPwdModalOpen(true) }
                   },
                 }}
               >
-                <Space className="cursor-pointer" style={{ padding: '4px 12px', borderRadius: 10 }}>
-                  <div style={{ width: 30, height: 30, borderRadius: 8, background: 'linear-gradient(135deg, #6366f1, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <UserOutlined style={{ color: '#fff', fontSize: 'calc(0.875rem * var(--font-size-scale))' }} />
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                    <span style={{ color: '#334155', fontSize: 'calc(0.875rem * var(--font-size-scale))', fontWeight: 500 }}>
-                      {currentUser && 'display_name' in currentUser ? (currentUser.display_name || currentUser.username) : '用户'}
-                    </span>
-                    {currentUser && 'position_name' in currentUser && currentUser.position_name && (
-                      <span style={{ color: '#94a3b8', fontSize: 'calc(0.75rem * var(--font-size-scale))', fontWeight: 400 }}>
-                        {currentUser.position_name}
-                      </span>
-                    )}
-                  </div>
-                </Space>
+                <div className="tbv2-avatar">
+                  <div className="tbv2-avatar-circle">{userInitial}</div>
+                  <span className="tbv2-avatar-name">
+                    {userDisplayName}{userPosition ? ` · ${userPosition}` : ''}
+                  </span>
+                </div>
               </Dropdown>
             )}
-          </Space>
+          </div>
         </div>
-
-        <Modal
-          title="修改密码"
-          open={pwdModalOpen}
-          onOk={handleChangePassword}
-          onCancel={() => setPwdModalOpen(false)}
-          width={420}
-          okText="确认修改"
-        >
-          <Form form={pwdForm} layout="vertical" style={{ marginTop: 16 }}>
-            <Form.Item name="old_password" label="原密码" rules={[{ required: true, message: '请输入原密码' }]}>
-              <Input.Password placeholder="输入当前密码" />
-            </Form.Item>
-            <Form.Item name="new_password" label="新密码" rules={[{ required: true, message: '请输入新密码' }, { min: 6, message: '密码至少6位' }]}>
-              <Input.Password placeholder="至少6位" />
-            </Form.Item>
-            <Form.Item
-              name="confirm_password"
-              label="确认新密码"
-              dependencies={['new_password']}
-              rules={[
-                { required: true, message: '请确认新密码' },
-                ({ getFieldValue }) => ({
-                  validator(_, value) {
-                    if (!value || getFieldValue('new_password') === value) return Promise.resolve()
-                    return Promise.reject(new Error('两次密码不一致'))
-                  },
-                }),
-              ]}
-            >
-              <Input.Password placeholder="再次输入新密码" />
-            </Form.Item>
-          </Form>
-        </Modal>
 
         <Modal
           title="安全提醒 — 请修改默认密码"
@@ -1095,7 +1128,7 @@ export default function MainLayout() {
           </Form>
         </Modal>
 
-        <Content style={{ padding: '12px 24px 24px' }}>
+        <Content style={{ padding: '20px 24px 32px' }}>
           {canViewCurrentPage ? (
             <Outlet />
           ) : (

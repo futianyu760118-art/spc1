@@ -9,7 +9,16 @@ Backend (run from `backend/`, Python 3.12):
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000        # entrypoint: app/main.py
 python init_database.py                          # idempotent schema bootstrap (see below)
+python check_deploy_agent.py                     # deploy_agent 冒烟（mock docker/git/health，见部署运维章节）
 ```
+
+Deploy Agent（独立进程，跑在生产主机上，供后端驱动部署，见 `backend/deploy_agent/README.md`）:
+```bash
+cd backend && pip install -r deploy_agent/requirements.txt
+python -m deploy_agent                            # 默认 127.0.0.1:8901；生产用 systemd unit (deploy_agent/scripts/deploy-agent.service)
+```
+
+Docker dev（`docker-compose.yml`）里 deploy_agent 是独立服务（复用 spc-v2-backend 镜像 + `python -m deploy_agent`，挂 /var/run/docker.sock 与 ./data/deploy 工作目录）；backend 通过 `DEPLOY_AGENT_URL=http://deploy-agent:8901` 访问它。健康检查用 compose 服务名 `http://backend:8000` / `http://frontend:80`。dev 首次会显示空版本列表属正常（工作目录无 versions/）。
 
 Frontend (run from `frontend/`, Node 20):
 ```bash
@@ -48,10 +57,12 @@ Models live under `backend/app/models/<domain>/`. `alembic/env.py` imports `app.
 - **Response envelope is mandatory client-side.** The frontend axios interceptor (`frontend/src/services/api.ts`) treats `response.data.code !== 0` as a failure. Successful endpoints must return `{ code, message, data }` — see `ResponseModel` / `PageResult` in `app/schemas/common.py`. A bare list/dict return will be rejected by the client even though HTTP is 200.
 - All routes mount under `/api/v1` (set by `API_PREFIX`); sub-router prefixes are wired in `app/api/v1/__init__.py`. Domains: `dashboard, order, material, production, exception, rules, basicdata, meeting, npi, assistant, common`.
 - **Auth = JWT + two invalidation layers.** Tokens carry `login_version` and `jti`; `app/core/dependencies.py` (`get_current_user` / `get_current_user_or_share`) rejects tokens whose `login_version` != DB value or whose `jti` is blacklisted (`app/core/token_blacklist.py`, Redis-backed). Re-login bumps `sys_user.login_version`. Force-logout responses send header `X-Force-Logout: true`. **Share tokens** (`share: true` in JWT) bypass permission + login_version checks — use `get_current_user_or_share` for share-accessible routes.
-- Permissions are a role-keyed dict (`role.permissions = {resource: [actions]}`), seeded in `init_database.py` and merged at runtime via `merge_role_permission_additions`. `permission_registry` is re-synced to DB on every startup (in `lifespan`).
+- Permissions are a role-keyed dict (`role.permissions = {resource: [actions]}`), seeded in `init_database.py` and merged at runtime via `merge_role_permission_additions`. `permission_registry` is re-synced to DB on every startup (in `lifespan`). **`seed_roles` only sets `permissions` when creating a role** — for existing roles it refreshes `role_name` only, so runtime grants made in 角色管理 survive container restarts. Do not restore the old `role.permissions = role_data["permissions"]` overwrite; new base permissions belong in `ROLE_PERMISSION_ADDITIONS` (`app/core/permissions.py`).
 - **Three APScheduler instances start in `app/main.py` lifespan**: ERP sync (`basicdata.sync_scheduler`), risk scan (`exception.risk_scheduler`), overdue check (`scheduler.overdue_checker`). They start/stop with the app — importing `main` starts them on boot.
 - `main.py` overrides the default JSON response class with `SafeJSONResponse` to tolerate non-UTF-8 / `Decimal` / `datetime`. Don't bypass it.
 - ERP integration is SQL-driven: sync SQL + field mappings are stored in the `sync_sql_config` / `field_mapping` tables and editable at runtime (see `backend/ERP_INTEGRATION.md`). Manual triggers: `POST /api/v1/basicdata/sync/...`.
+
+- **部署运维（deploy_versions）**: 后端 `app/api/v1/system/deploy_versions.py` 是一层薄代理，转发到本机 `deploy_agent`（`backend/deploy_agent/`，独立进程，默认 `127.0.0.1:8901`，与后端共享 `SECRET_KEY`）。权限模型：`deploy_versions.read` 可查看（list/status/detail/SSE 流），`deploy_versions.manage` 可执行动作（rollback/switch/deploy-new）；两者都按角色在「角色管理」中授予，**不限定 admin**（admin 自动通过）。GET/POST 走 header Bearer；SSE（`/jobs/{id}/stream`）因前端用 fetch+ReadableStream 也走 header Bearer（与 notifications 的 EventSource query-token 惯例不同，勿改回）。agent 把 git pull / docker build / compose up / 健康检查封装为 job + SSE 事件（`step` / `phase` / `log` / `end`）。加 agent 新命令时保持 `_run_step` 输出约定。冒烟脚本 `backend/check_deploy_agent.py`（mock docker/git/health）。
 
 ## Frontend conventions
 

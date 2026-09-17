@@ -1,7 +1,6 @@
 """通用通知 API — 当前用户的消息中心"""
 
 from typing import Optional
-from datetime import datetime
 
 import json
 
@@ -10,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, update, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import AsyncSessionLocal, get_db
 from app.core.dependencies import get_current_user
 from app.core.security import PermissionChecker
 from app.models.basicdata.announcement import Notification
@@ -47,7 +46,6 @@ async def create_notification(
         type=request.type,
         priority=request.priority,
         is_read=False,
-        created_at=datetime.utcnow(),
     )
     db.add(notification)
     await db.commit()
@@ -132,7 +130,7 @@ async def mark_read(
         raise HTTPException(status_code=404, detail="通知不存在")
     if not notif.is_read:
         notif.is_read = True
-        notif.read_at = datetime.utcnow()
+        notif.read_at = func.now()
         await db.commit()
     await publish_unread_update(db, uid)
     return ResponseModel(data={"id": notif_id})
@@ -149,11 +147,10 @@ async def mark_all_read(
     conditions = [Notification.user_id == uid, Notification.is_read == False]  # noqa: E712
     if type:
         conditions.append(Notification.type == type)
-    now = datetime.utcnow()
     await db.execute(
         update(Notification)
         .where(and_(*conditions))
-        .values(is_read=True, read_at=now)
+        .values(is_read=True, read_at=func.now())
     )
     await db.commit()
     await publish_unread_update(db, uid)
@@ -165,15 +162,18 @@ async def mark_all_read(
 async def stream_notifications(
     request: Request,
     token: str = Query(..., description="JWT token (EventSource 无法设 header)"),
-    db: AsyncSession = Depends(get_db),
 ):
-    """通知 SSE 实时流。首帧 snapshot(未读计数)，后续 unread 事件，15s 心跳。"""
-    current_user = await get_current_user(token=token, db=db)
+    """通知 SSE 实时流。首帧 snapshot(未读计数)，后续 unread 事件，15s 心跳。
+
+    鉴权用短命会话,不挂 Depends(get_db):流可活几小时,不能占住池连接。
+    """
+    async with AsyncSessionLocal() as db:
+        current_user = await get_current_user(token=token, db=db)
     uid = _get_user_id(current_user)
 
     async def gen():
         try:
-            async for chunk in subscribe_stream(uid, db):
+            async for chunk in subscribe_stream(uid):
                 if await request.is_disconnected():
                     break
                 yield chunk
