@@ -276,6 +276,15 @@ export const materialApi = {
     api.get(`/materials/kit-analysis/${orderNo}/product-bom-flat`, {
       params: { product_code: productCode, ...(bomId ? { bom_id: bomId } : {}) },
     }),
+  // 物料占用分析
+  searchOccupancyMaterials: (params: { keyword?: string }) =>
+    api.get('/materials/occupancy/search-materials', { params }),
+  searchOccupancyOrders: (params: { keyword?: string }) =>
+    api.get('/materials/occupancy/search-orders', { params }),
+  getOccupancyByMaterial: (params: { material_code: string }) =>
+    api.get('/materials/occupancy/by-material', { params }),
+  getOccupancyByOrder: (params: { order_no: string }) =>
+    api.get('/materials/occupancy/by-order', { params }),
   // 物料盘点
   createStockCheckFromOrder: (orderNo: string, data?: {
     title?: string

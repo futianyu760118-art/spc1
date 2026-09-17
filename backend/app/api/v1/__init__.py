@@ -26,6 +26,7 @@ api_router.include_router(material.po_router, prefix="/materials", tags=["物料
 api_router.include_router(material.stock_check_router, prefix="/materials", tags=["物料齐套中心-物料盘点"])
 api_router.include_router(material.scrap_inventory_router, prefix="/materials", tags=["物料齐套中心-报废物料库存查询"])
 api_router.include_router(material.inventory_board_router, prefix="/materials/inventory-board", tags=["物料齐套中心-库存看板"])
+api_router.include_router(material.occupancy_router, prefix="/materials/occupancy", tags=["物料齐套中心-物料占用分析"])
 
 # Production center
 api_router.include_router(production.router, prefix="/production", tags=["生产协同中心"])

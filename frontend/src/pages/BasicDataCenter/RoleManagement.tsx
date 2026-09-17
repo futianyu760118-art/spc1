@@ -78,6 +78,7 @@ const FALLBACK_PERMISSION_TREE: PermTreeNode[] = [
       { key: 'materials.supplier_risk', label: '供应商风险分析' },
       { key: 'materials.supplier_payment', label: '供应商付款排程' },
       { key: 'materials.stock_check', label: '物料盘点' },
+      { key: 'materials.occupancy', label: '物料占用分析' },
     ],
   },
   {
