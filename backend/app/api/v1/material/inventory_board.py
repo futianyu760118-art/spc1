@@ -8,8 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
-from app.schemas.material.inventory_board import InventoryOverviewResponse
+from app.schemas.material.inventory_board import (
+    CheckCoverageResponse,
+    InventoryOverviewResponse,
+)
 from app.services.material.inventory_board_service import (
+    get_check_coverage,
     get_inventory_overview,
     get_stock_check_overview,
 )
@@ -27,6 +31,19 @@ async def inventory_overview(
     """库存看板 — 库存概览（KPI + 仓库/类别分布 + 库龄 + 低库存 + 筛选下拉）"""
     data = await get_inventory_overview(db, warehouse_id=warehouse_id, category=category)
     return ResponseModel(data=InventoryOverviewResponse(**data))
+
+
+@router.get("/coverage", response_model=ResponseModel[CheckCoverageResponse])
+async def check_coverage(
+    recent_days: int = Query(
+        30, ge=-1, le=100000, description="已盘判定窗口：7/30；-1=全部历史"
+    ),
+    current_user: dict = Depends(PermissionChecker("materials.inventory_board", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """库存看板 — 盘点覆盖（已盘 / 未盘 物料×仓库，按仓库分组）"""
+    data = await get_check_coverage(db, recent_days=recent_days)
+    return ResponseModel(data=CheckCoverageResponse(**data))
 
 
 @router.get("/stock-check", response_model=ResponseModel[dict])

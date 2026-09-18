@@ -91,3 +91,25 @@ class InventoryOverviewResponse(BaseModel):
     low_stock: List[LowStockRow]
     warehouses: List[dict]  # 用于筛选条下拉 [{id, name}]
     categories: List[str]  # 用于筛选条下拉（distinct material_type）
+
+
+class CoverageWarehouseRow(BaseModel):
+    """盘点覆盖 — 单仓已盘 / 未盘（行 = 物料×仓库）"""
+
+    wh_id: Optional[int] = None
+    wh_name: str
+    total: int
+    checked: int
+    unchecked: int
+    rate: float
+
+
+class CheckCoverageResponse(BaseModel):
+    """盘点覆盖 — 全仓合计 + 按仓库明细"""
+
+    recent_days: int
+    total: int
+    checked: int
+    unchecked: int
+    rate: float
+    warehouses: List[CoverageWarehouseRow]

@@ -867,11 +867,14 @@ export const wecomApi = {
     >('/wecom/jsapi-config', { params: { url } }),
 }
 
-// ============ 库存看板 ============
+// ============ 库存看板（驾驶舱 · 大屏版） ============
 export const inventoryBoardApi = {
   getOverview: (params?: { warehouse_id?: number; category?: string }) =>
     api.get('/materials/inventory-board/overview', { params }),
   getStockCheck: (params?: { trend_days?: number; active_limit?: number; diff_limit?: number }) =>
     api.get('/materials/inventory-board/stock-check', { params }),
+  /** 盘点覆盖：已盘 / 未盘（物料×仓库）；recent_days: 7/30，-1=全部历史 */
+  getCoverage: (params?: { recent_days?: number }) =>
+    api.get('/materials/inventory-board/coverage', { params }),
 }
 

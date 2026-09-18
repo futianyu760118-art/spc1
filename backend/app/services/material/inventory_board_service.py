@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select, case, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -417,4 +417,84 @@ async def get_stock_check_overview(
         "active_checks": active_rows,
         "trend": trend,
         "recent_diffs": recent_diffs,
+    }
+
+
+async def get_check_coverage(
+    db: AsyncSession,
+    recent_days: Optional[int] = 30,
+) -> dict:
+    """盘点覆盖 — 全部「物料×仓库」的已盘 / 未盘（按仓库分组）
+
+    已盘口径与库存页「近期已盘」/ 任务盘点「已盘窗口」一致：
+    该 (material_id, wh_id) 在窗口内实盘过（scm_inventory_check_item.actual_qty 非空
+    且盘点单未取消），窗口由 _resolve_recent_days 归一（None=系统默认、负数=全部历史）。
+
+    行 = 物料×仓库（与 scm_inventory 行一致，一物料多仓算多行），全仓口径，不做仓库筛选
+    —— 前端用仓库 chips 做展示层筛选，避免重复请求。
+    """
+    # 延迟导入：stock_check_service 体积大，避免模块级循环依赖
+    from app.services.material.stock_check_service import (
+        _get_recent_checked_by_warehouse,
+        _resolve_recent_days,
+    )
+
+    cond = _apply_filters(None, None)
+    rows_q = (
+        select(
+            Inventory.material_id,
+            Inventory.wh_id,
+            func.max(Inventory.wh_name).label("wh_name"),
+        )
+        .select_from(Inventory)
+        .join(Material, and_(*cond))
+        .group_by(Inventory.material_id, Inventory.wh_id)
+    )
+
+    keys: List[Tuple[int, Optional[int]]] = []
+    wh_name_of: Dict[Optional[int], str] = {}
+    for r in (await db.execute(rows_q)).all():
+        if r.material_id is None:
+            continue
+        mid = int(r.material_id)
+        wid = int(r.wh_id) if r.wh_id is not None else None
+        keys.append((mid, wid))
+        wh_name_of[wid] = r.wh_name or (f"仓库#{wid}" if wid is not None else "(未入库)")
+
+    skip_days = _resolve_recent_days(recent_days)
+    recent_map = await _get_recent_checked_by_warehouse(db, keys) if keys else {}
+    today = datetime.now().date()
+
+    acc: Dict[Optional[int], Dict] = {}
+    checked_total = 0
+    for k in keys:
+        recent = recent_map.get(k)
+        is_checked = bool(
+            recent is not None
+            and recent.get("check_date") is not None
+            and (today - recent["check_date"]).days <= skip_days
+        )
+        wid = k[1]
+        a = acc.get(wid)
+        if a is None:
+            a = {"wh_id": wid, "wh_name": wh_name_of.get(wid, ""), "total": 0, "checked": 0}
+            acc[wid] = a
+        a["total"] += 1
+        if is_checked:
+            a["checked"] += 1
+            checked_total += 1
+
+    total = len(keys)
+    warehouses = sorted(acc.values(), key=lambda x: x["total"], reverse=True)
+    for w in warehouses:
+        w["unchecked"] = w["total"] - w["checked"]
+        w["rate"] = round(w["checked"] / w["total"], 4) if w["total"] else 0.0
+
+    return {
+        "recent_days": skip_days,
+        "total": total,
+        "checked": checked_total,
+        "unchecked": total - checked_total,
+        "rate": round(checked_total / total, 4) if total else 0.0,
+        "warehouses": warehouses,
     }
