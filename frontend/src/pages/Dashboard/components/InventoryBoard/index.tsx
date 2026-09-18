@@ -316,8 +316,8 @@ function Gauge({ on, off }: { on: number; off: number }) {
         strokeDasharray={`${(p * L).toFixed(2)} ${(L + 2).toFixed(2)}`}>
         <title>{`已盘率 ${(p * 100).toFixed(1)}%`}</title>
       </path>
-      <text x="90" y="88" textAnchor="middle" fontSize="32" fontWeight="700" fill="#16a34a">{(p * 100).toFixed(1)}%</text>
-      <text x="90" y="108" textAnchor="middle" fontSize="13" fill="#94a3b8">已盘率</text>
+      <text x="90" y="88" textAnchor="middle" className="ivb-gauge-num">{(p * 100).toFixed(1)}%</text>
+      <text x="90" y="108" textAnchor="middle" className="ivb-gauge-sub">已盘率</text>
     </svg>
   )
 }
@@ -335,7 +335,7 @@ function AreaChart({ trend }: { trend: number[] }) {
   const area = `${pad},${h - pad} ${line} ${w - pad},${h - pad}`
   const last = pts[n - 1]
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none">
+    <svg viewBox={`0 0 ${w} ${h}`} width="100%" style={{ height: '2.7em', display: 'block' }} preserveAspectRatio="none">
       <defs>
         <linearGradient id="ivbAreaGrad" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#5b5bd6" stopOpacity=".3" />
@@ -385,14 +385,10 @@ export default function InventoryBoard() {
     }
   }, [fullscreen])
 
-  // 字号 = min(用户字号设置, 按高度能装下的字号)，下限 10px
-  const fontSize = useMemo(() => {
-    const raw = typeof window === 'undefined'
-      ? 1
-      : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--font-size-scale')) || 1
-    const maxFs = 15 * raw
-    if (!boardH) return maxFs
-    return Math.min(maxFs, Math.max(10, (boardH - 10) / 44.6))
+  // 字号上限：按可用高度算「装得下 8 行」的字号（与 --font-size-scale 取 min，见 .ivb-wrap）
+  const fitFontSize = useMemo(() => {
+    if (!boardH) return null
+    return Math.max(10, (boardH - 10) / 44.6)
   }, [boardH])
 
   const loadOverview = useCallback(async () => {
@@ -536,7 +532,10 @@ export default function InventoryBoard() {
   const kpi = view?.kpi
 
   const content = (
-    <div className="ivb-wrap" style={{ ['--ivb-fs' as string]: `${fontSize}px` } as React.CSSProperties}>
+    <div
+      className="ivb-wrap"
+      style={{ ['--ivb-fit' as string]: fitFontSize ? `${fitFontSize}px` : undefined } as React.CSSProperties}
+    >
       <style>{css}</style>
 
       <header className="ivb-bar">
