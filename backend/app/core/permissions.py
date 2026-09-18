@@ -61,6 +61,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
     },
     "org27_pos76": {
         "production.order_wage_lookup": ["read"],
+    },
     "purchase_manager": {
         "materials.task_stock_check": ["read"],
         "materials.inventory_board": ["read"],
