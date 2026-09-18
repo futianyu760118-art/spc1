@@ -82,27 +82,32 @@ def _expand_bom(
 
 
 async def _build_context(db: AsyncSession) -> dict:
-    """加载全部开放订单行 + BOM 图，产出按交期排好序的参与行。"""
-    order_rows = (
+    """加载全部开放订单产品行 + BOM 图，产出按交期排好序的参与行。
+
+    行级口径：以 sale_order_line 明细行为准（line_no = ERP 行号，BOM 挂在该行），
+    join sale_order 头表取 is_closed / is_deleted / customer。
+    open_qty 直接取明细行 order_qty（明细行无完工字段，不做已完工扣减）。
+    """
+    line_rows = (
         await db.execute(
-            select(SaleOrder).where(SaleOrder.is_closed == 0, SaleOrder.is_deleted == 0)
-        )
-    ).scalars().all()
-
-    order_nos = sorted({o.order_no for o in order_rows if o.order_no})
-
-    line_bom_map: dict[tuple[str, str], str] = {}
-    if order_nos:
-        so_lines = (
-            await db.execute(
-                select(SaleOrderLine.order_no, SaleOrderLine.line_no, SaleOrderLine.bom_id).where(
-                    SaleOrderLine.order_no.in_(order_nos)
-                )
+            select(
+                SaleOrderLine.order_no,
+                SaleOrderLine.line_no,
+                SaleOrderLine.product_code,
+                SaleOrderLine.product_name,
+                SaleOrderLine.promised_date,
+                SaleOrderLine.order_qty,
+                SaleOrderLine.bom_id,
+                SaleOrder.customer,
             )
-        ).all()
-        for ln in so_lines:
-            if ln.bom_id is not None:
-                line_bom_map[(ln.order_no, ln.line_no)] = str(ln.bom_id)
+            .join(SaleOrder, SaleOrderLine.sale_order_id == SaleOrder.id)
+            .where(
+                SaleOrder.is_closed == 0,
+                SaleOrder.is_deleted == 0,
+                SaleOrderLine.status != "closed",
+            )
+        )
+    ).all()
 
     bom_rows = (await db.execute(select(Bom.bom_id, Bom.material_id))).all()
     detail_rows = (
@@ -132,28 +137,28 @@ async def _build_context(db: AsyncSession) -> dict:
                 (d.material_id, d.standard_qty, d.scrap_rate)
             )
 
-    for o in order_rows:
-        if not o.order_no or not o.line_no:
+    for ln in line_rows:
+        if not ln.order_no or not ln.line_no:
             continue
-        open_qty = (o.order_qty or Decimal("0")) - (o.completed_qty or Decimal("0"))
+        open_qty = ln.order_qty or Decimal("0")
         if open_qty <= 0:
             ctx["skipped_lines"] += 1
             continue
-        bom_id = line_bom_map.get((o.order_no, o.line_no))
+        bom_id = str(ln.bom_id) if ln.bom_id is not None else None
         unit_map = _expand_bom(ctx, bom_id) if bom_id else {}
         if not unit_map:
             ctx["skipped_lines"] += 1
             continue
         ctx["line_rows"].append(
             {
-                "order_no": o.order_no,
-                "line_no": o.line_no,
-                "customer": o.customer,
-                "product_code": o.product_code,
-                "product_name": o.product_name,
-                "promised_date": o.promised_date,
-                "order_qty": o.order_qty or Decimal("0"),
-                "completed_qty": o.completed_qty or Decimal("0"),
+                "order_no": ln.order_no,
+                "line_no": ln.line_no,
+                "customer": ln.customer,
+                "product_code": ln.product_code,
+                "product_name": ln.product_name,
+                "promised_date": ln.promised_date,
+                "order_qty": open_qty,
+                "completed_qty": Decimal("0"),
                 "open_qty": open_qty,
                 "bom_id": bom_id,
                 "unit_map": unit_map,
@@ -277,7 +282,7 @@ async def get_occupancy_by_order(
     ctx = await _build_context(db)
     target_rows = [r for r in ctx["line_rows"] if r["order_no"] == order_no]
 
-    open_line_count = (
+    header_exists = (
         await db.execute(
             select(func.count()).select_from(SaleOrder).where(
                 SaleOrder.order_no == order_no,
@@ -285,10 +290,23 @@ async def get_occupancy_by_order(
                 SaleOrder.is_deleted == 0,
             )
         )
-    ).scalar()
-    open_line_count = open_line_count or 0
-    if not target_rows and open_line_count == 0:
+    ).scalar() or 0
+    if not target_rows and header_exists == 0:
         return None
+
+    open_line_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(SaleOrderLine)
+            .join(SaleOrder, SaleOrderLine.sale_order_id == SaleOrder.id)
+            .where(
+                SaleOrderLine.order_no == order_no,
+                SaleOrder.is_closed == 0,
+                SaleOrder.is_deleted == 0,
+                SaleOrderLine.status != "closed",
+            )
+        )
+    ).scalar() or 0
 
     material_ids: set[int] = set()
     for tr in target_rows:

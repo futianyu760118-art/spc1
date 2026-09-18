@@ -165,7 +165,7 @@ export default function ByMaterialTab({
           </div>
         ),
       },
-      { title: '未完工量', dataIndex: 'open_qty', align: 'right', width: 92, render: fmt },
+      { title: '行数量', dataIndex: 'open_qty', align: 'right', width: 92, render: fmt },
       { title: '单耗', dataIndex: 'unit_qty', align: 'right', width: 76, render: fmt },
       {
         title: '需求量',
@@ -216,7 +216,7 @@ export default function ByMaterialTab({
     if (!data) return
     exportCsv(
       `物料占用_${data.material_code}.csv`,
-      ['合同交期', '订单号', '行号', '客户', '产品编码', '产品名称', '未完工量', '单耗', '需求量', '可占量', '占用量', '欠量', '状态'],
+      ['合同交期', '订单号', '行号', '客户', '产品编码', '产品名称', '行数量', '单耗', '需求量', '可占量', '占用量', '欠量', '状态'],
       data.rows.map((r) => [
         r.promised_date || '',
         r.order_no,
@@ -274,7 +274,7 @@ export default function ByMaterialTab({
         {data && data.skipped_lines > 0 && (
           <div className="right">
             <span style={{ fontSize: 'calc(11.5px * var(--font-size-scale))', color: '#92400e' }}>
-              {data.skipped_lines} 个开放订单行因缺 BOM / 已完工未参与
+              {data.skipped_lines} 个开放订单行因缺 BOM / 数量异常未参与
             </span>
           </div>
         )}
@@ -283,8 +283,8 @@ export default function ByMaterialTab({
       <div className="occ-rule">
         <span style={{ flexShrink: 0, marginTop: 2 }}>ⓘ</span>
         <div>
-          <b>占用规则</b>：开放订单按<b>合同交期从早到晚</b>串行占用库存；需求量 = 累计单耗 ×
-          未完工量（订单量 − 已完工）；库存 = 全仓即时结存（不含在途）；轮到该订单时的剩余量即「可占量」，占用量 =
+          <b>占用规则</b>：开放订单产品行按<b>合同交期从早到晚</b>串行占用库存；需求量 = 累计单耗 ×
+          行数量；库存 = 全仓即时结存（不含在途）；轮到该订单行时的剩余量即「可占量」，占用量 =
           min(需求量, 可占量)。
         </div>
       </div>

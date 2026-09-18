@@ -236,7 +236,7 @@ export default function ByOrderTab({
         {data && data.skipped_lines > 0 && (
           <div className="right">
             <span style={{ fontSize: 'calc(11.5px * var(--font-size-scale))', color: '#92400e' }}>
-              该订单有 {data.skipped_lines} 个产品行因缺 BOM / 已完工未参与
+              该订单有 {data.skipped_lines} 个产品行因缺 BOM / 数量异常未参与
             </span>
           </div>
         )}
@@ -320,13 +320,7 @@ export default function ByOrderTab({
                 </span>
                 <div className="rt">
                   <span>
-                    订单量 <b>{fmt(line.order_qty)}</b>
-                  </span>
-                  <span>
-                    已完工 <b>{fmt(line.completed_qty)}</b>
-                  </span>
-                  <span>
-                    未完工 <b>{fmt(line.open_qty)}</b>
+                    行数量 <b>{fmt(line.open_qty)}</b>
                   </span>
                   <span>交期 {duePill(line.promised_date)}</span>
                 </div>
