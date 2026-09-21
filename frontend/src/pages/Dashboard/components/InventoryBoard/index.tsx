@@ -3,6 +3,7 @@ import { Button, Spin, Tooltip } from 'antd'
 import { FullscreenOutlined, FullscreenExitOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { inventoryBoardApi } from '@/services/api'
+import { useThemeStore } from '@/store/theme'
 
 /*
  * 库存看板（驾驶舱 · 大屏版）— 复刻 docs/prototype/redesign/inventory-board.html
@@ -17,9 +18,11 @@ const PALETTE = [
   '#f43f5e', '#64748b', '#e879f9', '#84cc16', '#06b6d4', '#fb7185',
 ]
 const OTHER_COLOR = '#94a3b8'
-const MAX_WH_ROWS = 7   // 按仓库：Top 7 + 其他（≤8 行，保证一屏不挤压）
-const MAX_CAT_ROWS = 6  // 按类别：Top 6 + 其他（≤7 行）
-const MAX_COV_ROWS = 8  // 盘点覆盖：未盘降序 Top 8（与按仓库同为 8 行，字号自适应按 8 行标定）
+/* 各列表显示上限（防 25 仓全铺开过长）；装不下时板块内滚动，不裁内容 */
+const MAX_WH_ROWS = 8   // 按仓库：含「其他」最多 8 行
+const MAX_CAT_ROWS = 7  // 按类别：含「其他」最多 7 行
+const MAX_COV_ROWS = 8  // 盘点覆盖：最多 8 行
+const MAX_CHECKS = 5    // 盘点进度：最多 5 张盘点单
 
 const WINDOWS = [
   { k: 7, label: '近 7 天' },
@@ -120,9 +123,9 @@ const pct = (a: number, b: number) => {
 
 const css = `
 .ivb-wrap {
-  /* 字号统一走 --font-size-scale（顶栏字号设置实时生效）；
-     --ivb-fit 仅为「按可用高度能装下」的上限，二者取小 —— 高屏完全跟随设置，矮屏自动收窄 */
-  font-size: min(calc(0.9375rem * var(--font-size-scale, 1)), var(--ivb-fit, 999px));
+  /* 字号完全跟随统一字体管理（--font-size-scale，顶栏设置实时生效，无上限压制）；
+     一屏装不下时由 JS 减行数自适应（见 rowBudget），绝不压字号 */
+  font-size: calc(15px * var(--font-size-scale, 1));
   color: #0f172a; display: flex; flex-direction: column; flex: 1; min-height: 0;
 }
 .ivb-wrap * { box-sizing: border-box; }
@@ -174,10 +177,20 @@ const css = `
 .ivb-body.split { flex-direction: row; gap: 1.1em; }
 .ivb-chart { flex: 0 0 clamp(9.5em, 24%, 14.5em); display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; }
 .ivb-chart svg { width: 100%; height: auto; max-height: 100%; }
-.ivb-list { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ivb-list {
+  /* 行列表：装得下时行均分变高；装不下时板块内滚动（细滚动条），内容永不裁 */
+  flex: 1; min-height: 0; min-width: 0;
+  display: flex; flex-direction: column;
+  overflow-y: auto; scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent;
+}
+.ivb-list::-webkit-scrollbar { width: 5px; }
+.ivb-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+.ivb-list::-webkit-scrollbar-track { background: transparent; }
 
 .ivb-row {
-  flex: 1 1 auto; min-height: 0; overflow: hidden;
+  /* 不设 min-height:0 —— 行永不压缩到比内容矮（那会裁字/叠行）；
+     有富余时 flex 分摊变高，装不下时整行在卡片底部被裁（预算逻辑保证基本不会） */
+  flex: 1 1 auto; overflow: hidden;
   display: flex; flex-direction: column; justify-content: center; padding: 0.15em 0;
 }
 .ivb-row + .ivb-row { border-top: 1px solid #eef2f7; }
@@ -225,7 +238,11 @@ const css = `
 .ivb-kpi4 .v.good { color: #16a34a; }
 .ivb-kpi4 .v.bad { color: #dc2626; }
 .ivb-kpi4 .v.brand { color: #4c4dc2; }
-.ivb-chk { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; padding: 0.2em 0; border-bottom: 1px solid #eef2f7; }
+.ivb-chk {
+  /* 同 .ivb-row：不压缩到比内容矮，防止「单号/副行文字不见」 */
+  flex: 1 1 auto; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: center; padding: 0.2em 0; border-bottom: 1px solid #eef2f7;
+}
 .ivb-chk:last-of-type { border-bottom: none; }
 .ivb-chk-top { display: flex; align-items: center; gap: 0.5em; margin-bottom: 0.3em; }
 .ivb-chk-no { font-family: ui-monospace, Consolas, Menlo, monospace; font-size: 0.74em; font-weight: 700; white-space: nowrap; }
@@ -241,7 +258,6 @@ const css = `
 .ivb-trend-head b { margin-left: auto; font-size: 1.15em; color: #475569; font-weight: 700; }
 .ivb-trend svg { display: block; width: 100%; }
 .ivb-trend-axis { display: flex; justify-content: space-between; font-size: 0.62em; color: #94a3b8; margin-top: 0.2em; font-variant-numeric: tabular-nums; }
-@media (max-height: 1050px) { .ivb-trend { display: none; } }
 `
 
 /* ---------- 图形 ---------- */
@@ -364,8 +380,9 @@ export default function InventoryBoard() {
   const [clock, setClock] = useState(() => dayjs().format('HH:mm'))
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
 
-  // 实测可用高度（不依赖 100vh - 魔数），并按高度自动缩放字号：
-  // 保证 2×2 卡片内容永远装得下（行不会被压扁/重叠）
+  // 实测可用高度（不依赖 100vh - 魔数）；字号完全跟随统一字体设置，
+  // 一屏装不下时按高度减少行数（绝不压字号）
+  const { fontSizeScale } = useThemeStore()
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [boardH, setBoardH] = useState(0)
 
@@ -376,20 +393,15 @@ export default function InventoryBoard() {
       const top = el.getBoundingClientRect().top
       setBoardH(Math.max(360, Math.round(window.innerHeight - top - 32)))
     }
-    calc()
+    const raf = requestAnimationFrame(calc)
     const t = window.setTimeout(calc, 250)
     window.addEventListener('resize', calc)
     return () => {
-      window.removeEventListener('resize', calc)
+      cancelAnimationFrame(raf)
       window.clearTimeout(t)
+      window.removeEventListener('resize', calc)
     }
-  }, [fullscreen])
-
-  // 字号上限：按可用高度算「装得下 8 行」的字号（与 --font-size-scale 取 min，见 .ivb-wrap）
-  const fitFontSize = useMemo(() => {
-    if (!boardH) return null
-    return Math.max(10, (boardH - 10) / 44.6)
-  }, [boardH])
+  }, [fullscreen, fontSizeScale])
 
   const loadOverview = useCallback(async () => {
     try {
@@ -457,7 +469,7 @@ export default function InventoryBoard() {
 
   const view = whFilter === 'all' ? base : (scoped ?? base)
 
-  // 按仓库：数量降序；超过 MAX_WH_ROWS 时尾部合并「其他 N 仓」（灰色）
+  // 按仓库：数量降序；装不下时尾部合并「其他 N 仓」（灰色）
   const whGroups = useMemo(() => {
     const list = (base?.by_warehouse ?? []).map(w => ({
       id: w.warehouse_id,
@@ -468,10 +480,10 @@ export default function InventoryBoard() {
       other: false,
     })).sort((a, b) => b.qty - a.qty)
 
-    if (list.length <= MAX_WH_ROWS + 1) return list
+    if (list.length <= MAX_WH_ROWS) return list
 
-    const head = list.slice(0, MAX_WH_ROWS)
-    const tail = list.slice(MAX_WH_ROWS)
+    const head = list.slice(0, MAX_WH_ROWS - 1)
+    const tail = list.slice(MAX_WH_ROWS - 1)
     head.push({
       id: -1,
       name: `其他 ${tail.length} 仓`,
@@ -486,7 +498,7 @@ export default function InventoryBoard() {
   const whTotal = useMemo(() => whGroups.reduce((a, w) => a + w.qty, 0), [whGroups])
   const whCount = useMemo(() => (base?.by_warehouse ?? []).length, [base])
 
-  // 按类别：数量降序；Top 6 + 其他（堆叠条与图例同源，保证合计 100%）
+  // 按类别：数量降序；Top N + 其他（堆叠条与图例同源，保证合计 100%）
   const catGroups = useMemo(() => {
     const all = (view?.by_category ?? [])
       .map(c => ({ name: c.category || '未分类', count: num(c.material_count), qty: num(c.total_qty) }))
@@ -495,8 +507,8 @@ export default function InventoryBoard() {
 
     if (all.length <= MAX_CAT_ROWS) return all.map((c, i) => ({ ...c, color: PALETTE[i % PALETTE.length] }))
 
-    const head = all.slice(0, MAX_CAT_ROWS).map((c, i) => ({ ...c, color: PALETTE[i % PALETTE.length] }))
-    const tail = all.slice(MAX_CAT_ROWS)
+    const head = all.slice(0, MAX_CAT_ROWS - 1).map((c, i) => ({ ...c, color: PALETTE[i % PALETTE.length] }))
+    const tail = all.slice(MAX_CAT_ROWS - 1)
     head.push({
       name: `其他 ${tail.length} 类`,
       count: tail.reduce((a, c) => a + c.count, 0),
@@ -532,10 +544,7 @@ export default function InventoryBoard() {
   const kpi = view?.kpi
 
   const content = (
-    <div
-      className="ivb-wrap"
-      style={{ ['--ivb-fit' as string]: fitFontSize ? `${fitFontSize}px` : undefined } as React.CSSProperties}
-    >
+    <div className="ivb-wrap">
       <style>{css}</style>
 
       <header className="ivb-bar">
@@ -585,7 +594,7 @@ export default function InventoryBoard() {
             <h3>库存分布 · 按仓库</h3>
             <span className="ivb-hint">
               合计 <b>{whCount}</b> 仓 · 库存数量 {fmtQty(whTotal)}
-              {whGroups.length > whCount ? ` · Top ${MAX_WH_ROWS} + 其他` : ''}
+              {whGroups.some(w => w.other) ? ` · Top ${MAX_WH_ROWS - 1} + 其他` : ''}
               {whFilter === 'all' ? '' : ` · 已选 ${(base?.by_warehouse ?? []).find(w => w.warehouse_id === whFilter)?.warehouse_name ?? ''}`}
             </span>
           </div>
@@ -624,7 +633,9 @@ export default function InventoryBoard() {
             <h3>库存分布 · 按类别</h3>
             <span className="ivb-hint">
               共 <b>{catCount}</b> 类 · 库存数量 {fmtQty(catTotal)}
-              {catGroups.length > MAX_CAT_ROWS ? ` · Top ${MAX_CAT_ROWS} + 其他` : ''}
+              {catGroups.some(c => c.name.startsWith('其他'))
+                ? ` · Top ${catGroups.filter(c => !c.name.startsWith('其他')).length} + 其他`
+                : ''}
               {whFilter === 'all' ? '' : ` · ${(base?.by_warehouse ?? []).find(w => w.warehouse_id === whFilter)?.warehouse_name ?? ''}`}
             </span>
           </div>
@@ -716,42 +727,44 @@ export default function InventoryBoard() {
                 <div className="v brand">{num(chk?.kpi.active_checks)} 单</div>
               </div>
             </div>
-            {(chk?.active_checks ?? []).map(c => {
-              const p = c.total_materials ? c.checked_materials / c.total_materials : 0
-              const barColor = p >= 0.8 ? '#16a34a' : p > 0 ? '#d97706' : '#e2e8f0'
-              return (
-                <div key={c.check_id} className="ivb-chk">
-                  <div className="ivb-chk-top">
-                    <span className="ivb-chk-no">{c.check_no}</span>
-                    <span className={`ivb-st ${c.status === 'open' ? 'open' : 'doing'}`}>
-                      {c.status === 'open' ? '待开始' : '进行中'}
-                    </span>
-                    <span className={`ivb-chk-age${c.age_days >= 7 ? ' hot' : ''}`}>停留 {c.age_days} 天</span>
+            <div className="ivb-list">
+              {(chk?.active_checks ?? []).slice(0, MAX_CHECKS).map(c => {
+                const p = c.total_materials ? c.checked_materials / c.total_materials : 0
+                const barColor = p >= 0.8 ? '#16a34a' : p > 0 ? '#d97706' : '#e2e8f0'
+                return (
+                  <div key={c.check_id} className="ivb-chk">
+                    <div className="ivb-chk-top">
+                      <span className="ivb-chk-no">{c.check_no}</span>
+                      <span className={`ivb-st ${c.status === 'open' ? 'open' : 'doing'}`}>
+                        {c.status === 'open' ? '待开始' : '进行中'}
+                      </span>
+                      <span className={`ivb-chk-age${c.age_days >= 7 ? ' hot' : ''}`}>停留 {c.age_days} 天</span>
+                    </div>
+                    <div className="ivb-track">
+                      <i style={{ width: `${(p * 100).toFixed(0)}%`, background: barColor }} />
+                    </div>
+                    <div className="ivb-chk-sub">
+                      <span>已盘 {c.checked_materials} / 应盘 {c.total_materials}</span>
+                      {c.created_by && <span>{c.created_by}</span>}
+                      <span>{c.check_date ? dayjs(c.check_date).format('MM-DD') : ''}</span>
+                      <span className="p">{Math.round(p * 100)}%</span>
+                    </div>
                   </div>
-                  <div className="ivb-track">
-                    <i style={{ width: `${(p * 100).toFixed(0)}%`, background: barColor }} />
+                )
+              })}
+              {trend.length > 0 && (
+                <div className="ivb-trend">
+                  <div className="ivb-trend-head">
+                    <span>近 30 天完成单数</span><b>{trendSum} 单</b>
                   </div>
-                  <div className="ivb-chk-sub">
-                    <span>已盘 {c.checked_materials} / 应盘 {c.total_materials}</span>
-                    {c.created_by && <span>{c.created_by}</span>}
-                    <span>{c.check_date ? dayjs(c.check_date).format('MM-DD') : ''}</span>
-                    <span className="p">{Math.round(p * 100)}%</span>
+                  <AreaChart trend={trend} />
+                  <div className="ivb-trend-axis">
+                    <span>{dayjs().subtract(29, 'day').format('MM-DD')}</span>
+                    <span>今天 {dayjs().format('MM-DD')}</span>
                   </div>
                 </div>
-              )
-            })}
-            {trend.length > 0 && (
-              <div className="ivb-trend">
-                <div className="ivb-trend-head">
-                  <span>近 30 天完成单数</span><b>{trendSum} 单</b>
-                </div>
-                <AreaChart trend={trend} />
-                <div className="ivb-trend-axis">
-                  <span>{dayjs().subtract(29, 'day').format('MM-DD')}</span>
-                  <span>今天 {dayjs().format('MM-DD')}</span>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </section>
       </div>
