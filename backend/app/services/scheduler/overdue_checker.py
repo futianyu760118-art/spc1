@@ -8,6 +8,7 @@ from sqlalchemy import select, func, or_
 from app.core.database import AsyncSessionLocal
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.basicdata.announcement import Notification
+from app.services.notification.notification_broker import publish_unread_update
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,9 @@ class OverdueCheckerScheduler:
                     notification_count += 1
 
                 await db.commit()
+                # commit 后 SSE 推送未读计数（Redis 失败静默丢弃）
+                for row in rows:
+                    await publish_unread_update(db, row.owner_id)
                 logger.info(f"[逾期检查] 完成: 为 {len(rows)} 个责任人创建了 {notification_count} 条通知")
         except Exception as e:
             logger.error(f"[逾期检查] 执行失败: {e}")

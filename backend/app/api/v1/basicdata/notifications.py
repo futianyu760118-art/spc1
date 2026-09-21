@@ -50,6 +50,8 @@ async def create_notification(
     db.add(notification)
     await db.commit()
     await db.refresh(notification)
+    # commit 后 SSE 推送未读计数（Redis 失败静默丢弃）
+    await publish_unread_update(db, uid)
     return ResponseModel(data={"id": notification.id})
 
 

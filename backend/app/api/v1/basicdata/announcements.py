@@ -14,6 +14,7 @@ from app.core.audit import log_audit
 from app.models.basicdata.announcement import Announcement, Notification
 from app.models.basicdata.user import SysUser
 from app.schemas.common import ResponseModel
+from app.services.notification.notification_broker import publish_unread_update
 
 router = APIRouter()
 
@@ -296,4 +297,7 @@ async def publish_announcement(
     await log_audit(db, "announcement", ann.id, "update", field_name="is_published",
                     old_value="false", new_value="true", operator=current_user.get("username", ""))
     await db.commit()
+    # commit 后 SSE 推送未读计数（Redis 失败静默丢弃）
+    for uid in user_rows:
+        await publish_unread_update(db, uid)
     return ResponseModel(data={"id": ann.id, "notified_users": len(user_rows)})
