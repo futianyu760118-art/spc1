@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, Tabs, List, Tag, Typography, notification as antNotification } from 'antd'
+import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, List, Tag, Typography, notification as antNotification } from 'antd'
 import {
   DashboardOutlined,
   ShoppingCartOutlined,
@@ -34,9 +34,9 @@ import {
   NotificationOutlined,
   CheckOutlined,
   CheckCircleOutlined,
-  SoundOutlined,
   IdcardOutlined,
   SafetyOutlined,
+  SafetyCertificateOutlined,
   ApiOutlined,
   EnvironmentOutlined,
   StockOutlined,
@@ -73,8 +73,6 @@ const MODULE_ICON_MAP: Record<string, React.ReactNode> = {
   materials: <ExperimentOutlined />,
   production: <RocketOutlined />,
   exceptions: <WarningOutlined />,
-  meetings: <TeamOutlined />,
-  npi: <ProjectOutlined />,
   rules: <ToolOutlined />,
   basicdata: <DatabaseOutlined />,
   finance: <AccountBookOutlined />,
@@ -104,18 +102,13 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'production.exceptions': <WarningOutlined />,
   'production.daily_report': <FileTextOutlined />,
   'exceptions.pool': <WarningOutlined />,
-  'exceptions.issue_log': <FileTextOutlined />,
-  'exceptions.change_log': <SwapOutlined />,
   'exceptions.quality': <AuditOutlined />,
   'exceptions.product_samples': <FileTextOutlined />,
   'exceptions.closure': <AuditOutlined />,
   'rules.risk_rules': <SettingOutlined />,
-  'rules.inspection': <AuditOutlined />,
   'rules.node_standards': <ContainerOutlined />,
   'rules.order_standards': <FileTextOutlined />,
   'rules.work_instructions': <AuditOutlined />,
-  'rules.responsibility': <TeamOutlined />,
-  'rules.status_dict': <AppstoreOutlined />,
   'basicdata.import': <ImportOutlined />,
   'basicdata.data': <DatabaseOutlined />,
   'basicdata.data.customers': <UserOutlined />,
@@ -140,8 +133,6 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   audit: <AuditOutlined />,
   settings: <SwapOutlined />,
   'finance.data': <AccountBookOutlined />,
-  meetings: <TeamOutlined />,
-  npi: <ProjectOutlined />,
 }
 
 // 判断节点是否为可进入的菜单页面：自身有路由，或子树中存在有路由的页面。
@@ -214,6 +205,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/supplier-payment', icon: <AccountBookOutlined />, label: '供应商付款排程', permission: 'materials.supplier_payment' },
       { key: '/stock-check', icon: <AuditOutlined />, label: '物料盘点', permission: 'materials.stock_check' },
       { key: '/task-stock-check', icon: <AuditOutlined />, label: '任务盘点', permission: 'materials.task_stock_check' },
+      { key: '/stock-check-audit', icon: <SafetyCertificateOutlined />, label: '盘点抽检', permission: 'materials.stock_check_audit' },
       { key: '/subcontract-orders', icon: <ProfileOutlined />, label: '委外订单', permission: 'materials.subcontract_orders' },
       { key: '/scrap-inventory', icon: <DeleteOutlined />, label: '报废物料库存查询', permission: 'materials.scrap_inventory' },
       { key: '/material-occupancy', icon: <AppstoreOutlined />, label: '物料占用分析', permission: 'materials.occupancy' },
@@ -249,27 +241,9 @@ const allMenuItems: PermissionAwareItem[] = [
     permission: 'exceptions',
     children: [
       { key: '/issues', icon: <WarningOutlined />, label: '异常总池', permission: 'exceptions.pool' },
-      { key: '/issue-log', icon: <FileTextOutlined />, label: '问题日志', permission: 'exceptions.issue_log' },
-      { key: '/change-log', icon: <SwapOutlined />, label: '变更日志', permission: 'exceptions.change_log' },
       { key: '/quality-issues', icon: <AuditOutlined />, label: '品质异常', permission: 'exceptions.quality' },
       { key: '/product-samples', icon: <FileTextOutlined />, label: '产品封样', permission: 'exceptions.product_samples' },
       { key: '/closure-tracking', icon: <AuditOutlined />, label: '闭环跟踪', permission: 'exceptions.closure' },
-    ],
-  },
-  {
-    key: 'meeting-center',
-    icon: <TeamOutlined />,
-    label: '会议与任务中心',
-    children: [
-      { key: '/meetings', icon: <TeamOutlined />, label: '会议与行动项', permission: 'meetings' },
-    ],
-  },
-  {
-    key: 'npi-center',
-    icon: <ProjectOutlined />,
-    label: '新品/NPI项目中心',
-    children: [
-      { key: '/npi', icon: <ProjectOutlined />, label: '项目总览', permission: 'npi' },
     ],
   },
   {
@@ -279,12 +253,9 @@ const allMenuItems: PermissionAwareItem[] = [
     permission: 'rules',
     children: [
       { key: '/risk-rules', icon: <SettingOutlined />, label: '预警规则', permission: 'rules.risk_rules' },
-      { key: '/inspection-rules', icon: <AuditOutlined />, label: '点检规则', permission: 'rules.inspection' },
       { key: '/node-standards', icon: <ContainerOutlined />, label: '节点标准', permission: 'rules.node_standards' },
       { key: '/order-standards', icon: <FileTextOutlined />, label: '订单标准', permission: 'rules.order_standards' },
       { key: '/work-instructions', icon: <AuditOutlined />, label: '作业指导书', permission: 'rules.work_instructions' },
-      { key: '/responsibility-map', icon: <TeamOutlined />, label: '责任归属', permission: 'rules.responsibility' },
-      { key: '/status-dict', icon: <AppstoreOutlined />, label: '状态字典', permission: 'rules.status_dict' },
     ],
   },
   {
@@ -439,6 +410,7 @@ const pathToGroupKey: Record<string, string> = {
   '/run-orders': 'order-delivery',
   '/order-risk-pool': 'order-delivery',
   '/stock-check': 'material-center',
+  '/stock-check-audit': 'material-center',
   '/quick-stock-check': 'material-center',
   '/task-stock-check': 'material-center',
   '/purchase-plan': 'material-center',
@@ -471,20 +443,13 @@ const pathToGroupKey: Record<string, string> = {
   '/packaging': 'production-center',
   '/process-exceptions': 'production-center',
   '/issues': 'exception-center',
-  '/issue-log': 'exception-center',
-  '/change-log': 'exception-center',
   '/quality-issues': 'exception-center',
   '/product-samples': 'exception-center',
   '/closure-tracking': 'exception-center',
-  '/meetings': 'meeting-center',
-  '/npi': 'npi-center',
   '/risk-rules': 'rules-center',
-  '/inspection-rules': 'rules-center',
   '/node-standards': 'rules-center',
   '/order-standards': 'rules-center',
   '/work-instructions': 'rules-center',
-  '/responsibility-map': 'rules-center',
-  '/status-dict': 'rules-center',
   '/import': 'basicdata-center',
   '/basicdata/customers': 'basicdata-management',
   '/basicdata/suppliers': 'basicdata-management',
@@ -519,6 +484,7 @@ const pathToPermission: Record<string, string> = {
   '/domestic-shipment': 'orders.list',
   '/order-risk-pool': 'orders.risk_pool',
   '/stock-check': 'materials.stock_check',
+  '/stock-check-audit': 'materials.stock_check_audit',
   '/quick-stock-check': 'materials.stock_check',
   '/task-stock-check': 'materials.task_stock_check',
   '/purchase-plan': 'materials.purchase_plan',
@@ -531,8 +497,6 @@ const pathToPermission: Record<string, string> = {
   '/scrap-inventory': 'materials.scrap_inventory',
   '/material-occupancy': 'materials.occupancy',
   '/issues': 'exceptions.pool',
-  '/issue-log': 'exceptions.issue_log',
-  '/change-log': 'exceptions.change_log',
   '/quality-issues': 'exceptions.quality',
   '/product-samples': 'exceptions.product_samples',
   '/closure-tracking': 'exceptions.closure',
@@ -553,16 +517,11 @@ const pathToPermission: Record<string, string> = {
   '/assembly': 'production.assembly',
   '/packaging': 'production.packaging',
   '/process-exceptions': 'production.exceptions',
-  '/meetings': 'meetings',
-  '/npi': 'npi',
   '/import': 'basicdata.import',
   '/risk-rules': 'rules.risk_rules',
-  '/inspection-rules': 'rules.inspection',
   '/node-standards': 'rules.node_standards',
   '/order-standards': 'rules.order_standards',
   '/work-instructions': 'rules.work_instructions',
-  '/responsibility-map': 'rules.responsibility',
-  '/status-dict': 'rules.status_dict',
   '/users': 'users',
   '/roles': 'roles',
   '/audit': 'audit',
@@ -586,6 +545,7 @@ const pathToPermission: Record<string, string> = {
   '/basicdata/files': 'basicdata.files',
   '/basicdata/data-supply': 'basicdata.data_supply',
   '/announcements': 'announcements',
+  '/notifications': 'topbar.notifications',
   '/deploy-versions': 'deploy_versions',
   '/purchase/price-change': 'purchase.price_change',
   '/purchase/price-change/new': 'purchase.price_change',
@@ -609,11 +569,9 @@ export default function MainLayout() {
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
   const [bellOpen, setBellOpen] = useState(false)
-  const [notifTab, setNotifTab] = useState('announcement_system')
   const [notifList, setNotifList] = useState<any[]>([])
   const [notifLoading, setNotifLoading] = useState(false)
   const [unreadTotal, setUnreadTotal] = useState(0)
-  const [unreadByType, setUnreadByType] = useState<Record<string, number>>({})
   const [forcePwdModalOpen, setForcePwdModalOpen] = useState(false)
   const [forcePwdForm] = Form.useForm()
   const [forcePwdDismissable, setForcePwdDismissable] = useState(false)
@@ -700,32 +658,20 @@ export default function MainLayout() {
     try {
       const res: any = await notificationApi.unreadCount()
       setUnreadTotal(res.data?.total || 0)
-      setUnreadByType(res.data?.by_type || {})
     } catch { /* silent */ }
   }, [originalToken, isShareUser, canUseTopbar.notifications])
 
-  const fetchNotifList = useCallback(async (tab?: string) => {
+  const fetchNotifList = useCallback(async () => {
     if (!originalToken || isShareUser() || !canUseTopbar.notifications) return
     setNotifLoading(true)
     try {
-      const activeTab = tab || notifTab
-      const params: Record<string, any> = { page_size: 30 }
-      if (activeTab === 'announcement_system') {
-        const [annRes, sysRes] = await Promise.all([
-          notificationApi.list({ ...params, type: 'announcement' }),
-          notificationApi.list({ ...params, type: 'system' })
-        ])
-        const items = [...(annRes.data?.items || []), ...(sysRes.data?.items || [])]
-        items.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        setNotifList(items)
-      } else if (activeTab === 'alert') {
-        const res: any = await notificationApi.list(params)
-        const items = (res.data?.items || []).filter((n: any) => n.type !== 'announcement' && n.type !== 'system')
-        setNotifList(items)
-      }
+      const res: any = await notificationApi.list({ page_size: 50 })
+      const items = (res.data?.items || []) as any[]
+      items.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      setNotifList(items)
     } catch { /* silent */ }
     setNotifLoading(false)
-  }, [originalToken, isShareUser, notifTab, canUseTopbar.notifications])
+  }, [originalToken, isShareUser, canUseTopbar.notifications])
 
   useEffect(() => {
     if (!originalToken || isShareUser()) return
@@ -771,7 +717,6 @@ export default function MainLayout() {
         try {
           const data = JSON.parse(ev.data)
           setUnreadTotal(data.total || 0)
-          setUnreadByType(data.by_type || {})
         } catch { /* silent */ }
       })
       es.addEventListener('error', () => {
@@ -819,8 +764,8 @@ export default function MainLayout() {
   }, [originalToken, isShareUser, canUseTopbar.notifications])
 
   useEffect(() => {
-    if (bellOpen) fetchNotifList(notifTab)
-  }, [bellOpen, notifTab, fetchNotifList])
+    if (bellOpen) fetchNotifList()
+  }, [bellOpen, fetchNotifList])
 
   useEffect(() => {
     if (currentUser && 'is_default_password' in currentUser && currentUser.is_default_password) {
@@ -836,14 +781,7 @@ export default function MainLayout() {
   }
 
   const handleMarkAllRead = async () => {
-    if (notifTab === 'announcement_system') {
-      await Promise.all([
-        notificationApi.markAllRead('announcement'),
-        notificationApi.markAllRead('system')
-      ])
-    } else {
-      await notificationApi.markAllRead(notifTab)
-    }
+    await notificationApi.markAllRead()
     setNotifList(prev => prev.map(n => ({ ...n, is_read: true })))
     fetchUnreadCount()
   }
@@ -878,7 +816,12 @@ export default function MainLayout() {
     if (isSupplierUser()) {
       return filterSupplierPortalMenu(dynamicMenuItems, hasPermission)
     }
-    return filterMenuByPermission(dynamicMenuItems, hasPermission)
+    const tree = filterMenuByPermission(dynamicMenuItems, hasPermission)
+    // 个人工作区：站内信（对全部持有 topbar.notifications 权限的内部用户可见）
+    if (hasPermission('topbar.notifications', 'read')) {
+      tree.push({ key: '/notifications', icon: <BellOutlined />, label: '站内信' } as any)
+    }
+    return tree
   }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
@@ -982,23 +925,10 @@ export default function MainLayout() {
                 overlayStyle={{ width: 380 }}
                 content={
                   <div style={{ margin: '-12px -16px' }}>
-                    <Tabs
-                      activeKey={notifTab}
-                      onChange={setNotifTab}
-                      centered
-                      size="small"
-                      style={{ marginBottom: 0 }}
-                      items={[
-                        {
-                          key: 'announcement_system',
-                          label: <span style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}><SoundOutlined /> 公告系统 {(unreadByType['announcement'] || 0) + (unreadByType['system'] || 0) > 0 ? <Badge count={(unreadByType['announcement'] || 0) + (unreadByType['system'] || 0)} size="small" offset={[4, -2]} /> : null}</span>,
-                        },
-                        {
-                          key: 'alert',
-                          label: <span style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}><WarningOutlined /> 提醒 {(unreadByType['material_alert'] || 0) + (unreadByType['exception_alert'] || 0) > 0 ? <Badge count={(unreadByType['material_alert'] || 0) + (unreadByType['exception_alert'] || 0)} size="small" offset={[4, -2]} /> : null}</span>,
-                        },
-                      ]}
-                    />
+                    <div style={{ padding: '10px 12px 4px', fontWeight: 600, fontSize: 'calc(0.9375rem * var(--font-size-scale))', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span>站内信</span>
+                      {unreadTotal > 0 && <Badge count={unreadTotal} size="small" />}
+                    </div>
                     <List
                       loading={notifLoading}
                       dataSource={notifList}
@@ -1013,6 +943,10 @@ export default function MainLayout() {
                             if (item.type === 'feedback' && item.ref_id) {
                               setBellOpen(false)
                               navigate(`/basicdata/feedback?id=${item.ref_id}`)
+                            }
+                            if (item.ref_type === 'stock_check' && item.ref_id) {
+                              setBellOpen(false)
+                              navigate(`/stock-check/${item.ref_id}`)
                             }
                           }}
                         >
@@ -1044,7 +978,7 @@ export default function MainLayout() {
                     />
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderTop: '1px solid #f0f0f0' }}>
                       <Button type="link" size="small" icon={<CheckOutlined />} onClick={handleMarkAllRead} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>全部已读</Button>
-                      <Button type="link" size="small" onClick={() => { setBellOpen(false); navigate('/announcements') }} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>查看全部</Button>
+                      <Button type="link" size="small" onClick={() => { setBellOpen(false); navigate('/notifications') }} style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))' }}>查看全部</Button>
                     </div>
                   </div>
                 }

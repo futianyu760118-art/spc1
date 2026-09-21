@@ -43,14 +43,9 @@ from app.models.production.workshop_daily_report import (  # noqa: F401
     WorkshopDailyReportTask,
 )
 from app.models.exception.risk_issue import RiskIssue
-from app.models.exception.issue_log import IssueLog
-from app.models.exception.change_log import ChangeLog
 from app.models.exception.quality_issue import QualityIssue
 from app.models.rules.risk_rule import RiskRule
-from app.models.rules.inspection_rule import InspectionRule
 from app.models.rules.node_standard import NodeStandard
-from app.models.rules.responsibility_map import ResponsibilityMap
-from app.models.rules.status_dictionary import StatusDictionary
 from app.models.common.business_document import BusinessDocument, BusinessDocumentVersion
 from app.models.basicdata.user import SysUser, SysRole
 from app.models.basicdata.audit_log import AuditLog
@@ -356,6 +351,10 @@ class DatabaseInitializer:
                 "source": "VARCHAR(16) NOT NULL DEFAULT 'manual'",
                 "erp_bill_no": "VARCHAR(64)",
                 "erp_inter_id": "BIGINT",
+                "audit_status": "VARCHAR(16)",
+                "audit_by": "VARCHAR(100)",
+                "audit_at": "TIMESTAMP",
+                "audit_comment": "TEXT",
             },
             "scm_inventory_check_item": {
                 "level": "INTEGER",
@@ -369,6 +368,10 @@ class DatabaseInitializer:
                 "counted_by": "VARCHAR(100)",
                 "counted_at": "TIMESTAMP",
                 "version": "INTEGER NOT NULL DEFAULT 0",
+                "audit_failed": "INTEGER NOT NULL DEFAULT 0",
+                "appeal_status": "VARCHAR(16)",
+                "appeal_reason": "TEXT",
+                "appeal_at": "TIMESTAMP",
             },
             "production_daily_report": {
                 "oa_detail_id": "INTEGER",
@@ -452,6 +455,16 @@ class DatabaseInitializer:
                     print("  sys_user.channel_sessions backfilled from login_version/last_token_jti")
         except Exception as e:
             print(f"  sys_user.channel_sessions backfill skipped: {e}")
+        # 盘点抽检:存量已完结单视为已通过(NULL=老单兼容,回填后新完结单都会显式写值)
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "UPDATE scm_inventory_check SET audit_status = 'passed' "
+                    "WHERE status = 'completed' AND audit_status IS NULL"
+                ))
+            print("  scm_inventory_check.audit_status backfilled for completed checks")
+        except Exception as e:
+            print(f"  scm_inventory_check.audit_status backfill skipped: {e}")
         # 删除废弃列
         for table, cols in drop_columns.items():
             for col in cols:
@@ -476,7 +489,12 @@ class DatabaseInitializer:
             print(f"  subcontract_order_detail.price comment skipped: {e}")
 
         # 数据供给旧通用查询模型已下线：删除死表（幂等，每条独立事务）
-        for dead_table in ("data_supply_config", "field_mapping"):
+        # 2026-09 下线菜单模块对应表：问题日志/变更日志/点检规则/责任归属/状态字典
+        for dead_table in (
+            "data_supply_config", "field_mapping",
+            "issue_log", "change_log",
+            "inspection_rule", "responsibility_map", "status_dictionary",
+        ):
             try:
                 async with self.engine.begin() as conn:
                     await conn.execute(text(f"DROP TABLE IF EXISTS {dead_table}"))
@@ -672,6 +690,14 @@ class DatabaseInitializer:
                 print("  scm_inventory_check.erp_bill_no unique index ensured")
             except Exception as e:
                 print(f"  scm_inventory_check.erp_bill_no index skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_scm_inventory_check_audit_status "
+                    "ON scm_inventory_check (audit_status)"
+                ))
+                print("  scm_inventory_check.audit_status index ensured")
+            except Exception as e:
+                print(f"  scm_inventory_check.audit_status index skipped: {e}")
 
     async def migrate_production_daily_report_index(self):
         """将 production_daily_report 的唯一索引由 (oa_id) 改为 (oa_id, oa_detail_id)，
@@ -1049,18 +1075,11 @@ class DatabaseInitializer:
                             "production.schedule_plans": ["create", "read", "update", "delete"],
                             "production.daily_report": ["create", "read", "update", "delete"],
                             "exceptions.pool": ["create", "read", "update", "delete", "import"],
-                            "exceptions.issue_log": ["create", "read", "update", "delete", "import"],
-                            "exceptions.change_log": ["create", "read", "update", "delete", "import"],
                             "exceptions.quality": ["create", "read", "update", "delete", "import"],
                             "exceptions.product_samples": ["create", "read", "update", "delete"],
                             "exceptions.closure": ["create", "read", "update", "delete", "import"],
-                            "meetings": ["create", "read", "update", "delete"],
-                            "npi": ["create", "read", "update", "delete"],
                             "rules.risk_rules": ["create", "read", "update", "delete"],
-                            "rules.inspection": ["create", "read", "update", "delete"],
                             "rules.node_standards": ["create", "read", "update", "delete"],
-                            "rules.responsibility": ["create", "read", "update", "delete"],
-                            "rules.status_dict": ["create", "read", "update", "delete"],
                             "rules.order_standards": ["create", "read", "update", "delete"],
                             "rules.work_instructions": ["create", "read", "update", "delete"],
                             "basicdata.import": ["create", "read", "update", "delete", "import"],
@@ -1108,13 +1127,9 @@ class DatabaseInitializer:
                             "production.exceptions": ["read", "update", "import"],
                             "production.schedule_plans": ["read", "update"],
                             "exceptions.pool": ["read"],
-                            "exceptions.issue_log": ["read"],
-                            "exceptions.change_log": ["read"],
                             "exceptions.quality": ["read"],
                             "exceptions.product_samples": ["read", "update"],
                             "exceptions.closure": ["read"],
-                            "meetings": ["read"],
-                            "npi": ["read"],
                             "basicdata.import": ["read"],
                             "basicdata.data": ["read"],
                             "basicdata.feedback": ["create", "read"],
@@ -1147,12 +1162,8 @@ class DatabaseInitializer:
                             "purchase.price_change": ["create", "read", "update"],
                             "purchase.price_change.pending": ["read"],
                             "exceptions.pool": ["read"],
-                            "exceptions.issue_log": ["read"],
-                            "exceptions.change_log": ["read"],
                             "exceptions.quality": ["read"],
                             "exceptions.closure": ["read"],
-                            "meetings": ["read"],
-                            "npi": ["read"],
                             "basicdata.import": ["read"],
                             "basicdata.data": ["read"],
                             "basicdata.feedback": ["create", "read"],
@@ -1190,12 +1201,8 @@ class DatabaseInitializer:
                             "production.packaging": ["read", "update"],
                             "production.exceptions": ["read", "update"],
                             "exceptions.pool": ["read", "update"],
-                            "exceptions.issue_log": ["read", "update"],
-                            "exceptions.change_log": ["read", "update"],
                             "exceptions.quality": ["read", "update"],
                             "exceptions.closure": ["read", "update"],
-                            "meetings": ["create", "read", "update", "delete"],
-                            "npi": ["read"],
                             "basicdata.import": ["read"],
                             "basicdata.data": ["read"],
                             "basicdata.feedback": ["create", "read", "update"],
@@ -1229,12 +1236,8 @@ class DatabaseInitializer:
                             "purchase.price_change.pending": ["read"],
                             "purchase.price_change.config": ["create", "read", "update", "delete"],
                             "exceptions.pool": ["read", "update"],
-                            "exceptions.issue_log": ["read", "update"],
-                            "exceptions.change_log": ["read", "update"],
                             "exceptions.quality": ["read", "update"],
                             "exceptions.closure": ["read", "update"],
-                            "meetings": ["read"],
-                            "npi": ["read"],
                             "basicdata.import": ["read"],
                             "basicdata.data": ["read"],
                             "basicdata.feedback": ["create", "read", "update"],
