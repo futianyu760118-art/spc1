@@ -550,6 +550,13 @@ async def recent(
         filter_query = filter_query.where(*writeback_todo_criterion())
     if audit_statuses:
         filter_query = filter_query.where(StockCheck.audit_status.in_(audit_statuses))
+    if has_appeal:
+        # 与取数同口径:仅存在待裁决复议行的盘点单
+        appeal_exists = select(StockCheckItem.id).where(
+            StockCheckItem.check_id == StockCheck.id,
+            StockCheckItem.appeal_status == "pending",
+        ).exists()
+        filter_query = filter_query.where(appeal_exists)
     total = (await db.execute(
         select(func.count()).select_from(filter_query.subquery())
     )).scalar() or 0

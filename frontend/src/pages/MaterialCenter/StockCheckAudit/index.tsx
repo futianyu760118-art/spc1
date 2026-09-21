@@ -144,10 +144,9 @@ export default function StockCheckAuditPage() {
   // 行勾选(问题行标记;过程标记与终检发回共用) + footer 原因输入
   const [pickedIds, setPickedIds] = useState<number[]>([])
   const [footComment, setFootComment] = useState('')
+  // footer 展开的动作(null=收起;reject=发回原因;flag=标记说明)
+  const [footAction, setFootAction] = useState<'reject' | 'flag' | null>(null)
   const [acting, setActing] = useState(false)
-
-  // 通过确认弹窗
-  const [passOpen, setPassOpen] = useState(false)
 
   // 表格视口内滚动:直接测量表体元素距视口顶部的位置(自适应 KPI 换行/字号缩放),页面不出现滚动条
   const tableWrapRef = useRef<HTMLDivElement>(null)
@@ -228,10 +227,10 @@ export default function StockCheckAuditPage() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      setPassOpen(false)
       if (!acting) {
         setAppealCheck(null)
         setDetail(null)
+        setFootAction(null)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -345,17 +344,15 @@ export default function StockCheckAuditPage() {
           message.success(`已标记 ${extra?.item_ids?.length ?? 0} 行问题并通知盘点人`)
           const cur = detail
           setFootComment('')
-          setPassOpen(false)
+          setFootAction(null)
           if (cur) void openDetail(cur)
         }
-        setPassOpen(false)
         void load()
         void loadKpi()
       } catch (e: any) {
         const code = e?.response?.data?.detail?.code ?? e?.response?.status
         if (code === 409) {
           message.warning('该盘点单已被处置或刚被修改，正在刷新')
-          setPassOpen(false)
           setDetail(null)
           void load()
         } else {
@@ -368,6 +365,7 @@ export default function StockCheckAuditPage() {
     [detail, buildAuditItems, load, loadKpi, openDetail, message],
   )
 
+  // 通过:无不符直接生效;有不符弹确认(唯一保留的确认弹窗)
   const handlePassClick = () => {
     if (mismatchIds.length > 0) {
       modal.confirm({
@@ -378,7 +376,7 @@ export default function StockCheckAuditPage() {
         onOk: () => doAudit('pass'),
       })
     } else {
-      setPassOpen(true)
+      void doAudit('pass')
     }
   }
 
@@ -404,6 +402,15 @@ export default function StockCheckAuditPage() {
       comment: footComment.trim() || undefined,
       item_ids: pickedIds,
     })
+  }
+
+  // 发回重填入口(终检 footer):展开原因输入并自动聚焦
+  const startReject = () => {
+    setFootAction('reject')
+    // 下一帧聚焦,体验接近弹层
+    window.setTimeout(() => {
+      document.getElementById('sca-foot-reason')?.focus()
+    }, 50)
   }
 
   // ===== 复议裁决(独立弹窗,不复用复点抽屉) =====
@@ -723,7 +730,12 @@ export default function StockCheckAuditPage() {
           if (raw === '') {
             setAuditQtys((m) => ({ ...m, [i.id]: null }))
           } else if (!isNaN(Number(raw))) {
-            setAuditQtys((m) => ({ ...m, [i.id]: Number(raw) }))
+            const n = Number(raw)
+            setAuditQtys((m) => ({ ...m, [i.id]: n }))
+            // 复点与盘点人实盘不一致 → 自动勾选为问题行(可手动取消)
+            if (i.actual_qty != null && n !== Number(i.actual_qty)) {
+              setPickedIds((s) => (s.includes(i.id) ? s : [...s, i.id]))
+            }
           }
         }}
       />
@@ -899,12 +911,17 @@ export default function StockCheckAuditPage() {
                       const picked = pickedIds.includes(i.id)
                       const marked = i.audit_failed === 1
                       const diff = i.diff_qty == null || i.actual_qty == null ? null : Number(i.diff_qty)
+                      const togglePick = i.actual_qty == null
+                        ? undefined
+                        : () => setPickedIds((s) => (picked ? s.filter((x) => x !== i.id) : [...s, i.id]))
                       return (
                         <tr
                           key={i.id}
                           className={`${marked ? 'marked' : ''} ${picked ? 'picked' : ''}`.trim() || undefined}
+                          onClick={togglePick}
+                          style={togglePick ? { cursor: 'pointer' } : undefined}
                         >
-                          <td style={{ textAlign: 'center' }}>
+                          <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
                             {i.actual_qty == null
                               ? <span className="sca-circle disabled" />
                               : (
@@ -946,7 +963,7 @@ export default function StockCheckAuditPage() {
                                   ? <span className="sca-diff-pill up">+{diff}</span>
                                   : <span className="sca-diff-pill down">{diff}</span>}
                           </td>
-                          <td className="num">{drawerRdCell(i)}</td>
+                          <td className="num" onClick={(e) => e.stopPropagation()}>{drawerRdCell(i)}</td>
                           <td>
                             {i.appeal_status === 'pending'
                               ? <Tooltip title="复议待财务裁决，可在上方复议面板处理"><span className="sca-verdict none">复议中</span></Tooltip>
@@ -991,44 +1008,68 @@ export default function StockCheckAuditPage() {
 
             <div className="sca-dw-foot">
               {canFinalAudit && (
-                <>
-                  <div className="reason-row">
-                    <input
-                      value={footComment}
-                      placeholder="发回原因（仅发回时必填）· 勾选问题行后发回，盘点人将看到原因…"
-                      onChange={(e) => setFootComment(e.target.value)}
-                    />
-                  </div>
+                footAction === 'reject' ? (
+                  <>
+                    <div className="reason-row" style={{ width: '100%' }}>
+                      <input
+                        id="sca-foot-reason"
+                        value={footComment}
+                        placeholder="发回原因（必填）· 回车确认发回…"
+                        onChange={(e) => setFootComment(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !acting) void submitReject() }}
+                      />
+                    </div>
+                    <div className="btn-row">
+                      <span className="note">已勾选 {pickedIds.length} 行问题行 · 发回后单据回到进行中，已盘数据保留</span>
+                      <Button onClick={() => { setFootAction(null); setFootComment('') }}>取消</Button>
+                      <Button danger icon={<UndoOutlined />} loading={acting} onClick={() => void submitReject()}>
+                        确认发回{pickedIds.length > 0 ? `（${pickedIds.length} 行）` : ''}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
                   <div className="btn-row">
                     <span className="note">
-                      勾选 {pickedIds.length} 行 · 通过将按盘点人实盘数计划 K3 回写
-                      {mismatchIds.length > 0 ? ` · 本轮不符 ${mismatchIds.length} 行（可通过，记录留档）` : ''}
+                      复点 {rdCount} 行 · 不符 {mismatchIds.length} 行 · 通过将按盘点人实盘数计划 K3 回写
                     </span>
-                    <Button onClick={() => void doAudit('exempt')}>免检通过</Button>
-                    <Button type="primary" icon={<CheckCircleOutlined />} onClick={handlePassClick}>抽检通过</Button>
-                    <Button danger icon={<UndoOutlined />} loading={acting} onClick={() => void submitReject()}>
-                      发回重填{pickedIds.length > 0 ? `（${pickedIds.length} 行）` : ''}
+                    <Button danger icon={<UndoOutlined />} onClick={startReject}>
+                      {mismatchIds.length > 0 ? `发回不符行（${mismatchIds.length}）` : '发回重填'}
                     </Button>
+                    <Button type="primary" icon={<CheckCircleOutlined />} onClick={handlePassClick}>通 过</Button>
                   </div>
-                </>
+                )
               )}
               {canFlag && (
-                <>
-                  <div className="reason-row">
-                    <input
-                      value={footComment}
-                      placeholder="标记说明（可选），将随通知发送给盘点人…"
-                      onChange={(e) => setFootComment(e.target.value)}
-                    />
-                  </div>
+                footAction === 'flag' ? (
+                  <>
+                    <div className="reason-row" style={{ width: '100%' }}>
+                      <input
+                        id="sca-foot-reason"
+                        value={footComment}
+                        placeholder="标记说明（可选）· 回车确认标记…"
+                        onChange={(e) => setFootComment(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !acting && pickedIds.length > 0) void submitFlag() }}
+                      />
+                    </div>
+                    <div className="btn-row">
+                      <span className="note">已勾选 {pickedIds.length} 行 · 标记后立即通知盘点人，抽屉保持打开可继续核对</span>
+                      <Button onClick={() => { setFootAction(null); setFootComment('') }}>取消</Button>
+                      <Button type="primary" loading={acting} onClick={() => void submitFlag()}>
+                        确认标记 {pickedIds.length} 行并通知
+                      </Button>
+                    </div>
+                  </>
+                ) : (
                   <div className="btn-row">
-                    <span className="note">已勾选 {pickedIds.length} 行 · 标记后立即通知盘点人，抽屉保持打开可继续核对</span>
-                    <Button onClick={() => setDetail(null)}>暂不标记</Button>
-                    <Button type="primary" loading={acting} onClick={() => void submitFlag()}>
-                      标记{pickedIds.length > 0 ? ` ${pickedIds.length} 行` : '问题行'}并通知
+                    <span className="note">单据仍在进行中 · 点击行即可勾选问题行（复点不符会自动勾选），标记后通知盘点人</span>
+                    <Button
+                      type="primary"
+                      onClick={() => setFootAction('flag')}
+                    >
+                      标记问题行{pickedIds.length > 0 ? `（${pickedIds.length}）` : ''}
                     </Button>
                   </div>
-                </>
+                )
               )}
               {readonly && (
                 <div className="btn-row">
@@ -1041,64 +1082,9 @@ export default function StockCheckAuditPage() {
         )}
       </div>
 
-
-      {/* ===== 抽检通过确认弹窗 ===== */}
-      <div className={`sca-bmask${passOpen ? ' open' : ''}`} onClick={() => { if (!acting) setPassOpen(false) }}>
-        <div className="sca-modal">
-          <div className="sca-md-head">
-            <CheckCircleOutlined style={{ color: '#16a34a' }} />
-            <h3>抽检通过 · {detail?.check_no}</h3>
-            <span className="hint">通过后本单锁定，进入 K3 回写计划</span>
-            <button className="sca-dw-close" onClick={() => setPassOpen(false)}><CloseOutlined /></button>
-          </div>
-          <div className="sca-md-body">
-            <div className="sca-pass-sum">
-              <span>复点 <b>{rdCount}</b> 行</span>
-              <span className="ok">一致 <b>{rdOk}</b></span>
-              <span className="bad">不符 <b>{mismatchIds.length}</b></span>
-            </div>
-            <div className="sc-frm-label" style={{ marginBottom: 6 }}>
-              抽检通过后，将按（单据类型 × 仓库）分组计划 {wbGroups.length} 张 K3 单据（未审核）：
-            </div>
-            {wbGroups.length > 0 && (
-              <div className="sca-tbl-wrap">
-                <table className="sca-tbl">
-                  <thead>
-                    <tr><th>单据类型</th><th>仓库</th><th className="num">行数</th><th className="num">数量合计</th></tr>
-                  </thead>
-                  <tbody>
-                    {wbGroups.map((g, idx) => (
-                      <tr key={idx}>
-                        <td style={{ fontWeight: 500 }}>
-                          {g.gain ? '盘盈入库单' : '盘亏调拨单（调入不良仓）'}
-                        </td>
-                        <td>{g.wh}</td>
-                        <td className="num">{g.count}</td>
-                        <td className={`num ${g.gain ? 'sc-diff-up' : 'sc-diff-down'}`}>
-                          {g.gain ? '+' : '−'}{g.total}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="sca-cp-note">
-              {mismatchIds.length > 0 && <>存在 <b>{mismatchIds.length} 行复点不符</b>，通过后该不符记录将留档。</>}
-              K3 单据为<b>未审核</b>状态，需仓管员在 K3 审核后库存才会调整；可稍后在盘点单「K3 回写」区块执行写入与重试。
-            </div>
-          </div>
-          <div className="sca-md-foot">
-            <span className="foot-hint">通过后不可再发回</span>
-            <Button onClick={() => setPassOpen(false)}>再想想</Button>
-            <Button type="primary" icon={<CheckCircleOutlined />} loading={acting} onClick={() => void doAudit('pass')}>确认通过</Button>
-          </div>
-        </div>
-      </div>
-
       {/* ===== 复议裁决弹窗（独立于复点抽屉） ===== */}
       <div className={`sca-bmask${appealCheck ? ' open' : ''}`} onClick={() => { if (!acting) setAppealCheck(null) }}>
-        <div className="sca-modal">
+        <div className="sca-modal" onClick={(e) => e.stopPropagation()}>
           <div className="sca-md-head">
             <AimOutlined style={{ color: '#0284c7' }} />
             <h3>复议裁决 · {appealCheck?.check_no}</h3>
@@ -1134,8 +1120,8 @@ export default function StockCheckAuditPage() {
                     复议原因：{i.appeal_reason || '—'}
                   </div>
                   <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-                    <Button size="small" type="primary" ghost disabled={acting} onClick={() => void resolveAppeal(i.id, true)}>支持复议（撤销标记，认可盘点数）</Button>
-                    <Button size="small" danger ghost disabled={acting} onClick={() => void resolveAppeal(i.id, false)}>驳回复议（维持标记）</Button>
+                    <Button size="small" type="primary" disabled={acting} onClick={() => void resolveAppeal(i.id, true)}>支持复议（撤销标记，认可盘点数）</Button>
+                    <Button size="small" danger disabled={acting} onClick={() => void resolveAppeal(i.id, false)}>驳回复议（维持标记）</Button>
                   </div>
                 </div>
               )
