@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI):
     _check_erp_connection()
     # 启动时：同步权限定义到数据库
     try:
-        from app.core.permission_registry import sync_permissions_to_db, cleanup_deprecated_permissions
+        from app.core.permission_registry import sync_permissions_to_db, cleanup_deprecated_permissions, migrate_permission_actions
         from app.core.database import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
             await sync_permissions_to_db(db)
@@ -101,6 +101,11 @@ async def lifespan(app: FastAPI):
                 await cleanup_deprecated_permissions(db)
             except Exception as e:
                 logger.warning(f"[权限注册] 清理废弃权限失败: {e}")
+            # 盘点抽检动作迁移(read/manage → 标准增删改查),幂等
+            try:
+                await migrate_permission_actions(db)
+            except Exception as e:
+                logger.warning(f"[权限注册] 盘点抽检动作迁移失败: {e}")
             # 清理上次未完成的同步任务（服务重启导致的僵尸 running/pending 任务）。
             # 仅清理本实例（按 server_id）的任务：多实例共用一个库时，
             # 不能把其它实例正在执行的任务误标为失败。

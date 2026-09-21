@@ -67,6 +67,11 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.inventory_board": ["read"],
         "materials.occupancy": ["read"],
     },
+    "finance": {
+        # 抽检工作台需要读取盘点单列表/详情
+        "materials.stock_check": ["read"],
+        "materials.stock_check_audit": ["read", "update"],
+    },
 }
 
 

@@ -114,6 +114,51 @@ async def sync_permissions_to_db(db: AsyncSession) -> int:
 # 运行期代码（API PermissionChecker / 前端菜单）不再引用，需在每次启动时清理。
 DEPRECATED_PERMISSION_CODES = ("orders.stock_check", "orders.inventory_check")
 
+# 一次性动作迁移:盘点抽检曾声明为 read/manage,现回归标准增删改查。
+# 幂等:每次启动执行,已迁移的行不再变化。
+MIGRATE_AUDIT_ACTIONS = ("materials.stock_check_audit",)
+
+
+async def migrate_permission_actions(db: AsyncSession) -> int:
+    """把 materials.stock_check_audit 的 actions 迁移为标准 CRUD,并把角色 JSON 内的
+    manage 动作迁到 update(该权限此前以 read/manage 声明)。幂等,每次启动执行。"""
+    from sqlalchemy import text
+
+    changed = 0
+    for code in MIGRATE_AUDIT_ACTIONS:
+        await db.execute(
+            text(
+                "UPDATE sys_permission SET actions = '[\"create\", \"read\", \"update\", \"delete\"]'::jsonb "
+                "WHERE code = CAST(:code AS text) AND actions::text <> '[\"create\", \"read\", \"update\", \"delete\"]'"
+            ),
+            {"code": code},
+        )
+        # 角色 JSON: {"materials.stock_check_audit": ["read","manage"]} → manage 迁移为 update,并确保含 read
+        result = await db.execute(
+            text(
+                "UPDATE sys_role SET permissions = jsonb_set( "
+                "  permissions - CAST(:code AS text), "
+                "  ARRAY[:code], "
+                "  ( "
+                "    SELECT COALESCE(jsonb_agg(DISTINCT x.a ORDER BY x.a), '[]'::jsonb) "
+                "    FROM ( "
+                "      SELECT CASE WHEN t.a = 'manage' THEN 'update' ELSE t.a END AS a "
+                "      FROM jsonb_array_elements_text(permissions -> CAST(:code AS text)) AS t(a) "
+                "      UNION SELECT 'read' "
+                "    ) x "
+                "  ) "
+                ") "
+                "WHERE permissions ? CAST(:code AS text) "
+                "  AND permissions -> CAST(:code AS text) ? 'manage'"
+            ),
+            {"code": code},
+        )
+        changed += result.rowcount or 0
+    await db.commit()
+    if changed:
+        logger.info(f"[权限注册] 迁移盘点抽检动作 manage→update,涉及 {changed} 个角色")
+    return changed
+
 
 async def cleanup_deprecated_permissions(db: AsyncSession) -> int:
     """清理已废弃的权限：从 sys_role.permissions JSONB 移除 key，并删除 sys_permission 行。
@@ -185,6 +230,7 @@ declare_permission("materials.supplier_risk", "供应商风险分析", module="m
 declare_permission("materials.supplier_payment", "供应商付款排程", module="materials", parent_code="materials", route_path="/supplier-payment", sort_order=6)
 declare_permission("materials.stock_check", "物料盘点", module="materials", parent_code="materials", route_path="/stock-check", sort_order=7)
 declare_permission("materials.task_stock_check", "任务盘点", module="materials", parent_code="materials", route_path="/task-stock-check", sort_order=8)
+declare_permission("materials.stock_check_audit", "盘点抽检", module="materials", parent_code="materials", route_path="/stock-check-audit", sort_order=13)
 declare_permission("materials.subcontract_orders", "委外订单", module="materials", parent_code="materials", route_path="/subcontract-orders", sort_order=9)
 declare_permission("materials.scrap_inventory", "报废物料库存查询", module="materials", parent_code="materials", route_path="/scrap-inventory", sort_order=10)
 declare_permission("materials.inventory_board", "库存看板", module="materials", parent_code="materials", route_path="/inventory-board", sort_order=11)
@@ -208,27 +254,16 @@ declare_permission("production.order_wage_lookup", "订单工价查询", module=
 # 异常与质量中心
 declare_permission("exceptions", "异常与质量中心", module="exceptions", sort_order=6)
 declare_permission("exceptions.pool", "异常总池", module="exceptions", parent_code="exceptions", route_path="/issues", sort_order=1)
-declare_permission("exceptions.issue_log", "问题日志", module="exceptions", parent_code="exceptions", route_path="/issue-log", sort_order=2)
-declare_permission("exceptions.change_log", "变更日志", module="exceptions", parent_code="exceptions", route_path="/change-log", sort_order=3)
 declare_permission("exceptions.quality", "品质异常", module="exceptions", parent_code="exceptions", route_path="/quality-issues", sort_order=4)
 declare_permission("exceptions.product_samples", "产品封样", module="exceptions", parent_code="exceptions", route_path="/product-samples", sort_order=5)
 declare_permission("exceptions.closure", "闭环跟踪", module="exceptions", parent_code="exceptions", route_path="/closure-tracking", sort_order=6)
 
-# 会议与任务中心
-declare_permission("meetings", "会议与任务中心", module="meetings", route_path="/meetings", sort_order=7)
-
-# 新品/NPI项目中心
-declare_permission("npi", "新品/NPI项目中心", module="npi", route_path="/npi", sort_order=8)
-
 # 规则配置中心
 declare_permission("rules", "规则配置中心", module="rules", sort_order=9)
 declare_permission("rules.risk_rules", "预警规则", module="rules", parent_code="rules", route_path="/risk-rules", sort_order=1)
-declare_permission("rules.inspection", "点检规则", module="rules", parent_code="rules", route_path="/inspection-rules", sort_order=2)
 declare_permission("rules.node_standards", "节点标准", module="rules", parent_code="rules", route_path="/node-standards", sort_order=3)
 declare_permission("rules.order_standards", "订单标准", module="rules", parent_code="rules", route_path="/order-standards", sort_order=4)
 declare_permission("rules.work_instructions", "作业指导书", module="rules", parent_code="rules", route_path="/work-instructions", sort_order=5)
-declare_permission("rules.responsibility", "责任归属", module="rules", parent_code="rules", route_path="/responsibility-map", sort_order=6)
-declare_permission("rules.status_dict", "状态字典", module="rules", parent_code="rules", route_path="/status-dict", sort_order=7)
 
 # 基础数据与集成中心
 declare_permission("basicdata", "基础数据与集成中心", module="basicdata", sort_order=10)
