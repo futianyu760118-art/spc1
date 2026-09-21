@@ -1,0 +1,23 @@
+{
+  "name": "company-control",
+  "version": "0.1.0",
+  "description": "公司智能控制中台只读业务能力（指标目录 / 指标查询 / 物料与供应商主数据 / 订单明细）",
+  "owner": "company-middle-platform",
+  "transport": "stdio",
+  "read_only": true,
+  "required_permissions": ["CONTROL_PLATFORM_READ"],
+  "dependencies": [
+    "中台 FastAPI 只读查询端点（/api/internal/mcp/*）",
+    "中台数仓 / 主数据 / 订单明细数据源（只读账号）"
+  ],
+  "maintainer": "中台平台组（版本负责人待 Registry 提交时填写）",
+  "runtime": "python>=3.12, mcp>=2.0",
+  "tools": [
+    { "name": "get_system_health", "permission_level": "READ_ONLY" },
+    { "name": "catalog_metrics_list", "permission_level": "READ_ONLY" },
+    { "name": "metric_query", "permission_level": "READ_ONLY" },
+    { "name": "master_material_search", "permission_level": "READ_ONLY" },
+    { "name": "master_supplier_get", "permission_level": "READ_ONLY" },
+    { "name": "detail_orders_list", "permission_level": "READ_ONLY" }
+  ]
+}
