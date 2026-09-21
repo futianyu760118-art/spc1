@@ -71,6 +71,37 @@ Models live under `backend/app/models/<domain>/`. `alembic/env.py` imports `app.
 - UI: Ant Design 5 + `@ant-design/pro-components` + Tailwind. TS is `strict`; unused locals/params checks are disabled (`noUnusedLocals: false`).
 - `npm run build` is the only typecheck — there is **no** `lint`, `test`, or `format` script, and no ESLint/Prettier config. Don't invent one without asking.
 
+## 代码整洁与防重复守则（所有代码改动适用）
+
+写任何代码前、中、后必须遵守以下规则，违反须在交付前自我纠正：
+
+**动手前：先查再写**
+- 写任何新函数/组件/工具类之前，先在代码库中搜索是否已有相似实现（按功能关键词、相似命名、相邻模块查找）；有就复用或扩展，禁止重复造轮子。
+- 新增第三方依赖前，先确认标准库和项目现有依赖无法满足；能不加就不加。
+- 修改代码前先读上下文（同目录相邻文件、import、调用方），理解并遵循项目现有约定（命名风格、错误处理、返回结构、目录组织），不另起炉灶。
+- 需求有歧义时先提问澄清，不靠猜。
+
+**写代码时：整洁铁律**
+- DRY：同一段逻辑禁止复制第二次；出现第二处相似即提取为公共函数/组件/常量，并替换所有调用点。
+- 但不过度抽象：只有单一调用方的逻辑不预先提取（Rule of Three）；禁止为"将来可能用到"写代码（YAGNI）。
+- 命名见名知义、与项目风格一致：禁止 `data1` / `tmp` / `foo` / `handle2` 这类命名；布尔值用 is/has/can 前缀；函数名用动词，类/名词用名词。
+- 函数单一职责：一个函数只做一件事；超过约 40 行或嵌套超过 3 层必须拆分；参数超过 3 个时收拢为对象/配置。
+- 不留任何"代码垃圾"：不留 `console.log` / `print` / 调试输出；不留注释掉的旧代码（git 有历史，直接删）；不留无用 import、无用变量、空 catch、空函数；不写复述代码的废话注释，注释只解释"为什么"。
+- 最小改动原则：只改与当前任务相关的代码；不顺手重排格式、不重构无关文件、不修改无关空行，保证 diff 干净可审。
+
+**交付前：自查清单（逐项执行）**
+- 全局搜索本次新写的函数名/关键代码片段，确认与已有代码无重复；发现重复立即合并。
+- 删除所有调试代码、临时代码、被注释的旧实现。
+- 运行项目的校验命令并确保通过（本项目：前端 `npm run build` 是唯一 typecheck；后端起 uvicorn 验证端点，见 No test suite 章节）。
+- 新代码的错误处理、日志、边界情况与项目现有模式一致。
+- 汇报改动时说明：改了哪些文件、为什么、复用了哪些已有代码。
+
+**硬性禁令**
+- 禁止复制本会话早前写的或代码库已有的代码片段来"快速实现"新功能。
+- 禁止"先这样，以后再改"：写出来就必须是最终正确形态。
+- 禁止引入项目中未使用的框架、模式或架构；与代码库保持一致，不炫技。
+- 禁止在未说明的情况下留下 TODO；留 TODO 必须写清原因和负责人。
+
 ## No test suite
 
 There is **no** pytest/jest/vitest configured (not in `requirements.txt` or `package.json`). `backend/test_*.py` and root `check_*.py` / `add_*.py` are standalone scripts run manually against a live DB, not a test framework. Verify changes by starting uvicorn and hitting the endpoint, or by running the relevant script.
