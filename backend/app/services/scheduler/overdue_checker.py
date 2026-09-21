@@ -56,6 +56,7 @@ class OverdueCheckerScheduler:
                         title='逾期未到料提醒',
                         content=f'您负责的采购计划中有 {overdue_count} 条逾期未到物料，请及时跟进处理。',
                         ref_type='purchase_order',
+                        sender_name='系统',
                         priority='important',
                         is_read=False,
                     )

@@ -290,6 +290,8 @@ async def publish_announcement(
             content=(ann.content or "")[:500],
             ref_type="announcement",
             ref_id=ann.id,
+            sender_id=int(current_user.get("user_id") or current_user.get("sub")),
+            sender_name=current_user.get("username", ""),
             priority=ann.priority,
         )
         db.add(notif)

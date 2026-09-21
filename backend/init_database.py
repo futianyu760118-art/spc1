@@ -412,6 +412,10 @@ class DatabaseInitializer:
                 "channel_sessions": "JSONB",
                 "scm_employee_id": "BIGINT",
             },
+            "notification": {
+                "sender_id": "INTEGER",
+                "sender_name": "VARCHAR(64)",
+            },
         }
         # 删除已废弃的列
         drop_columns = {

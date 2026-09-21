@@ -2870,6 +2870,8 @@ async def _notify_appeal(
             content=reason[:512],
             ref_type="stock_check",
             ref_id=head.id,
+            sender_id=_current_user_id(current_user),
+            sender_name=(current_user or {}).get("username"),
             priority="important",
         ))
     # 本服务无显式 commit（依赖 get_db 请求结束自动提交），flush 后即推送；
@@ -2911,6 +2913,8 @@ async def _notify_check_audit(
             content=(comment or "")[:512],
             ref_type="stock_check",
             ref_id=head.id,
+            sender_id=_current_user_id(current_user),
+            sender_name=(current_user or {}).get("username"),
             priority="important",
         ))
     # 本服务无显式 commit（依赖 get_db 请求结束自动提交），flush 后即推送；
