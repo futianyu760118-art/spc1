@@ -70,6 +70,7 @@ function jumpTarget(n: NotifItem): { label: string; path: string } | null {
   if (n.type === 'stock_check_appeal' && n.ref_id) return { label: '复议待裁决', path: '/stock-check-audit?tab=appeal' }
   if (n.ref_type === 'stock_check' && n.ref_id) return { label: `盘点单 #${n.ref_id}`, path: `/stock-check/${n.ref_id}` }
   if (n.ref_type === 'price_change' && n.ref_id) return { label: `调价单 #${n.ref_id}`, path: `/purchase/price-change/${n.ref_id}` }
+  if (n.ref_type === 'supplier_claim' && n.ref_id) return { label: `索赔单 #${n.ref_id}`, path: `/quality/supplier-claims/${n.ref_id}` }
   if ((n.type === 'feedback' || n.type === 'feedback_alert') && n.ref_id) return { label: `反馈单 #${n.ref_id}`, path: `/basicdata/feedback?id=${n.ref_id}` }
   if (n.ref_type === 'purchase_order') return { label: '采购到料计划', path: '/purchase-plan' }
   if (n.type === 'exception_alert') return { label: '异常总池', path: '/issues' }

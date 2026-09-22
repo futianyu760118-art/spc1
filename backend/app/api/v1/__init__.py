@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import assistant, basicdata, common, dashboard, exception, external, masterdata, material, order, production, purchase, rules, system, writeback
+from app.api.v1 import approval, assistant, basicdata, common, dashboard, exception, external, masterdata, material, order, production, purchase, quality, rules, system, writeback
 
 api_router = APIRouter()
 
@@ -18,6 +18,7 @@ api_router.include_router(material.purchase_plan_analysis_router, prefix="/mater
 api_router.include_router(material.issues_router, prefix="/materials/issues", tags=["物料齐套中心-问题物料"])
 api_router.include_router(material.long_lead_router, prefix="/materials/long-lead", tags=["物料齐套中心-长交期物料"])
 api_router.include_router(material.kit_analysis_router, prefix="/materials/kit-analysis", tags=["物料齐套中心-齐套分析"])
+api_router.include_router(material.kitting_router, prefix="/materials/kitting", tags=["物料齐套中心-齐套计算"])
 api_router.include_router(material.supplier_risk_router, prefix="/materials/supplier-risk", tags=["物料齐套中心-供应商风险"])
 api_router.include_router(material.supplier_payment_router, prefix="/materials/supplier-payment", tags=["物料齐套中心-供应商付款排程"])
 api_router.include_router(material.supplier_message_router, prefix="/materials/supplier-messages", tags=["物料齐套中心-供应商即时沟通"])
@@ -85,3 +86,9 @@ api_router.include_router(purchase.price_change_router, prefix="/purchase/price-
 
 # Writeback center
 api_router.include_router(writeback.router, tags=["数据回写"])
+
+# Quality center（品质管理）
+api_router.include_router(quality.supplier_claims_router, prefix="/quality/supplier-claims", tags=["品质管理-供应商索赔单"])
+
+# Approval center（审批中心：统一待我审批 + 审批链配置）
+api_router.include_router(approval.approvals_router, prefix="/approvals", tags=["审批中心"])

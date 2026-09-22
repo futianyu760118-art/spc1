@@ -38,6 +38,7 @@ TYPE_LABELS = {
     "feedback_alert": "反馈提醒",
     "system": "系统",
     "price_change": "调价单",
+    "supplier_claim": "索赔单",
     "stock_check_audit": "盘点抽检",
     "stock_check_appeal": "复议待裁决",
     "material_alert": "物料提醒",

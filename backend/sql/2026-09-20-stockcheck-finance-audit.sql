@@ -1,7 +1,8 @@
 -- ============================================================
--- 盘点财务抽检 + 复议 · 数据库变更脚本
+-- 盘点财务抽检 + 复议 + 通知提出人 · 数据库变更脚本
 -- 对应: docs/superpowers/specs/2026-09-18-stockcheck-finance-audit-design.md
--- 日期: 2026-09-20
+-- 日期: 2026-09-20(2026-09-22 补齐通知列与复议索引)
+-- 覆盖: 服务器 v9-20260918-0932(c67a15a) → 当前版本的全部库变更
 -- 说明: 幂等,可重复执行。生产环境容器启动时 init_database.py 会自动执行
 --       等价迁移(create_all + migrate_columns),本脚本供手工应用/DBA审核。
 -- ============================================================
@@ -25,6 +26,10 @@ ALTER TABLE scm_inventory_check_item ADD COLUMN IF NOT EXISTS audit_failed  INTE
 ALTER TABLE scm_inventory_check_item ADD COLUMN IF NOT EXISTS appeal_status VARCHAR(16);                 -- 复议状态 pending/accepted/rejected;NULL=无复议
 ALTER TABLE scm_inventory_check_item ADD COLUMN IF NOT EXISTS appeal_reason TEXT;                        -- 复议申请原因
 ALTER TABLE scm_inventory_check_item ADD COLUMN IF NOT EXISTS appeal_at     TIMESTAMP;                   -- 复议申请时间
+
+-- 复议待裁决队列按 appeal_status 过滤(高频),与模型 index=True 对齐
+CREATE INDEX IF NOT EXISTS ix_scm_inventory_check_item_appeal_status
+    ON scm_inventory_check_item (appeal_status);
 
 -- ------------------------------------------------------------
 -- 3. 存量回填:已完结老单视为已通过(避免卡抽检流程;幂等)
@@ -95,10 +100,30 @@ WHERE permissions ? 'materials.stock_check_audit'
   AND permissions -> 'materials.stock_check_audit' ? 'manage';
 
 -- ------------------------------------------------------------
+-- 7. 通知 notification:提出人落库(通知中心三栏 + 复议申请记录提出人)
+-- ------------------------------------------------------------
+ALTER TABLE notification ADD COLUMN IF NOT EXISTS sender_id   INTEGER;      -- 提出人ID(关联 sys_user.id;与 migrate_columns 一致不建库级外键)
+ALTER TABLE notification ADD COLUMN IF NOT EXISTS sender_name VARCHAR(64);  -- 提出人/发送人姓名快照
+
+-- 存量回填:复议申请通知由 stock_check_audit 改为独立类型 stock_check_appeal(幂等)
+UPDATE notification
+SET type = 'stock_check_appeal'
+WHERE type = 'stock_check_audit' AND title LIKE '%收到复议申请%';
+
+-- ------------------------------------------------------------
+-- 附:本次版本随容器启动自动清理的废弃表(init_database.py 幂等 DROP,手工执行可选)
+-- ------------------------------------------------------------
+-- DROP TABLE IF EXISTS issue_log, change_log, inspection_rule, responsibility_map, status_dictionary;
+
+-- ------------------------------------------------------------
 -- 验证(可选执行)
 -- ------------------------------------------------------------
 -- SELECT column_name, data_type FROM information_schema.columns
 --   WHERE table_name = 'scm_inventory_check' AND column_name LIKE 'audit%';
 -- SELECT column_name FROM information_schema.columns
 --   WHERE table_name = 'scm_inventory_check_item' AND column_name IN ('audit_failed','appeal_status','appeal_reason','appeal_at');
+-- SELECT column_name FROM information_schema.columns
+--   WHERE table_name = 'notification' AND column_name IN ('sender_id','sender_name');
+-- SELECT indexname FROM pg_indexes
+--   WHERE indexname IN ('ix_scm_inventory_check_audit_status','ix_scm_inventory_check_item_appeal_status');  -- 应为 2 行
 -- SELECT count(*) FROM scm_inventory_check WHERE status='completed' AND audit_status IS NULL;  -- 应为 0

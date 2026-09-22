@@ -1,4 +1,4 @@
-"""独立测试脚本 — 26 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
+"""独立测试脚本 — 30 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
 
 运行（在 mcp-company-control/ 目录下）：
     python scripts/test_company_control.py
@@ -9,7 +9,7 @@
 
 分组：
   - 旧版回归：0.1.0 兼容工具存在、旧 Schema/分页上限、参数与字段映射、能力未开放错误、健康检查修正
-  - 新版链路：orders/details/bom 正常链路、错误映射、脱敏、幂等、evidence
+  - 新版链路：orders/details/bom 正常链路、错误映射、脱敏、幂等、evidence、齐套 5 工具
   - HTTP 传输：401 鉴权、握手、缺 token 拒绝启动
 """
 
@@ -46,6 +46,11 @@ EXPECTED_TOOLS = {
     "metric_query",
     "master_material_search",
     "master_supplier_get",
+    "material_kitting_results_list",
+    "material_shortages_list",
+    "material_kitting_demands_list",
+    "inventory_availability_list",
+    "material_supplies_list",
 }
 
 DATA_AS_OF = "2026-09-19T18:00:00Z"
@@ -206,6 +211,79 @@ SUPPLIERS = [
     },
 ]
 
+KITTING_RESULTS = [
+    {
+        "demand_type": "SALES_ORDER",
+        "demand_no": "SO-2609-001",
+        "demand_line_no": "1",
+        "kit_status": "PARTIAL",
+        "kit_rate_by_item": 66.67,
+        "allocation_run_id": "run-2609-a",
+        "calculation_version": "1.0.0",
+    },
+    {
+        "demand_type": "SALES_ORDER",
+        "demand_no": "SO-2609-002",
+        "demand_line_no": "1",
+        "kit_status": "FULL",
+        "kit_rate_by_item": 100.0,
+        "allocation_run_id": "run-2609-a",
+        "calculation_version": "1.0.0",
+    },
+]
+
+KITTING_SHORTAGES = [
+    {
+        "demand_no": "SO-2609-001",
+        "material_code": "M-100",
+        "shortage_qty": 12.5,
+        "shortage_reason": "NO_STOCK",
+    },
+    {
+        "demand_no": "SO-2609-001",
+        "material_code": "M-200",
+        "shortage_qty": 3.0,
+        "shortage_reason": "SUPPLY_LATE",
+    },
+]
+
+KITTING_DEMANDS = [
+    {
+        "demand_no": "SO-2609-001",
+        "demand_line_no": "1",
+        "product_code": "P-100",
+        "required_date": "2026-09-20",
+    },
+    {
+        "demand_no": "SO-2609-002",
+        "demand_line_no": "1",
+        "product_code": "P-200",
+        "required_date": "2026-09-28",
+    },
+]
+
+INVENTORY_AVAILABILITY = [
+    {"material_code": "M-100", "available_qty": 88.0},
+    {"material_code": "M-200", "available_qty": 0.0},
+]
+
+MATERIAL_SUPPLIES = [
+    {
+        "supply_type": "PURCHASE",
+        "supply_no": "PO-2609-001",
+        "supply_line_no": "1",
+        "material_code": "M-100",
+        "supply_qty": 200.0,
+    },
+    {
+        "supply_type": "TRANSFER",
+        "supply_no": "TR-2609-001",
+        "supply_line_no": "1",
+        "material_code": "M-200",
+        "supply_qty": 50.0,
+    },
+]
+
 MOCK_STATE = {"mode": "normal", "last_query": None}
 
 # 与 SPC「数据供给」HMAC 机制一致的校验参数
@@ -218,6 +296,20 @@ MOCK_ENDPOINT_CODES = {
     "/external/boms/tree": "boms.tree",
     "/external/materials/list": "materials.list",
     "/external/suppliers/list": "suppliers.list",
+    "/external/material-kitting/results": "kitting.results",
+    "/external/material-kitting/shortages": "kitting.shortages",
+    "/external/material-kitting/demands": "kitting.demands",
+    "/external/inventory/availability": "inventory.availability",
+    "/external/material-supplies/list": "material.supplies",
+}
+
+# 齐套类 mock 路由（stale_kitting 模式只影响这些路径）
+KITTING_MOCK_PATHS = {
+    "/external/material-kitting/results",
+    "/external/material-kitting/shortages",
+    "/external/material-kitting/demands",
+    "/external/inventory/availability",
+    "/external/material-supplies/list",
 }
 
 MCP_HTTP_TOKEN = "test-http-token"
@@ -237,6 +329,22 @@ class MockHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             pass  # 客户端超时主动断开属预期（timeout 模式）
+
+    def _kitting_envelope(self, rows, q, stale=False):
+        """齐套类端点统一信封：items + 分页 + 新鲜度元信息"""
+        return {
+            "code": 0,
+            "message": "ok",
+            "data": {
+                "items": rows,
+                "total": len(rows),
+                "page": int(q.get("page", 1)),
+                "page_size": int(q.get("page_size", 20)),
+                "data_as_of": DATA_AS_OF,
+                "data_confidence": "low" if stale else "high",
+                "stale": stale,
+            },
+        }
 
     def do_POST(self):
         if urlparse(self.path).path == "/oauth/token":
@@ -284,6 +392,22 @@ class MockHandler(BaseHTTPRequestHandler):
             )
 
         parsed = urlparse(self.path)
+        if mode == "stale_kitting" and parsed.path in KITTING_MOCK_PATHS:
+            return self._json(
+                {
+                    "code": 0,
+                    "message": "ok",
+                    "data": {
+                        "items": KITTING_RESULTS[:1],
+                        "total": 1,
+                        "page": 1,
+                        "page_size": 20,
+                        "data_as_of": DATA_AS_OF,
+                        "data_confidence": "low",
+                        "stale": True,
+                    },
+                }
+            )
         if not self._verify_signature(parsed):
             return self._json({"error": "signature invalid"}, 401)
         q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
@@ -392,6 +516,36 @@ class MockHandler(BaseHTTPRequestHandler):
                     },
                 }
             )
+        if route == "/external/material-kitting/results":
+            rows = KITTING_RESULTS
+            if q.get("demand_no"):
+                rows = [r for r in rows if r["demand_no"] == q["demand_no"]]
+            return self._json(self._kitting_envelope(rows, q))
+        if route == "/external/material-kitting/shortages":
+            rows = KITTING_SHORTAGES
+            if q.get("demand_no"):
+                rows = [r for r in rows if r["demand_no"] == q["demand_no"]]
+            if q.get("material_code"):
+                rows = [r for r in rows if r["material_code"] == q["material_code"]]
+            return self._json(self._kitting_envelope(rows, q))
+        if route == "/external/material-kitting/demands":
+            rows = KITTING_DEMANDS
+            if q.get("order_no"):
+                rows = [r for r in rows if r["demand_no"] == q["order_no"]]
+            return self._json(self._kitting_envelope(rows, q))
+        if route == "/external/inventory/availability":
+            rows = INVENTORY_AVAILABILITY
+            if q.get("material_code"):
+                rows = [r for r in rows if r["material_code"] == q["material_code"]]
+            return self._json(self._kitting_envelope(rows, q))
+        if route == "/external/material-supplies/list":
+            rows = MATERIAL_SUPPLIES
+            if q.get("material_code"):
+                rows = [r for r in rows if r["material_code"] == q["material_code"]]
+            if q.get("supply_type"):
+                wanted = {s.strip().upper() for s in q["supply_type"].split(",")}
+                rows = [r for r in rows if r["supply_type"] in wanted]
+            return self._json(self._kitting_envelope(rows, q))
         return self._json({"error": "not found"}, 404)
 
 
@@ -432,7 +586,7 @@ async def call_tool(session, name, args):
 
 async def check_01_initialize(session, init_result):
     assert init_result.server_info.name == "company-control", f"server_info.name={init_result.server_info.name}"
-    assert init_result.server_info.version == "0.2.0", f"server_info.version={init_result.server_info.version!r}"
+    assert init_result.server_info.version == "1.0.0", f"server_info.version={init_result.server_info.version!r}"
 
 
 async def check_02_tools_list(session):
@@ -559,10 +713,10 @@ async def check_12_health(session):
     _, body = await call_tool(session, "get_system_health", {})
     data = body.get("data", {})
     assert data.get("status") == "ok", f"{data}"
-    assert data.get("read_only") is True and data.get("version") == "0.2.0"
+    assert data.get("read_only") is True and data.get("version") == "1.0.0"
     assert set(data.get("capabilities", [])) == EXPECTED_TOOLS
     # §16 顶层字段超集
-    assert body.get("status") == "ok" and body.get("version") == "0.2.0"
+    assert body.get("status") == "ok" and body.get("version") == "1.0.0"
     assert body.get("checked_at") and set(body.get("capabilities", [])) == EXPECTED_TOOLS
 
 
@@ -718,6 +872,61 @@ async def check_22_rate_limited(session):
     assert err.get("code") == "RATE_LIMITED" and err.get("retryable") is True, f"{body}"
 
 
+async def check_27_kitting_results(session):
+    """material_kitting_results_list：demand_no 过滤、evidence、分页信封"""
+    _, body = await call_tool(
+        session, "material_kitting_results_list", {"demand_no": "SO-2609-001", "page_size": 2}
+    )
+    assert body and body.get("capability") == "material_kitting_results_list", f"{body}"
+    assert body.get("source") == "company-control" and body.get("read_only") is True, f"{body}"
+    rows = body.get("data") or []
+    assert rows and all(r.get("demand_no") == "SO-2609-001" for r in rows), f"demand_no 过滤未生效: {rows}"
+    refs = body.get("evidence_refs") or []
+    assert refs and all(
+        r.startswith("control-platform://kitting-result/SALES_ORDER/") and "@" in r for r in refs
+    ), f"{refs}"
+    page = body.get("page") or {}
+    assert page.get("page") == 1 and page.get("page_size") == 2 and page.get("total", 0) > 0, f"{page}"
+
+
+async def check_28_shortages(session):
+    """material_shortages_list：evidence 前缀 shortage/"""
+    _, body = await call_tool(session, "material_shortages_list", {"demand_no": "SO-2609-001"})
+    assert body and body.get("capability") == "material_shortages_list", f"{body}"
+    assert body.get("data"), f"未返回缺料明细: {body}"
+    refs = body.get("evidence_refs") or []
+    assert refs and all(r.startswith("control-platform://shortage/") for r in refs), f"{refs}"
+
+
+async def check_29_kitting_related_lists(session):
+    """demands / inventory / supplies 三工具：capability、data、evidence 前缀"""
+    cases = (
+        ("material_kitting_demands_list", {"order_no": "SO-2609-001"}, "control-platform://demand/"),
+        ("inventory_availability_list", {"material_code": "M-100"}, "control-platform://inventory/"),
+        ("material_supplies_list", {"material_code": "M-100"}, "control-platform://supply/"),
+    )
+    for name, args, prefix in cases:
+        _, body = await call_tool(session, name, args)
+        assert body and body.get("capability") == name, f"{name}: {body}"
+        assert body.get("data"), f"{name}: 未返回数据"
+        refs = body.get("evidence_refs") or []
+        assert refs and all(r.startswith(prefix) for r in refs), f"{name}: {refs}"
+
+
+async def check_30_kitting_stale(session):
+    """齐套端点 stale=true → 成功信封 + low confidence（数据照常返回，不抛 STALE_DATA）"""
+    MOCK_STATE["mode"] = "stale_kitting"
+    try:
+        _, body = await call_tool(
+            session, "material_kitting_results_list", {"demand_no": "SO-2609-001"}
+        )
+    finally:
+        MOCK_STATE["mode"] = "normal"
+    assert not (body or {}).get("error"), f"{body}"
+    assert body.get("data_confidence") == "low", f"{body}"
+    assert isinstance(body.get("data"), list), f"{body}"
+
+
 # ---------------- HTTP 检查（双传输补充） ----------------
 
 INIT_BODY = {
@@ -849,10 +1058,10 @@ def check_26_http_requires_token(base_url: str):
     assert code == 2, f"退出码应为 2，实际 {code}"
 
 
-# 分组：legacy = 旧版回归（0.1.0 兼容契约）；new = 新版链路（0.2.0 能力）；http = HTTP 传输
+# 分组：legacy = 旧版回归（0.1.0 兼容契约）；new = 新版链路（1.0.0 能力）；http = HTTP 传输
 GROUPS = [
     ("legacy", "旧版", "旧版回归（0.1.0 兼容契约）"),
-    ("new", "新版", "新版链路（0.2.0 能力）"),
+    ("new", "新版", "新版链路（1.0.0 能力）"),
     ("http", "HTTP", "HTTP 传输（双传输）"),
 ]
 GROUP_SHORT = {key: short for key, short, _ in GROUPS}
@@ -881,6 +1090,10 @@ CHECKS = [
     ("legacy", "20 健康检查 evidence 与置信度", check_20_health_evidence_and_confidence),
     ("new", "21 bom_tree 嵌套树与扁平列表", check_21_bom_tree_forms),
     ("new", "22 上游限流映射 RATE_LIMITED", check_22_rate_limited),
+    ("new", "27 齐套结果查询与 evidence", check_27_kitting_results),
+    ("new", "28 缺料明细查询与 evidence", check_28_shortages),
+    ("new", "29 需求/库存/供给三工具链路", check_29_kitting_related_lists),
+    ("new", "30 齐套数据过期返回 low confidence", check_30_kitting_stale),
 ]
 
 

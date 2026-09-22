@@ -226,6 +226,7 @@ declare_permission("materials.purchase_plan", "采购到料计划", module="mate
 declare_permission("materials.issues", "问题物料池", module="materials", parent_code="materials", route_path="/material-issues", sort_order=2)
 declare_permission("materials.long_lead", "长交期物料池", module="materials", parent_code="materials", route_path="/long-lead-materials", sort_order=3)
 declare_permission("materials.kit_analysis", "齐套分析", module="materials", parent_code="materials", route_path="/kit-analysis", sort_order=4)
+declare_permission("materials.kitting", "齐套计算", module="materials", parent_code="materials", actions=["read", "manage"], sort_order=5)
 declare_permission("materials.supplier_risk", "供应商风险分析", module="materials", parent_code="materials", route_path="/supplier-risk", sort_order=5)
 declare_permission("materials.supplier_payment", "供应商付款排程", module="materials", parent_code="materials", route_path="/supplier-payment", sort_order=6)
 declare_permission("materials.stock_check", "物料盘点", module="materials", parent_code="materials", route_path="/stock-check", sort_order=7)
@@ -317,6 +318,16 @@ declare_permission("purchase.price_change.archive_delete", "调价单归档删�
 # 财务数据
 declare_permission("finance", "财务数据", module="finance", sort_order=12)
 declare_permission("finance.data", "科目余额", module="finance", parent_code="finance", actions=["read"], route_path="/finance/subject-balances", sort_order=1)
+
+# 品质管理（2026-09-22）— 供应商索赔通知单
+declare_permission("quality", "品质管理", module="quality", sort_order=13)
+declare_permission("quality.supplier_claim", "供应商索赔单", module="quality", parent_code="quality", route_path="/quality/supplier-claims", sort_order=1)
+declare_permission("quality.supplier_claim.archive_delete", "索赔单归档删除", module="quality", parent_code="quality", actions=["delete"], sort_order=2)
+
+# 审批中心（2026-09-22）— 统一待我审批 + 审批链配置（新流程注册 provider 即接入）
+declare_permission("approval", "审批中心", module="approval", sort_order=14)
+declare_permission("approval.pending", "待我审批", module="approval", parent_code="approval", route_path="/approvals/pending", sort_order=1)
+declare_permission("approval.config", "审批配置", module="approval", parent_code="approval", route_path="/approvals/configs", sort_order=2)
 
 # 部署运维（2026-09-04）— 生产环境部署 / 回退 / 切换任意版本为当前
 declare_permission(

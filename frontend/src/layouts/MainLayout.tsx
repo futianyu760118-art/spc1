@@ -309,6 +309,25 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/purchase/price-change/config', icon: <SettingOutlined />, label: '审批配置', permission: 'purchase.price_change.config' },
     ],
   },
+  {
+    key: 'approval-center',
+    icon: <CheckCircleOutlined />,
+    label: '审批中心',
+    permission: 'approval',
+    children: [
+      { key: '/approvals/pending', icon: <ClockCircleOutlined />, label: '待我审批', permission: 'approval.pending' },
+      { key: '/approvals/configs', icon: <SettingOutlined />, label: '审批配置', permission: 'approval.config' },
+    ],
+  },
+  {
+    key: 'quality-center',
+    icon: <SafetyOutlined />,
+    label: '品质管理',
+    permission: 'quality',
+    children: [
+      { key: '/quality/supplier-claims', icon: <FileTextOutlined />, label: '供应商索赔单', permission: 'quality.supplier_claim' },
+    ],
+  },
 ]
 
 function filterMenuByPermission(items: PermissionAwareItem[], hasPermission: (resource: string, action: string) => boolean): PermissionAwareItem[] {
@@ -439,6 +458,8 @@ const pathToGroupKey: Record<string, string> = {
   '/purchase/price-change/new': 'purchase-center',
   '/purchase/price-change/pending': 'purchase-center',
   '/purchase/price-change/config': 'purchase-center',
+  '/approvals/pending': 'approval-center',
+  '/approvals/configs': 'approval-center',
   '/assembly': 'production-center',
   '/packaging': 'production-center',
   '/process-exceptions': 'production-center',
@@ -551,6 +572,10 @@ const pathToPermission: Record<string, string> = {
   '/purchase/price-change/new': 'purchase.price_change',
   '/purchase/price-change/pending': 'purchase.price_change.pending',
   '/purchase/price-change/config': 'purchase.price_change.config',
+  '/approvals/pending': 'approval.pending',
+  '/approvals/configs': 'approval.config',
+  '/quality/supplier-claims': 'quality.supplier_claim',
+  '/quality/supplier-claims/new': 'quality.supplier_claim',
   '/finance/subject-balances': 'finance.data',
 }
 

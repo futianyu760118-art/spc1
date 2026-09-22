@@ -64,6 +64,8 @@ Models live under `backend/app/models/<domain>/`. `alembic/env.py` imports `app.
 
 - **部署运维（deploy_versions）**: 后端 `app/api/v1/system/deploy_versions.py` 是一层薄代理，转发到本机 `deploy_agent`（`backend/deploy_agent/`，独立进程，默认 `127.0.0.1:8901`，与后端共享 `SECRET_KEY`）。权限模型：`deploy_versions.read` 可查看（list/status/detail/SSE 流），`deploy_versions.manage` 可执行动作（rollback/switch/deploy-new）；两者都按角色在「角色管理」中授予，**不限定 admin**（admin 自动通过）。GET/POST 走 header Bearer；SSE（`/jobs/{id}/stream`）因前端用 fetch+ReadableStream 也走 header Bearer（与 notifications 的 EventSource query-token 惯例不同，勿改回）。agent 把 git pull / docker build / compose up / 健康检查封装为 job + SSE 事件（`step` / `phase` / `log` / `end`）。加 agent 新命令时保持 `_run_step` 输出约定。冒烟脚本 `backend/check_deploy_agent.py`（mock docker/git/health）。
 
+- **审批中心（approval）**: 统一「待我审批」聚合 + 审批链配置，独立一级菜单。新业务流程接入只需在 `backend/app/services/common/approval_providers.py` 注册一个 provider（biz_type / 名称 / 归一化取数函数，参考 supplier_claim），统一端点 `GET /api/v1/approvals/pending` 自动聚合，前端无需改动。审批链配置只允许操作**已注册**的 biz_type（`PUT /api/v1/approvals/configs/{biz_type}` 会拒绝未注册业务，防止与其它模块配置页产生双写路径；调价单未注册、维持原入口）。权限域：`approval.pending`（审批人，节点权限在引擎内二次校验）、`approval.config`（配置管理员）。审批动作仍在各业务详情页完成（统一列表只做聚合与深链跳转）。
+
 ## Frontend conventions
 
 - Single axios instance at `src/services/api.ts`, `baseURL: '/api/v1'`, 30s timeout, token from `useAuthStore`. Auth/permission state in **Zustand** stores (`src/store/auth.ts`, `permission.ts`, `theme.ts`) — not Redux/context. Permission tree is fetched once and cached; route→permission mapping lives in `permission.ts`.
@@ -102,9 +104,22 @@ Models live under `backend/app/models/<domain>/`. `alembic/env.py` imports `app.
 - 禁止引入项目中未使用的框架、模式或架构；与代码库保持一致，不炫技。
 - 禁止在未说明的情况下留下 TODO；留 TODO 必须写清原因和负责人。
 
-## No test suite
+## Tests
 
-There is **no** pytest/jest/vitest configured (not in `requirements.txt` or `package.json`). `backend/test_*.py` and root `check_*.py` / `add_*.py` are standalone scripts run manually against a live DB, not a test framework. Verify changes by starting uvicorn and hitting the endpoint, or by running the relevant script.
+Backend has a pytest suite (`backend/pytest.ini`, `testpaths = tests`); frontend still has **no** test runner (`npm run build` remains the only frontend check).
+
+```bash
+cd backend && pip install -r requirements-dev.txt   # pytest / pytest-asyncio（生产镜像不装）
+python -m pytest -v                                  # 全量：86 个用例
+python -m pytest tests/unit tests/integration -v     # 只跑供应商索赔/审批中心套件
+```
+
+- `tests/unit/` + `tests/integration/` — 供应商索赔单 + 审批中心自动化测试（2026-09 新增）：独立测试库 `spc_test`（conftest 自动建库+最小种子+每用例清表，**不碰开发库**），ASGI 内存客户端直打 FastAPI app，不起 uvicorn。
+- **`pytest.ini` 里的 `asyncio_default_fixture_loop_scope = session` / `asyncio_default_test_loop_scope = session` 是硬性前提**：全局异步引擎池跨事件循环会损坏连接，删掉这两行会导致全部集成用例报 "Future attached to a different loop"。
+- `tests/test_*.py` 根下其余文件（`test_context_manager.py`、`test_cancellation.py` 等）是既有单测；`test_external_*.py` 是针对活服务的独立脚本（无 test_ 函数，pytest 只导入不执行）。
+- 改审批引擎/索赔单/审批中心代码后必须跑 `python -m pytest`。
+
+其余验证方式不变：起 uvicorn 打端点，或跑 `backend/test_*.py`、根 `check_*.py` / `add_*.py` 等独立脚本。
 
 ## Active investigation notes (read if working in these areas)
 

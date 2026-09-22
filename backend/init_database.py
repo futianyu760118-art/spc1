@@ -44,6 +44,7 @@ from app.models.production.workshop_daily_report import (  # noqa: F401
 )
 from app.models.exception.risk_issue import RiskIssue
 from app.models.exception.quality_issue import QualityIssue
+from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprovalLog  # noqa: F401
 from app.models.rules.risk_rule import RiskRule
 from app.models.rules.node_standard import NodeStandard
 from app.models.common.business_document import BusinessDocument, BusinessDocumentVersion
@@ -127,6 +128,9 @@ class DatabaseInitializer:
         new_columns = {
             "sync_log": {
                 "server_id": "VARCHAR(64)",
+            },
+            "kitting_run": {
+                "blocked_count": "INTEGER NOT NULL DEFAULT 0",
             },
             "sale_order": {
                 "line_no": "VARCHAR(32) NOT NULL DEFAULT ''",
@@ -712,6 +716,14 @@ class DatabaseInitializer:
                 print("  scm_inventory_check.audit_status index ensured")
             except Exception as e:
                 print(f"  scm_inventory_check.audit_status index skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_scm_inventory_check_item_appeal_status "
+                    "ON scm_inventory_check_item (appeal_status)"
+                ))
+                print("  scm_inventory_check_item.appeal_status index ensured")
+            except Exception as e:
+                print(f"  scm_inventory_check_item.appeal_status index skipped: {e}")
 
     async def migrate_production_daily_report_index(self):
         """将 production_daily_report 的唯一索引由 (oa_id) 改为 (oa_id, oa_detail_id)，
@@ -1674,6 +1686,27 @@ class DatabaseInitializer:
                 print(f"Error seeding price change rule config: {e}")
                 raise
 
+    async def seed_supplier_claim_approval_config(self):
+        """供应商索赔单默认审批链（仅首次插入，不覆盖运行时修改）。"""
+        async with AsyncSessionLocal() as session:
+            existing = await session.execute(text("SELECT id FROM approval_config WHERE biz_type = 'supplier_claim'"))
+            if existing.fetchone():
+                return
+            default_nodes = [
+                {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager"},
+                {"seq": 2, "label": "上级部门意见", "role": "manager",
+                 "condition": {"field": "claim_amount", "op": ">=", "value": 1000}},
+                {"seq": 3, "label": "总经理意见", "role": "general_manager",
+                 "condition": {"field": "claim_amount", "op": ">=", "value": 5000}},
+                {"seq": 4, "label": "财务结算", "role": "finance"},
+            ]
+            await session.execute(text(
+                "INSERT INTO approval_config (biz_type, biz_name, nodes, is_active, updated_by) "
+                "VALUES ('supplier_claim', '供应商索赔单', :nodes, TRUE, 'system')"
+            ), {"nodes": json.dumps(default_nodes)})
+            await session.commit()
+            print("Supplier claim default approval config seeded")
+
     async def seed_sample_data(self):
         """Seed comprehensive sample data for dashboard visualization"""
         print("Seeding sample business data...")
@@ -2202,6 +2235,42 @@ ORDER BY FModifyDate DESC
                         created_by="admin",
                     ),
                     SyncSqlConfig(
+                        sync_type="transfer_orders",
+                        description="调拨单明细 — K3 仓库调拨单（FTranType=41，直接调拨）",
+                        sql_text="""
+SELECT
+    CAST(b.FBillNo AS VARCHAR(64))          AS transfer_no,
+    CAST(e.FEntryID AS INT)                 AS entry_id,
+    CAST(e.FItemID AS INT)                  AS material_id,
+    CAST(it.FNumber AS VARCHAR(64))         AS material_code,
+    CAST(it.FName AS VARCHAR(256))          AS material_name,
+    CAST(e.FQty AS DECIMAL(15,2))           AS qty,
+    CAST(src.FNumber AS VARCHAR(32))        AS from_wh_code,
+    CAST(dst.FNumber AS VARCHAR(32))        AS to_wh_code,
+    CAST(b.FDate AS DATE)                   AS transfer_date,
+    CAST(b.FDate AS DATE)                   AS expected_arrival_date,
+    CASE WHEN b.FStatus = 1 THEN 'confirmed' ELSE 'draft' END AS status,
+    b.FCheckDate                            AS erp_updated_at
+FROM k3sv.AIS20161019115614.dbo.ICStockBill b
+JOIN k3sv.AIS20161019115614.dbo.ICStockBillEntry e ON e.FInterID = b.FInterID
+LEFT JOIN k3sv.AIS20161019115614.dbo.t_ICItem it ON it.FItemID = e.FItemID
+LEFT JOIN k3sv.AIS20161019115614.dbo.t_Stock src ON src.FItemID = e.FSCStockID
+LEFT JOIN k3sv.AIS20161019115614.dbo.t_Stock dst ON dst.FItemID = e.FDCStockID
+WHERE b.FTranType = 41
+  AND b.FCancellation = 0
+  AND b.FDate >= DATEADD(DAY, -120, GETDATE())
+  AND b.FDate <= DATEADD(DAY, 1, GETDATE())
+ORDER BY b.FDate DESC, b.FBillNo, e.FEntryID
+                        """.strip(),
+                        field_mapping_json=None,
+                        is_active=True,
+                        sync_enabled=True,
+                        sync_interval="6h",
+                        sync_strategy="full",
+                        sync_priority=8,
+                        created_by="admin",
+                    ),
+                    SyncSqlConfig(
                         sync_type="inventory",
                         description="即时库存 — 从ERP库存表拉取（全量快照）",
                         sql_text="-- TODO: 配置 ERP 即时库存查询 SQL，返回字段需包含: material_id, material_code, material_name, wh_id, wh_code, wh_name, location_id, location_name, qty_on_hand, locked_qty, balance_qty, qty_in_transit, unit_price, ending_balance, batch_no；可选: last_inbound_at(最后入库时间), last_outbound_at(最后出库时间), last_picking_at(最后领料时间)\nSELECT NULL AS material_id, NULL AS material_code, NULL AS material_name, NULL AS wh_id, NULL AS wh_code, NULL AS wh_name, NULL AS location_id, NULL AS location_name, NULL AS qty_on_hand, NULL AS locked_qty, NULL AS balance_qty, NULL AS qty_in_transit, NULL AS unit_price, NULL AS ending_balance, NULL AS batch_no, NULL AS last_inbound_at, NULL AS last_outbound_at, NULL AS last_picking_at WHERE 1 = 0",
@@ -2391,6 +2460,7 @@ ORDER BY FModifyDate DESC
             await self.seed_roles()
             await self.seed_users()
             await self.seed_price_change_rule_config()
+            await self.seed_supplier_claim_approval_config()
             await self.seed_risk_rules()
             await self.seed_normal_order_standards()
             await self.seed_base_conditions()

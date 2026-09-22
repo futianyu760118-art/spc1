@@ -193,6 +193,12 @@ export const orderApi = {
   exportOrders: (params: Record<string, any>) =>
     api.get('/orders/export', { params, responseType: 'blob' }),
   getShippingAnalytics: () => api.get('/orders/shipping-analytics'),
+  getShippingPlanHistory: (recordId: number) =>
+    api.get('/orders/shipping-plan-history', { params: { record_id: recordId } }),
+  importShippingPlan: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/orders/import/shipping-plan', fd)
+  },
 }
 
 export const runOrderApi = {

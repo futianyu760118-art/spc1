@@ -21,6 +21,7 @@ from mcp.server.mcpserver.utilities.func_metadata import ArgModelBase
 from pydantic import ConfigDict, Field
 
 from . import __version__, contracts
+from .kitting import register_kitting_tools
 from .legacy_compat import register_legacy_tools
 from .orders import query_orders
 from .tool_helpers import (
@@ -88,6 +89,11 @@ EXPECTED_TOOLS = [
     "metric_query",
     "master_material_search",
     "master_supplier_get",
+    "material_kitting_results_list",
+    "material_shortages_list",
+    "material_kitting_demands_list",
+    "inventory_availability_list",
+    "material_supplies_list",
 ]
 
 
@@ -261,3 +267,6 @@ async def bom_tree(
 # 0.1.0 向后兼容工具（detail_orders_list / catalog_metrics_list / metric_query /
 # master_material_search / master_supplier_get），注册后共 9 个只读 Tool
 register_legacy_tools(mcp)
+
+# 物料齐套类工具（结果/缺料/需求/库存可用量/未来供给），注册后共 14 个只读 Tool
+register_kitting_tools(mcp)

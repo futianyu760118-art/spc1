@@ -65,8 +65,8 @@ def parse_iso_datetime(value: str, field: str) -> None:
         raise BizError("INVALID_ARGUMENT", f"{field} 必须为 ISO 8601 时间：{value!r}") from exc
 
 
-def as_of_confidence(payload: Dict[str, Any]):
-    if payload.get("stale") is True:
+def as_of_confidence(payload: Dict[str, Any], allow_stale: bool = False):
+    if not allow_stale and payload.get("stale") is True:
         raise UpstreamError("STALE_DATA", "上游数据已过期，超出新鲜度阈值")
     as_of = str(payload.get("data_as_of") or contracts.utc_now_iso())
     confidence = str(payload.get("data_confidence") or "high").lower()
@@ -90,9 +90,10 @@ def list_result(
     evidence_entity: str,
     evidence_id: Callable[[Dict[str, Any]], str],
     row_transform: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+    allow_stale: bool = False,
 ) -> Dict[str, Any]:
     """列表类 Tool 公共返回：解包 items/total、脱敏、（可选）字段别名、分页信息、Evidence"""
-    as_of, confidence = as_of_confidence(payload)
+    as_of, confidence = as_of_confidence(payload, allow_stale=allow_stale)
     rows = contracts.redact(payload.get("items") or [])
     if row_transform is not None:
         rows = [row_transform(row) for row in rows]

@@ -1,7 +1,7 @@
 {
   "name": "company-control",
-  "version": "0.2.0",
-  "description": "公司智能控制中台只读业务能力（订单列表 / 订单明细列表 / BOM 多级树 / 健康检查；0.1.0 兼容：订单风险列表、指标目录、指标查询、物料检索、供应商详情）",
+  "version": "1.0.0",
+  "description": "公司智能控制中台只读业务能力（订单列表 / 订单明细列表 / BOM 多级树 / 物料齐套结果 / 缺料明细 / 齐套需求 / 库存可用量 / 未来供给 / 健康检查；0.1.0 兼容：订单风险列表、指标目录、指标查询、物料检索、供应商详情）",
   "owner": "company-middle-platform",
   "transport": ["stdio", "streamable-http"],
   "read_only": true,
@@ -21,6 +21,11 @@
     { "name": "catalog_metrics_list", "permission_level": "READ_ONLY" },
     { "name": "metric_query", "permission_level": "READ_ONLY" },
     { "name": "master_material_search", "permission_level": "READ_ONLY" },
-    { "name": "master_supplier_get", "permission_level": "READ_ONLY" }
+    { "name": "master_supplier_get", "permission_level": "READ_ONLY" },
+    { "name": "material_kitting_results_list", "permission_level": "READ_ONLY" },
+    { "name": "material_shortages_list", "permission_level": "READ_ONLY" },
+    { "name": "material_kitting_demands_list", "permission_level": "READ_ONLY" },
+    { "name": "inventory_availability_list", "permission_level": "READ_ONLY" },
+    { "name": "material_supplies_list", "permission_level": "READ_ONLY" }
   ]
 }

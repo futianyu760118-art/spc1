@@ -14,6 +14,8 @@ from app.models.material.payment_apply import PaymentApply
 from app.models.material.subcontract_order import SubcontractOrder
 from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.material.supplier_message import SupplierMessage
+from app.models.material.kitting import KittingResult, KittingRun, KittingShortage  # noqa: F401
+from app.models.material.transfer_order import TransferOrder  # noqa: F401
 
 # 生产协同中心
 from app.models.production.process_progress import ProcessProgress
@@ -39,6 +41,9 @@ from app.models.common.business_document import BusinessDocument, BusinessDocume
 # 规则配置中心
 from app.models.rules.risk_rule import RiskRule
 from app.models.rules.node_standard import NodeStandard
+
+# 品质管理
+from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprovalLog  # noqa: F401
 
 # 基础数据与集成中心
 from app.models.basicdata.user import SysUser, SysRole
@@ -100,4 +105,7 @@ __all__ = [
     "DataSupplyCallLog",
     "ShareLink",
     "ShareLinkRecipient",
+    # 品质管理
+    "SupplierClaim",
+    "SupplierClaimApprovalLog",
 ]

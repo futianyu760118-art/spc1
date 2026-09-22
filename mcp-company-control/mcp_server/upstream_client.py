@@ -38,7 +38,7 @@ REQUEST_TIMEOUT_MS = int(os.getenv("CONTROL_PLATFORM_TIMEOUT_MS", "15000"))
 CONNECT_TIMEOUT_MS = int(os.getenv("CONTROL_PLATFORM_CONNECT_TIMEOUT_MS", "5000"))
 
 # SPC 可暴露接口注册表：路径 → endpoint_code（int: 前缀为内部 @exposable；其余为对外接口注册表）
-# 签名用，必须与 SPC 侧注册一致；已就绪：/common/ping + 五个对外接口
+# 签名用，必须与 SPC 侧注册一致；已就绪：/common/ping + 五个对外接口 + 物料齐套 5 接口
 _ENDPOINT_CODES = {
     "/common/ping": "int:health.ping",
     "/external/orders/list": "orders.list",
@@ -46,6 +46,11 @@ _ENDPOINT_CODES = {
     "/external/boms/tree": "boms.tree",
     "/external/materials/list": "materials.list",
     "/external/suppliers/list": "suppliers.list",
+    "/external/material-kitting/results": "kitting.results",
+    "/external/material-kitting/shortages": "kitting.shortages",
+    "/external/material-kitting/demands": "kitting.demands",
+    "/external/inventory/availability": "inventory.availability",
+    "/external/material-supplies/list": "material.supplies",
 }
 
 _RETRYABLE = {"UPSTREAM_TIMEOUT", "UPSTREAM_UNAVAILABLE", "RATE_LIMITED"}

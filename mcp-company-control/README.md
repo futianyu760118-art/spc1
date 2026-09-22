@@ -3,7 +3,7 @@
 中台只读能力适配器，接入 AEOS Hub。遵循 **AEOS MCP Integration Specification v0.1.0**。
 
 - **名称**：company-control
-- **版本**：0.2.0
+- **版本**：1.0.0
 - **传输**：stdio（默认，由 AEOS Hub 作为 MCP client 拉起）/ streamable-http（远程客户端，静态 Bearer Token）
 - **技术栈**：Python 3.12+ / 官方 mcp SDK 2.x（`MCPServer`）/ httpx / pydantic
 - **权限等级**：全部 Tool 为 `READ_ONLY`（MCP annotations `readOnlyHint=true` + `server.json` 声明）
@@ -77,16 +77,19 @@ args = ["-m", "mcp_server"]
 
 1. 登录 SPC → 基础数据中心 → 数据供给 → 新建 API Key
 2. 勾选接口：`int:health.ping`、`orders.list`、`order_details.list`、`boms.tree`、
-   `materials.list`、`suppliers.list`
+   `materials.list`、`suppliers.list`、`kitting.results`、`kitting.shortages`、
+   `kitting.demands`、`inventory.availability`、`material.supplies`
 3. IP 白名单：填 MCP 运行主机 IP（本地调试可留空）
 4. 保存后复制 AppKey / AppSecret（**AppSecret 仅显示一次**），填入 `.env`
 
-**当前端点状态**：6 个端点已就绪（`/common/ping`、`/external/orders/list`、
+**当前端点状态**：11 个端点已就绪（`/common/ping`、`/external/orders/list`、
 `/external/order-details/list`、`/external/boms/tree`、`/external/materials/list`、
-`/external/suppliers/list`）；SPC 指标端点尚未开放，`catalog_metrics_list` / `metric_query`
-返回结构化「能力未开放」错误（不返回伪造数据）。
+`/external/suppliers/list`、`/external/material-kitting/results`、
+`/external/material-kitting/shortages`、`/external/material-kitting/demands`、
+`/external/inventory/availability`、`/external/material-supplies/list`）；SPC 指标端点尚未开放，
+`catalog_metrics_list` / `metric_query` 返回结构化「能力未开放」错误（不返回伪造数据）。
 
-## Tool 清单（9 个，全部 READ_ONLY）
+## Tool 清单（14 个，全部 READ_ONLY）
 
 | Tool | 说明 | 关键约束 |
 |---|---|---|
@@ -99,6 +102,11 @@ args = ["-m", "mcp_server"]
 | `master_supplier_get` | 供应商详情（0.1.0 兼容） | 对接 `/external/suppliers/list`（编码精确匹配）；不存在返回 `NOT_FOUND` |
 | `catalog_metrics_list` | 指标目录（0.1.0 兼容） | SPC 端点未开放 → `UPSTREAM_UNAVAILABLE`（`retryable=false`） |
 | `metric_query` | 指标查询（0.1.0 兼容） | 保留 92 天跨度校验；SPC 端点未开放 → `UPSTREAM_UNAVAILABLE`（`retryable=false`） |
+| `material_kitting_results_list` | 齐套结果列表（AEOS 文档 §9） | endpoint_code `kitting.results`；过滤条件全可选；单页 ≤200；含状态/齐套率/预计齐套日期 |
+| `material_shortages_list` | 缺料明细列表（AEOS 文档 §9） | endpoint_code `kitting.shortages`；含净缺口/预计可用日期/缺料原因/责任部门 |
+| `material_kitting_demands_list` | 齐套需求对象列表（AEOS 文档 §9） | endpoint_code `kitting.demands`；销售订单行，含数量/需求日期/优先级/状态 |
+| `inventory_availability_list` | 库存可用量（按物料聚合，AEOS 文档 §9） | endpoint_code `inventory.availability`；`available_qty` = 现存 − 锁定；不暴露单价等敏感字段 |
+| `material_supplies_list` | 未来供给列表（AEOS 文档 §9） | endpoint_code `material.supplies`；四源统一：采购在途/委外回货/自制计划/调拨 |
 
 - 全部 Tool 拒绝未定义字段（严格 Schema，`additionalProperties: false`），带 `readOnlyHint` 标注
 - 数据类 Tool 支持可选 `request_id`（≤64 字符）透传上游并在返回包回显，便于审计与链路追踪
@@ -106,7 +114,7 @@ args = ["-m", "mcp_server"]
 
 ### 0.1.0 兼容说明
 
-| 0.1.0 工具 | 0.2.0 兼容方式 | 上游 |
+| 0.1.0 工具 | 1.0.0 兼容方式 | 上游 |
 |---|---|---|
 | `get_system_health` | 保留名称，补 evidence 与降级置信度（方案 §8） | `/common/ping` |
 | `detail_orders_list` | 适配到订单表头端点，参数映射 + 字段别名 | `/external/orders/list` |
@@ -172,7 +180,7 @@ python scripts/test_company_control.py
 ## 元数据与权限声明
 
 - `server.json`：Server 元数据（name / version / owner / transport / read_only / required_permissions / 依赖 / 维护团队 / 每 Tool 权限等级），提交 AEOS Registry 使用
-- MCP 协议层：`serverInfo.version=0.2.0`；每个 Tool 带 `annotations.readOnlyHint=true`
+- MCP 协议层：`serverInfo.version=1.0.0`；每个 Tool 带 `annotations.readOnlyHint=true`
 
 ## 上游系统依赖
 
@@ -180,7 +188,12 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
 
 - 已就绪：`GET /common/ping`（`int:health.ping`）、`GET /external/orders/list`（`orders.list`）、
   `GET /external/order-details/list`（`order_details.list`）、`GET /external/boms/tree`（`boms.tree`）、
-  `GET /external/materials/list`（`materials.list`）、`GET /external/suppliers/list`（`suppliers.list`）
+  `GET /external/materials/list`（`materials.list`）、`GET /external/suppliers/list`（`suppliers.list`）、
+  `GET /external/material-kitting/results`（`kitting.results`）、
+  `GET /external/material-kitting/shortages`（`kitting.shortages`）、
+  `GET /external/material-kitting/demands`（`kitting.demands`）、
+  `GET /external/inventory/availability`（`inventory.availability`）、
+  `GET /external/material-supplies/list`（`material.supplies`）
 - 调用方需在 API Key 上勾选对应 endpoint_code + IP 白名单
 
 ## 已知限制
@@ -195,6 +208,11 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
 - BOM 树仅支持按 `bom_id` 查询（上游接口设计），可由 `order_details_list` 返回的 `bom_id` 串联
 - HTTP 模式为单一静态 token，轮换需更新 env 并重启
 - 旧 `sse` 传输不支持（已被 streamable-http 取代）
+- 齐套类工具（kitting/shortages/demands/inventory/supplies）的 OUTSOURCE 供给暂无交期，
+  `expected_available_date` 为 null
+- 调拨供给为近 120 天窗口快照；本账套直接调拨审核即入库存，不计入齐套未来供给（避免与库存重复）
+- 齐套类工具对过期数据返回 `data_confidence=low` + 行级 `expired` 字段（数据照常返回），
+  不返回 `STALE_DATA` 错误（与 orders 类工具不同）
 
 ## 目录结构
 
@@ -203,6 +221,7 @@ mcp-company-control/
 ├─ mcp_server/            # Server 包（避免与 SDK 包 mcp 同名）
 │  ├─ __main__.py         # 入口：传输分发（stdio / streamable-http）
 │  ├─ server.py           # mcp 实例 + 新版 Tool（orders/details/bom/health）
+│  ├─ kitting.py          # 齐套类 Tool（kitting/短料/需求/库存可用量/未来供给）
 │  ├─ legacy_compat.py    # 0.1.0 兼容 Tool（detail_orders/metrics/material/supplier）
 │  ├─ tool_helpers.py     # Tool 公共基础设施（错误信封/校验/列表返回）
 │  ├─ orders.py           # 订单表头共享查询 + 兼容字段别名
