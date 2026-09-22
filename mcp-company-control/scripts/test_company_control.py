@@ -1,4 +1,4 @@
-"""独立测试脚本 — stdio 13 项 + HTTP 4 项（AEOS MCP Integration Spec §20 十二条 + 双传输补充）
+"""独立测试脚本 — 26 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
 
 运行（在 mcp-company-control/ 目录下）：
     python scripts/test_company_control.py
@@ -6,6 +6,11 @@
 内置 mock 中台端点（127.0.0.1 随机端口），无需真实中台：
   - stdio：以子进程拉起 mcp_server，用 MCP client 完成真实握手与调用
   - streamable-http：以子进程拉起 --transport streamable-http，验证鉴权与握手
+
+分组：
+  - 旧版回归：0.1.0 兼容工具存在、旧 Schema/分页上限、参数与字段映射、能力未开放错误、健康检查修正
+  - 新版链路：orders/details/bom 正常链路、错误映射、脱敏、幂等、evidence
+  - HTTP 传输：401 鉴权、握手、缺 token 拒绝启动
 """
 
 import asyncio
@@ -36,6 +41,11 @@ EXPECTED_TOOLS = {
     "orders_list",
     "order_details_list",
     "bom_tree",
+    "detail_orders_list",
+    "catalog_metrics_list",
+    "metric_query",
+    "master_material_search",
+    "master_supplier_get",
 }
 
 DATA_AS_OF = "2026-09-19T18:00:00Z"
@@ -138,7 +148,61 @@ BOM_TREE = {
     ],
 }
 
-MOCK_STATE = {"mode": "normal"}
+MATERIALS = [
+    {
+        "id": 1,
+        "erp_material_id": 10001,
+        "material_code": "MO-8821",
+        "material_name": "LED 驱动电源 60W",
+        "spec_model": "60W",
+        "material_type": "电子件",
+        "unit_of_measure": "个",
+        "brand": "示例品牌",
+        "is_purchase": 1,
+        "is_produce": 0,
+        "status": 1,
+        "supplier_id": 10,
+        "supplier_name": "示例供应商",
+        "order_unit_price": 42.5,
+        "last_outbound_date": "2026-09-18",
+        "update_time": "2026-09-19T10:00:00",
+    },
+    {
+        "id": 2,
+        "erp_material_id": 10002,
+        "material_code": "MS-3310",
+        "material_name": "铝合金压铸件-灯壳",
+        "spec_model": "A-100",
+        "material_type": "结构件",
+        "unit_of_measure": "件",
+        "brand": None,
+        "is_purchase": 1,
+        "is_produce": 1,
+        "status": 1,
+        "supplier_id": None,
+        "supplier_name": None,
+        "order_unit_price": 18.0,
+        "last_outbound_date": None,
+        "update_time": "2026-09-18T09:00:00",
+    },
+]
+
+SUPPLIERS = [
+    {
+        "id": 10,
+        "supplier_code": "SUP-001",
+        "supplier_name": "示例供应商",
+        "supplier_short": "示例",
+        "supplier_type": "外协",
+        "contact_person": "张三",
+        "contact_phone": "137****3333",
+        "payment_terms": "月结30天",
+        "status": 1,
+        "update_time": "2026-09-19T08:00:00",
+    },
+]
+
+MOCK_STATE = {"mode": "normal", "last_query": None}
 
 # 与 SPC「数据供给」HMAC 机制一致的校验参数
 MOCK_APP_KEY = "test-app-key"
@@ -148,6 +212,8 @@ MOCK_ENDPOINT_CODES = {
     "/external/orders/list": "orders.list",
     "/external/order-details/list": "order_details.list",
     "/external/boms/tree": "boms.tree",
+    "/external/materials/list": "materials.list",
+    "/external/suppliers/list": "suppliers.list",
 }
 
 MCP_HTTP_TOKEN = "test-http-token"
@@ -202,6 +268,8 @@ class MockHandler(BaseHTTPRequestHandler):
             return self._json({"error": "invalid token"}, 401)
         if mode == "unavailable":
             return self._json({"error": "upstream down"}, 503)
+        if mode == "ratelimit":
+            return self._json({"error": "too many requests"}, 429)
         if mode == "stale":
             return self._json(
                 {
@@ -220,6 +288,7 @@ class MockHandler(BaseHTTPRequestHandler):
         if route == "/common/ping":
             return self._json({"code": 0, "message": "pong", "data": {"ok": True}})
         if route == "/external/orders/list":
+            MOCK_STATE["last_query"] = q
             rows = ORDERS
             if q.get("customer_code"):
                 rows = [o for o in rows if o["customer_code"] == q["customer_code"]]
@@ -259,7 +328,66 @@ class MockHandler(BaseHTTPRequestHandler):
                 }
             )
         if route == "/external/boms/tree":
+            if str(q.get("flatten", "")).lower() in ("1", "true", "yes"):
+                flat_items: list = []
+
+                def _walk(nodes):
+                    for node in nodes:
+                        flat_items.append({k: v for k, v in node.items() if k != "children"})
+                        _walk(node.get("children") or [])
+
+                _walk(BOM_TREE["tree"])
+                data = {k: v for k, v in BOM_TREE.items() if k != "tree"}
+                data["flatten"] = True
+                data["items"] = flat_items
+                return self._json({"code": 0, "message": "ok", "data": data})
             return self._json({"code": 0, "message": "ok", "data": BOM_TREE})
+        if route == "/external/materials/list":
+            rows = MATERIALS
+            if q.get("keyword"):
+                kw = q["keyword"]
+                rows = [
+                    m
+                    for m in rows
+                    if kw in (m["material_code"] or "")
+                    or kw in (m["material_name"] or "")
+                    or kw in (m.get("spec_model") or "")
+                ]
+            return self._json(
+                {
+                    "code": 0,
+                    "message": "ok",
+                    "data": {
+                        "items": rows,
+                        "total": len(rows),
+                        "page": int(q.get("page", 1)),
+                        "page_size": int(q.get("page_size", 20)),
+                    },
+                }
+            )
+        if route == "/external/suppliers/list":
+            rows = SUPPLIERS
+            if q.get("keyword"):
+                kw = q["keyword"]
+                rows = [
+                    s
+                    for s in rows
+                    if kw in (s["supplier_code"] or "")
+                    or kw in (s["supplier_name"] or "")
+                    or kw in (s.get("supplier_short") or "")
+                ]
+            return self._json(
+                {
+                    "code": 0,
+                    "message": "ok",
+                    "data": {
+                        "items": rows,
+                        "total": len(rows),
+                        "page": int(q.get("page", 1)),
+                        "page_size": int(q.get("page_size", 20)),
+                    },
+                }
+            )
         return self._json({"error": "not found"}, 404)
 
 
@@ -296,7 +424,7 @@ async def call_tool(session, name, args):
     return bool(result.is_error), parsed
 
 
-# ---------------- stdio 13 项检查（规范 §20） ----------------
+# ---------------- stdio 检查（规范 §20 + 0.1.0 兼容） ----------------
 
 async def check_01_initialize(session, init_result):
     assert init_result.server_info.name == "company-control", f"server_info.name={init_result.server_info.name}"
@@ -442,7 +570,149 @@ async def check_13_stale_data(session):
         MOCK_STATE["mode"] = "normal"
 
 
-# ---------------- HTTP 4 项检查（双传输补充） ----------------
+async def check_14_legacy_tools_present(session):
+    """0.1.0 兼容工具全部存在，且旧参数 Schema 可正常调用"""
+    tools = await session.list_tools()
+    names = {t.name for t in tools.tools}
+    legacy = {
+        "catalog_metrics_list",
+        "metric_query",
+        "master_material_search",
+        "master_supplier_get",
+        "detail_orders_list",
+    }
+    assert legacy <= names, f"缺少兼容工具: {legacy - names}"
+    is_error, body = await call_tool(
+        session, "detail_orders_list", {"customer": "示例客户A", "page": 1, "page_size": 20}
+    )
+    assert not is_error and body and body.get("capability") == "detail_orders_list", f"{body}"
+
+
+async def check_15_metrics_capability_unavailable(session):
+    """指标类工具返回结构化「能力未开放」错误，不返回空数组成功"""
+    for name, args in (
+        ("catalog_metrics_list", {"page": 1, "page_size": 20}),
+        (
+            "metric_query",
+            {"metric_code": "OTD", "date_from": "2026-09-01", "date_to": "2026-09-19", "dimension": "day"},
+        ),
+    ):
+        _, body = await call_tool(session, name, args)
+        err = (body or {}).get("error", {})
+        assert err.get("code") == "UPSTREAM_UNAVAILABLE", f"{name}: {body}"
+        assert err.get("retryable") is False, f"{name}: retryable 应为 false: {body}"
+        assert "data" not in body, f"{name}: 能力不可用时不应返回 data"
+
+
+async def check_16_metric_query_legacy_validation(session):
+    """metric_query 保留 92 天跨度校验"""
+    _, body = await call_tool(
+        session, "metric_query", {"metric_code": "OTD", "date_from": "2026-01-01", "date_to": "2026-09-19"}
+    )
+    assert body and body.get("error", {}).get("code") == "INVALID_ARGUMENT", f"{body}"
+
+
+async def check_17_material_search(session):
+    """master_material_search 功能兼容：关键词检索 + 证据 + 旧分页上限 100"""
+    _, body = await call_tool(session, "master_material_search", {"keyword": "电源"})
+    assert body and body.get("capability") == "master_material_search", f"{body}"
+    assert body.get("data"), f"未返回物料数据: {body}"
+    refs = body.get("evidence_refs") or []
+    assert refs and all(r.startswith("control-platform://material/") for r in refs), f"{refs}"
+    is_error, body = await call_tool(session, "master_material_search", {"keyword": "电源", "page_size": 101})
+    assert is_error or (body and body.get("error", {}).get("code") == "INVALID_ARGUMENT"), f"旧分页上限未生效: {body}"
+
+
+async def check_18_supplier_get(session):
+    """master_supplier_get 功能兼容：命中返回单对象，未命中 NOT_FOUND，电话脱敏"""
+    _, body = await call_tool(session, "master_supplier_get", {"supplier_code": "SUP-001"})
+    assert body and body.get("capability") == "master_supplier_get", f"{body}"
+    row = body.get("data") or {}
+    assert row.get("supplier_code") == "SUP-001", f"{body}"
+    assert row.get("contact_phone") == "***", f"联系电话未脱敏: {row}"
+    refs = body.get("evidence_refs") or []
+    assert refs and refs[0].startswith("control-platform://supplier/SUP-001@"), f"{refs}"
+    _, body = await call_tool(session, "master_supplier_get", {"supplier_code": "SUP-404"})
+    assert body and body.get("error", {}).get("code") == "NOT_FOUND", f"{body}"
+
+
+async def check_19_detail_orders_mapping(session):
+    """detail_orders_list 参数映射（customer→keyword、日期→合同交期）与字段别名"""
+    MOCK_STATE["last_query"] = None
+    _, body = await call_tool(
+        session,
+        "detail_orders_list",
+        {"customer": "示例客户A", "date_from": "2026-09-01", "date_to": "2026-09-30"},
+    )
+    assert body and body.get("capability") == "detail_orders_list", f"{body}"
+    q = MOCK_STATE.get("last_query") or {}
+    assert q.get("keyword") == "示例客户A", f"customer 未映射 keyword: {q}"
+    assert q.get("promised_date_start") == "2026-09-01" and q.get("promised_date_end") == "2026-09-30", (
+        f"日期未映射: {q}"
+    )
+    row = (body.get("data") or [{}])[0]
+    assert "amount_cny" in row and row["amount_cny"] == row.get("order_amount"), f"缺少 amount_cny 别名: {row}"
+    assert "due_date" in row and row["due_date"] == row.get("promised_date"), f"缺少 due_date 别名: {row}"
+    assert "risk_probability" not in row, "不应伪造 risk_probability"
+    # customer 与 product_line 同时提供时 customer 优先
+    MOCK_STATE["last_query"] = None
+    await call_tool(session, "detail_orders_list", {"customer": "示例客户A", "product_line": "户外照明"})
+    q = MOCK_STATE.get("last_query") or {}
+    assert q.get("keyword") == "示例客户A", f"customer 应优先于 product_line: {q}"
+    # 旧契约：至少一个过滤条件
+    _, body = await call_tool(session, "detail_orders_list", {})
+    assert body and body.get("error", {}).get("code") == "INVALID_ARGUMENT", f"{body}"
+    # 旧分页上限 100
+    is_error, body = await call_tool(session, "detail_orders_list", {"customer": "示例客户A", "page_size": 101})
+    assert is_error or (body and body.get("error", {}).get("code") == "INVALID_ARGUMENT"), f"旧分页上限未生效: {body}"
+
+
+async def check_20_health_evidence_and_confidence(session):
+    """健康检查：成功含 evidence 且三时间戳一致；上游不可用时降级为 low 且无证据"""
+    _, body = await call_tool(session, "get_system_health", {})
+    data = body.get("data", {})
+    assert data.get("status") == "ok", f"{data}"
+    refs = body.get("evidence_refs") or []
+    assert refs and refs[0].startswith("control-platform://health/ping@"), f"{refs}"
+    ts = refs[0].split("@", 1)[1]
+    assert data.get("checked_at") == ts == body.get("data_as_of"), (
+        f"时间戳不一致: {data.get('checked_at')} / {ts} / {body.get('data_as_of')}"
+    )
+    assert body.get("data_confidence") == "high"
+    MOCK_STATE["mode"] = "unavailable"
+    try:
+        _, body = await call_tool(session, "get_system_health", {})
+    finally:
+        MOCK_STATE["mode"] = "normal"
+    assert body.get("data", {}).get("status") == "degraded", f"{body}"
+    assert body.get("data_confidence") == "low", f"{body.get('data_confidence')}"
+    assert not (body.get("evidence_refs") or []), f"降级不应含证据: {body.get('evidence_refs')}"
+
+
+async def check_21_bom_tree_forms(session):
+    """bom_tree 支持嵌套树与扁平列表两种返回（方案 §12.2）"""
+    _, body = await call_tool(session, "bom_tree", {"bom_id": "BOM-001"})
+    data = body.get("data", {})
+    assert data.get("tree") and not data.get("items"), f"默认应返回嵌套树: {data}"
+    assert data["tree"][0].get("children"), f"嵌套树缺少 children: {data['tree'][0]}"
+    _, body = await call_tool(session, "bom_tree", {"bom_id": "BOM-001", "flatten": True})
+    data = body.get("data", {})
+    assert data.get("items") and not data.get("tree"), f"flatten=true 应返回扁平列表: {data}"
+    assert all("children" not in node for node in data["items"]), f"扁平列表不应含 children: {data['items']}"
+
+
+async def check_22_rate_limited(session):
+    """上游 429 映射为 RATE_LIMITED（retryable）"""
+    MOCK_STATE["mode"] = "ratelimit"
+    try:
+        _, body = await call_tool(session, "orders_list", {})
+    finally:
+        MOCK_STATE["mode"] = "normal"
+    err = body.get("error", {})
+    assert err.get("code") == "RATE_LIMITED" and err.get("retryable") is True, f"{body}"
+
+
+# ---------------- HTTP 检查（双传输补充） ----------------
 
 INIT_BODY = {
     "jsonrpc": "2.0",
@@ -518,14 +788,14 @@ async def wait_http_ready(port: int, timeout_s: float = 20.0) -> bool:
     return False
 
 
-async def check_14_http_no_token(port: int):
+async def check_23_http_no_token(port: int):
     url = f"http://127.0.0.1:{port}/mcp"
     async with httpx2.AsyncClient(timeout=5.0) as client:
         resp = await client.post(url, json=INIT_BODY, headers=INIT_HEADERS)
     assert resp.status_code == 401, f"无 token 未被拒绝: {resp.status_code} {resp.text[:120]}"
 
 
-async def check_15_http_bad_token(port: int):
+async def check_24_http_bad_token(port: int):
     url = f"http://127.0.0.1:{port}/mcp"
     async with httpx2.AsyncClient(timeout=5.0) as client:
         resp = await client.post(
@@ -534,7 +804,7 @@ async def check_15_http_bad_token(port: int):
     assert resp.status_code == 401, f"错误 token 未被拒绝: {resp.status_code} {resp.text[:120]}"
 
 
-async def check_16_http_authorized(port: int, token: str):
+async def check_25_http_authorized(port: int, token: str):
     url = f"http://127.0.0.1:{port}/mcp"
     http_client = create_mcp_http_client(headers={"Authorization": f"Bearer {token}"})
     async with http_client:
@@ -547,7 +817,7 @@ async def check_16_http_authorized(port: int, token: str):
                 assert names == EXPECTED_TOOLS, f"tools={names}"
 
 
-def check_17_http_requires_token(base_url: str):
+def check_26_http_requires_token(base_url: str):
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -573,62 +843,80 @@ def check_17_http_requires_token(base_url: str):
     assert code == 2, f"退出码应为 2，实际 {code}"
 
 
+# 分组：legacy = 旧版回归（0.1.0 兼容契约）；new = 新版链路（0.2.0 能力）；http = HTTP 传输
+GROUPS = [
+    ("legacy", "旧版", "旧版回归（0.1.0 兼容契约）"),
+    ("new", "新版", "新版链路（0.2.0 能力）"),
+    ("http", "HTTP", "HTTP 传输（双传输）"),
+]
+GROUP_SHORT = {key: short for key, short, _ in GROUPS}
+GROUP_TITLE = {key: title for key, _, title in GROUPS}
+
 CHECKS = [
-    ("01 initialize 握手成功", check_01_initialize),
-    ("02 tools/list 返回预期 Tool", check_02_tools_list),
-    ("03 正常输入返回结构化结果", check_03_normal_structured),
-    ("04 非法输入被拒绝且不崩溃", check_04_invalid_input),
-    ("05 未授权请求被拒绝", check_05_unauthorized),
-    ("06 上游超时返回标准错误", check_06_upstream_timeout),
-    ("07 上游不可用不导致进程崩溃", check_07_upstream_unavailable),
-    ("08 结果含 evidence_refs", check_08_evidence_refs),
-    ("09 敏感字段不出现在结果中", check_09_sensitive_fields),
-    ("10 无未声明的写操作工具", check_10_no_write_tools),
-    ("11 重复只读请求结果一致", check_11_idempotent_read),
-    ("12 get_system_health 返回正确状态", check_12_health),
-    ("13 数据过期返回 STALE_DATA", check_13_stale_data),
+    ("new", "01 initialize 握手成功", check_01_initialize),
+    ("new", "02 tools/list 返回预期 Tool", check_02_tools_list),
+    ("new", "03 正常输入返回结构化结果", check_03_normal_structured),
+    ("new", "04 非法输入被拒绝且不崩溃", check_04_invalid_input),
+    ("new", "05 未授权请求被拒绝", check_05_unauthorized),
+    ("new", "06 上游超时返回标准错误", check_06_upstream_timeout),
+    ("new", "07 上游不可用不导致进程崩溃", check_07_upstream_unavailable),
+    ("new", "08 结果含 evidence_refs", check_08_evidence_refs),
+    ("new", "09 敏感字段不出现在结果中", check_09_sensitive_fields),
+    ("legacy", "10 无未声明的写操作工具", check_10_no_write_tools),
+    ("new", "11 重复只读请求结果一致", check_11_idempotent_read),
+    ("new", "12 get_system_health 返回正确状态", check_12_health),
+    ("new", "13 数据过期返回 STALE_DATA", check_13_stale_data),
+    ("legacy", "14 0.1.0 兼容工具存在且旧 Schema 可用", check_14_legacy_tools_present),
+    ("legacy", "15 指标类工具返回能力未开放错误", check_15_metrics_capability_unavailable),
+    ("legacy", "16 metric_query 保留 92 天跨度校验", check_16_metric_query_legacy_validation),
+    ("legacy", "17 master_material_search 功能兼容", check_17_material_search),
+    ("legacy", "18 master_supplier_get 功能兼容", check_18_supplier_get),
+    ("legacy", "19 detail_orders_list 参数/字段映射", check_19_detail_orders_mapping),
+    ("legacy", "20 健康检查 evidence 与置信度", check_20_health_evidence_and_confidence),
+    ("new", "21 bom_tree 嵌套树与扁平列表", check_21_bom_tree_forms),
+    ("new", "22 上游限流映射 RATE_LIMITED", check_22_rate_limited),
 ]
 
 
 async def run() -> int:
     mock, port = start_mock()
     base_url = f"http://127.0.0.1:{port}"
-    results = []
+    results = []  # (group, name, ok, err)
+
+    def record(group: str, name: str, ok: bool, err: str = "") -> None:
+        results.append((group, name, ok, err))
+        print(f"[{GROUP_SHORT[group]}] {'PASS' if ok else 'FAIL'}  {name}" + (f": {err}" if err else ""))
+
     try:
         async with stdio_client(stdio_server_params(base_url)) as (read, write):
             async with ClientSession(read, write) as session:
                 init_result = await session.initialize()
-                for name, fn in CHECKS:
+                for group, name, fn in CHECKS:
                     try:
                         if name.startswith("01"):
                             await fn(session, init_result)
                         else:
                             await fn(session)
-                        results.append((name, True, ""))
-                        print(f"PASS  {name}")
+                        record(group, name, True)
                     except Exception as exc:  # noqa: BLE001
-                        results.append((name, False, str(exc)))
-                        print(f"FAIL  {name}: {exc}")
+                        record(group, name, False, str(exc))
 
         http_proc, http_port = start_http_server(base_url, MCP_HTTP_TOKEN)
         try:
             if not await wait_http_ready(http_port):
-                results.append(("14-16 HTTP 检查", False, "HTTP 服务未就绪"))
-                print("FAIL  14-16 HTTP 检查: HTTP 服务未就绪")
+                record("http", "23-25 HTTP 检查", False, "HTTP 服务未就绪")
             else:
                 http_checks = [
-                    ("14 HTTP 无 token 被拒（401）", lambda: check_14_http_no_token(http_port)),
-                    ("15 HTTP 错误 token 被拒（401）", lambda: check_15_http_bad_token(http_port)),
-                    ("16 HTTP 正确 token 握手成功", lambda: check_16_http_authorized(http_port, MCP_HTTP_TOKEN)),
+                    ("23 HTTP 无 token 被拒（401）", lambda: check_23_http_no_token(http_port)),
+                    ("24 HTTP 错误 token 被拒（401）", lambda: check_24_http_bad_token(http_port)),
+                    ("25 HTTP 正确 token 握手成功", lambda: check_25_http_authorized(http_port, MCP_HTTP_TOKEN)),
                 ]
                 for name, fn in http_checks:
                     try:
                         await fn()
-                        results.append((name, True, ""))
-                        print(f"PASS  {name}")
+                        record("http", name, True)
                     except Exception as exc:  # noqa: BLE001
-                        results.append((name, False, str(exc)))
-                        print(f"FAIL  {name}: {exc}")
+                        record("http", name, False, str(exc))
         finally:
             http_proc.terminate()
             try:
@@ -637,18 +925,25 @@ async def run() -> int:
                 http_proc.kill()
 
         try:
-            check_17_http_requires_token(base_url)
-            results.append(("17 HTTP 未配 token 拒绝启动", True, ""))
-            print("PASS  17 HTTP 未配 token 拒绝启动")
+            check_26_http_requires_token(base_url)
+            record("http", "26 HTTP 未配 token 拒绝启动", True)
         except Exception as exc:  # noqa: BLE001
-            results.append(("17 HTTP 未配 token 拒绝启动", False, str(exc)))
-            print(f"FAIL  17 HTTP 未配 token 拒绝启动: {exc}")
+            record("http", "26 HTTP 未配 token 拒绝启动", False, str(exc))
     finally:
         mock.shutdown()
 
-    failed = [r for r in results if not r[1]]
-    print(f"\n总计 {len(results)} 项，通过 {len(results) - len(failed)}，失败 {len(failed)}")
-    return 1 if failed else 0
+    print()
+    total_failed = 0
+    for group, _, title in GROUPS:
+        group_results = [r for r in results if r[0] == group]
+        failed = [r for r in group_results if not r[2]]
+        total_failed += len(failed)
+        print(f"【{title}】通过 {len(group_results) - len(failed)}/{len(group_results)}")
+        for _, name, ok, err in group_results:
+            if not ok:
+                print(f"    FAIL {name}: {err}")
+    print(f"\n总计 {len(results)} 项，通过 {len(results) - total_failed}，失败 {total_failed}")
+    return 1 if total_failed else 0
 
 
 if __name__ == "__main__":

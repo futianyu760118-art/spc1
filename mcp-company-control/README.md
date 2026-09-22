@@ -76,27 +76,47 @@ args = ["-m", "mcp_server"]
 创建密钥（SPC 管理端）：
 
 1. 登录 SPC → 基础数据中心 → 数据供给 → 新建 API Key
-2. 勾选接口：`int:health.ping`、`orders.list`、`order_details.list`、`boms.tree`
+2. 勾选接口：`int:health.ping`、`orders.list`、`order_details.list`、`boms.tree`、
+   `materials.list`、`suppliers.list`
 3. IP 白名单：填 MCP 运行主机 IP（本地调试可留空）
 4. 保存后复制 AppKey / AppSecret（**AppSecret 仅显示一次**），填入 `.env`
 
-**当前端点状态**：4 个 Tool 对应端点均已就绪（`/common/ping`、`/external/orders/list`、
-`/external/order-details/list`、`/external/boms/tree`）；其余对外端点（物料/供应商/库存等）
-后续按同一模式接入，更新 `_ENDPOINT_CODES` 映射即可。
+**当前端点状态**：6 个端点已就绪（`/common/ping`、`/external/orders/list`、
+`/external/order-details/list`、`/external/boms/tree`、`/external/materials/list`、
+`/external/suppliers/list`）；SPC 指标端点尚未开放，`catalog_metrics_list` / `metric_query`
+返回结构化「能力未开放」错误（不返回伪造数据）。
 
-## Tool 清单（4 个，全部 READ_ONLY）
+## Tool 清单（9 个，全部 READ_ONLY）
 
 | Tool | 说明 | 关键约束 |
 |---|---|---|
-| `get_system_health` | 连接自检 | 返回状态/版本/capabilities（顶层字段超集，§16） |
-| `orders_list` | 订单列表 | 过滤条件全可选；单页 ≤200；含 `page`/`evidence_refs` |
-| `order_details_list` | 订单明细列表 | 过滤条件全可选；单页 ≤200 |
-| `bom_tree` | BOM 多级树 | `bom_id` 必填；`demand_qty`/`flatten` 可选；返回嵌套树或扁平列表 |
+| `get_system_health` | 连接自检 | 成功含 ping evidence；降级 `data_confidence=low`；单时间戳（§8/§16） |
+| `orders_list` | 订单列表（新版） | 过滤条件全可选；单页 ≤200 |
+| `order_details_list` | 订单明细列表（新版） | 过滤条件全可选；单页 ≤200 |
+| `bom_tree` | BOM 多级树（新版） | `bom_id` 必填；返回嵌套树或扁平列表 |
+| `detail_orders_list` | 订单风险列表（0.1.0 兼容） | 至少一个过滤条件；`customer`→上游 `keyword`；`date_from/date_to`→合同交期；单页 ≤100；附加 `amount_cny`/`due_date` 别名 |
+| `master_material_search` | 物料检索（0.1.0 兼容） | 对接 `/external/materials/list`；单页 ≤100 |
+| `master_supplier_get` | 供应商详情（0.1.0 兼容） | 对接 `/external/suppliers/list`（编码精确匹配）；不存在返回 `NOT_FOUND` |
+| `catalog_metrics_list` | 指标目录（0.1.0 兼容） | SPC 端点未开放 → `UPSTREAM_UNAVAILABLE`（`retryable=false`） |
+| `metric_query` | 指标查询（0.1.0 兼容） | 保留 92 天跨度校验；SPC 端点未开放 → `UPSTREAM_UNAVAILABLE`（`retryable=false`） |
 
 - 全部 Tool 拒绝未定义字段（严格 Schema，`additionalProperties: false`），带 `readOnlyHint` 标注
 - 数据类 Tool 支持可选 `request_id`（≤64 字符）透传上游并在返回包回显，便于审计与链路追踪
 - 上游返回 `stale: true` 时统一返回 `STALE_DATA`（retryable），`data_confidence=low` 透传
-- 订单类 Tool 不强制过滤条件（与 SPC 对外接口行为一致），请配合分页使用
+
+### 0.1.0 兼容说明
+
+| 0.1.0 工具 | 0.2.0 兼容方式 | 上游 |
+|---|---|---|
+| `get_system_health` | 保留名称，补 evidence 与降级置信度（方案 §8） | `/common/ping` |
+| `detail_orders_list` | 适配到订单表头端点，参数映射 + 字段别名 | `/external/orders/list` |
+| `master_material_search` | 功能兼容 | `/external/materials/list` |
+| `master_supplier_get` | 功能兼容 | `/external/suppliers/list` |
+| `catalog_metrics_list` / `metric_query` | 契约兼容（Schema/信封不变），返回结构化「能力未开放」错误 | SPC 指标端点待开放 |
+
+- 参数映射：`customer`→`keyword`（与 `product_line` 同时提供时优先 `customer`）；`date_from/date_to`→`promised_date_start/end`（语义由下单日期变为合同交期，见工具描述）
+- 字段别名：`order_amount`→`amount_cny`、`promised_date`→`due_date`（保留新版原字段）；**不**做 `risk_level`→`risk_probability` 转换
+- 旧分页上限保持 100（`page`/`page_size`）；新版工具上限 200
 
 ## 输入输出示例
 
@@ -143,8 +163,10 @@ args = ["-m", "mcp_server"]
 python scripts/test_company_control.py
 ```
 
-内置 mock 中台端点，覆盖：stdio 13 项（握手 / tools/list / 结构化返回 / 非法输入 /
-未授权 / 超时 / 不可用不崩溃 / evidence / 脱敏 / 无写工具 / 幂等 / 健康检查 / 数据过期）
+内置 mock 中台端点，覆盖：stdio 20 项（握手 / tools/list / 结构化返回 / 非法输入 /
+未授权 / 超时 / 不可用不崩溃 / evidence / 脱敏 / 无写工具 / 幂等 / 健康检查 / 数据过期 /
+0.1.0 兼容工具与旧 Schema / 能力未开放错误 / 92 天跨度校验 / 物料与供应商功能兼容 /
+订单参数与字段映射 / 健康检查 evidence 与置信度）
 + HTTP 4 项（无 token 401 / 错误 token 401 / 正确 token 握手 / 未配 token 拒绝启动）。
 
 ## 元数据与权限声明
@@ -157,13 +179,19 @@ python scripts/test_company_control.py
 SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API Key 调用：
 
 - 已就绪：`GET /common/ping`（`int:health.ping`）、`GET /external/orders/list`（`orders.list`）、
-  `GET /external/order-details/list`（`order_details.list`）、`GET /external/boms/tree`（`boms.tree`）
+  `GET /external/order-details/list`（`order_details.list`）、`GET /external/boms/tree`（`boms.tree`）、
+  `GET /external/materials/list`（`materials.list`）、`GET /external/suppliers/list`（`suppliers.list`）
 - 调用方需在 API Key 上勾选对应 endpoint_code + IP 白名单
 
 ## 已知限制
 
 - 仅只读；写操作 Tool 待 AEOS Guard 审批流成熟后再评估
-- 订单/BOM Tool 不强制过滤条件（与 SPC 对外接口一致），单页上限 200 条
+- 指标类工具（`catalog_metrics_list` / `metric_query`）为契约兼容：SPC 端点开放后更新
+  `_ENDPOINT_CODES` 并替换兼容实现即可恢复功能
+- `detail_orders_list` 的 `product_line` 无对应上游过滤（SPC 订单端点不支持产品线），
+  与 `customer` 同时提供时按 customer 查询；`date_from/date_to` 上游语义为合同交期
+- `master_supplier_get` 通过关键词检索后精确匹配编码（单页 200 条内），超大规模供应商库
+  若未命中可先用 `suppliers.list` 增量同步
 - BOM 树仅支持按 `bom_id` 查询（上游接口设计），可由 `order_details_list` 返回的 `bom_id` 串联
 - HTTP 模式为单一静态 token，轮换需更新 env 并重启
 - 旧 `sse` 传输不支持（已被 streamable-http 取代）
@@ -174,7 +202,10 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
 mcp-company-control/
 ├─ mcp_server/            # Server 包（避免与 SDK 包 mcp 同名）
 │  ├─ __main__.py         # 入口：传输分发（stdio / streamable-http）
-│  ├─ server.py           # Tool 注册与实现 + HTTP auth 注入
+│  ├─ server.py           # mcp 实例 + 新版 Tool（orders/details/bom/health）
+│  ├─ legacy_compat.py    # 0.1.0 兼容 Tool（detail_orders/metrics/material/supplier）
+│  ├─ tool_helpers.py     # Tool 公共基础设施（错误信封/校验/列表返回）
+│  ├─ orders.py           # 订单表头共享查询 + 兼容字段别名
 │  ├─ upstream_client.py  # 中台端点客户端（超时/错误映射/受限重试）
 │  └─ contracts.py        # 标准返回包/错误/Evidence/脱敏
 ├─ scripts/test_company_control.py

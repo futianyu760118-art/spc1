@@ -16,10 +16,11 @@ SENSITIVE_KEYS = {"phone", "mobile", "contact_phone", "cost_price", "unit_cost",
 class BizError(Exception):
     """业务/参数校验错误 — 由 Tool 包装为规范 §12 结构化错误返回"""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, retryable: Optional[bool] = None):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.retryable = retryable
 
 
 def utc_now_iso() -> str:
@@ -54,14 +55,15 @@ def ok(
     return payload
 
 
-def err(code: str, message: str) -> Dict[str, Any]:
-    """标准错误返回（规范 §12）"""
+def err(code: str, message: str, *, retryable: Optional[bool] = None) -> Dict[str, Any]:
+    """标准错误返回（规范 §12）；retryable 默认按错误码判定，能力未开放等场景可显式覆盖"""
+    is_retryable = code in RETRYABLE_CODES if retryable is None else retryable
     return {
         "source": SOURCE,
         "error": {
             "code": code,
             "message": message,
-            "retryable": code in RETRYABLE_CODES,
+            "retryable": is_retryable,
             "occurred_at": utc_now_iso(),
         },
     }
