@@ -91,7 +91,7 @@ args = ["-m", "mcp_server"]
 | Tool | 说明 | 关键约束 |
 |---|---|---|
 | `get_system_health` | 连接自检 | 成功含 ping evidence；降级 `data_confidence=low`；单时间戳（§8/§16） |
-| `orders_list` | 订单列表（新版） | 过滤条件全可选；单页 ≤200 |
+| `orders_list` | 订单列表（新版） | 过滤条件全可选；单页 ≤200；`status` 为派生值（`pending_review`/`in_progress`/`partially_closed`/`completed`/`cancelled`，依据 `erp_status` + `delivery_completed_date`） |
 | `order_details_list` | 订单明细列表（新版） | 过滤条件全可选；单页 ≤200 |
 | `bom_tree` | BOM 多级树（新版） | `bom_id` 必填；返回嵌套树或扁平列表 |
 | `detail_orders_list` | 订单风险列表（0.1.0 兼容） | 至少一个过滤条件；`customer`→上游 `keyword`；`date_from/date_to`→合同交期；单页 ≤100；附加 `amount_cny`/`due_date` 别名 |
@@ -137,7 +137,7 @@ args = ["-m", "mcp_server"]
   "data_confidence": "high",
   "data_as_of": "2026-09-21T08:00:00Z",
   "evidence_refs": ["control-platform://order/SO-2609-001@2026-09-21T08:00:00Z"],
-  "data": [{"order_no": "SO-2609-001", "customer": "示例客户A", "status": "open"}],
+  "data": [{"order_no": "SO-2609-001", "customer": "示例客户A", "status": "in_progress", "erp_status": 1, "delivery_completed_date": null}],
   "page": {"page": 1, "page_size": 20, "total": 1, "truncated": false}
 }
 ```

@@ -62,7 +62,9 @@ ORDERS = [
         "order_qty": 100.0,
         "completed_qty": 10.0,
         "order_amount": 1280000.0,
-        "status": "open",
+        "status": "in_progress",
+        "erp_status": 1,
+        "delivery_completed_date": None,
         "risk_level": "red",
         "promised_date": "2026-09-20",
         "planned_start_date": "2026-09-10",
@@ -81,7 +83,9 @@ ORDERS = [
         "order_qty": 50.0,
         "completed_qty": 0.0,
         "order_amount": 560000.0,
-        "status": "open",
+        "status": "completed",
+        "erp_status": 3,
+        "delivery_completed_date": "2026-09-18",
         "risk_level": "yellow",
         "promised_date": "2026-09-28",
         "planned_start_date": "2026-09-15",
@@ -454,6 +458,8 @@ async def check_03_normal_structured(session):
     assert body["source"] == "company-control" and body["read_only"] is True
     assert body["capability"] == "orders_list" and body["data"]
     assert body.get("request_id") == "req-001", f"request_id 未回显: {body.get('request_id')}"
+    row = body["data"][0]
+    assert "erp_status" in row and "delivery_completed_date" in row, f"缺少派生状态依据字段: {row}"
 
 
 async def check_04_invalid_input(session):

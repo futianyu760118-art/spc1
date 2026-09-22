@@ -139,7 +139,7 @@ async def get_system_health() -> Dict[str, Any]:
 @tool_error_envelope
 async def orders_list(
     keyword: Annotated[str, Field(max_length=80, description="关键字（订单号 / 客户 / 产品名 模糊匹配）")] = "",
-    status: Annotated[str, Field(max_length=200, description="订单状态，逗号分隔多选，如 open,closed")] = "",
+    status: Annotated[str, Field(max_length=200, description="订单状态（派生值），逗号分隔多选：pending_review / in_progress / partially_closed / completed / cancelled")] = "",
     customer_code: Annotated[str, Field(max_length=80, description="客户编码精确匹配")] = "",
     risk_level: Annotated[str, Field(max_length=40, description="风险等级，逗号分隔多选，如 red,yellow")] = "",
     promised_date_start: Annotated[str, Field(max_length=10, description="合同交期范围起 YYYY-MM-DD（含）")] = "",
