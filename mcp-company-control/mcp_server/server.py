@@ -1,6 +1,8 @@
 """company-control MCP Server — Tool 注册与实现（规范 §6/§7/§8/§10/§14/§16）
 
-运行：python -m mcp_server（stdio 传输，由 AEOS Hub 作为 MCP client 拉起）。
+运行：
+  python -m mcp_server                                    # stdio（默认，AEOS Hub 拉起）
+  python -m mcp_server --transport streamable-http ...    # HTTP（需 MCP_HTTP_TOKEN）
 目录名用 mcp_server 而非 mcp，避免与 SDK 的 mcp 包在 sys.path 中冲突。
 日志只写 stderr，绝不写 stdout（规范 §4）。
 """
@@ -8,12 +10,16 @@
 from __future__ import annotations
 
 import functools
+import hmac
 import logging
+import os
 import re
-from datetime import datetime, timedelta
-from typing import Annotated, Any, Dict, Literal
+from datetime import datetime
+from typing import Annotated, Any, Callable, Dict, Optional
 
+from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.mcpserver import MCPServer as FastMCP  # mcp SDK 2.x：FastMCP 已更名 MCPServer
+from mcp.server.mcpserver.server import AuthSettings
 from mcp.server.mcpserver.utilities.func_metadata import ArgModelBase
 from mcp.types import ToolAnnotations
 from pydantic import ConfigDict, Field
@@ -32,19 +38,48 @@ ArgModelBase.model_config = ConfigDict(arbitrary_types_allowed=True, extra="forb
 # 规范 §10：机器可读的只读声明（readOnlyHint），配合 AEOS Policy 强制执行
 READ_ONLY_TOOL = ToolAnnotations(readOnlyHint=True)
 
-mcp = FastMCP("company-control", version=__version__)
+# HTTP 模式静态 Bearer Token（env 注入，禁止硬编码）；为空则不启用 auth（stdio 模式不受影响）
+HTTP_TOKEN = os.getenv("MCP_HTTP_TOKEN", "")
+HTTP_PUBLIC_URL = os.getenv("MCP_HTTP_PUBLIC_URL", "").rstrip("/") or (
+    f"http://127.0.0.1:{os.getenv('MCP_HTTP_PORT') or '8902'}"
+)
+
+
+class StaticTokenVerifier(TokenVerifier):
+    """HTTP 模式静态 Bearer Token 校验；常数时间比较，避免时序侧信道"""
+
+    def __init__(self, expected_token: str):
+        self._expected_token = expected_token
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if self._expected_token and hmac.compare_digest(token, self._expected_token):
+            return AccessToken(token=token, client_id="static-bearer", scopes=[])
+        return None
+
+
+mcp = FastMCP(
+    "company-control",
+    version=__version__,
+    token_verifier=StaticTokenVerifier(HTTP_TOKEN) if HTTP_TOKEN else None,
+    auth=(
+        AuthSettings(
+            issuer_url=HTTP_PUBLIC_URL,
+            resource_server_url=HTTP_PUBLIC_URL,
+            validate_token_resource=False,
+        )
+        if HTTP_TOKEN
+        else None
+    ),
+)
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_MAX_METRIC_SPAN_DAYS = 92
 _MAX_EVIDENCE_PER_CALL = 50
 
 EXPECTED_TOOLS = [
     "get_system_health",
-    "catalog_metrics_list",
-    "metric_query",
-    "master_material_search",
-    "master_supplier_get",
-    "detail_orders_list",
+    "orders_list",
+    "order_details_list",
+    "bom_tree",
 ]
 
 
@@ -73,6 +108,13 @@ def _parse_date(value: str, field: str):
         raise BizError("INVALID_ARGUMENT", f"{field} 不是合法日期：{value!r}") from exc
 
 
+def _parse_iso_datetime(value: str, field: str) -> None:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise BizError("INVALID_ARGUMENT", f"{field} 必须为 ISO 8601 时间：{value!r}") from exc
+
+
 def _as_of_confidence(payload: Dict[str, Any]):
     if payload.get("stale") is True:
         raise UpstreamError("STALE_DATA", "上游数据已过期，超出新鲜度阈值")
@@ -83,8 +125,43 @@ def _as_of_confidence(payload: Dict[str, Any]):
     return as_of, confidence
 
 
-_Page = Annotated[int, Field(ge=1, le=100)]
-_PageSize = Annotated[int, Field(ge=1, le=100)]
+def _filter_params(**values: Any) -> Dict[str, Any]:
+    """省略未填写的空值参数（透传上游时保持与 SPC 对外接口默认行为一致）"""
+    return {key: value for key, value in values.items() if value}
+
+
+def _list_result(
+    capability: str,
+    payload: Dict[str, Any],
+    *,
+    page: int,
+    page_size: int,
+    request_id: str,
+    evidence_entity: str,
+    evidence_id: Callable[[Dict[str, Any]], str],
+) -> Dict[str, Any]:
+    """列表类 Tool 公共返回：解包 items/total、脱敏、分页信息、Evidence（规范 §8/§9/§13/§17）"""
+    as_of, confidence = _as_of_confidence(payload)
+    rows = contracts.redact(payload.get("items") or [])
+    total = int(payload.get("total") or len(rows))
+    refs = []
+    for row in rows:
+        ref_id = evidence_id(row)
+        if ref_id:
+            refs.append(contracts.evidence(evidence_entity, ref_id, as_of))
+    return contracts.ok(
+        capability,
+        rows,
+        data_as_of=as_of,
+        data_confidence=confidence,
+        evidence_refs=refs[:_MAX_EVIDENCE_PER_CALL],
+        page=contracts.page_envelope(page, page_size, total, total > page * page_size),
+        request_id=request_id or None,
+    )
+
+
+_Page = Annotated[int, Field(ge=1, description="页码，从 1 开始")]
+_PageSize = Annotated[int, Field(ge=1, le=200, description="每页条数，上限 200")]
 _RequestId = Annotated[str, Field(max_length=64, description="调用方请求 ID（审计/链路追踪用，可选）")]
 
 
@@ -125,160 +202,122 @@ async def get_system_health() -> Dict[str, Any]:
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
 @tool_error_envelope
-async def catalog_metrics_list(
-    page: Annotated[int, Field(ge=1, le=100, description="页码，从 1 开始")] = 1,
-    page_size: Annotated[int, Field(ge=1, le=100, description="每页条数，上限 100")] = 20,
+async def orders_list(
+    keyword: Annotated[str, Field(max_length=80, description="关键字（订单号 / 客户 / 产品名 模糊匹配）")] = "",
+    status: Annotated[str, Field(max_length=200, description="订单状态，逗号分隔多选，如 open,closed")] = "",
+    customer_code: Annotated[str, Field(max_length=80, description="客户编码精确匹配")] = "",
+    risk_level: Annotated[str, Field(max_length=40, description="风险等级，逗号分隔多选，如 red,yellow")] = "",
+    promised_date_start: Annotated[str, Field(max_length=10, description="合同交期范围起 YYYY-MM-DD（含）")] = "",
+    promised_date_end: Annotated[str, Field(max_length=10, description="合同交期范围止 YYYY-MM-DD（含）")] = "",
+    updated_after: Annotated[str, Field(max_length=40, description="增量同步锚点 ISO 8601，仅返回 updated_at 不早于该时间的记录")] = "",
+    page: _Page = 1,
+    page_size: _PageSize = 20,
     request_id: _RequestId = "",
 ) -> Dict[str, Any]:
-    """列出中台可查询的指标目录（只读）。Agent 应先查目录获取指标编码，再调用 metric_query。"""
-    params: Dict[str, Any] = {"page": page, "page_size": page_size}
-    if request_id:
-        params["request_id"] = request_id
-    payload = await upstream("/metrics", params)
-    as_of, confidence = _as_of_confidence(payload)
-    rows = contracts.redact(payload.get("data") or [])
-    total = int(payload.get("total") or len(rows))
-    return contracts.ok(
-        "catalog_metrics_list",
-        rows,
-        data_as_of=as_of,
-        data_confidence=confidence,
-        evidence_refs=[contracts.evidence("metric-catalog", "all", as_of)],
-        page=contracts.page_envelope(page, page_size, total, total > page * page_size),
-        request_id=request_id or None,
+    """分页查询销售订单列表（只读）。过滤条件均可选；单页最多 200 条。"""
+    if promised_date_start:
+        _parse_date(promised_date_start, "promised_date_start")
+    if promised_date_end:
+        _parse_date(promised_date_end, "promised_date_end")
+    if updated_after:
+        _parse_iso_datetime(updated_after, "updated_after")
+
+    params = _filter_params(
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        status=status,
+        customer_code=customer_code,
+        risk_level=risk_level,
+        promised_date_start=promised_date_start,
+        promised_date_end=promised_date_end,
+        updated_after=updated_after,
+        request_id=request_id,
+    )
+    payload = await upstream("/external/orders/list", params)
+    return _list_result(
+        "orders_list",
+        payload,
+        page=page,
+        page_size=page_size,
+        request_id=request_id,
+        evidence_entity="order",
+        evidence_id=lambda row: str(row.get("order_no") or ""),
     )
 
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
 @tool_error_envelope
-async def metric_query(
-    metric_code: Annotated[str, Field(min_length=1, max_length=80, description="指标编码，可先经 catalog_metrics_list 查询")],
-    date_from: Annotated[str, Field(description="开始日期 YYYY-MM-DD（含）")],
-    date_to: Annotated[str, Field(description="结束日期 YYYY-MM-DD（含）")],
-    dimension: Annotated[Literal["day", "week", "month"], Field(description="聚合粒度：day / week / month")] = "day",
+async def order_details_list(
+    order_no: Annotated[str, Field(max_length=80, description="订单号精确匹配（拉取某订单的全部明细行）")] = "",
+    keyword: Annotated[str, Field(max_length=80, description="关键字（订单号 / 产品名 / 产品型号 模糊匹配）")] = "",
+    product_code: Annotated[str, Field(max_length=80, description="产品编码精确匹配")] = "",
+    status: Annotated[str, Field(max_length=200, description="明细行状态，逗号分隔多选，如 open,closed")] = "",
+    bom_no: Annotated[str, Field(max_length=80, description="BOM 编号精确匹配")] = "",
+    promised_date_start: Annotated[str, Field(max_length=10, description="合同交期范围起 YYYY-MM-DD（含）")] = "",
+    promised_date_end: Annotated[str, Field(max_length=10, description="合同交期范围止 YYYY-MM-DD（含）")] = "",
+    updated_after: Annotated[str, Field(max_length=40, description="增量同步锚点 ISO 8601，仅返回 updated_at 不早于该时间的记录")] = "",
+    page: _Page = 1,
+    page_size: _PageSize = 20,
     request_id: _RequestId = "",
 ) -> Dict[str, Any]:
-    """查询中台指标数据（只读）。日期跨度不超过 92 天；结果含 data_as_of 数据新鲜度与 evidence_refs。"""
-    d_from = _parse_date(date_from, "date_from")
-    d_to = _parse_date(date_to, "date_to")
-    if d_from > d_to:
-        raise BizError("INVALID_ARGUMENT", "date_from 不能晚于 date_to")
-    if (d_to - d_from) > timedelta(days=_MAX_METRIC_SPAN_DAYS):
-        raise BizError("INVALID_ARGUMENT", f"日期跨度不能超过 {_MAX_METRIC_SPAN_DAYS} 天")
+    """分页查询销售订单明细行列表（只读）。过滤条件均可选；单页最多 200 条。"""
+    if promised_date_start:
+        _parse_date(promised_date_start, "promised_date_start")
+    if promised_date_end:
+        _parse_date(promised_date_end, "promised_date_end")
+    if updated_after:
+        _parse_iso_datetime(updated_after, "updated_after")
 
-    params: Dict[str, Any] = {
-        "metric_code": metric_code,
-        "date_from": date_from,
-        "date_to": date_to,
-        "dimension": dimension,
-    }
-    if request_id:
-        params["request_id"] = request_id
-    payload = await upstream("/metric", params)
-    as_of, confidence = _as_of_confidence(payload)
-    rows = contracts.redact(payload.get("data") or [])
-    return contracts.ok(
-        "metric_query",
-        rows,
-        data_as_of=as_of,
-        data_confidence=confidence,
-        evidence_refs=[contracts.evidence("metric", metric_code, as_of)],
-        request_id=request_id or None,
+    params = _filter_params(
+        page=page,
+        page_size=page_size,
+        order_no=order_no,
+        keyword=keyword,
+        product_code=product_code,
+        status=status,
+        bom_no=bom_no,
+        promised_date_start=promised_date_start,
+        promised_date_end=promised_date_end,
+        updated_after=updated_after,
+        request_id=request_id,
+    )
+    payload = await upstream("/external/order-details/list", params)
+    return _list_result(
+        "order_details_list",
+        payload,
+        page=page,
+        page_size=page_size,
+        request_id=request_id,
+        evidence_entity="order-detail",
+        evidence_id=lambda row: "/".join(
+            part for part in (row.get("order_no"), row.get("line_no")) if part
+        ),
     )
 
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
 @tool_error_envelope
-async def master_material_search(
-    keyword: Annotated[str, Field(min_length=2, max_length=80, description="物料编码或名称关键词")],
-    page: Annotated[int, Field(ge=1, le=100, description="页码，从 1 开始")] = 1,
-    page_size: Annotated[int, Field(ge=1, le=100, description="每页条数，上限 100")] = 20,
+async def bom_tree(
+    bom_id: Annotated[str, Field(min_length=1, max_length=80, description="顶层 BOM ID（必填），以其为根向下展开多级")],
+    demand_qty: Annotated[Optional[float], Field(ge=0, description="根需求量；缺省取根 BOM 基础用量，再缺省取 1")] = None,
+    flatten: Annotated[bool, Field(description="true 返回扁平列表 items，false 返回嵌套树 tree")] = False,
     request_id: _RequestId = "",
 ) -> Dict[str, Any]:
-    """按关键词检索物料主数据（只读）。敏感字段（联系方式/成本价等）已脱敏。"""
-    params: Dict[str, Any] = {"keyword": keyword, "page": page, "page_size": page_size}
-    if request_id:
-        params["request_id"] = request_id
-    payload = await upstream("/material", params)
-    as_of, confidence = _as_of_confidence(payload)
-    rows = contracts.redact(payload.get("data") or [])
-    total = int(payload.get("total") or len(rows))
-    refs = [contracts.evidence("material", r["material_code"], as_of) for r in rows if r.get("material_code")]
-    return contracts.ok(
-        "master_material_search",
-        rows,
-        data_as_of=as_of,
-        data_confidence=confidence,
-        evidence_refs=refs[:_MAX_EVIDENCE_PER_CALL],
-        page=contracts.page_envelope(page, page_size, total, total > page * page_size),
-        request_id=request_id or None,
+    """查询已组装好的多级 BOM 树（只读）。仅支持按 bom_id 查询；子件需求量为沿树连乘结果。"""
+    params = _filter_params(
+        bom_id=bom_id,
+        flatten="true" if flatten else "false",
+        demand_qty=str(demand_qty) if demand_qty is not None else "",
+        request_id=request_id,
     )
-
-
-@mcp.tool(annotations=READ_ONLY_TOOL)
-@tool_error_envelope
-async def master_supplier_get(
-    supplier_code: Annotated[str, Field(min_length=1, max_length=80, description="供应商编码")],
-    request_id: _RequestId = "",
-) -> Dict[str, Any]:
-    """获取供应商主数据详情（只读）。不存在时返回 NOT_FOUND。"""
-    params: Dict[str, Any] = {"supplier_code": supplier_code}
-    if request_id:
-        params["request_id"] = request_id
-    payload = await upstream("/supplier", params)
+    payload = await upstream("/external/boms/tree", params)
     as_of, confidence = _as_of_confidence(payload)
-    row = contracts.redact(payload.get("data") or {})
-    refs = [contracts.evidence("supplier", supplier_code, as_of)] if row else []
     return contracts.ok(
-        "master_supplier_get",
-        row,
+        "bom_tree",
+        contracts.redact(payload),
         data_as_of=as_of,
         data_confidence=confidence,
-        evidence_refs=refs,
-        request_id=request_id or None,
-    )
-
-
-@mcp.tool(annotations=READ_ONLY_TOOL)
-@tool_error_envelope
-async def detail_orders_list(
-    customer: Annotated[str, Field(max_length=80, description="客户名称（过滤条件之一）")] = "",
-    product_line: Annotated[str, Field(max_length=40, description="产品线（过滤条件之一）")] = "",
-    date_from: Annotated[str, Field(max_length=10, description="下单开始日期 YYYY-MM-DD（与 date_to 成对）")] = "",
-    date_to: Annotated[str, Field(max_length=10, description="下单结束日期 YYYY-MM-DD（与 date_from 成对）")] = "",
-    page: Annotated[int, Field(ge=1, le=100, description="页码，从 1 开始")] = 1,
-    page_size: Annotated[int, Field(ge=1, le=100, description="每页条数，上限 100，默认 20")] = 20,
-    request_id: _RequestId = "",
-) -> Dict[str, Any]:
-    """分页查询订单明细（只读）。必须至少提供 customer / product_line / date_from+date_to 之一，防止全表拉取。"""
-    if not (customer or product_line or (date_from and date_to)):
-        raise BizError("INVALID_ARGUMENT", "至少需要一个过滤条件：customer / product_line / date_from+date_to")
-    if date_from or date_to:
-        _parse_date(date_from, "date_from")
-        _parse_date(date_to, "date_to")
-
-    params: Dict[str, Any] = {"page": page, "page_size": page_size}
-    if customer:
-        params["customer"] = customer
-    if product_line:
-        params["product_line"] = product_line
-    if date_from and date_to:
-        params["date_from"] = date_from
-        params["date_to"] = date_to
-    if request_id:
-        params["request_id"] = request_id
-
-    payload = await upstream("/orders", params)
-    as_of, confidence = _as_of_confidence(payload)
-    rows = contracts.redact(payload.get("data") or [])
-    total = int(payload.get("total") or len(rows))
-    refs = [contracts.evidence("order", r["order_no"], as_of) for r in rows if r.get("order_no")]
-    return contracts.ok(
-        "detail_orders_list",
-        rows,
-        data_as_of=as_of,
-        data_confidence=confidence,
-        evidence_refs=refs[:_MAX_EVIDENCE_PER_CALL],
-        page=contracts.page_envelope(page, page_size, total, total > page * page_size),
+        evidence_refs=[contracts.evidence("bom", bom_id, as_of)],
         request_id=request_id or None,
     )

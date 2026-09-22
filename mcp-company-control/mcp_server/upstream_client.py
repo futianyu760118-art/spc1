@@ -37,15 +37,13 @@ TOKEN_URL = os.getenv("CONTROL_PLATFORM_TOKEN_URL", "")
 REQUEST_TIMEOUT_MS = int(os.getenv("CONTROL_PLATFORM_TIMEOUT_MS", "15000"))
 CONNECT_TIMEOUT_MS = int(os.getenv("CONTROL_PLATFORM_CONNECT_TIMEOUT_MS", "5000"))
 
-# SPC 可暴露接口注册表：路径 → endpoint_code（int: 前缀，签名用，必须与 SPC @exposable 注册一致）
-# /common/ping 为 SPC 现网已注册端点；其余为占位，待 SPC 侧 @exposable 端点建成后对齐
+# SPC 可暴露接口注册表：路径 → endpoint_code（int: 前缀为内部 @exposable；其余为对外接口注册表）
+# 签名用，必须与 SPC 侧注册一致；已就绪：/common/ping + 三个对外接口
 _ENDPOINT_CODES = {
     "/common/ping": "int:health.ping",
-    "/metrics": "int:mcp.metrics",
-    "/metric": "int:mcp.metric",
-    "/material": "int:mcp.material",
-    "/supplier": "int:mcp.supplier",
-    "/orders": "int:mcp.orders",
+    "/external/orders/list": "orders.list",
+    "/external/order-details/list": "order_details.list",
+    "/external/boms/tree": "boms.tree",
 }
 
 _RETRYABLE = {"UPSTREAM_TIMEOUT", "UPSTREAM_UNAVAILABLE", "RATE_LIMITED"}
