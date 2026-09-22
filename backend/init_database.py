@@ -469,6 +469,16 @@ class DatabaseInitializer:
             print("  scm_inventory_check.audit_status backfilled for completed checks")
         except Exception as e:
             print(f"  scm_inventory_check.audit_status backfill skipped: {e}")
+        # 盘点复议:复议申请通知改用独立类型(前端据此跳转复议待裁决队列),存量按标题回填(幂等)
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "UPDATE notification SET type = 'stock_check_appeal' "
+                    "WHERE type = 'stock_check_audit' AND title LIKE '%收到复议申请%'"
+                ))
+            print("  notification.stock_check_appeal backfilled for appeal applications")
+        except Exception as e:
+            print(f"  notification.stock_check_appeal backfill skipped: {e}")
         # 删除废弃列
         for table, cols in drop_columns.items():
             for col in cols:

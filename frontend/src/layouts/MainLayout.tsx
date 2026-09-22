@@ -940,11 +940,13 @@ export default function MainLayout() {
                           style={{ cursor: 'pointer', padding: '10px 4px', opacity: item.is_read ? 0.55 : 1 }}
                           onClick={() => {
                             if (!item.is_read) handleMarkRead(item.id)
-                            if (item.type === 'feedback' && item.ref_id) {
+                            if (item.type === 'stock_check_appeal' && item.ref_id) {
+                              setBellOpen(false)
+                              navigate('/stock-check-audit?tab=appeal')
+                            } else if (item.type === 'feedback' && item.ref_id) {
                               setBellOpen(false)
                               navigate(`/basicdata/feedback?id=${item.ref_id}`)
-                            }
-                            if (item.ref_type === 'stock_check' && item.ref_id) {
+                            } else if (item.ref_type === 'stock_check' && item.ref_id) {
                               setBellOpen(false)
                               navigate(`/stock-check/${item.ref_id}`)
                             }

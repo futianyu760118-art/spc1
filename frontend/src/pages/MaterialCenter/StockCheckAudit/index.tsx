@@ -20,6 +20,7 @@ import {
   SearchOutlined,
   UndoOutlined,
 } from '@ant-design/icons'
+import { useSearchParams } from 'react-router-dom'
 import api, { materialApi } from '@/services/api'
 import { formatDateTime } from '@/utils'
 import { STATUS_MAP } from '../StockCheck/types'
@@ -49,6 +50,9 @@ const ACTION_LABEL: Record<string, string> = {
 }
 
 type TabKey = 'progress' | 'pending' | 'appeal' | 'done'
+
+const TAB_KEYS = ['progress', 'pending', 'appeal', 'done'] as const
+const isTabKey = (v: string | null): v is TabKey => v !== null && (TAB_KEYS as readonly string[]).includes(v)
 
 interface HistoryEntry {
   audit_qty: number
@@ -117,7 +121,11 @@ function errText(e: any, fallback: string): string {
 export default function StockCheckAuditPage() {
   const { message, modal } = App.useApp()
 
-  const [tab, setTab] = useState<TabKey>('pending')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [tab, setTab] = useState<TabKey>(() => {
+    const t = searchParams.get('tab')
+    return isTabKey(t) ? t : 'pending'
+  })
   const [rows, setRows] = useState<StockCheck[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -222,6 +230,15 @@ export default function StockCheckAuditPage() {
   useEffect(() => {
     void loadKpi()
   }, [loadKpi])
+
+  // 深链指定队列(如通知点击 /stock-check-audit?tab=appeal);同页跳转不重挂载,需监听 searchParams
+  useEffect(() => {
+    const t = searchParams.get('tab')
+    if (isTabKey(t) && t !== tab) {
+      setTab(t)
+      setPage(1)
+    }
+  }, [searchParams, tab])
 
   // Esc 关闭抽屉/弹窗
   useEffect(() => {
@@ -758,6 +775,15 @@ export default function StockCheckAuditPage() {
     return <span className="sca-verdict bad">✗ 不符{d != null ? ` ${d > 0 ? '+' : ''}${d}` : ''}</span>
   }
 
+  const switchTab = (t: TabKey) => {
+    setTab(t)
+    setPage(1)
+    const next = new URLSearchParams(searchParams)
+    if (t === 'pending') next.delete('tab')
+    else next.set('tab', t)
+    setSearchParams(next, { replace: true })
+  }
+
   const queueMeta: Record<TabKey, { title: string; hint: string }> = {
     progress: { title: '进行中的盘点单', hint: '对已盘的行随时复点纠错，不打断盘点进度' },
     pending: { title: '待抽检', hint: '已完结、等待财务终检 · 通过后按（类型 × 仓库）计划 K3 单据' },
@@ -770,16 +796,16 @@ export default function StockCheckAuditPage() {
       {/* ===== 队列切换 + 搜索 ===== */}
       <div className="sc-toolbar">
         <div className="sca-seg">
-          <button className={tab === 'progress' ? 'on' : ''} onClick={() => { setTab('progress'); setPage(1) }}>
+          <button className={tab === 'progress' ? 'on' : ''} onClick={() => switchTab('progress')}>
             进行中 · 过程抽检 <span className="n">{kpi.progress}</span>
           </button>
-          <button className={tab === 'pending' ? 'on' : ''} onClick={() => { setTab('pending'); setPage(1) }}>
+          <button className={tab === 'pending' ? 'on' : ''} onClick={() => switchTab('pending')}>
             待抽检 <span className={`n${kpi.pending > 0 ? ' hot' : ''}`}>{kpi.pending}</span>
           </button>
-          <button className={tab === 'appeal' ? 'on' : ''} onClick={() => { setTab('appeal'); setPage(1) }}>
+          <button className={tab === 'appeal' ? 'on' : ''} onClick={() => switchTab('appeal')}>
             复议待裁决 <span className={`n${kpi.appeal > 0 ? ' hot' : ''}`} style={kpi.appeal > 0 ? { background: '#dbeafe', color: '#1d4ed8' } : undefined}>{kpi.appeal}</span>
           </button>
-          <button className={tab === 'done' ? 'on' : ''} onClick={() => { setTab('done'); setPage(1) }}>
+          <button className={tab === 'done' ? 'on' : ''} onClick={() => switchTab('done')}>
             已处理 <span className="n">{kpi.done}</span>
           </button>
         </div>

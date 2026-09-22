@@ -29,6 +29,7 @@ const TYPE_DEFS = [
   { key: 'announcement', label: '公告', icon: SoundOutlined, color: '#4c4dc2', bg: '#eef0fe' },
   { key: 'price_change', label: '调价单', icon: TransactionOutlined, color: '#0e7490', bg: '#ecfeff' },
   { key: 'stock_check_audit', label: '盘点抽检', icon: AuditOutlined, color: '#16a34a', bg: '#f0fdf4' },
+  { key: 'stock_check_appeal', label: '复议待裁决', icon: AuditOutlined, color: '#1d4ed8', bg: '#dbeafe' },
   { key: 'material_alert', label: '物料提醒', icon: AppstoreOutlined, color: '#d97706', bg: '#fffbeb' },
   { key: 'exception_alert', label: '异常提醒', icon: WarningOutlined, color: '#dc2626', bg: '#fef2f2' },
   { key: 'feedback', label: '问题反馈', icon: MessageOutlined, color: '#8b5cf6', bg: '#f5f3ff' },
@@ -66,6 +67,7 @@ const PRIORITY_DEFS: Record<string, { label: string; color: string; bg: string }
 }
 
 function jumpTarget(n: NotifItem): { label: string; path: string } | null {
+  if (n.type === 'stock_check_appeal' && n.ref_id) return { label: '复议待裁决', path: '/stock-check-audit?tab=appeal' }
   if (n.ref_type === 'stock_check' && n.ref_id) return { label: `盘点单 #${n.ref_id}`, path: `/stock-check/${n.ref_id}` }
   if (n.ref_type === 'price_change' && n.ref_id) return { label: `调价单 #${n.ref_id}`, path: `/purchase/price-change/${n.ref_id}` }
   if ((n.type === 'feedback' || n.type === 'feedback_alert') && n.ref_id) return { label: `反馈单 #${n.ref_id}`, path: `/basicdata/feedback?id=${n.ref_id}` }

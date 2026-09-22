@@ -2823,6 +2823,8 @@ async def _notify_appeal(
     from sqlalchemy import text as _text
 
     title: str
+    # 复议申请用独立类型: 前端据此跳转「复议待裁决」队列;裁决结果仍用 stock_check_audit(盘点人看工作台)
+    notif_type = "stock_check_appeal" if is_apply else "stock_check_audit"
     if is_apply:
         title = f"盘点单 {head.check_no} 收到复议申请"
     else:
@@ -2865,7 +2867,7 @@ async def _notify_appeal(
     for uid in recipients:
         db.add(Notification(
             user_id=uid,
-            type="stock_check_audit",
+            type=notif_type,
             title=title,
             content=reason[:512],
             ref_type="stock_check",
