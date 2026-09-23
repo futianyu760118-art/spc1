@@ -65,6 +65,42 @@ export type ApprovalPreview = ApprovalItem & {
   action_hint?: string
 }
 
+export type ApprovalUserOption = {
+  id: number
+  username: string
+  display_name?: string | null
+  role_name?: string | null
+}
+
+export type ApprovalCondition = {
+  field: string
+  op: '>=' | '<=' | '>' | '<' | '==' | '!=' | 'in'
+  value: number | string | Array<number | string>
+}
+
+export type ApprovalApprover = { user_id?: number; username?: string }
+
+export type ApprovalNodeConfig = {
+  seq?: number
+  label: string
+  role?: string
+  approvers?: ApprovalApprover[]
+  condition?: ApprovalCondition
+  conditions?: ApprovalCondition[]
+  timeout_hours?: number | null
+}
+
+export type ApprovalConfigItem = {
+  biz_type: string
+  biz_name: string
+  nodes: ApprovalNodeConfig[]
+  is_active?: boolean
+  condition_field_options?: Array<{ value: string; label: string }>
+  pending_count?: number | null
+  updated_by?: string | null
+  updated_at?: string | null
+}
+
 export const approvalApi = {
   pending: (params?: Record<string, any>) => api.get('/approvals/pending', { params }),
   approved: (params?: Record<string, any>) => api.get('/approvals/approved', { params }),
@@ -80,4 +116,5 @@ export const approvalApi = {
   getConfig: (bizType: string) => api.get(`/approvals/configs/${bizType}`),
   saveConfig: (bizType: string, data: Record<string, any>) => api.put(`/approvals/configs/${bizType}`, data),
   roles: () => api.get('/approvals/roles'),
+  users: (keyword?: string) => api.get('/approvals/users', { params: keyword ? { keyword } : {} }),
 }
