@@ -24,6 +24,7 @@ from . import __version__, contracts
 from .kitting import register_kitting_tools
 from .legacy_compat import register_legacy_tools
 from .orders import query_orders
+from .quality import register_quality_tools
 from .tool_helpers import (
     READ_ONLY_TOOL,
     Page,
@@ -94,6 +95,8 @@ EXPECTED_TOOLS = [
     "material_kitting_demands_list",
     "inventory_availability_list",
     "material_supplies_list",
+    "quality_issues_list",
+    "quality_trace",
 ]
 
 
@@ -270,3 +273,6 @@ register_legacy_tools(mcp)
 
 # 物料齐套类工具（结果/缺料/需求/库存可用量/未来供给），注册后共 14 个只读 Tool
 register_kitting_tools(mcp)
+
+# 质量类工具（质量异常列表/质量追溯），注册后共 16 个只读 Tool
+register_quality_tools(mcp)

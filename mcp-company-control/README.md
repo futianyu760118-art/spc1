@@ -3,7 +3,7 @@
 中台只读能力适配器，接入 AEOS Hub。遵循 **AEOS MCP Integration Specification v0.1.0**。
 
 - **名称**：company-control
-- **版本**：1.0.0
+- **版本**：1.1.0
 - **传输**：stdio（默认，由 AEOS Hub 作为 MCP client 拉起）/ streamable-http（远程客户端，静态 Bearer Token）
 - **技术栈**：Python 3.12+ / 官方 mcp SDK 2.x（`MCPServer`）/ httpx / pydantic
 - **权限等级**：全部 Tool 为 `READ_ONLY`（MCP annotations `readOnlyHint=true` + `server.json` 声明）
@@ -82,14 +82,15 @@ args = ["-m", "mcp_server"]
 3. IP 白名单：填 MCP 运行主机 IP（本地调试可留空）
 4. 保存后复制 AppKey / AppSecret（**AppSecret 仅显示一次**），填入 `.env`
 
-**当前端点状态**：11 个端点已就绪（`/common/ping`、`/external/orders/list`、
+**当前端点状态**：13 个端点已就绪（`/common/ping`、`/external/orders/list`、
 `/external/order-details/list`、`/external/boms/tree`、`/external/materials/list`、
 `/external/suppliers/list`、`/external/material-kitting/results`、
 `/external/material-kitting/shortages`、`/external/material-kitting/demands`、
-`/external/inventory/availability`、`/external/material-supplies/list`）；SPC 指标端点尚未开放，
+`/external/inventory/availability`、`/external/material-supplies/list`、
+`/external/quality-issues/list`、`/external/quality-trace/list`）；SPC 指标端点尚未开放，
 `catalog_metrics_list` / `metric_query` 返回结构化「能力未开放」错误（不返回伪造数据）。
 
-## Tool 清单（14 个，全部 READ_ONLY）
+## Tool 清单（16 个，全部 READ_ONLY）
 
 | Tool | 说明 | 关键约束 |
 |---|---|---|
@@ -107,6 +108,8 @@ args = ["-m", "mcp_server"]
 | `material_kitting_demands_list` | 齐套需求对象列表（AEOS 文档 §9） | endpoint_code `kitting.demands`；销售订单行，含数量/需求日期/优先级/状态 |
 | `inventory_availability_list` | 库存可用量（按物料聚合，AEOS 文档 §9） | endpoint_code `inventory.availability`；`available_qty` = 现存 − 锁定；不暴露单价等敏感字段 |
 | `material_supplies_list` | 未来供给列表（AEOS 文档 §9） | endpoint_code `material.supplies`；四源统一：采购在途/委外回货/自制计划/调拨 |
+| `quality_issues_list` | 质量异常列表（AEOS 异常与质量中心 §7） | endpoint_code `quality_issues.list`；无数据源字段（severity/inspection_result/batch_no/supplier_code/material_code/line_no/blocking/issue_type）返回 null；单页 ≤200 |
+| `quality_trace` | 质量追溯（AEOS 异常与质量中心 §7） | endpoint_code `quality_trace.list`；order_no/product_code/batch_no 三选一；扁平节点（quality_issue/order_line/bom），evidence 用 object_type/object_id |
 
 - 全部 Tool 拒绝未定义字段（严格 Schema，`additionalProperties: false`），带 `readOnlyHint` 标注
 - 数据类 Tool 支持可选 `request_id`（≤64 字符）透传上游并在返回包回显，便于审计与链路追踪
@@ -171,16 +174,17 @@ args = ["-m", "mcp_server"]
 python scripts/test_company_control.py
 ```
 
-内置 mock 中台端点，覆盖：stdio 20 项（握手 / tools/list / 结构化返回 / 非法输入 /
+内置 mock 中台端点，覆盖：stdio 30 项（握手 / tools/list / 结构化返回 / 非法输入 /
 未授权 / 超时 / 不可用不崩溃 / evidence / 脱敏 / 无写工具 / 幂等 / 健康检查 / 数据过期 /
 0.1.0 兼容工具与旧 Schema / 能力未开放错误 / 92 天跨度校验 / 物料与供应商功能兼容 /
-订单参数与字段映射 / 健康检查 evidence 与置信度）
+订单参数与字段映射 / 健康检查 evidence 与置信度 / 齐套 5 工具 / 质量列表与追溯 /
+质量追溯缺锚点校验 / 质量数据过期映射）
 + HTTP 4 项（无 token 401 / 错误 token 401 / 正确 token 握手 / 未配 token 拒绝启动）。
 
 ## 元数据与权限声明
 
 - `server.json`：Server 元数据（name / version / owner / transport / read_only / required_permissions / 依赖 / 维护团队 / 每 Tool 权限等级），提交 AEOS Registry 使用
-- MCP 协议层：`serverInfo.version=1.0.0`；每个 Tool 带 `annotations.readOnlyHint=true`
+- MCP 协议层：`serverInfo.version=1.1.0`；每个 Tool 带 `annotations.readOnlyHint=true`
 
 ## 上游系统依赖
 
@@ -193,7 +197,9 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
   `GET /external/material-kitting/shortages`（`kitting.shortages`）、
   `GET /external/material-kitting/demands`（`kitting.demands`）、
   `GET /external/inventory/availability`（`inventory.availability`）、
-  `GET /external/material-supplies/list`（`material.supplies`）
+  `GET /external/material-supplies/list`（`material.supplies`）、
+  `GET /external/quality-issues/list`（`quality_issues.list`）、
+  `GET /external/quality-trace/list`（`quality_trace.list`）
 - 调用方需在 API Key 上勾选对应 endpoint_code + IP 白名单
 
 ## 已知限制
@@ -213,6 +219,10 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
 - 调拨供给为近 120 天窗口快照；本账套直接调拨审核即入库存，不计入齐套未来供给（避免与库存重复）
 - 齐套类工具对过期数据返回 `data_confidence=low` + 行级 `expired` 字段（数据照常返回），
   不返回 `STALE_DATA` 错误（与 orders 类工具不同）
+- 质量类工具：`quality_issues_list` 的 `severity` / `inspection_result` / `batch_no` /
+  `supplier_code` / `material_code` / `line_no` / `blocking` / `issue_type` 无 SPC 数据源，恒为 `null`；
+  `quality_trace` 不支持 `supplier_code` 锚点；上游 `stale=true` 返回 `STALE_DATA`（不返回数据，
+  与 orders 类工具一致）
 
 ## 目录结构
 
@@ -222,6 +232,7 @@ mcp-company-control/
 │  ├─ __main__.py         # 入口：传输分发（stdio / streamable-http）
 │  ├─ server.py           # mcp 实例 + 新版 Tool（orders/details/bom/health）
 │  ├─ kitting.py          # 齐套类 Tool（kitting/短料/需求/库存可用量/未来供给）
+│  ├─ quality.py          # 质量类 Tool（质量异常/追溯）
 │  ├─ legacy_compat.py    # 0.1.0 兼容 Tool（detail_orders/metrics/material/supplier）
 │  ├─ tool_helpers.py     # Tool 公共基础设施（错误信封/校验/列表返回）
 │  ├─ orders.py           # 订单表头共享查询 + 兼容字段别名

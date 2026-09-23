@@ -1,4 +1,4 @@
-"""独立测试脚本 — 30 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
+"""独立测试脚本 — 34 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
 
 运行（在 mcp-company-control/ 目录下）：
     python scripts/test_company_control.py
@@ -9,7 +9,7 @@
 
 分组：
   - 旧版回归：0.1.0 兼容工具存在、旧 Schema/分页上限、参数与字段映射、能力未开放错误、健康检查修正
-  - 新版链路：orders/details/bom 正常链路、错误映射、脱敏、幂等、evidence、齐套 5 工具
+  - 新版链路：orders/details/bom 正常链路、错误映射、脱敏、幂等、evidence、齐套 5 工具、质量 2 工具
   - HTTP 传输：401 鉴权、握手、缺 token 拒绝启动
 """
 
@@ -51,6 +51,8 @@ EXPECTED_TOOLS = {
     "material_kitting_demands_list",
     "inventory_availability_list",
     "material_supplies_list",
+    "quality_issues_list",
+    "quality_trace",
 }
 
 DATA_AS_OF = "2026-09-19T18:00:00Z"
@@ -284,6 +286,64 @@ MATERIAL_SUPPLIES = [
     },
 ]
 
+QUALITY_ISSUES = [
+    {
+        "issue_no": "QI-20260922-0001",
+        "title": "来料尺寸超差",
+        "status": "open",
+        "order_no": "SO-2609-001",
+        "product_code": "P-100",
+        "severity": None,
+        "inspection_result": None,
+        "owner": "李四",
+        "owner_org": "品质部",
+        "occurred_at": "2026-09-22",
+    },
+    {
+        "issue_no": "QI-20260922-0002",
+        "title": "外壳划伤",
+        "status": "in_progress",
+        "order_no": "SO-2609-001",
+        "product_code": "P-100",
+        "severity": None,
+        "inspection_result": None,
+        "owner": "赵六",
+        "owner_org": "生产部",
+        "occurred_at": "2026-09-21",
+    },
+]
+
+QUALITY_TRACE = [
+    {
+        "object_type": "quality_issue",
+        "object_id": "QI-20260922-0001",
+        "relation": "order_no",
+        "order_no": "SO-2609-001",
+        "issue_no": "QI-20260922-0001",
+        "severity": None,
+        "owner": "李四",
+    },
+    {
+        "object_type": "order_line",
+        "object_id": "SO-2609-001:1",
+        "relation": "order_no",
+        "order_no": "SO-2609-001",
+        "line_no": "1",
+        "product_code": "P-100",
+        "batch_no": "B-2609",
+        "bom_no": "BOM-001",
+        "bom_id": 1001,
+    },
+    {
+        "object_type": "bom",
+        "object_id": "BOM-001",
+        "relation": "order_line",
+        "order_no": "SO-2609-001",
+        "bom_no": "BOM-001",
+        "bom_version": "V1",
+    },
+]
+
 MOCK_STATE = {"mode": "normal", "last_query": None}
 
 # 与 SPC「数据供给」HMAC 机制一致的校验参数
@@ -301,6 +361,8 @@ MOCK_ENDPOINT_CODES = {
     "/external/material-kitting/demands": "kitting.demands",
     "/external/inventory/availability": "inventory.availability",
     "/external/material-supplies/list": "material.supplies",
+    "/external/quality-issues/list": "quality_issues.list",
+    "/external/quality-trace/list": "quality_trace.list",
 }
 
 # 齐套类 mock 路由（stale_kitting 模式只影响这些路径）
@@ -330,8 +392,8 @@ class MockHandler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             pass  # 客户端超时主动断开属预期（timeout 模式）
 
-    def _kitting_envelope(self, rows, q, stale=False):
-        """齐套类端点统一信封：items + 分页 + 新鲜度元信息"""
+    def _list_envelope(self, rows, q, stale=False):
+        """列表类端点统一信封：items + 分页 + 新鲜度元信息"""
         return {
             "code": 0,
             "message": "ok",
@@ -520,24 +582,24 @@ class MockHandler(BaseHTTPRequestHandler):
             rows = KITTING_RESULTS
             if q.get("demand_no"):
                 rows = [r for r in rows if r["demand_no"] == q["demand_no"]]
-            return self._json(self._kitting_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q))
         if route == "/external/material-kitting/shortages":
             rows = KITTING_SHORTAGES
             if q.get("demand_no"):
                 rows = [r for r in rows if r["demand_no"] == q["demand_no"]]
             if q.get("material_code"):
                 rows = [r for r in rows if r["material_code"] == q["material_code"]]
-            return self._json(self._kitting_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q))
         if route == "/external/material-kitting/demands":
             rows = KITTING_DEMANDS
             if q.get("order_no"):
                 rows = [r for r in rows if r["demand_no"] == q["order_no"]]
-            return self._json(self._kitting_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q))
         if route == "/external/inventory/availability":
             rows = INVENTORY_AVAILABILITY
             if q.get("material_code"):
                 rows = [r for r in rows if r["material_code"] == q["material_code"]]
-            return self._json(self._kitting_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q))
         if route == "/external/material-supplies/list":
             rows = MATERIAL_SUPPLIES
             if q.get("material_code"):
@@ -545,7 +607,23 @@ class MockHandler(BaseHTTPRequestHandler):
             if q.get("supply_type"):
                 wanted = {s.strip().upper() for s in q["supply_type"].split(",")}
                 rows = [r for r in rows if r["supply_type"] in wanted]
-            return self._json(self._kitting_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q))
+        if route == "/external/quality-issues/list":
+            rows = QUALITY_ISSUES
+            if q.get("issue_no"):
+                rows = [r for r in rows if r["issue_no"] == q["issue_no"]]
+            if q.get("order_no"):
+                rows = [r for r in rows if r["order_no"] == q["order_no"]]
+            if q.get("status"):
+                wanted = {s.strip() for s in q["status"].split(",")}
+                rows = [r for r in rows if r["status"] in wanted]
+            return self._json(self._list_envelope(rows, q))
+        if route == "/external/quality-trace/list":
+            rows = [
+                r for r in QUALITY_TRACE
+                if not q.get("order_no") or r.get("order_no") == q["order_no"]
+            ]
+            return self._json(self._list_envelope(rows, q))
         return self._json({"error": "not found"}, 404)
 
 
@@ -586,7 +664,7 @@ async def call_tool(session, name, args):
 
 async def check_01_initialize(session, init_result):
     assert init_result.server_info.name == "company-control", f"server_info.name={init_result.server_info.name}"
-    assert init_result.server_info.version == "1.0.0", f"server_info.version={init_result.server_info.version!r}"
+    assert init_result.server_info.version == "1.1.0", f"server_info.version={init_result.server_info.version!r}"
 
 
 async def check_02_tools_list(session):
@@ -713,10 +791,10 @@ async def check_12_health(session):
     _, body = await call_tool(session, "get_system_health", {})
     data = body.get("data", {})
     assert data.get("status") == "ok", f"{data}"
-    assert data.get("read_only") is True and data.get("version") == "1.0.0"
+    assert data.get("read_only") is True and data.get("version") == "1.1.0"
     assert set(data.get("capabilities", [])) == EXPECTED_TOOLS
     # §16 顶层字段超集
-    assert body.get("status") == "ok" and body.get("version") == "1.0.0"
+    assert body.get("status") == "ok" and body.get("version") == "1.1.0"
     assert body.get("checked_at") and set(body.get("capabilities", [])) == EXPECTED_TOOLS
 
 
@@ -927,6 +1005,55 @@ async def check_30_kitting_stale(session):
     assert isinstance(body.get("data"), list), f"{body}"
 
 
+async def check_31_quality_issues_list(session):
+    """quality_issues_list：过滤、null 占位字段、evidence、分页信封"""
+    _, body = await call_tool(
+        session, "quality_issues_list", {"order_no": "SO-2609-001", "page_size": 2}
+    )
+    assert body and body.get("capability") == "quality_issues_list", f"{body}"
+    assert body.get("source") == "company-control" and body.get("read_only") is True, f"{body}"
+    rows = body.get("data") or []
+    assert rows and all(r.get("order_no") == "SO-2609-001" for r in rows), f"order_no 过滤未生效: {rows}"
+    assert rows[0].get("severity") is None, f"无数据源字段必须为 null: {rows[0]}"
+    refs = body.get("evidence_refs") or []
+    assert refs and all(
+        r.startswith("control-platform://quality-issue/") and "@" in r for r in refs
+    ), f"{refs}"
+    page = body.get("page") or {}
+    assert page.get("page") == 1 and page.get("page_size") == 2 and page.get("total", 0) > 0, f"{page}"
+
+
+async def check_32_quality_trace(session):
+    """quality_trace：三类节点 + evidence 使用 object_type/object_id"""
+    _, body = await call_tool(session, "quality_trace", {"order_no": "SO-2609-001"})
+    assert body and body.get("capability") == "quality_trace", f"{body}"
+    rows = body.get("data") or []
+    types = {r.get("object_type") for r in rows}
+    assert {"quality_issue", "order_line", "bom"} <= types, f"{types}"
+    refs = body.get("evidence_refs") or []
+    assert refs and all(r.startswith("control-platform://quality-trace/") for r in refs), f"{refs}"
+    assert any("/quality_issue/" in r for r in refs), f"{refs}"
+    assert any("/order_line/" in r for r in refs), f"{refs}"
+
+
+async def check_33_quality_trace_requires_anchor(session):
+    """quality_trace 缺锚点 → INVALID_ARGUMENT（不调用上游、不崩溃）"""
+    _, body = await call_tool(session, "quality_trace", {})
+    err = body.get("error", {})
+    assert err.get("code") == "INVALID_ARGUMENT" and err.get("retryable") is False, f"{body}"
+
+
+async def check_34_quality_stale(session):
+    """质量端点 stale=true → STALE_DATA（retryable，交付说明 §11.9）"""
+    MOCK_STATE["mode"] = "stale"
+    try:
+        _, body = await call_tool(session, "quality_issues_list", {"order_no": "SO-2609-001"})
+    finally:
+        MOCK_STATE["mode"] = "normal"
+    err = body.get("error", {})
+    assert err.get("code") == "STALE_DATA" and err.get("retryable") is True, f"{body}"
+
+
 # ---------------- HTTP 检查（双传输补充） ----------------
 
 INIT_BODY = {
@@ -1058,10 +1185,10 @@ def check_26_http_requires_token(base_url: str):
     assert code == 2, f"退出码应为 2，实际 {code}"
 
 
-# 分组：legacy = 旧版回归（0.1.0 兼容契约）；new = 新版链路（1.0.0 能力）；http = HTTP 传输
+# 分组：legacy = 旧版回归（0.1.0 兼容契约）；new = 新版链路（1.1.0 能力）；http = HTTP 传输
 GROUPS = [
     ("legacy", "旧版", "旧版回归（0.1.0 兼容契约）"),
-    ("new", "新版", "新版链路（1.0.0 能力）"),
+    ("new", "新版", "新版链路（1.1.0 能力）"),
     ("http", "HTTP", "HTTP 传输（双传输）"),
 ]
 GROUP_SHORT = {key: short for key, short, _ in GROUPS}
@@ -1094,6 +1221,10 @@ CHECKS = [
     ("new", "28 缺料明细查询与 evidence", check_28_shortages),
     ("new", "29 需求/库存/供给三工具链路", check_29_kitting_related_lists),
     ("new", "30 齐套数据过期返回 low confidence", check_30_kitting_stale),
+    ("new", "31 质量异常列表查询与 evidence", check_31_quality_issues_list),
+    ("new", "32 质量追溯节点与 evidence", check_32_quality_trace),
+    ("new", "33 质量追溯缺锚点被拒", check_33_quality_trace_requires_anchor),
+    ("new", "34 质量数据过期返回 STALE_DATA", check_34_quality_stale),
 ]
 
 
