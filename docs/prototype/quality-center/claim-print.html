@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>打印 · SC20260923-004 供应商索赔通知单 · 品质管理原型</title>
+<link rel="stylesheet" href="../redesign/styles.css">
+<!-- PROTOTYPE — 一次性原型，非生产代码 -->
+<!-- 品质管理 · 供应商索赔单 ④：A4 纸质单版式（与详情页左侧只读版式同源）
+     演示数据为「已归档」状态——各级意见 / 签字均已填充 -->
+<style>
+  body { background: var(--gray-100); }
+
+  /* ---- 工具栏（打印时隐藏） ---- */
+  .print-bar {
+    max-width: 900px; margin: 20px auto 14px; padding: 10px 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .print-bar .t { font-size: var(--fs-13); color: var(--text-2); }
+  .print-bar .t b { color: var(--text-1); font-variant-numeric: tabular-nums; }
+  .print-bar .hint { margin-left: auto; font-size: 11.5px; color: var(--text-3); }
+  .print-foot { max-width: 900px; margin: 12px auto 28px; font-size: 11.5px; color: var(--text-3); text-align: center; }
+
+  /* ---- A4 纸 ---- */
+  .sheet {
+    width: 900px; max-width: 96vw; margin: 0 auto;
+    background: var(--surface); border: 1px solid var(--gray-300);
+    box-shadow: var(--shadow-md); border-radius: 3px;
+    padding: 34px 40px;
+    font-size: 13px; line-height: 1.85; color: #111;
+  }
+  .p-row { display: flex; border: 1px solid #000; }
+  .p-row > div { padding: 10px 12px; border-right: 1px solid #000; }
+  .p-row > div:last-child { border-right: none; }
+  .p-co { width: 30%; }
+  .p-co b { font-size: 15px; }
+  .p-co .en { font-size: 11.5px; color: #444; }
+  .p-ti { flex: 1; text-align: center; align-self: center; font-weight: 700; font-size: 20px; letter-spacing: .08em; }
+  .p-ti .en { display: block; font-size: 11px; font-weight: 400; color: #444; letter-spacing: .02em; margin-top: 3px; }
+  .p-no { width: 150px; font-size: 11.5px; color: #333; align-self: center; font-variant-numeric: tabular-nums; }
+  .p-sec { border: 1px solid #000; border-top: none; padding: 10px 12px; }
+  .p-sec .lbl { color: #333; }
+  .p-sec .clause { font-size: 11.5px; color: #555; margin-top: 4px; }
+  .p-ck { letter-spacing: .02em; }
+  .p-calc { white-space: pre-line; margin-top: 4px; }
+  .p-amount { margin-top: 6px; }
+  .p-amount b { font-size: 15.5px; font-variant-numeric: tabular-nums; }
+  .p-sign { text-align: right; margin-top: 6px; color: #222; }
+  .p-op .who { text-align: right; color: #333; font-size: 12.5px; margin-top: 4px; }
+  .p-remark { color: #333; }
+
+  @media print {
+    body { background: #fff; }
+    .no-print { display: none !important; }
+    .sheet { width: auto; max-width: none; border: none; box-shadow: none; border-radius: 0; padding: 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ 工具栏（打印时隐藏） ============ -->
+<div class="card print-bar no-print">
+  <a class="btn btn-ghost btn-sm" href="claim-detail.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="m15 6-6 6 6 6"/></svg>返回详情</a>
+  <span class="t">供应商索赔通知单 <b class="mono">SC20260923-004</b> · 已归档版式（各级签字已填充）</span>
+  <span class="hint">演示数据 · 归档前也可随时预览打印</span>
+  <button class="btn btn-primary btn-sm" onclick="window.print()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M7 8V4h10v4"/><rect x="4" y="8" width="16" height="8" rx="1.5"/><path d="M7 13h10v7H7z"/></svg>打印 / 另存为 PDF</button>
+</div>
+
+<!-- ============ A4 纸质单 ============ -->
+<div class="sheet">
+  <div class="p-row">
+    <div class="p-co"><b>宁波恒剑光电科技有限公司</b><div class="en">IQC Department</div></div>
+    <div class="p-ti">供应商索赔通知单<span class="en">Supplier Claim Confirmation</span></div>
+    <div class="p-no">NO. SC20260923-004<br>Issue date: 2026-09-23<br>1/1</div>
+  </div>
+
+  <div class="p-sec"><span class="lbl">供应商 Supplier:</span> <b>宁波宏盛电子有限公司（SUP-00231）</b></div>
+
+  <div class="p-sec">
+    <span class="lbl">索赔原因 Claim reason：</span><span class="p-ck">■ 现场/客户投诉 Field/customer claim　□ 供货业绩 Supply performance</span>
+    <div class="clause">供应商索赔主要基于以下几个方面：交货和质量问题；制造过程中发现质量问题；导致我司客户索赔的质量问题。</div>
+  </div>
+
+  <div class="p-sec p-ck">
+    <span class="lbl">索赔细项 Details claimed：</span><br>
+    ☑ 替代件费用 Replacement　□ 包装费用 Packing fee　☑ 运输费用 Transporting fee<br>
+    ☑ 人工费用 Man-hour fee　□ 额外费用 Additional fee　□ 处罚 Punishment<br>
+    □ 降级使用　□ 直接损失
+  </div>
+
+  <div class="p-sec">
+    <span class="lbl">索赔方式：</span>本公司财务部直接扣款
+    <div class="p-calc">索赔金额计算说明：客户退回成品 32 件，返工更换主控板替代件 32 件 × ¥65.00；往返运输 2 车 × ¥320.00；返工人工 12 工时 × ¥45.00。依据《供应商质量协议》第 4.2、4.5 条。</div>
+    <div class="p-amount">共计扣除费用 <b>¥3,260.00</b> 元人民币。</div>
+    <div class="p-sign">品质部签字 Signature：王华　2026-09-23</div>
+  </div>
+
+  <div class="p-sec p-ck">
+    <span class="lbl">退回要求 About parts returned from field：</span><br>
+    ☑ 无需退回，由恒剑直接处理 Not need to return, please HJ handle it directly<br>
+    □ 需退回，供应商承担运费 Please return, supplier will be charge of the transporting fee.
+  </div>
+
+  <div class="p-sec p-op">
+    <div><b>索赔部门意见：</b>情况属实，同意索赔，请上级确认。</div>
+    <div class="who">签字 Signature：李建国　2026-09-23</div>
+  </div>
+
+  <div class="p-sec p-op">
+    <div><b>上级部门意见：</b>同意，注意后续批次来料管控。</div>
+    <div class="who">签字 Signature：张伟　2026-09-23</div>
+  </div>
+
+  <div class="p-sec p-op">
+    <div><b>财务结算：</b>已登记，下月对账扣款。</div>
+    <div class="who">签字 Signature：周芳　2026-09-23</div>
+  </div>
+
+  <div class="p-sec p-remark">备注：客户投诉编号 C-2609-118，详见附件检验报告。</div>
+</div>
+
+<div class="print-foot no-print">
+  浏览器打印对话框 → 目标选择「另存为 PDF」· 纸张 A4 · 边距默认 · 无需勾选背景图形
+</div>
+
+<!-- 原型切换条（非设计内容，打印时隐藏） -->
+<div class="protobar no-print">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html">品质管理总览</a>
+  <a href="claims.html">索赔单台账</a>
+  <a href="claim-new.html">新建 / 编辑</a>
+  <a href="claim-detail.html">详情 · 审批</a>
+  <a href="claim-print.html" class="cur">打印视图</a>
+  <a href="../redesign/index.html">全站原型总览</a>
+</div>
+
+</body>
+</html>

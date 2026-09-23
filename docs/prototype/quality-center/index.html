@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>总览 · 品质管理原型</title>
+<link rel="stylesheet" href="../redesign/styles.css">
+<!-- PROTOTYPE — 一次性原型，非生产代码 -->
+<style>
+  .ov-wrap { max-width: 1040px; margin: 0 auto; padding: 56px 32px 100px; }
+  .ov-hero { text-align: center; margin-bottom: 36px; }
+  .ov-hero .badge-line { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--brand-600); background: var(--brand-50); border: 1px solid var(--brand-200); border-radius: var(--r-full); padding: 3px 12px; margin-bottom: 18px; }
+  .ov-hero h1 { font-size: var(--fs-30); font-weight: 700; letter-spacing: -.02em; }
+  .ov-hero p { color: var(--text-2); font-size: var(--fs-14); margin-top: 10px; }
+  .ov-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grp-title { display: flex; align-items: center; gap: 8px; font-size: var(--fs-13); font-weight: 600; color: var(--text-1); margin: 28px 0 12px; }
+  .grp-title .no { font-size: 10.5px; font-weight: 700; color: var(--brand-500); background: var(--brand-50); border-radius: 5px; padding: 1px 7px; }
+  .grp-title .hint { font-size: 11.5px; font-weight: 400; color: var(--text-3); }
+  .ov-card { display: block; padding: 20px; position: relative; transition: border-color .12s, box-shadow .12s; }
+  .ov-card:hover { border-color: var(--brand-300); box-shadow: var(--shadow-md); }
+  .ov-card .no { position: absolute; top: 18px; right: 18px; font-size: 11px; font-weight: 700; color: var(--brand-500); background: var(--brand-50); padding: 1px 8px; border-radius: 5px; }
+  .ov-card h3 { font-size: var(--fs-16); font-weight: 650; margin-bottom: 6px; }
+  .ov-card p { font-size: var(--fs-12); color: var(--text-3); line-height: 1.75; }
+  .ov-card .go { display: inline-flex; align-items: center; gap: 4px; margin-top: 14px; font-size: var(--fs-12); color: var(--brand-600); font-weight: 500; }
+  .ov-notes { margin-top: 36px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  .ov-note { padding: 14px 16px; }
+  .ov-note b { font-size: var(--fs-13); display: block; margin-bottom: 4px; }
+  .ov-note span { font-size: 11.5px; color: var(--text-3); line-height: 1.7; }
+  .rule-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .rule-tbl th { text-align: left; font-size: 11px; font-weight: 500; color: var(--gray-500); background: var(--gray-50); padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .rule-tbl td { padding: 9px 12px; border-bottom: 1px solid var(--gray-100); color: var(--text-2); vertical-align: top; line-height: 1.7; }
+  .rule-tbl td:first-child { color: var(--text-1); font-weight: 500; white-space: nowrap; }
+  .rule-tbl tr:last-child td { border-bottom: none; }
+</style>
+</head>
+<body style="background:
+  radial-gradient(700px 400px at 12% 0%, rgba(91,91,214,.07), transparent 60%),
+  radial-gradient(600px 380px at 90% 10%, rgba(14,165,233,.06), transparent 60%),
+  var(--bg);">
+
+<div class="ov-wrap">
+  <div class="ov-hero">
+    <span class="badge-line">● PROTOTYPE · 品质管理 · 待评审</span>
+    <h1>品质管理 · 供应商索赔单 · 原型</h1>
+    <p>把纸质「供应商索赔通知单」线上化：台账 + 新建（纸质单实时预览）+ 详情（左纸质单右审批面板，四态演示）+ 打印同源版式；待办收口审批中心</p>
+  </div>
+
+  <div class="ov-grid">
+    <a class="card ov-card" href="claims.html">
+      <span class="no">01</span>
+      <h3>索赔单台账</h3>
+      <p>KPI 带 4 卡（本月索赔金额 / 审批中 / 待我审批 / 已归档，点击即筛）；状态 chips（radio-hack 真实过滤）+ 更多筛选抽屉菜单（含空态演示）；密集表格：单号 mono 链接 / 状态标签 / 供应商组合列 / 原因标签 / 细项 mini 标签 +「+N」/ 金额右对齐 / 当前节点 + 等待时长（超时红）/ 附件计数 / 行 hover 操作；聚合行（合计 ¥23,550）+ 提交 / 删除二次确认弹窗。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="claim-new.html">
+      <span class="no">02</span>
+      <h3>新建 / 编辑</h3>
+      <p>左侧三段式表单：基本信息（供应商搜索选择 / 索赔原因与退回要求单选卡片）/ 索赔细项 8 宫格勾选卡片 + 金额大输入 / 计算说明（质量协议固定条款提示条）+ 附件拖拽上传；右侧粘性<b style="color:var(--brand-600)">「纸质单实时预览」</b>——所见即所打；底部提示金额如何影响审批链节点。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="claim-detail.html">
+      <span class="no">03</span>
+      <h3>详情 · 审批</h3>
+      <p>左 60% 纸质单只读渲染（与打印同源，各级意见 / 签字随进度填充）+ 右 40% 粘性审批面板：状态卡（已等待时长分级）/ 审批进度纵向步骤 + <b style="color:var(--brand-600)">条件节点跳过标记</b>（金额 &lt; ¥5,000 总经理节点未进入快照）/ 当前节点操作（驳回必填意见）/ 按轮次审批记录 / 附件；撤回二次确认。右上角可切换<b style="color:var(--brand-600)">草稿 / 审批中 / 已归档 / 已驳回</b>四态演示。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="claim-print.html">
+      <span class="no">04</span>
+      <h3>打印视图</h3>
+      <p>A4 版式纸质单：公司抬头 + 中英标题 + NO./Issue date → 供应商 → 索赔原因（■ + 固定条款）→ 细项（☑ 八项）→ 索赔方式 + 计算说明 + 共计扣除费用 + 品质部签字 → 退回要求 → 各级意见 / 签字 → 备注；顶部工具栏 @media print 隐藏，浏览器「另存为 PDF」零后端依赖。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
+  <div class="grp-title"><span class="no">R</span>关键规则<span class="hint">原型中每一处交互都对应下面一条规则，实现时按此校验</span></div>
+  <div class="card">
+    <table class="rule-tbl">
+      <thead><tr><th style="width:150px">规则</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>审批链快照冻结</td><td>提交时按当前金额冻结审批链快照，在途单据不受配置变更影响；金额 ¥3,260 ≥ ¥1,000 含「上级部门意见」，&lt; ¥5,000 不含「总经理意见」（原型以虚线跳过标记呈现）。</td></tr>
+        <tr><td>默认审批链</td><td>索赔部门意见（采购经理）→ 上级部门意见（供应链经理，≥ ¥1,000）→ 总经理意见（≥ ¥5,000）→ 财务结算（无条件）；阈值与节点在审批中心配置。</td></tr>
+        <tr><td>状态机</td><td>draft → pending → approved | rejected | recalled；驳回 / 撤回后可编辑重新提交，审批记录按轮次留档不覆盖。</td></tr>
+        <tr><td>驳回必填意见</td><td>通过可不填意见；驳回必须填写原因，退回申请人修改后重新提交。</td></tr>
+        <tr><td>操作权限</td><td>编辑 / 提交仅本人草稿（或驳回 / 撤回态）；审批仅当前节点审批人 / admin；已归档删除需「归档删除」权限。</td></tr>
+        <tr><td>打印同源</td><td>详情页左侧纸质单与打印页同一版式家族；归档后按此打印 / 另存 PDF，归档前亦可预览。</td></tr>
+        <tr><td>待办收口</td><td>「待我审批」不单设页面——统一收口到审批中心待办工作台（biz_type = supplier_claim），侧栏保留待办计数。</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="ov-notes">
+    <div class="card ov-note">
+      <b>本次范围</b>
+      <span>仅供应商索赔单 4 页 + 模块总览；把现有 AntD 实现重设计为全站「靛蓝精致版」范式，不新增后端字段。</span>
+    </div>
+    <div class="card ov-note">
+      <b>未纳入本次</b>
+      <span>品质总览看板、品质异常台账、质量追溯（对外接口已存在，无前端页）——待品质域扩展时另行设计。</span>
+    </div>
+    <div class="card ov-note">
+      <b>演示数据</b>
+      <span>8 条索赔单覆盖 5 种状态；SC20260923-004 为列表 / 新建 / 详情 / 打印共用主数据（审批中 · 停在第 2 节点 · ¥3,260.00）。演示视角：王华（品质主管）。</span>
+    </div>
+  </div>
+
+  <div style="text-align:center; margin-top:36px; font-size:11px; color:var(--text-3);">
+    设计文档：docs/superpowers/specs/2026-09-23-quality-center-prototype-design.md · 业务实现：2026-09-22-supplier-claim-design.md · 风格基线：docs/prototype/redesign/styles.css
+  </div>
+</div>
+
+<!-- 原型切换条（非设计内容） -->
+<div class="protobar">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html" class="cur">品质管理总览</a>
+  <a href="claims.html">索赔单台账</a>
+  <a href="claim-new.html">新建 / 编辑</a>
+  <a href="claim-detail.html">详情 · 审批</a>
+  <a href="claim-print.html">打印视图</a>
+  <a href="../redesign/index.html">全站原型总览</a>
+</div>
+
+</body>
+</html>

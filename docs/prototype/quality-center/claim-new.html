@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新建供应商索赔单 · 品质管理原型</title>
+<link rel="stylesheet" href="../redesign/styles.css">
+<!-- PROTOTYPE — 一次性原型，非生产代码；交互由 CSS :has() + radio/checkbox hack 实现，零 JS -->
+<!-- 品质管理 · 供应商索赔单 ②：左三段式表单（基本信息 / 细项与金额 / 说明与凭证）
+     + 右粘性「纸质单实时预览」（所见即所打）+ 金额条件节点提示 -->
+<style>
+  /* ---- 交互开关（隐藏 radio / checkbox） ---- */
+  .hack { position: fixed; left: -100px; opacity: 0; pointer-events: none; }
+
+  .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .page-head h1 { font-size: var(--fs-20); font-weight: 600; letter-spacing: -.01em; }
+  .page-head .sub { font-size: var(--fs-12); color: var(--text-3); margin-top: 3px; }
+  .page-head .actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+  .form-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(320px,1fr); gap: 14px; align-items: start; }
+  @media (max-width: 1180px) { .form-grid { grid-template-columns: 1fr; } }
+
+  /* ---- 表单 ---- */
+  .f-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  .f-item label.fl { display: block; font-size: var(--fs-12); color: var(--text-2); font-weight: 500; margin-bottom: 6px; }
+  .f-item .req::after { content:" *"; color: var(--danger); }
+  .f-item .input, .f-item .select { width: 100%; }
+  .f-item .input .cur { color: var(--text-1); }
+
+  /* ---- 单选卡片（索赔原因 / 退回要求） ---- */
+  .rcards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .rcard {
+    display: flex; align-items: flex-start; gap: 10px;
+    border: 1px solid var(--border); border-radius: var(--r-md);
+    padding: 10px 12px; cursor: pointer; background: var(--surface);
+    transition: border-color .12s, background .12s;
+  }
+  .rcard:hover { border-color: var(--gray-300); }
+  .rcard .box { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--gray-300); margin-top: 2px; flex-shrink: 0; position: relative; }
+  .rcard .tt { font-size: var(--fs-13); color: var(--text-1); font-weight: 500; line-height: 1.45; }
+  .rcard .en { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+  body:has(#rd-field:checked)  #rdc-field,
+  body:has(#rd-supply:checked) #rdc-supply,
+  body:has(#rt-noret:checked)  #rtc-noret,
+  body:has(#rt-ret:checked)    #rtc-ret {
+    border-color: var(--brand-500); background: var(--brand-50);
+    box-shadow: 0 0 0 3px rgba(91,91,214,.10);
+  }
+  body:has(#rd-field:checked)  #rdc-field  .box,
+  body:has(#rd-supply:checked) #rdc-supply .box,
+  body:has(#rt-noret:checked)  #rtc-noret  .box,
+  body:has(#rt-ret:checked)    #rtc-ret    .box { border-color: var(--brand-500); }
+  body:has(#rd-field:checked)  #rdc-field  .box::after,
+  body:has(#rd-supply:checked) #rdc-supply .box::after,
+  body:has(#rt-noret:checked)  #rtc-noret  .box::after,
+  body:has(#rt-ret:checked)    #rtc-ret    .box::after {
+    content:""; position:absolute; inset:3px; border-radius:50%; background: var(--brand-500);
+  }
+
+  /* ---- 细项勾选卡片（8 宫格） ---- */
+  .ccards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  @media (max-width: 900px) { .ccards { grid-template-columns: repeat(2, 1fr); } }
+  .ccard {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); border-radius: var(--r-md);
+    padding: 8px 10px; cursor: pointer; font-size: var(--fs-12); color: var(--text-2);
+    background: var(--surface); transition: border-color .12s, background .12s;
+  }
+  .ccard:hover { border-color: var(--gray-300); }
+  .ccard .box { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid var(--gray-300); flex-shrink: 0; position: relative; }
+  .ccard .zh { color: var(--text-1); }
+  body:has(#ci-1:checked) #cic-1, body:has(#ci-2:checked) #cic-2, body:has(#ci-3:checked) #cic-3,
+  body:has(#ci-4:checked) #cic-4, body:has(#ci-5:checked) #cic-5, body:has(#ci-6:checked) #cic-6,
+  body:has(#ci-7:checked) #cic-7, body:has(#ci-8:checked) #cic-8 {
+    border-color: var(--brand-400); background: var(--brand-50); color: var(--brand-600);
+  }
+  body:has(#ci-1:checked) #cic-1 .box, body:has(#ci-2:checked) #cic-2 .box, body:has(#ci-3:checked) #cic-3 .box,
+  body:has(#ci-4:checked) #cic-4 .box, body:has(#ci-5:checked) #cic-5 .box, body:has(#ci-6:checked) #cic-6 .box,
+  body:has(#ci-7:checked) #cic-7 .box, body:has(#ci-8:checked) #cic-8 .box { border-color: var(--brand-500); background: var(--brand-500); }
+  body:has(#ci-1:checked) #cic-1 .box::after, body:has(#ci-2:checked) #cic-2 .box::after, body:has(#ci-3:checked) #cic-3 .box::after,
+  body:has(#ci-4:checked) #cic-4 .box::after, body:has(#ci-5:checked) #cic-5 .box::after, body:has(#ci-6:checked) #cic-6 .box::after,
+  body:has(#ci-7:checked) #cic-7 .box::after, body:has(#ci-8:checked) #cic-8 .box::after {
+    content:""; position:absolute; left:3.5px; top:1px; width:4px; height:7px;
+    border: solid #fff; border-width: 0 1.8px 1.8px 0; transform: rotate(40deg);
+  }
+
+  /* ---- 金额大输入 ---- */
+  .amount-input { position: relative; }
+  .amount-input .cur { position: absolute; left: 10px; top: 0; height: 32px; line-height: 32px; color: var(--text-3); font-size: var(--fs-13); }
+  .amount-input .input { padding-left: 24px; font-size: var(--fs-14); font-weight: 600; color: var(--text-1); font-variant-numeric: tabular-nums; }
+
+  /* ---- 说明条款提示条 ---- */
+  .f-note { background: var(--info-bg); border: 1px solid var(--info-bd); color: #075985; border-radius: var(--r-md); padding: 8px 12px; font-size: var(--fs-12); line-height: 1.7; }
+  .f-note b { color: #075985; }
+
+  textarea.ta {
+    width: 100%; border: 1px solid var(--border); border-radius: var(--r-md);
+    padding: 8px 10px; font: inherit; font-size: var(--fs-13); color: var(--text-1);
+    background: var(--surface); resize: vertical; line-height: 1.7; outline: none;
+  }
+  textarea.ta:focus { border-color: var(--brand-500); box-shadow: 0 0 0 3px rgba(91,91,214,.14); }
+
+  /* ---- 附件上传 ---- */
+  .dropzone {
+    border: 1.5px dashed var(--gray-300); border-radius: var(--r-md);
+    padding: 18px 16px; text-align: center; color: var(--text-3); font-size: var(--fs-12);
+    cursor: pointer; transition: border-color .12s, background .12s;
+  }
+  .dropzone:hover { border-color: var(--brand-400); background: var(--brand-50); }
+  .dropzone svg { width: 22px; height: 22px; color: var(--gray-300); margin-bottom: 4px; }
+  .dropzone b { color: var(--text-2); font-weight: 500; }
+  .file-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--gray-100); border-radius: var(--r-md); margin-top: 6px; font-size: var(--fs-12); background: var(--surface); }
+  .file-row svg { width: 14px; height: 14px; color: var(--text-3); flex-shrink: 0; }
+  .file-row .nm { color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-row .sz { color: var(--text-3); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .file-row .ok { margin-left: auto; color: var(--success); font-size: 11px; flex-shrink: 0; }
+  .file-row .rm { color: var(--gray-400); cursor: pointer; padding: 2px; border-radius: 4px; flex-shrink: 0; }
+  .file-row .rm:hover { color: var(--danger); background: var(--danger-bg); }
+  .file-row .rm svg { width: 12px; height: 12px; color: currentColor; }
+
+  /* ---- 右列粘性 ---- */
+  .sticky-col { position: sticky; top: 68px; display: flex; flex-direction: column; gap: 12px; }
+
+  /* ---- 纸质单预览（屏幕柔和版，打印页为 #000 硬边框） ---- */
+  .paper-sm { border: 1px solid var(--gray-400); background: var(--surface); border-radius: 3px; padding: 12px 14px; font-size: 10.5px; line-height: 1.7; color: var(--gray-800); }
+  .paper-sm .ph-row { display: flex; border: 1px solid var(--gray-300); }
+  .paper-sm .ph-row > div { padding: 5px 7px; border-right: 1px solid var(--gray-300); }
+  .paper-sm .ph-row > div:last-child { border-right: none; }
+  .paper-sm .co b { font-size: 11px; }
+  .paper-sm .ti { text-align: center; font-weight: 700; font-size: 12.5px; flex: 1; }
+  .paper-sm .no-cell { width: 118px; font-size: 10px; color: var(--gray-600); }
+  .paper-sm .sec { border: 1px solid var(--gray-300); border-top: none; padding: 5px 7px; }
+  .paper-sm .sec .lbl { color: var(--gray-600); }
+  .paper-sm .clause { color: var(--gray-500); font-size: 9.5px; margin-top: 2px; }
+  .paper-sm .ck { letter-spacing: .02em; }
+  .paper-sm .amount-line { margin-top: 3px; }
+  .paper-sm .amount-line b { font-size: 12px; color: var(--gray-900); font-variant-numeric: tabular-nums; }
+  .paper-sm .sign-line { text-align: right; margin-top: 4px; color: var(--gray-600); }
+  .paper-sm .calc-sm { white-space: pre-line; color: var(--gray-700); margin-top: 2px; }
+  .paper-sm .signs-note { color: var(--gray-400); font-size: 9.5px; }
+
+  .tip-list { margin: 0; padding: 0; list-style: none; font-size: var(--fs-12); color: var(--text-2); line-height: 1.8; }
+  .tip-list li { display: flex; gap: 8px; }
+  .tip-list li::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--brand-400); margin-top: 8px; flex-shrink: 0; }
+  .tip-list b { color: var(--text-1); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ============ 交互开关（勿删） ============ -->
+<input type="radio" name="rd" id="rd-field" class="hack" checked>
+<input type="radio" name="rd" id="rd-supply" class="hack">
+<input type="radio" name="rt" id="rt-noret" class="hack" checked>
+<input type="radio" name="rt" id="rt-ret" class="hack">
+<input type="checkbox" id="ci-1" class="hack" checked>
+<input type="checkbox" id="ci-2" class="hack">
+<input type="checkbox" id="ci-3" class="hack" checked>
+<input type="checkbox" id="ci-4" class="hack" checked>
+<input type="checkbox" id="ci-5" class="hack">
+<input type="checkbox" id="ci-6" class="hack">
+<input type="checkbox" id="ci-7" class="hack">
+<input type="checkbox" id="ci-8" class="hack">
+
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.2-5.5"/><path d="M4 4v4.5h4.5"/><path d="M10.5 9.2v5.6l4.8-2.8z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17.2v.1"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3.5 8 12 4l8.5 4v8L12 20l-8.5-4z"/><path d="M3.5 8 12 12l8.5-4M12 12v8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m4 13.5 8 4.2 8-4.2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+  <symbol id="i-checkc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8 12.3 2.8 2.8 5.2-5.8"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.2 2.8-4.8 5.5-4.8s4.9 1.6 5.5 4.8"/><circle cx="16.8" cy="9.5" r="2.6"/><path d="M16.4 14.8c2.3.2 3.7 1.6 4.1 3.7"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M9 19c-1.5.5-3.5.4-5-.6.6-1.4 1.6-2.3 3-2.8"/><path d="M13.5 21c-.3-1.8-.1-3.5.5-5"/><path d="M14 4.5C17 3 20.5 3.5 20.5 3.5S21 7 19.5 10c-1 2-3 4.5-5.5 6L9 12.5S11 8 14 4.5z"/><circle cx="15.5" cy="8.5" r="1.3"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13"/><path d="M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10.3 19a2 2 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M21.4 11.1 12.5 20a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 11.7 20.5 3.8 14 20.5l-2.6-6.6z"/><path d="M4 11.7l7.4.2M11.4 13.9l.4 6.6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 5 6v5c0 4.6 3 7.9 7 9.5 4-1.6 7-4.9 7-9.5V6z"/><path d="m9 11.6 2.2 2.2 4-4.4"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3.5 12.5 6 5a1.5 1.5 0 0 1 1.4-1h9.2A1.5 1.5 0 0 1 18 5l2.5 7.5V18a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/><path d="M3.5 12.5H9a3 3 0 0 0 6 0h5.5"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8M17.5 7H20M4 17h2.5M11.5 17H20"/><circle cx="14.5" cy="7" r="2"/><circle cx="8.5" cy="17" r="2"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3M8 21v-7h8v7"/></symbol>
+  <symbol id="i-img" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m5 18 4.5-5 3.5 3.5 2.5-2.5 4 4"/></symbol>
+  <symbol id="i-pdf" viewBox="0 0 24 24"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5"/><path d="M8.5 16.5c1.8-4 3-4.8 3.6-4.2.7.7-.6 2.2 0 2.9.5.6 2-.3 3.4-1.2"/></symbol>
+</svg>
+
+<div class="app">
+  <!-- ================= 侧栏 ================= -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">SPC</div>
+      <div class="logo-text">SPC 供应链中台<small>SUPPLY CHAIN CENTER</small></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="../redesign/dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>供应链驾驶舱</a>
+
+      <div class="nav-group-title">订单交付中心</div>
+      <a class="nav-item" href="../redesign/orders.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>订单总控台<span class="count">126</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-run"/></svg>跑单管理</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>订单风险池<span class="count hot">4</span></a>
+
+      <div class="nav-group-title">物料齐套中心</div>
+      <a class="nav-item" href="../redesign/purchase-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cal"/></svg>采购到料计划</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-box"/></svg>问题物料池<span class="count hot">7</span></a>
+      <a class="nav-item" href="../redesign/kit-analysis.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-layers"/></svg>齐套分析</a>
+
+      <div class="nav-group-title">异常与质量中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>异常总池<span class="count hot">5</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-checkc"/></svg>闭环跟踪</a>
+
+      <div class="nav-group-title">品质管理</div>
+      <a class="nav-item active" href="claims.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>供应商索赔单<span class="count hot">1</span></a>
+
+      <div class="nav-group-title">审批中心</div>
+      <a class="nav-item" href="../approval-center/workbench.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-inbox"/></svg>待办工作台<span class="count hot">12</span></a>
+      <a class="nav-item" href="../approval-center/config.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sliders"/></svg>审批配置</a>
+
+      <div class="nav-group-title">协同与项目</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>会议与任务中心<span class="ph">开发中</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rocket"/></svg>新品 / NPI 项目中心<span class="ph">开发中</span></a>
+
+      <div class="nav-group-title">规则与数据</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sliders"/></svg>规则配置中心</a>
+      <a class="nav-item" href="../redesign/basicdata.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-db"/></svg>基础数据与集成</a>
+    </nav>
+  </aside>
+
+  <!-- ================= 主区 ================= -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-crumb">品质管理 · 供应商索赔单<b>新建</b></div>
+      <div class="topbar-actions">
+        <div class="global-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>搜索索赔单号、供应商…<kbd>Ctrl K</kbd></div>
+        <div class="icon-btn" title="消息反馈"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bell"/></svg><span class="dot"></span></div>
+        <div class="avatar-user"><div class="avatar">华</div><span class="name">王华 · 品质主管</span></div>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- 页头 -->
+      <div class="page-head">
+        <a class="btn btn-ghost btn-sm" href="claims.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><use href="#i-chev" transform="rotate(180 12 12)"/></svg>返回台账</a>
+        <div>
+          <h1>新建供应商索赔单</h1>
+          <div class="sub">按纸质「供应商索赔通知单 Supplier Claim Confirmation」线上化 · 提交后进入审批链</div>
+        </div>
+        <div class="actions">
+          <a class="btn btn-secondary" href="claims.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-save"/></svg>仅存草稿</a>
+          <a class="btn btn-primary" href="claims.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-send"/></svg>保存并提交审批</a>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <!-- ================= 左：主表单 ================= -->
+        <div style="display:flex; flex-direction:column; gap:14px; min-width:0;">
+
+          <!-- ① 基本信息 -->
+          <div class="card">
+            <div class="card-head"><h3>基本信息</h3><span class="hint">带 * 为必填</span></div>
+            <div class="card-body">
+              <div class="f-grid">
+                <div class="f-item">
+                  <label class="fl req">供应商 Supplier</label>
+                  <div class="select"><span class="cur">宁波宏盛电子有限公司（SUP-00231）</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev" transform="rotate(90 12 12)"/></svg></div>
+                </div>
+                <div class="f-item">
+                  <label class="fl req">开单日期 Issue date</label>
+                  <div class="input"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="13" height="13" style="color:var(--gray-400)"><use href="#i-cal"/></svg><span class="cur">2026-09-23</span></div>
+                </div>
+                <div class="f-item" style="grid-column:1 / -1">
+                  <label class="fl req">索赔原因 Claim reason</label>
+                  <div class="rcards">
+                    <label class="rcard" id="rdc-field" for="rd-field">
+                      <span class="box"></span>
+                      <span><div class="tt">■ 现场 / 客户投诉</div><div class="en">Field / customer claim</div></span>
+                    </label>
+                    <label class="rcard" id="rdc-supply" for="rd-supply">
+                      <span class="box"></span>
+                      <span><div class="tt">□ 供货业绩</div><div class="en">Supply performance</div></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="f-item" style="grid-column:1 / -1">
+                  <label class="fl req">退回要求 About parts returned from field</label>
+                  <div class="rcards">
+                    <label class="rcard" id="rtc-noret" for="rt-noret">
+                      <span class="box"></span>
+                      <span><div class="tt">无需退回，由恒剑直接处理</div><div class="en">Not need to return, HJ handle it directly</div></span>
+                    </label>
+                    <label class="rcard" id="rtc-ret" for="rt-ret">
+                      <span class="box"></span>
+                      <span><div class="tt">需退回，供应商承担运费</div><div class="en">Return, supplier charge of transporting fee</div></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ② 索赔细项与金额 -->
+          <div class="card">
+            <div class="card-head"><h3>索赔细项与金额</h3><span class="hint">至少勾选一项 · 打印时按纸质单八项排版</span></div>
+            <div class="card-body" style="display:flex; flex-direction:column; gap:14px;">
+              <div class="ccards">
+                <label class="ccard" id="cic-1" for="ci-1"><span class="box"></span><span class="zh">替代件费用</span></label>
+                <label class="ccard" id="cic-2" for="ci-2"><span class="box"></span><span class="zh">包装费用</span></label>
+                <label class="ccard" id="cic-3" for="ci-3"><span class="box"></span><span class="zh">运输费用</span></label>
+                <label class="ccard" id="cic-4" for="ci-4"><span class="box"></span><span class="zh">人工费用</span></label>
+                <label class="ccard" id="cic-5" for="ci-5"><span class="box"></span><span class="zh">额外费用</span></label>
+                <label class="ccard" id="cic-6" for="ci-6"><span class="box"></span><span class="zh">处罚</span></label>
+                <label class="ccard" id="cic-7" for="ci-7"><span class="box"></span><span class="zh">降级使用</span></label>
+                <label class="ccard" id="cic-8" for="ci-8"><span class="box"></span><span class="zh">直接损失</span></label>
+              </div>
+              <div class="f-grid">
+                <div class="f-item">
+                  <label class="fl req">索赔金额（元）</label>
+                  <div class="amount-input"><span class="cur">¥</span><div class="input"><span class="cur">3,260.00</span></div></div>
+                </div>
+                <div class="f-item">
+                  <label class="fl">索赔方式</label>
+                  <div class="input"><span class="cur">本公司财务部直接扣款</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ③ 计算说明与凭证 -->
+          <div class="card">
+            <div class="card-head"><h3>计算说明与凭证</h3><span class="hint">计算说明将原样打印在纸质单上</span></div>
+            <div class="card-body" style="display:flex; flex-direction:column; gap:12px;">
+              <div class="f-item" style="margin:0">
+                <label class="fl">索赔金额计算说明</label>
+                <textarea class="ta" rows="4">客户退回成品 32 件，返工更换主控板替代件 32 件 × ¥65.00；往返运输 2 车 × ¥320.00；返工人工 12 工时 × ¥45.00。依据《供应商质量协议》第 4.2、4.5 条。</textarea>
+                <div class="f-note" style="margin-top:8px">
+                  供应商索赔主要基于以下几个方面：<b>交货和质量问题</b>；<b>制造过程中发现质量问题</b>；<b>导致我司客户索赔的质量问题</b>。（纸质单固定条款，自动打印，无需填写）
+                </div>
+              </div>
+              <div class="f-item" style="margin:0">
+                <label class="fl">备注</label>
+                <textarea class="ta" rows="2" placeholder="选填"></textarea>
+              </div>
+              <div class="f-item" style="margin:0">
+                <label class="fl">附件（检验报告 / 照片等）</label>
+                <div class="dropzone">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>
+                  <div><b>点击或拖拽上传</b> · 支持图片 / PDF，单件 ≤ 20MB</div>
+                </div>
+                <div class="file-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><use href="#i-img"/></svg><span class="nm">客诉返工照片_0921.jpg</span><span class="sz">2.1 MB</span><span class="ok">✓ 已上传</span><span class="rm" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-x"/></svg></span></div>
+                <div class="file-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><use href="#i-pdf"/></svg><span class="nm">IQC 检验报告 R-2609-04.pdf</span><span class="sz">648 KB</span><span class="ok">✓ 已上传</span><span class="rm" title="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><use href="#i-x"/></svg></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= 右：纸质单预览（粘性） ================= -->
+        <div class="sticky-col">
+          <div class="card">
+            <div class="card-head">
+              <h3>纸质单预览</h3>
+              <span class="hint">随填写实时更新</span>
+              <span class="more" style="margin-left:auto" title="归档前亦可随时预览打印">打印版式 →</span>
+            </div>
+            <div class="card-body">
+              <div class="paper-sm">
+                <div class="ph-row">
+                  <div class="co" style="width:150px"><b>宁波恒剑光电科技有限公司</b><br>IQC Department</div>
+                  <div class="ti">供应商索赔通知单<br><span style="font-size:9px; font-weight:400">Supplier Claim Confirmation</span></div>
+                  <div class="no-cell">NO. SC20260923-004<br>Issue date: 2026-09-23<br>1/1</div>
+                </div>
+                <div class="sec"><span class="lbl">供应商 Supplier:</span> <b>宁波宏盛电子有限公司</b></div>
+                <div class="sec">
+                  <span class="lbl">索赔原因：</span><span class="ck">■ 现场/客户投诉　□ 供货业绩</span>
+                  <div class="clause">供应商索赔主要基于：交货和质量问题；制造过程中发现质量问题；导致客户索赔。</div>
+                </div>
+                <div class="sec ck">
+                  <span class="lbl">索赔细项：</span>☑替代件费用　□包装费用　☑运输费用<br>☑人工费用　□额外费用　□处罚<br>□降级使用　□直接损失
+                </div>
+                <div class="sec">
+                  <span class="lbl">索赔方式：</span>本公司财务部直接扣款
+                  <div class="calc-sm">客户退回成品 32 件，返工更换主控板替代件 32 件 × ¥65.00；往返运输 2 车 × ¥320.00；返工人工 12 工时 × ¥45.00。依据《供应商质量协议》第 4.2、4.5 条。</div>
+                  <div class="amount-line">共计扣除费用 <b>¥3,260.00</b> 元人民币</div>
+                  <div class="sign-line">品质部签字 Signature：王华　2026-09-23</div>
+                </div>
+                <div class="sec ck"><span class="lbl">退回要求：</span>☑ 无需退回，由恒剑直接处理　□ 需退回，供应商承担运费</div>
+                <div class="sec signs-note">—— 各级意见 / 签字区随审批进度填充，见详情页与打印视图 ——</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>提交前须知</h3></div>
+            <div class="card-body">
+              <ul class="tip-list">
+                <li>提交时按<b>当前金额</b>冻结审批链快照：¥3,260 ≥ ¥1,000 将包含「上级部门意见」节点，&lt; ¥5,000 不含「总经理意见」。</li>
+                <li>审批中由<b>索赔部门 → 上级部门 → 财务结算</b>逐级签字，全部通过后自动归档。</li>
+                <li>驳回 / 撤回后可修改重新提交，<b>历史审批记录按轮次留档</b>。</li>
+                <li>归档后按纸质单版式<b>打印 / 另存 PDF</b> 存档（草稿亦可预览打印）。</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- 原型切换条（非设计内容） -->
+<div class="protobar">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html">品质管理总览</a>
+  <a href="claims.html">索赔单台账</a>
+  <a href="claim-new.html" class="cur">新建 / 编辑</a>
+  <a href="claim-detail.html">详情 · 审批</a>
+  <a href="claim-print.html">打印视图</a>
+  <a href="../redesign/index.html">全站原型总览</a>
+</div>
+
+</body>
+</html>
