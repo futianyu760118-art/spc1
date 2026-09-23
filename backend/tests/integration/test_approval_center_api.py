@@ -1,7 +1,7 @@
 """审批中心 API 回归测试（统一待我审批聚合 / 审批链配置 / 角色选项）。"""
 
-from tests.conftest import login
-from tests.integration._helpers import FIN, PM, Q, VIEWER, act, create, pending_items, snap_roles
+from tests.conftest import DEFAULT_CHAIN, login
+from tests.integration._helpers import FIN, PM, Q, VIEWER, act, create, payload, pending_items, snap_roles
 
 ADMIN = "admin"
 
@@ -213,15 +213,28 @@ async def test_preview_progress_scoped_to_current_round(client):
     assert progress[0]["comment"] is None
 
 
-async def test_preview_hint_when_chain_missing(client):
-    """审批链未配置（快照为空）时提示指向配置缺失，而不是「其他审批人处理」。"""
-    h_admin, h_q, h_pm = await login(client, ADMIN), await login(client, Q), await login(client, PM)
+async def test_submit_rejected_when_chain_missing(client, db):
+    """审批链未配置时提交被拒，不产生无人可见的挂起单据。"""
+    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
     assert (await client.put("/api/v1/approvals/configs/supplier_claim",
-                             json={"nodes": []}, headers=h_admin)).json()["code"] == 0
-    a = await create(client, h_q, 500, submit=True)
-    assert a["approval_snapshot"] == []
-    r = await client.get(f"/api/v1/approvals/items/supplier_claim/{a['id']}", headers=h_pm)
-    assert "审批链未配置" in r.json()["data"]["action_hint"]
+                             json={"nodes": []}, headers=h_admin)).json()["code"] == 1
+    # nodes 为空本身会被校验拒绝，这里直接删配置行模拟「未配置」
+    from sqlalchemy import text
+    from app.core.database import engine
+    async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM approval_config WHERE biz_type = 'supplier_claim'"))
+    try:
+        r = await client.post("/api/v1/quality/supplier-claims", json=payload(500, True), headers=h_q)
+        assert r.json()["code"] == 1 and "审批链" in r.json()["message"]
+        # 失败时丢弃本次插入的草稿，避免留下用户看不到的孤儿单
+        count = (await db.execute(text(
+            "SELECT COUNT(*) FROM supplier_claim WHERE supplier_name = :sn"
+        ), {"sn": payload(500)["supplier_name"]})).scalar()
+        assert count == 0
+    finally:
+        # client fixture 只 UPDATE 不 INSERT，删除的行必须在此恢复，否则污染后续用例
+        assert (await client.put("/api/v1/approvals/configs/supplier_claim",
+                                 json={"nodes": DEFAULT_CHAIN}, headers=h_admin)).json()["code"] == 0
 
 
 async def test_unified_approve_and_reject(client):
@@ -309,3 +322,110 @@ async def test_action_endpoints_reject_malformed_input(client):
     r = await client.post("/api/v1/approvals/batch-approve",
                           json={"items": [{"biz_type": "supplier_claim", "id": "abc"}]}, headers=h_pm)
     assert r.status_code == 200 and r.json()["data"]["failed"][0]["reason"] == "单据 ID 不正确"
+
+
+async def test_config_validation_rejects_bad_nodes(client):
+    """审批链保存校验：空链 / 缺审批人 / 非法操作符 / 非法条件字段 / 超时越界。"""
+    h_admin = await login(client, ADMIN)
+    cases = [
+        ([], "至少需要 1 个节点"),
+        ([{"seq": 1, "label": "意见", "role": ""}], "未选择审批角色或指定人员"),
+        ([{"seq": 1, "label": "意见", "role": "quality",
+           "condition": {"field": "claim_amount", "op": "like", "value": 1}}], "操作符"),
+        ([{"seq": 1, "label": "意见", "role": "quality",
+           "condition": {"field": "unknown_field", "op": ">=", "value": 1}}], "不合法"),
+        ([{"seq": 1, "label": "意见", "role": "quality", "timeout_hours": 9999}], "0 ~ 720"),
+    ]
+    for nodes, keyword in cases:
+        r = await client.put("/api/v1/approvals/configs/supplier_claim", json={"nodes": nodes}, headers=h_admin)
+        assert r.json()["code"] == 1, nodes
+        assert keyword in r.json()["message"], (nodes, r.json()["message"])
+
+
+async def test_config_accepts_approvers_multi_conditions_and_timeout(client, db):
+    """指定人员 + 多条件 AND + 超时配置：保存后提交，快照按条件过滤并带上审批人与超时。"""
+    from sqlalchemy import text
+
+    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
+    qa2_id = (await db.execute(text("SELECT id FROM sys_user WHERE username = 'qa_quality2'"))).scalar()
+    nodes = [
+        {"seq": 1, "label": "指定人确认", "role": "",
+         "approvers": [{"user_id": qa2_id, "username": "qa_quality2"}], "timeout_hours": 12},
+        {"seq": 2, "label": "金额双条件", "role": "manager", "timeout_hours": 0,
+         "conditions": [{"field": "claim_amount", "op": ">=", "value": 1000},
+                        {"field": "claim_amount", "op": "<=", "value": 999999}]},
+    ]
+    r = await client.put("/api/v1/approvals/configs/supplier_claim", json={"nodes": nodes}, headers=h_admin)
+    assert r.json()["code"] == 0, r.json()
+    a = await create(client, h_q, 500, submit=True)   # 500 不满足节点 2 的金额条件
+    snap = a["approval_snapshot"]
+    assert [n["label"] for n in snap] == ["指定人确认"]
+    assert snap[0]["approvers"][0]["user_id"] == qa2_id
+    assert snap[0]["approvers"][0]["username"] == "qa_quality2"
+    assert snap[0]["timeout_hours"] == 12
+
+
+async def test_config_disable_blocks_new_submission(client):
+    """停用审批链：提交被拒（避免产生无人可见的挂单），在途单据不受影响。"""
+    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
+    r = await client.put("/api/v1/approvals/configs/supplier_claim",
+                         json={"nodes": [{"seq": 1, "label": "意见", "role": "quality"}], "is_active": False},
+                         headers=h_admin)
+    assert r.json()["code"] == 0 and r.json()["data"]["is_active"] is False
+    r = await client.get("/api/v1/approvals/configs/supplier_claim", headers=h_admin)
+    assert r.json()["data"]["is_active"] is False
+    r = await client.post("/api/v1/quality/supplier-claims", json=payload(500, True), headers=h_q)
+    assert r.json()["code"] == 1 and "审批链" in r.json()["message"]
+    # 重新启用后恢复可提交
+    r = await client.put("/api/v1/approvals/configs/supplier_claim",
+                         json={"nodes": [{"seq": 1, "label": "意见", "role": "quality"}], "is_active": True},
+                         headers=h_admin)
+    assert r.json()["code"] == 0
+    a = await create(client, h_q, 500, submit=True)
+    assert a["approval_status"] == "pending"
+
+
+async def test_configs_list_reports_pending_count_and_field_options(client):
+    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
+    await create(client, h_q, 500, submit=True)
+    r = await client.get("/api/v1/approvals/configs", headers=h_admin)
+    sc = next(x for x in r.json()["data"]["items"] if x["biz_type"] == "supplier_claim")
+    assert sc["pending_count"] == 1
+    assert sc["condition_field_options"] == [{"value": "claim_amount", "label": "索赔金额"}]
+
+
+async def test_users_endpoint_lists_approver_candidates(client):
+    h_admin, h_pm = await login(client, ADMIN), await login(client, PM)
+    r = await client.get("/api/v1/approvals/users", headers=h_admin)
+    usernames = {x["username"] for x in r.json()["data"]["items"]}
+    assert {"qa_pm", "qa_fin", "admin"} <= usernames
+    assert all(x["display_name"] for x in r.json()["data"]["items"])
+    r = await client.get("/api/v1/approvals/users", params={"keyword": "qa_pm"}, headers=h_admin)
+    assert [x["username"] for x in r.json()["data"]["items"]] == ["qa_pm"]
+    # 审批域自有权限：无 approval.config 的角色 403
+    assert (await client.get("/api/v1/approvals/users", headers=h_pm)).status_code == 403
+
+
+async def test_timeout_reminder_skips_disabled_business(client, db):
+    """停用审批链后不再推送超时提醒（在途单据仍保留待办可见与可审批）。"""
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import text as sql_text
+
+    from app.core.database import engine
+    from app.services.scheduler.approval_timeout_reminder import ApprovalTimeoutReminderScheduler
+
+    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
+    nodes = [{"seq": 1, "label": "意见", "role": "purchase_manager", "timeout_hours": 1}]
+    assert (await client.put("/api/v1/approvals/configs/supplier_claim",
+                             json={"nodes": nodes}, headers=h_admin)).json()["code"] == 0
+    a = await create(client, h_q, 500, submit=True)
+    async with engine.begin() as conn:
+        await conn.execute(sql_text("UPDATE supplier_claim SET submitted_at = :ts WHERE id = :eid"),
+                           {"ts": datetime.now() - timedelta(hours=3), "eid": a["id"]})
+
+    scheduler = ApprovalTimeoutReminderScheduler()
+    assert await scheduler._collect_targets(db) != []  # 启用时命中超时待办
+    assert (await client.put("/api/v1/approvals/configs/supplier_claim",
+                             json={"nodes": nodes, "is_active": False}, headers=h_admin)).json()["code"] == 0
+    assert await scheduler._collect_targets(db) == []  # 停用后不再提醒

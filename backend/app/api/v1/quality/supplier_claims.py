@@ -93,6 +93,8 @@ async def create_claim(
     try:
         record = await service.create_claim(data, applicant=user["username"], submit=bool(data.get("submit")))
     except ValueError as e:
+        # 提交失败（如审批链未配置/已停用）时丢弃本次插入的草稿，避免留下用户看不到的孤儿单
+        await db.rollback()
         return ResponseModel(code=1, message=str(e))
     await db.commit()
     return ResponseModel(data=record, message="已提交审批" if data.get("submit") else "保存成功")

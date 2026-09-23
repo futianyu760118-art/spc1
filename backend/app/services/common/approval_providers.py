@@ -4,6 +4,7 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.common.approval_engine import resolve_node_approver_user_ids
 from app.services.common.approval_registry import (
     ApprovalActionRequest,
     ApprovalPendingProvider,
@@ -16,6 +17,7 @@ CLAIM_REASON_LABELS = {
     "supply_performance": "供应业绩",
 }
 ACTION_LABELS = {"submit": "提交单据", "approve": "通过", "reject": "驳回", "recall": "撤回单据", "auto_skip": "自动跳过", "revoked": "撤回审批"}
+CLAIM_CONDITION_FIELDS = [{"value": "claim_amount", "label": "索赔金额"}]
 
 
 def _fmt(value) -> str:
@@ -24,9 +26,13 @@ def _fmt(value) -> str:
     return str(value)[:16].replace("T", " ")
 
 
-def _normalize_claim(d: dict) -> dict:
+def _current_node(d: dict) -> Optional[dict]:
     snap = d.get("approval_snapshot") or []
-    node = next((n for n in snap if n.get("seq") == d.get("approval_level")), None)
+    return next((n for n in snap if n.get("seq") == d.get("approval_level")), None)
+
+
+def _normalize_claim(d: dict) -> dict:
+    node = _current_node(d)
     amount = d.get("claim_amount")
     return {
         "biz_type": "supplier_claim",
@@ -71,7 +77,20 @@ def _claim_fields(d: dict) -> list[dict]:
 
 async def _fetch_supplier_claim_pending(db, username: str, role: str) -> list[dict]:
     items = await SupplierClaimService(db).pending_approvals(approver_username=username, approver_role=role)
-    return [_normalize_claim(d) for d in items]
+    role_cache: dict[str, list[int]] = {}
+    result = []
+    for d in items:
+        item = _normalize_claim(d)
+        node = _current_node(d) or {}
+        if node.get("approvers"):
+            item["approver_user_ids"] = await resolve_node_approver_user_ids(db, node)
+        else:
+            role_code = node.get("role") or ""
+            if role_code and role_code not in role_cache:
+                role_cache[role_code] = await resolve_node_approver_user_ids(db, node)
+            item["approver_user_ids"] = role_cache.get(role_code, [])
+        result.append(item)
+    return result
 
 
 async def _fetch_supplier_claim_approved(db, username: str) -> list[dict]:
@@ -180,4 +199,5 @@ register_pending_provider(ApprovalPendingProvider(
     preview=_preview_supplier_claim,
     approve=_approve_supplier_claim,
     reject=_reject_supplier_claim,
+    condition_field_options=CLAIM_CONDITION_FIELDS,
 ))

@@ -13,6 +13,7 @@ from app.services.exception.risk_scheduler import risk_scheduler  # noqa: F401
 from app.services.scheduler.overdue_checker import overdue_checker  # noqa: F401
 from app.services.scheduler.capacity_sync_scheduler import capacity_sync_scheduler  # noqa: F401
 from app.services.scheduler.data_supply_alert import data_supply_alert_scheduler  # noqa: F401
+from app.services.scheduler.approval_timeout_reminder import approval_timeout_reminder  # noqa: F401
 
 
 class SafeJSONEncoder(json.JSONEncoder):
@@ -143,6 +144,8 @@ async def lifespan(app: FastAPI):
     # 启动时：开启逾期未到料检查
     overdue_checker.start()
     data_supply_alert_scheduler.start()
+    # 启动时：开启审批超时提醒
+    approval_timeout_reminder.start()
     # 启动时：开启 OA 工序产能定时同步（白天每小时增量 + 凌晨3点全量兜底）
     capacity_sync_scheduler.start()
     # 启动时：开启写回 Worker
@@ -169,6 +172,7 @@ async def lifespan(app: FastAPI):
     capacity_sync_scheduler.stop()
     overdue_checker.stop()
     data_supply_alert_scheduler.stop()
+    approval_timeout_reminder.stop()
     risk_scheduler.stop()
     scheduler.stop()
 

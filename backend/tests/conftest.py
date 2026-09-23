@@ -161,9 +161,9 @@ async def client(_test_db):
             "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset "
             "RESTART IDENTITY CASCADE"
         ))
-        # 审批配置恢复默认链（配置类用例会改链，不能污染后续用例）
+        # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
         await conn.execute(text("""
-            UPDATE approval_config SET nodes = CAST(:nodes AS jsonb)
+            UPDATE approval_config SET nodes = CAST(:nodes AS jsonb), is_active = TRUE
             WHERE biz_type = 'supplier_claim'
         """), {"nodes": json.dumps(DEFAULT_CHAIN)})
 

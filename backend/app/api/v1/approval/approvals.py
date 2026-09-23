@@ -18,6 +18,7 @@ from app.core.dependencies import get_current_user
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
 from app.services.common import approval_providers  # noqa: F401 — 导入即触发各业务流程注册
+from app.services.common.approval_chain import validate_nodes
 from app.services.common.approval_metrics import (
     approved_stats,
     enrich_pending_item,
@@ -29,7 +30,6 @@ from app.services.common.approval_registry import (
     ApprovalActionRequest,
     get_pending_providers,
     get_provider,
-    is_registered,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,15 @@ def _clean_comment(value) -> str:
 def _is_today(value) -> bool:
     dt = parse_dt(value)
     return bool(dt and dt.date() == date.today())
+
+
+def _clean_bool(value, *, default: bool) -> bool:
+    """请求体布尔值容错：字符串 "false" / "0" 不能被 bool() 当成 True。"""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no", "off")
+    return bool(value)
 
 
 def _clean_version(value) -> Optional[int]:
@@ -236,10 +245,18 @@ async def list_approval_configs(
 
     items = []
     for provider in get_pending_providers():
-        items.append(existing.pop(provider.biz_type, {
+        row = existing.pop(provider.biz_type, {
             "biz_type": provider.biz_type, "biz_name": provider.biz_name,
             "nodes": [], "is_active": True, "updated_by": None, "updated_at": None,
-        }))
+        })
+        row["condition_field_options"] = provider.condition_field_options or []
+        try:
+            # 系统视角（admin 旁路）统计该业务在途待办数，供「在途 N 单沿用旧快照」提示
+            row["pending_count"] = len(await provider.fetch(db, "", "admin"))
+        except Exception:
+            logger.warning("统计在途待办失败 biz=%s", provider.biz_type)
+            row["pending_count"] = None
+        items.append(row)
     return ResponseModel(data={"items": items})
 
 
@@ -249,19 +266,22 @@ async def get_approval_config(
     _: dict = Depends(PermissionChecker("approval.config", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    if not is_registered(biz_type):
+    provider = get_provider(biz_type)
+    if not provider:
         return ResponseModel(code=1, message="该业务流程未接入审批中心")
     row = await db.execute(text(
         "SELECT biz_type, biz_name, nodes, is_active, updated_by, updated_at FROM approval_config WHERE biz_type = :bt LIMIT 1"
     ), {"bt": biz_type})
     r = row.fetchone()
     if not r:
-        return ResponseModel(data={"biz_type": biz_type, "nodes": []})
+        return ResponseModel(data={"biz_type": biz_type, "nodes": [], "is_active": True,
+                                   "condition_field_options": provider.condition_field_options or []})
     d = dict(r._mapping)
     if isinstance(d.get("nodes"), str):
         d["nodes"] = json.loads(d.get("nodes") or "[]")
     if isinstance(d.get("updated_at"), datetime):
         d["updated_at"] = d["updated_at"].isoformat()
+    d["condition_field_options"] = provider.condition_field_options or []
     return ResponseModel(data=d)
 
 
@@ -273,25 +293,54 @@ async def save_approval_config(
     _: dict = Depends(PermissionChecker("approval.config", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    if not is_registered(biz_type):
+    provider = get_provider(biz_type)
+    if not provider:
         return ResponseModel(code=1, message="该业务流程未接入审批中心")
     nodes = data.get("nodes", [])
-    provider = next((p for p in get_pending_providers() if p.biz_type == biz_type), None)
-    biz_name = data.get("biz_name") or (provider.biz_name if provider else biz_type)
+    allowed = [o.get("value") for o in (provider.condition_field_options or []) if o.get("value")]
+    err = validate_nodes(nodes, allowed_condition_fields=allowed)
+    if err:
+        return ResponseModel(code=1, message=err)
+    biz_name = data.get("biz_name") or provider.biz_name
+    is_active = _clean_bool(data.get("is_active"), default=True)
     row = await db.execute(text("SELECT id FROM approval_config WHERE biz_type = :bt LIMIT 1"), {"bt": biz_type})
     if row.fetchone():
         await db.execute(text("""
-            UPDATE approval_config SET biz_name = :bn, nodes = :nodes, is_active = TRUE,
+            UPDATE approval_config SET biz_name = :bn, nodes = :nodes, is_active = :ia,
                                        updated_by = :ub, updated_at = NOW()
             WHERE biz_type = :bt
-        """), {"bn": biz_name, "nodes": json.dumps(nodes), "ub": current_user["username"], "bt": biz_type})
+        """), {"bn": biz_name, "nodes": json.dumps(nodes), "ia": is_active,
+               "ub": current_user["username"], "bt": biz_type})
     else:
         await db.execute(text("""
             INSERT INTO approval_config (biz_type, biz_name, nodes, is_active, updated_by)
-            VALUES (:bt, :bn, :nodes, TRUE, :ub)
-        """), {"bt": biz_type, "bn": biz_name, "nodes": json.dumps(nodes), "ub": current_user["username"]})
-    await db.commit()
-    return ResponseModel(data={"biz_type": biz_type, "nodes": nodes}, message="保存成功")
+            VALUES (:bt, :bn, :nodes, :ia, :ub)
+        """), {"bt": biz_type, "bn": biz_name, "nodes": json.dumps(nodes),
+               "ia": is_active, "ub": current_user["username"]})
+    return ResponseModel(data={"biz_type": biz_type, "nodes": nodes, "is_active": is_active}, message="保存成功")
+
+
+@router.get("/users", response_model=ResponseModel)
+async def list_user_options(
+    keyword: Optional[str] = Query(None),
+    _: dict = Depends(PermissionChecker("approval.config", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """审批链编辑器「指定人员」下拉数据源（审批域自有权限，不依赖用户管理读权限）。"""
+    conditions = ["u.is_active = TRUE"]
+    params: dict = {"lim": 50}
+    if keyword:
+        conditions.append("(u.username ILIKE :kw OR COALESCE(u.display_name, u.username) ILIKE :kw)")
+        params["kw"] = f"%{keyword}%"
+    rows = await db.execute(text(f"""
+        SELECT u.id, u.username, COALESCE(u.display_name, u.username) AS display_name, r.role_name
+        FROM sys_user u
+        LEFT JOIN sys_role r ON r.id = u.role_id
+        WHERE {' AND '.join(conditions)}
+        ORDER BY u.id
+        LIMIT :lim
+    """), params)
+    return ResponseModel(data={"items": [dict(r._mapping) for r in rows]})
 
 
 @router.get("/roles", response_model=ResponseModel)

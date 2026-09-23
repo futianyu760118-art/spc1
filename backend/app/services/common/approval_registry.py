@@ -6,7 +6,7 @@ provider（biz_type + 名称 + 归一化取数函数），审批中心 API 自�
 不影响待办聚合。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +43,7 @@ class ApprovalPendingProvider:
     preview: Optional[PreviewFetcher] = None
     approve: Optional[ActionHandler] = None
     reject: Optional[ActionHandler] = None
+    condition_field_options: list[dict] = field(default_factory=list)
 
 
 _providers: dict[str, ApprovalPendingProvider] = {}
@@ -58,7 +59,3 @@ def get_pending_providers() -> list[ApprovalPendingProvider]:
 
 def get_provider(biz_type: str) -> Optional[ApprovalPendingProvider]:
     return _providers.get(biz_type)
-
-
-def is_registered(biz_type: str) -> bool:
-    return biz_type in _providers

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.common.approval_engine import ApprovalEngine
+from app.services.common.approval_notify import send_approval_wecom_textcard
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +33,6 @@ def _to_date(value) -> Optional[date]:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         raise ValueError(f"日期格式不正确：{value}（应为 YYYY-MM-DD）")
-
-
-def _get_settings():
-    from app.core.config import get_settings
-    return get_settings()
-
-
-def _get_wecom_client():
-    from app.services.basicdata.wecom.client import get_wecom_client
-    return get_wecom_client()
 
 
 class SupplierClaimService:
@@ -255,7 +246,7 @@ class SupplierClaimService:
             raise ValueError("仅草稿/驳回/撤回状态可提交")
         if not (rec.get("supplier_name") or "").strip():
             raise ValueError("供应商不能为空，无法提交")
-        fresh = await self.engine.submit(claim_id, applicant)
+        fresh = await self.engine.submit(claim_id, applicant)  # 链未配置/已停用会抛 ValueError，原样上抛
         if not fresh:
             raise ValueError("提交失败，请刷新后重试")
         # 绑定附件引用计数，避免孤儿清理误删已被单据引用的文件
@@ -337,19 +328,7 @@ class SupplierClaimService:
         node = next((n for n in snap if n.get("seq") == level), None)
         if not node:
             return
-        approvers = node.get("approvers")
-        if isinstance(approvers, list):
-            target_uids = [int(a["user_id"]) for a in approvers if a.get("user_id")]
-        else:
-            role = node.get("role")
-            if not role:
-                return
-            rows = await self.db.execute(text("""
-                SELECT u.id FROM sys_user u
-                JOIN sys_role r ON u.role_id = r.id
-                WHERE r.role_code = :rc AND u.is_active = TRUE
-            """), {"rc": role})
-            target_uids = [r[0] for r in rows if r[0]]
+        target_uids = await self.engine.get_node_approver_user_ids(node)
         if not target_uids:
             return
         label = node.get("label", f"L{level}")
@@ -380,37 +359,14 @@ class SupplierClaimService:
         """企微 textcard 推送，未配置/失败时降级，不影响审批流程。"""
         if not user_ids:
             return
-        try:
-            settings = _get_settings()
-            if not (settings.wecom_corp_id and settings.wecom_corp_secret and settings.wecom_agent_id):
-                return
-            rows = await self.db.execute(text(
-                "SELECT wecom_user_id FROM sys_user WHERE id = ANY(:uids) AND wecom_user_id IS NOT NULL AND wecom_user_id != ''"
-            ), {"uids": user_ids})
-            wecom_ids = [r[0] for r in rows if r[0]]
-            if not wecom_ids:
-                return
-            base = settings.frontend_base_url or "http://localhost:3000"
-            if base and not base.startswith(("http://", "https://")):
-                base = "http://" + base
-            agent_id = int(settings.wecom_agent_id)
-            payload = {
-                "touser": "|".join(wecom_ids),
-                "msgtype": "textcard",
-                "agentid": agent_id,
-                "textcard": {
-                    "title": f"索赔单待审批 - {label}",
-                    "description": (f"索赔单 {rec.get('claim_no', '')}\n供应商：{rec.get('supplier_name', '')}\n"
-                                    f"申请人：{rec.get('applicant', '')}\n审批节点：{label}\n点击查看详情并处理审批。"),
-                    "url": f"{base}/quality/supplier-claims/{rec['id']}",
-                    "btntxt": "查看详情",
-                },
-            }
-            resp = await _get_wecom_client().send_app_message(payload)
-            if resp.get("errcode", 0) != 0:
-                logger.warning(f"[supplier_claim][wecom] 推送失败 errcode={resp.get('errcode')}")
-        except Exception as e:
-            logger.warning(f"[supplier_claim][wecom] 推送异常（已降级）: {e}")
+        await send_approval_wecom_textcard(
+            self.db,
+            user_ids=[int(uid) for uid in user_ids],
+            title=f"索赔单待审批 - {label}",
+            description=(f"索赔单 {rec.get('claim_no', '')}\n供应商：{rec.get('supplier_name', '')}\n"
+                         f"申请人：{rec.get('applicant', '')}\n审批节点：{label}\n点击查看详情并处理审批。"),
+            path=f"/quality/supplier-claims/{rec['id']}",
+        )
 
     async def _notify_applicant_hook(self, rec: dict, title: str, content: str):
         applicant = rec.get("applicant")

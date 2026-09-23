@@ -43,6 +43,7 @@ TYPE_LABELS = {
     "stock_check_appeal": "复议待裁决",
     "material_alert": "物料提醒",
     "exception_alert": "异常提醒",
+    "approval_timeout": "审批超时",
 }
 
 

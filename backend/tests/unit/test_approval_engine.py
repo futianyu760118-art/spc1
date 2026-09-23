@@ -71,3 +71,61 @@ class TestCondMatch:
 
     def test_missing_field_value_fails_closed(self):
         assert _cond_match({"field": "v", "op": ">=", "value": 1}, {}) is False
+
+
+class TestConditionsMatch:
+    def test_multi_conditions_and(self):
+        from app.services.common.approval_engine import _conditions_match
+
+        node = {"conditions": [
+            {"field": "amount", "op": ">=", "value": 1000},
+            {"field": "dept", "op": "in", "value": ["采购部", "质量部"]},
+        ]}
+        assert _conditions_match(node, {"amount": 1500, "dept": "采购部"}) is True
+        assert _conditions_match(node, {"amount": 1500, "dept": "财务部"}) is False
+        assert _conditions_match(node, {"amount": 500, "dept": "采购部"}) is False
+
+    def test_legacy_single_condition(self):
+        from app.services.common.approval_engine import _conditions_match
+
+        assert _conditions_match({"condition": {"field": "amount", "op": ">=", "value": 1000}}, {"amount": 1000}) is True
+        assert _conditions_match({"condition": {"field": "amount", "op": ">=", "value": 1000}}, {"amount": 999}) is False
+
+    def test_no_condition_always_matches(self):
+        from app.services.common.approval_engine import _conditions_match
+
+        assert _conditions_match({}, {"amount": 1}) is True
+        assert _conditions_match({"conditions": None}, {"amount": 1}) is True
+
+    def test_in_accepts_comma_string(self):
+        from app.services.common.approval_engine import _conditions_match
+
+        node = {"condition": {"field": "dept", "op": "in", "value": "采购部, 质量部"}}
+        assert _conditions_match(node, {"dept": "质量部"}) is True
+        assert _conditions_match(node, {"dept": "财务部"}) is False
+
+
+class TestResolveNodeApproverUserIds:
+    async def test_approvers_take_priority(self):
+        from app.services.common.approval_engine import resolve_node_approver_user_ids
+
+        node = {"role": "purchase_manager", "approvers": [{"user_id": 7, "username": "u7"}, {"username": "u9"}]}
+        assert await resolve_node_approver_user_ids(None, node) == [7]
+
+    async def test_role_lookup_uses_db(self):
+        from app.services.common.approval_engine import resolve_node_approver_user_ids
+
+        class FakeResult:
+            def __iter__(self):
+                return iter([(3,), (5,), (None,)])
+
+        class FakeDb:
+            async def execute(self, *_a, **_kw):
+                return FakeResult()
+
+        assert await resolve_node_approver_user_ids(FakeDb(), {"role": "finance"}) == [3, 5]
+
+    async def test_no_role_returns_empty(self):
+        from app.services.common.approval_engine import resolve_node_approver_user_ids
+
+        assert await resolve_node_approver_user_ids(None, {}) == []

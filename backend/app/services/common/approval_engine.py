@@ -47,6 +47,8 @@ def _cond_match(cond: Optional[dict], fields: dict) -> bool:
     op = cond.get("op", "in")
     target = cond.get("value")
     if op == "in":
+        if isinstance(target, str):
+            target = [v.strip() for v in target.split(",") if v.strip()]
         return val in (target or [])
     try:
         val_n = float(val)
@@ -57,6 +59,43 @@ def _cond_match(cond: Optional[dict], fields: dict) -> bool:
         ">=": val_n >= t, "<=": val_n <= t, ">": val_n > t,
         "<": val_n < t, "==": val_n == t, "!=": val_n != t,
     }[op]
+
+
+def _conditions_match(node: Optional[dict], fields: dict) -> bool:
+    """节点触发条件：优先 conditions 数组（AND），兼容历史单条件 condition。"""
+    if not node:
+        return True
+    conds = node.get("conditions")
+    if conds:
+        return all(_cond_match(c, fields) for c in conds)
+    return _cond_match(node.get("condition"), fields)
+
+
+async def resolve_node_approver_user_ids(db: AsyncSession, node: Optional[dict]) -> list[int]:
+    """节点审批人的用户 ID 列表：approvers 优先（取 user_id），否则按角色查启用用户。
+
+    非数字 user_id 视为脏数据跳过，避免一条历史配置让待办列表整体 500。
+    """
+    if not node:
+        return []
+    approvers = node.get("approvers")
+    if approvers is not None:
+        result = []
+        for a in approvers:
+            try:
+                result.append(int(a["user_id"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return result
+    role = node.get("role")
+    if not role or db is None:
+        return []
+    rows = await db.execute(text("""
+        SELECT u.id FROM sys_user u
+        JOIN sys_role r ON u.role_id = r.id
+        WHERE r.role_code = :rc AND u.is_active = TRUE
+    """), {"rc": role})
+    return [r[0] for r in rows if r[0]]
 
 
 class ApprovalEngine:
@@ -99,38 +138,38 @@ class ApprovalEngine:
             {"eid": entity_id, "lv": level, "ap": approver, "ac": action, "cm": comment},
         )
 
-    async def init_snapshot(self, entity_id: int, fields: dict):
-        """读 approval_config 冻结审批链快照，按单据字段过滤条件节点。"""
+    async def _build_snapshot(self, fields: dict) -> list[dict]:
+        """读 approval_config 解析审批链快照（按条件过滤 + 重排 seq），不写库。"""
         r2 = await self.db.execute(
             text("SELECT nodes FROM approval_config WHERE biz_type = :bt AND is_active = TRUE"),
             {"bt": self.biz_type},
         )
         row = r2.fetchone()
         if not row:
-            await self.db.execute(
-                text(f"UPDATE {self.table} SET approval_snapshot = :snap WHERE id = :eid"),
-                {"snap": json.dumps([]), "eid": entity_id},
-            )
-            return
+            return []
         all_nodes = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or [])
         snapshot = []
         for node in all_nodes:
-            if not _cond_match(node.get("condition"), fields):
+            if not _conditions_match(node, fields):
                 continue
             snap_node = {"seq": node.get("seq"), "label": node.get("label"), "role": node.get("role")}
             if node.get("approvers"):
                 snap_node["approvers"] = node["approvers"]
             # 0 = 不提醒，必须与「未配置」区分，故显式判 None
             if node.get("timeout_hours") is not None:
-                snap_node["timeout_hours"] = int(node["timeout_hours"])
+                try:
+                    snap_node["timeout_hours"] = int(node["timeout_hours"])
+                except (TypeError, ValueError):
+                    # 历史脏数据：忽略该配置，按「未配置」处理（列表侧回退默认阈值）
+                    logger.warning("审批链节点 timeout_hours 非法 biz=%s value=%r", self.biz_type, node.get("timeout_hours"))
             snapshot.append(snap_node)
         # 条件过滤会移除中间节点导致 seq 断档，引擎按 seq+1 找下一节点，必须重排为连续 1..n
         for i, node in enumerate(snapshot, 1):
             node["seq"] = i
-        await self.db.execute(
-            text(f"UPDATE {self.table} SET approval_snapshot = :snap WHERE id = :eid"),
-            {"snap": json.dumps(snapshot), "eid": entity_id},
-        )
+        return snapshot
+
+    async def get_node_approver_user_ids(self, node: dict) -> list[int]:
+        return await resolve_node_approver_user_ids(self.db, node)
 
     # ---------- 节点审批人解析 ----------
 
@@ -193,13 +232,20 @@ class ApprovalEngine:
         if not rec or rec.get("approval_status") not in ("draft", "rejected", "recalled"):
             return None
         fields = {f: rec.get(f) for f in self.condition_fields}
+        # 链为空（未配置 / 已停用 / 条件全不满足）时拒绝提交，避免产生无人可见的挂单
+        snapshot = await self._build_snapshot(fields)
+        if not snapshot:
+            raise ValueError("审批链未配置或已停用，无法提交")
         await self.db.execute(text(f"""
             UPDATE {self.table}
             SET approval_status = 'pending', approval_level = 1, submitted_at = :now, version = version + 1
             WHERE id = :eid AND approval_status IN ('draft', 'rejected', 'recalled')
         """), {"eid": entity_id, "now": datetime.now()})
         await self.add_log(entity_id, None, "submit", applicant, "提交审批")
-        await self.init_snapshot(entity_id, fields)
+        await self.db.execute(
+            text(f"UPDATE {self.table} SET approval_snapshot = :snap WHERE id = :eid"),
+            {"snap": json.dumps(snapshot), "eid": entity_id},
+        )
         fresh = await self.load(entity_id)
         await self._notify_level(fresh, 1, "待您审批")
         return fresh
