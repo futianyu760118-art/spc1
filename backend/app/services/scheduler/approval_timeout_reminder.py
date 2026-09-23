@@ -66,12 +66,17 @@ class ApprovalTimeoutReminderScheduler:
         for provider in get_pending_providers():
             if provider.biz_type not in active:
                 continue
+            # SAVEPOINT 隔离：失败语句会让 session 事务进入 aborted 态，
+            # 不回滚会让后面所有业务被静默跳过
+            savepoint = await db.begin_nested()
             try:
                 # 系统视角扫描：admin 旁路节点权限过滤，取该业务全量在途
                 items = await provider.fetch(db, "", "admin")
             except Exception as exc:
+                await savepoint.rollback()
                 logger.warning("[审批超时提醒] 取数失败 biz=%s: %s", provider.biz_type, exc)
                 continue
+            await savepoint.commit()
             targets.extend(select_reminder_targets([enrich_pending_item(it) for it in items]))
         return targets
 

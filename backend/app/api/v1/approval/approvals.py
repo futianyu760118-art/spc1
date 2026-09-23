@@ -6,11 +6,14 @@
 
 import json
 import logging
+import re
+import time
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -31,6 +34,17 @@ from app.services.common.approval_registry import (
     get_pending_providers,
     get_provider,
 )
+from app.services.common.approval_sql import (
+    preview_readonly_sql,
+    validate_field_mapping,
+    validate_readonly_sql,
+    validate_sql_and_mapping,
+)
+from app.services.common.approval_sql_provider import (
+    list_biz_metas,
+    resolve_biz_meta,
+    sync_sql_providers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +53,9 @@ router = APIRouter()
 # 我已审批 / 我发起的默认时间窗（未显式传日期时限定，避免全历史扫描）
 DEFAULT_MY_WINDOW_DAYS = 90
 MAX_BATCH_SIZE = 50
+
+# SQL 业务标识：小写字母开头，避免与前端路由 / 数据库对象命名习惯冲突
+BIZ_TYPE_RE = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 
 
 def _match_keyword(item: dict, keyword: str) -> bool:
@@ -94,6 +111,23 @@ def _clean_bool(value, *, default: bool) -> bool:
     return bool(value)
 
 
+async def _safe_provider_call(db: AsyncSession, coro, *, biz_type: str, action: str, default):
+    """单条业务取数失败不得拖垮整个聚合列表：SAVEPOINT 隔离 + 降级为 default。
+
+    必须回滚 savepoint：否则失败语句会让共享 session 的事务进入 aborted 态，
+    同一次请求里「之后」的业务查询会全部报 InFailedSQLTransactionError 而被静默跳过。
+    """
+    savepoint = await db.begin_nested()
+    try:
+        result = await coro
+    except Exception as exc:
+        await savepoint.rollback()
+        logger.warning("审批中心聚合取数失败 action=%s biz=%s: %s", action, biz_type, exc)
+        return default
+    await savepoint.commit()
+    return result
+
+
 def _clean_version(value) -> Optional[int]:
     """expected_version 来自请求体，非法值应判为参数错误而不是让引擎 int() 抛 500。"""
     if value is None or value == "":
@@ -126,7 +160,11 @@ async def list_pending_approvals(
     """
     items: list[dict] = []
     for provider in get_pending_providers():
-        for it in await provider.fetch(db, current_user["username"], current_user["role"]):
+        fetched = await _safe_provider_call(
+            db, provider.fetch(db, current_user["username"], current_user["role"]),
+            biz_type=provider.biz_type, action="fetch", default=[],
+        )
+        for it in fetched:
             items.append(enrich_pending_item(it))
     items.sort(key=lambda x: _sort_key(x.get("submitted_at")), reverse=True)
 
@@ -170,7 +208,10 @@ async def list_my_approved(
             continue
         if not provider.fetch_approved:
             continue
-        items.extend(await provider.fetch_approved(db, current_user["username"]))
+        items.extend(await _safe_provider_call(
+            db, provider.fetch_approved(db, current_user["username"]),
+            biz_type=provider.biz_type, action="fetch_approved", default=[],
+        ))
     items = [
         it for it in items
         if _match_keyword(it, keyword)
@@ -208,7 +249,10 @@ async def list_my_submitted(
             continue
         if not provider.fetch_submitted:
             continue
-        items.extend(await provider.fetch_submitted(db, current_user["username"]))
+        items.extend(await _safe_provider_call(
+            db, provider.fetch_submitted(db, current_user["username"]),
+            biz_type=provider.biz_type, action="fetch_submitted", default=[],
+        ))
     items = [
         it for it in items
         if _match_keyword(it, keyword)
@@ -230,7 +274,7 @@ async def list_approval_configs(
     _: dict = Depends(PermissionChecker("approval.config", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """审批链列表：已注册的业务流程 ∪（其）approval_config 配置行。"""
+    """审批链列表：已接入的业务流程（内置 provider + 表内 SQL 业务，含停用）∪ 其 approval_config 配置行。"""
     rows = await db.execute(text(
         "SELECT biz_type, biz_name, nodes, is_active, updated_by, updated_at FROM approval_config"
     ))
@@ -244,17 +288,22 @@ async def list_approval_configs(
         existing[d["biz_type"]] = d
 
     items = []
-    for provider in get_pending_providers():
-        row = existing.pop(provider.biz_type, {
-            "biz_type": provider.biz_type, "biz_name": provider.biz_name,
+    for meta in await list_biz_metas(db):
+        row = existing.pop(meta.biz_type, {
+            "biz_type": meta.biz_type, "biz_name": meta.biz_name,
             "nodes": [], "is_active": True, "updated_by": None, "updated_at": None,
         })
-        row["condition_field_options"] = provider.condition_field_options or []
-        try:
+        row["condition_field_options"] = meta.condition_field_options or []
+        provider = get_provider(meta.biz_type)
+        if provider and meta.is_active:
             # 系统视角（admin 旁路）统计该业务在途待办数，供「在途 N 单沿用旧快照」提示
-            row["pending_count"] = len(await provider.fetch(db, "", "admin"))
-        except Exception:
-            logger.warning("统计在途待办失败 biz=%s", provider.biz_type)
+            fetched = await _safe_provider_call(
+                db, provider.fetch(db, "", "admin"),
+                biz_type=meta.biz_type, action="pending_count", default=None,
+            )
+            row["pending_count"] = len(fetched) if fetched is not None else None
+        else:
+            # 停用的 SQL 业务没有在途聚合，不误报为 0
             row["pending_count"] = None
         items.append(row)
     return ResponseModel(data={"items": items})
@@ -266,8 +315,8 @@ async def get_approval_config(
     _: dict = Depends(PermissionChecker("approval.config", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    provider = get_provider(biz_type)
-    if not provider:
+    meta = await resolve_biz_meta(db, biz_type)
+    if not meta:
         return ResponseModel(code=1, message="该业务流程未接入审批中心")
     row = await db.execute(text(
         "SELECT biz_type, biz_name, nodes, is_active, updated_by, updated_at FROM approval_config WHERE biz_type = :bt LIMIT 1"
@@ -275,13 +324,13 @@ async def get_approval_config(
     r = row.fetchone()
     if not r:
         return ResponseModel(data={"biz_type": biz_type, "nodes": [], "is_active": True,
-                                   "condition_field_options": provider.condition_field_options or []})
+                                   "condition_field_options": meta.condition_field_options or []})
     d = dict(r._mapping)
     if isinstance(d.get("nodes"), str):
         d["nodes"] = json.loads(d.get("nodes") or "[]")
     if isinstance(d.get("updated_at"), datetime):
         d["updated_at"] = d["updated_at"].isoformat()
-    d["condition_field_options"] = provider.condition_field_options or []
+    d["condition_field_options"] = meta.condition_field_options or []
     return ResponseModel(data=d)
 
 
@@ -293,15 +342,15 @@ async def save_approval_config(
     _: dict = Depends(PermissionChecker("approval.config", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    provider = get_provider(biz_type)
-    if not provider:
+    meta = await resolve_biz_meta(db, biz_type)
+    if not meta:
         return ResponseModel(code=1, message="该业务流程未接入审批中心")
     nodes = data.get("nodes", [])
-    allowed = [o.get("value") for o in (provider.condition_field_options or []) if o.get("value")]
+    allowed = [o.get("value") for o in (meta.condition_field_options or []) if o.get("value")]
     err = validate_nodes(nodes, allowed_condition_fields=allowed)
     if err:
         return ResponseModel(code=1, message=err)
-    biz_name = data.get("biz_name") or provider.biz_name
+    biz_name = data.get("biz_name") or meta.biz_name
     is_active = _clean_bool(data.get("is_active"), default=True)
     row = await db.execute(text("SELECT id FROM approval_config WHERE biz_type = :bt LIMIT 1"), {"bt": biz_type})
     if row.fetchone():
@@ -318,6 +367,169 @@ async def save_approval_config(
         """), {"bt": biz_type, "bn": biz_name, "nodes": json.dumps(nodes),
                "ia": is_active, "ub": current_user["username"]})
     return ResponseModel(data={"biz_type": biz_type, "nodes": nodes, "is_active": is_active}, message="保存成功")
+
+
+@router.get("/businesses", response_model=ResponseModel)
+async def list_approval_businesses(
+    _: dict = Depends(PermissionChecker("approval.business", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """业务接入清单：内置 provider + 表内 SQL 业务（含停用），附在途数与链节点数。
+
+    管理员专用端点：SQL 业务额外返回 sql_text / field_mapping / condition_fields /
+    deep_link_template 供前端向导编辑回填；内置业务这四项为空。
+    """
+    metas = await list_biz_metas(db)
+    chain_rows = await db.execute(text("SELECT biz_type, nodes FROM approval_config"))
+    chains: dict[str, list] = {}
+    for r in chain_rows:
+        nodes = r[1]
+        if isinstance(nodes, str):
+            nodes = json.loads(nodes or "[]")
+        chains[r[0]] = nodes or []
+    items = []
+    for meta in metas:
+        pending_count = None
+        provider = get_provider(meta.biz_type)
+        if provider and meta.is_active:
+            fetched = await _safe_provider_call(
+                db, provider.fetch(db, "", "admin"),
+                biz_type=meta.biz_type, action="pending_count", default=None,
+            )
+            pending_count = len(fetched) if fetched is not None else None
+        is_sql = meta.mode == "sql"
+        items.append({
+            "biz_type": meta.biz_type, "biz_name": meta.biz_name, "mode": meta.mode,
+            "is_active": meta.is_active, "description": meta.description,
+            "pending_count": pending_count, "chain_node_count": len(chains.get(meta.biz_type, [])),
+            "has_sql": bool(meta.sql_text), "updated_by": meta.updated_by, "updated_at": meta.updated_at,
+            "sql_text": meta.sql_text if is_sql else None,
+            "field_mapping": (meta.field_mapping or {}) if is_sql else {},
+            "condition_fields": (meta.condition_field_options or []) if is_sql else [],
+            "deep_link_template": meta.deep_link_template if is_sql else None,
+        })
+    return ResponseModel(data={"items": items})
+
+
+async def _validate_sql_business_payload(
+    db: AsyncSession, data: dict, *, for_create: bool, run_sql_check: bool = True,
+) -> Optional[str]:
+    """校验业务接入请求体；返回错误信息，None 表示通过。
+
+    run_sql_check=True 时会实跑一次取数（LIMIT 5）验证：SQL 能执行、映射列存在、id 行值可取整数。
+    """
+    if for_create:
+        biz_type = (data.get("biz_type") or "").strip()
+        if not BIZ_TYPE_RE.match(biz_type):
+            return "业务标识需为小写字母开头、仅含小写字母/数字/下划线的 3~64 位字符串"
+        if get_provider(biz_type):
+            return "该业务标识已被内置业务占用"
+    if not (data.get("biz_name") or "").strip():
+        return "业务名称不能为空"
+    if run_sql_check:
+        err = await validate_sql_and_mapping(db, data.get("sql_text"), data.get("field_mapping"))
+    else:
+        err = validate_readonly_sql(data.get("sql_text")) or validate_field_mapping(data.get("field_mapping"))
+    if err:
+        return err
+    options = data.get("condition_fields") or []
+    if not isinstance(options, list) or any(not isinstance(o, dict) or not (o.get("value") or "").strip() for o in options):
+        return "条件字段声明格式不正确"
+    return None
+
+
+@router.post("/businesses", response_model=ResponseModel)
+async def create_approval_business(
+    data: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.business", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """注册 SQL 接入业务：保存后立即注册 provider（本进程即时生效，多实例需重启）。"""
+    # 先查表判断重名：SQL 业务的 provider 也在内存注册表里，交给下面校验会误报「已被内置业务占用」
+    biz_type = (data.get("biz_type") or "").strip()
+    exists = (await db.execute(text("SELECT id FROM approval_business WHERE biz_type = :bt"), {"bt": biz_type})).fetchone()
+    if exists:
+        return ResponseModel(code=1, message="该业务标识已注册")
+    err = await _validate_sql_business_payload(db, data, for_create=True)
+    if err:
+        return ResponseModel(code=1, message=err)
+    try:
+        await db.execute(text("""
+            INSERT INTO approval_business
+                (biz_type, biz_name, mode, sql_text, field_mapping_json, condition_fields_json,
+                 deep_link_template, description, is_active, created_by, updated_by)
+            VALUES (:bt, :bn, 'sql', :sql, :fm, :cf, :dl, :desc, TRUE, :ub, :ub)
+        """), {"bt": biz_type, "bn": data["biz_name"].strip(), "sql": data["sql_text"],
+               "fm": json.dumps(data.get("field_mapping") or {}, ensure_ascii=False),
+               "cf": json.dumps(data.get("condition_fields") or [], ensure_ascii=False),
+               "dl": (data.get("deep_link_template") or "").strip() or None,
+               "desc": (data.get("description") or "").strip() or None, "ub": current_user["username"]})
+    except IntegrityError:
+        # 并发注册同名业务：唯一约束兜底，返回业务错误而不是 500
+        await db.rollback()
+        return ResponseModel(code=1, message="该业务标识已注册")
+    await sync_sql_providers(db)
+    return ResponseModel(data={"biz_type": biz_type}, message="已接入，待办工作台将自动聚合该业务")
+
+
+@router.put("/businesses/{biz_type}", response_model=ResponseModel)
+async def update_approval_business(
+    biz_type: str,
+    data: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.business", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """更新 SQL 接入业务（含启停）；内置业务由代码接入，不可经此修改。"""
+    meta = await resolve_biz_meta(db, biz_type)
+    if not meta:
+        return ResponseModel(code=1, message="该业务未注册")
+    if meta.mode != "sql":
+        return ResponseModel(code=1, message="内置业务由代码接入，不支持在此修改")
+    # 只改启停/说明时不重跑取数：否则源表失效的坏业务将无法停用（管理员失去自救手段）
+    sql_changed = (data.get("sql_text") or "") != (meta.sql_text or "")
+    mapping_changed = (data.get("field_mapping") or {}) != (meta.field_mapping or {})
+    err = await _validate_sql_business_payload(
+        db, data, for_create=False, run_sql_check=sql_changed or mapping_changed,
+    )
+    if err:
+        return ResponseModel(code=1, message=err)
+    is_active = _clean_bool(data.get("is_active"), default=meta.is_active)
+    await db.execute(text("""
+        UPDATE approval_business SET biz_name = :bn, sql_text = :sql, field_mapping_json = :fm,
+               condition_fields_json = :cf, deep_link_template = :dl, description = :desc,
+               is_active = :ia, updated_by = :ub, updated_at = NOW()
+        WHERE biz_type = :bt
+    """), {"bn": data["biz_name"].strip(), "sql": data["sql_text"],
+           "fm": json.dumps(data.get("field_mapping") or {}, ensure_ascii=False),
+           "cf": json.dumps(data.get("condition_fields") or [], ensure_ascii=False),
+           "dl": (data.get("deep_link_template") or "").strip() or None,
+           "desc": (data.get("description") or "").strip() or None,
+           "ia": is_active, "ub": current_user["username"], "bt": biz_type})
+    await sync_sql_providers(db)
+    return ResponseModel(data={"biz_type": biz_type, "is_active": is_active}, message="保存成功")
+
+
+@router.post("/businesses/test-sql", response_model=ResponseModel)
+async def test_approval_business_sql(
+    data: dict = Body(...),
+    _: dict = Depends(PermissionChecker("approval.business", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """测试取数 SQL：只读校验 + 预览前 5 行（不落库）。"""
+    sql_text = data.get("sql_text")
+    err = validate_readonly_sql(sql_text)
+    if err:
+        return ResponseModel(code=1, message=err)
+    started = time.perf_counter()
+    try:
+        result = await preview_readonly_sql(db, sql_text)
+    except Exception as exc:
+        logger.warning("测试取数失败: %s", exc)
+        return ResponseModel(code=1, message=f"SQL 执行失败：{exc}")
+    return ResponseModel(data={**result, "elapsed_ms": int((time.perf_counter() - started) * 1000)},
+                         message="取数成功")
 
 
 @router.get("/users", response_model=ResponseModel)

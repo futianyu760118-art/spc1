@@ -99,12 +99,14 @@ async def _test_db():
     from app.models.exception.quality_issue import QualityIssue
     from app.models.order.sale_order import SaleOrder, SaleOrderLine
     from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprovalLog
+    from app.models.common.approval_business import ApprovalBusiness
     tables = [
         SysRole.__table__, SysUser.__table__, UserOrgScope.__table__,
         SupplierClaim.__table__, SupplierClaimApprovalLog.__table__,
         Notification.__table__, FileAsset.__table__,
         DataSupplyApiKey.__table__, DataSupplyCallLog.__table__,
         QualityIssue.__table__, SaleOrder.__table__, SaleOrderLine.__table__, Bom.__table__,
+        ApprovalBusiness.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)

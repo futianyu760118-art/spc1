@@ -48,6 +48,8 @@ from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprov
 from app.models.rules.risk_rule import RiskRule
 from app.models.rules.node_standard import NodeStandard
 from app.models.common.business_document import BusinessDocument, BusinessDocumentVersion
+# 审批中心 SQL 接入业务注册表，create_all 依赖显式导入
+from app.models.common.approval_business import ApprovalBusiness  # noqa: F401
 from app.models.basicdata.user import SysUser, SysRole
 from app.models.basicdata.audit_log import AuditLog
 from app.models.basicdata.sync_sql_config import SyncSqlConfig

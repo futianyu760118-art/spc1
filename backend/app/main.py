@@ -131,6 +131,15 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"[启动] 清理中断同步任务失败: {e}")
     except Exception as e:
         logger.warning(f"[权限注册] 同步权限定义失败: {e}")
+    # 启动时：把启用的 SQL 接入业务注册进审批 provider 注册表（多实例下其它实例需重启生效）
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.common.approval_sql_provider import sync_sql_providers
+        async with AsyncSessionLocal() as db:
+            result = await sync_sql_providers(db)
+            logger.info(f"[审批中心] SQL 接入业务同步完成: {result}")
+    except Exception as e:
+        logger.warning(f"[审批中心] SQL 接入业务同步失败: {e}")
     try:
         from app.services.basicdata.exposable_registry import build_path_index, list_exposable_endpoints
         build_path_index(app)

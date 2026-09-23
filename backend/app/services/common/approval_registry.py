@@ -59,3 +59,8 @@ def get_pending_providers() -> list[ApprovalPendingProvider]:
 
 def get_provider(biz_type: str) -> Optional[ApprovalPendingProvider]:
     return _providers.get(biz_type)
+
+
+def unregister_provider(biz_type: str) -> None:
+    """注销 provider（SQL 接入业务停用/删除时用；内置 provider 不会被调用方注销）。"""
+    _providers.pop(biz_type, None)

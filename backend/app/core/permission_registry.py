@@ -335,6 +335,9 @@ declare_permission("quality.supplier_claim.archive_delete", "索赔单归档删�
 declare_permission("approval", "审批中心", module="approval", sort_order=14)
 declare_permission("approval.pending", "待我审批", module="approval", parent_code="approval", route_path="/approvals/pending", sort_order=1)
 declare_permission("approval.config", "审批配置", module="approval", parent_code="approval", route_path="/approvals/configs", sort_order=2)
+# 业务接入管理不单独挂菜单路由，避免与「审批配置」菜单重复（在审批配置页内以 Tab 呈现）
+declare_permission("approval.business", "业务接入管理", module="approval", parent_code="approval",
+                   actions=["read", "update"], sort_order=3)
 
 # 部署运维（2026-09-04）— 生产环境部署 / 回退 / 切换任意版本为当前
 declare_permission(

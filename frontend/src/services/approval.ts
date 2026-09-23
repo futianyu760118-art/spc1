@@ -101,6 +101,43 @@ export type ApprovalConfigItem = {
   updated_at?: string | null
 }
 
+export type ApprovalFieldMapping = Partial<Record<
+  'id' | 'no' | 'title' | 'summary' | 'applicant' | 'submitted_at' | 'current_node' | 'amount', string
+>>
+
+export type ApprovalConditionField = { value: string; label: string }
+
+export type ApprovalBusinessItem = {
+  biz_type: string
+  biz_name: string
+  mode: 'builtin' | 'sql'
+  is_active: boolean
+  description?: string | null
+  pending_count?: number | null
+  chain_node_count?: number
+  has_sql?: boolean
+  updated_by?: string | null
+  updated_at?: string | null
+  // 列表端点（管理员专用）额外返回，供向导编辑回填；内置业务为空
+  sql_text?: string | null
+  field_mapping?: ApprovalFieldMapping
+  condition_fields?: ApprovalConditionField[]
+  deep_link_template?: string | null
+}
+
+export type ApprovalBusinessPayload = {
+  biz_type?: string
+  biz_name: string
+  sql_text: string
+  field_mapping: ApprovalFieldMapping
+  condition_fields: ApprovalConditionField[]
+  deep_link_template?: string
+  description?: string
+  is_active?: boolean
+}
+
+export type TestSqlResult = { columns: string[]; rows: Record<string, any>[]; elapsed_ms: number }
+
 export const approvalApi = {
   pending: (params?: Record<string, any>) => api.get('/approvals/pending', { params }),
   approved: (params?: Record<string, any>) => api.get('/approvals/approved', { params }),
@@ -117,4 +154,9 @@ export const approvalApi = {
   saveConfig: (bizType: string, data: Record<string, any>) => api.put(`/approvals/configs/${bizType}`, data),
   roles: () => api.get('/approvals/roles'),
   users: (keyword?: string) => api.get('/approvals/users', { params: keyword ? { keyword } : {} }),
+  businesses: () => api.get('/approvals/businesses'),
+  createBusiness: (data: ApprovalBusinessPayload) => api.post('/approvals/businesses', data),
+  updateBusiness: (bizType: string, data: ApprovalBusinessPayload) =>
+    api.put(`/approvals/businesses/${bizType}`, data),
+  testSql: (sqlText: string) => api.post('/approvals/businesses/test-sql', { sql_text: sqlText }),
 }

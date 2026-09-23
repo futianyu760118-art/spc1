@@ -25,6 +25,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "quality.supplier_claim.archive_delete": ["delete"],
         "approval.pending": ["read"],
         "approval.config": ["read", "update"],
+        "approval.business": ["read", "update"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],

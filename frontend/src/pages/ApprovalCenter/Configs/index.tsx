@@ -1,15 +1,70 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Drawer, Modal, Space, Switch, Table, Tag, message } from 'antd'
+import { Alert, Button, Card, Drawer, Modal, Space, Switch, Table, Tabs, Tag, message } from 'antd'
 import dayjs from 'dayjs'
 import { approvalApi, type ApprovalConfigItem, type ApprovalNodeConfig, type ApprovalUserOption } from '../../../services/approval'
 import ApprovalChainEditor from '../../../components/ApprovalChainEditor'
+import { useAuthStore } from '../../../store/auth'
+import BusinessTab from './BusinessTab'
 
 type RoleItem = { role_code: string; role_name: string }
 
 export default function ApprovalConfigs() {
-  const [configs, setConfigs] = useState<ApprovalConfigItem[]>([])
   const [roles, setRoles] = useState<RoleItem[]>([])
   const [users, setUsers] = useState<ApprovalUserOption[]>([])
+  const [activeTab, setActiveTab] = useState('chains')
+  const [chainFocus, setChainFocus] = useState<string | null>(null)
+  const hasPermission = useAuthStore(s => s.hasPermission)
+
+  const loadOptions = useCallback(async () => {
+    try {
+      const [roleRes, userRes]: any[] = await Promise.all([approvalApi.roles(), approvalApi.users()])
+      setRoles(roleRes.data?.items || [])
+      setUsers(userRes.data?.items || [])
+    } catch { /* 全局拦截器已提示 */ }
+  }, [])
+
+  useEffect(() => { loadOptions() }, [loadOptions])
+
+  const roleOptions = useMemo(
+    () => roles.map(r => ({ value: r.role_code, label: `${r.role_name}（${r.role_code}）` })),
+    [roles],
+  )
+
+  const tabs = [
+    {
+      key: 'chains',
+      label: '审批链',
+      children: (
+        <ChainTab roleOptions={roleOptions} users={users} focusBizType={chainFocus}
+          onFocusHandled={() => setChainFocus(null)} />
+      ),
+    },
+  ]
+  if (hasPermission('approval.business', 'read')) {
+    tabs.push({
+      key: 'business',
+      label: '业务接入',
+      children: (
+        <BusinessTab roleOptions={roleOptions} userOptions={users}
+          onConfigureChain={bizType => { setChainFocus(bizType); setActiveTab('chains') }} />
+      ),
+    })
+  }
+
+  return (
+    <Card title="审批配置">
+      <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabs} />
+    </Card>
+  )
+}
+
+function ChainTab({ roleOptions, users, focusBizType, onFocusHandled }: {
+  roleOptions: { value: string; label: string }[]
+  users: ApprovalUserOption[]
+  focusBizType: string | null
+  onFocusHandled: () => void
+}) {
+  const [configs, setConfigs] = useState<ApprovalConfigItem[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<ApprovalConfigItem | null>(null)
@@ -24,26 +79,22 @@ export default function ApprovalConfigs() {
     } catch { /* 全局拦截器已提示 */ } finally { setLoading(false) }
   }, [])
 
-  const loadOptions = useCallback(async () => {
-    try {
-      const [roleRes, userRes]: any[] = await Promise.all([approvalApi.roles(), approvalApi.users()])
-      setRoles(roleRes.data?.items || [])
-      setUsers(userRes.data?.items || [])
-    } catch { /* 全局拦截器已提示 */ }
-  }, [])
+  useEffect(() => { load() }, [load])
 
-  useEffect(() => { load(); loadOptions() }, [load, loadOptions])
-
-  const roleOptions = useMemo(
-    () => roles.map(r => ({ value: r.role_code, label: `${r.role_name}（${r.role_code}）` })),
-    [roles],
-  )
-
-  const openEdit = (cfg: ApprovalConfigItem) => {
+  const openEdit = useCallback((cfg: ApprovalConfigItem) => {
     setEditing(cfg)
     setEditNodes((cfg.nodes || []).map((n, i) => ({ ...n, seq: n.seq || i + 1 })))
     setEditActive(cfg.is_active !== false)
-  }
+  }, [])
+
+  // 业务接入 Tab 的「配置链」跳转：等列表加载完成后定位并打开对应抽屉
+  useEffect(() => {
+    if (!focusBizType || loading) return
+    const hit = configs.find(c => c.biz_type === focusBizType)
+    if (hit) openEdit(hit)
+    else message.warning('未找到该业务的审批链配置')
+    onFocusHandled()
+  }, [focusBizType, loading, configs, openEdit, onFocusHandled])
 
   const save = async () => {
     if (!editing) return
@@ -78,7 +129,10 @@ export default function ApprovalConfigs() {
   }
 
   return (
-    <Card title="审批配置" extra={<Button onClick={load}>刷新</Button>}>
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <Button onClick={load}>刷新</Button>
+      </div>
       <Table<ApprovalConfigItem> rowKey="biz_type" loading={loading} dataSource={configs} pagination={false}
         columns={[
           { title: '业务名称', dataIndex: 'biz_name', render: (v: string, r: ApprovalConfigItem) => v || r.biz_type },
@@ -128,6 +182,6 @@ export default function ApprovalConfigs() {
           </>
         ) : null}
       </Drawer>
-    </Card>
+    </div>
   )
 }
