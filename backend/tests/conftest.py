@@ -91,14 +91,20 @@ async def _test_db():
     # 2) 只建本套件所需的最小表集合——全量 create_all 会被遗留模型的
     #    order_material_po_binding 非法外键（po_no 无唯一约束）卡死，且与本功能无关
     from app.models.basicdata.announcement import Notification
+    from app.models.basicdata.bom import Bom
+    from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog
     from app.models.basicdata.file_asset import FileAsset
     from app.models.basicdata.user import SysRole, SysUser
     from app.models.basicdata.user_org_scope import UserOrgScope
+    from app.models.exception.quality_issue import QualityIssue
+    from app.models.order.sale_order import SaleOrder, SaleOrderLine
     from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprovalLog
     tables = [
         SysRole.__table__, SysUser.__table__, UserOrgScope.__table__,
         SupplierClaim.__table__, SupplierClaimApprovalLog.__table__,
         Notification.__table__, FileAsset.__table__,
+        DataSupplyApiKey.__table__, DataSupplyCallLog.__table__,
+        QualityIssue.__table__, SaleOrder.__table__, SaleOrderLine.__table__, Bom.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -172,6 +178,46 @@ async def db(_test_db):
 
     async with AsyncSessionLocal() as session:
         yield session
+
+
+# 质量对外接口测试用 HMAC Key（假凭证，rate_limit=0 绕过 Redis）
+EXTERNAL_QUALITY_KEY = {"app_key": "ak_pytest_quality", "app_secret": "sk_pytest_quality"}
+EXTERNAL_ORDERS_KEY = {"app_key": "ak_pytest_orders", "app_secret": "sk_pytest_orders"}
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def external_keys(_test_db):
+    """清空质量/数据供给表并种入两把 HMAC Key：quality（两个新接口）/ orders（未授权对照）。"""
+    from app.core.database import engine
+
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "TRUNCATE quality_issue, sale_order, sale_order_line, scm_bom, "
+            "data_supply_api_key, data_supply_call_log RESTART IDENTITY CASCADE"
+        ))
+        await conn.execute(text("""
+            INSERT INTO data_supply_api_key
+                (key_name, api_key, is_active, allowed_endpoints_json, rate_limit,
+                 app_key, app_secret, ip_whitelist_json, created_by)
+            VALUES
+                ('pytest-quality', 'ak_pytest_quality', TRUE,
+                 '["quality_issues.list", "quality_trace.list"]', 0, :qak, :qas, NULL, 'pytest'),
+                ('pytest-orders', 'ak_pytest_orders', TRUE,
+                 '["orders.list"]', 0, :oak, :oas, NULL, 'pytest')
+        """), {
+            "qak": EXTERNAL_QUALITY_KEY["app_key"], "qas": EXTERNAL_QUALITY_KEY["app_secret"],
+            "oak": EXTERNAL_ORDERS_KEY["app_key"], "oas": EXTERNAL_ORDERS_KEY["app_secret"],
+        })
+    yield {"quality": EXTERNAL_QUALITY_KEY, "orders": EXTERNAL_ORDERS_KEY}
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def ext_client(external_keys):
+    """质量对外接口用例专用 ASGI 客户端（先清表种 Key，再进入用例）。"""
+    from app.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c
 
 
 async def login(client: AsyncClient, username: str, password: str = TEST_PASSWORD) -> dict:
