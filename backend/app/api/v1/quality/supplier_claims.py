@@ -42,11 +42,14 @@ async def list_claims(
     db: AsyncSession = Depends(get_db),
 ):
     service = SupplierClaimService(db)
-    items, total = await service.list_claims(
-        page=page, page_size=page_size, keyword=keyword or None, status=status or None,
-        date_start=date_start or None, date_end=date_end or None,
-        applicant=applicant or None, supplier=supplier or None,
-    )
+    try:
+        items, total = await service.list_claims(
+            page=page, page_size=page_size, keyword=keyword or None, status=status or None,
+            date_start=date_start or None, date_end=date_end or None,
+            applicant=applicant or None, supplier=supplier or None,
+        )
+    except ValueError as e:
+        return ResponseModel(code=1, message=str(e))
     return ResponseModel(data={"total": total, "page": page, "page_size": page_size, "items": items})
 
 

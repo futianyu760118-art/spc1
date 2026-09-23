@@ -112,7 +112,14 @@ async def sync_permissions_to_db(db: AsyncSession) -> int:
 
 # 已废弃的权限 code —— 这些权限已迁移到 materials.stock_check，
 # 运行期代码（API PermissionChecker / 前端菜单）不再引用，需在每次启动时清理。
-DEPRECATED_PERMISSION_CODES = ("orders.stock_check", "orders.inventory_check")
+# quality.supplier_claim.pending / .config：审批中心上线前的旧权限，已被 approval.pending / approval.config 取代。
+# 仅存在于历史库中（代码从未声明），不清理会继续作为菜单项渲染在「品质管理」下。
+DEPRECATED_PERMISSION_CODES = (
+    "orders.stock_check",
+    "orders.inventory_check",
+    "quality.supplier_claim.pending",
+    "quality.supplier_claim.config",
+)
 
 # 一次性动作迁移:盘点抽检曾声明为 read/manage,现回归标准增删改查。
 # 幂等:每次启动执行,已迁移的行不再变化。

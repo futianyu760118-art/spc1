@@ -20,6 +20,20 @@ CLAIM_ITEMS = {
 RETURN_REQUIREMENTS = {"no_return", "return_supplier_fee"}
 
 
+def _to_date(value) -> Optional[date]:
+    """把前端传来的日期统一转成 date：asyncpg 对 DATE 列只接受 date 对象，字符串会直接报 DataError。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        raise ValueError(f"日期格式不正确：{value}（应为 YYYY-MM-DD）")
+
+
 def _get_settings():
     from app.core.config import get_settings
     return get_settings()
@@ -58,10 +72,10 @@ class SupplierClaimService:
             params["st"] = status
         if date_start:
             conditions.append("c.claim_date >= :ds")
-            params["ds"] = date_start
+            params["ds"] = _to_date(date_start)
         if date_end:
             conditions.append("c.claim_date <= :de")
-            params["de"] = date_end
+            params["de"] = _to_date(date_end)
         if applicant:
             conditions.append("c.applicant = :ap")
             params["ap"] = applicant
@@ -169,7 +183,7 @@ class SupplierClaimService:
             "cm": data.get("claim_method"),
             "ce": data.get("calc_explanation"),
             "rr": data.get("return_requirement"),
-            "cd": data.get("claim_date") or date.today(),
+            "cd": _to_date(data.get("claim_date")) or date.today(),
             "rm": data.get("remarks"),
             "att": json.dumps(data.get("attachments") or []),
         }

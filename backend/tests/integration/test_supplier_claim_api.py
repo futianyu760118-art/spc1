@@ -83,6 +83,35 @@ async def test_edit_draft_then_pending_denied(client):
     assert r.json()["code"] == 1
 
 
+async def test_create_with_string_claim_date_from_frontend(client):
+    """前端 dayjs 提交 claim_date 为 'YYYY-MM-DD' 字符串；asyncpg 对 DATE 列不做隐式转换，服务端必须转 date。"""
+    h = await login(client, Q)
+    p = payload(500)
+    p["claim_date"] = "2026-09-23"
+    r = await client.post("/api/v1/quality/supplier-claims", json=p, headers=h)
+    body = r.json()
+    assert body["code"] == 0, body
+    assert body["data"]["claim_date"] == "2026-09-23"
+
+
+async def test_create_with_invalid_claim_date_rejected(client):
+    h = await login(client, Q)
+    p = payload(500)
+    p["claim_date"] = "2026/09/23 下午"
+    r = await client.post("/api/v1/quality/supplier-claims", json=p, headers=h)
+    assert r.json()["code"] == 1
+
+
+async def test_list_date_range_filter_with_strings(client):
+    """列表日期区间过滤（前端传字符串）不得 500。"""
+    h = await login(client, Q)
+    await create(client, h, 500)
+    r = await client.get("/api/v1/quality/supplier-claims",
+                         params={"date_start": "2026-01-01", "date_end": "2026-12-31"}, headers=h)
+    assert r.json()["code"] == 0, r.text
+    assert r.json()["data"]["total"] >= 1
+
+
 # ---------------------------------------------------------------- 状态机拒绝
 
 async def test_submit_non_draft_rejected(client):
