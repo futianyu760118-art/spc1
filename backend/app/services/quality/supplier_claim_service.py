@@ -309,6 +309,27 @@ class SupplierClaimService:
             items.append(d)
         return items
 
+    async def approved_by_me(self, approver: str) -> list[dict]:
+        """我已审批：我最近一次 approve/reject 的单据（被反审核的审批已置 revoked，不计入）。"""
+        rows = await self.db.execute(text("""
+            SELECT c.*, l.action AS my_action, l.comment AS my_comment, l.operated_at AS acted_at
+            FROM supplier_claim c
+            JOIN LATERAL (
+                SELECT action, comment, operated_at
+                FROM supplier_claim_approval_log
+                WHERE claim_id = c.id AND approver = :ap AND action IN ('approve', 'reject')
+                ORDER BY id DESC LIMIT 1
+            ) l ON TRUE
+            ORDER BY l.operated_at DESC NULLS LAST
+        """), {"ap": approver})
+        return [self._serialize(dict(r._mapping)) for r in rows]
+
+    async def submitted_by_me(self, applicant: str) -> list[dict]:
+        rows = await self.db.execute(text("""
+            SELECT * FROM supplier_claim WHERE applicant = :ap ORDER BY submitted_at DESC NULLS LAST
+        """), {"ap": applicant})
+        return [self._serialize(dict(r._mapping)) for r in rows]
+
     # ---------- 通知（引擎 hook） ----------
 
     async def _notify_approvers_of_level(self, rec: dict, level: int, title_prefix: str):

@@ -315,7 +315,7 @@ const allMenuItems: PermissionAwareItem[] = [
     label: '审批中心',
     permission: 'approval',
     children: [
-      { key: '/approvals/pending', icon: <ClockCircleOutlined />, label: '待我审批', permission: 'approval.pending' },
+      { key: '/approvals/pending', icon: <ClockCircleOutlined />, label: '待办工作台', permission: 'approval.pending' },
       { key: '/approvals/configs', icon: <SettingOutlined />, label: '审批配置', permission: 'approval.config' },
     ],
   },

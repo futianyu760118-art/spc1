@@ -5,9 +5,11 @@
 """
 
 import json
-from datetime import datetime
+import logging
+from datetime import date, datetime, timedelta
+from typing import Optional
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,23 +18,202 @@ from app.core.dependencies import get_current_user
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
 from app.services.common import approval_providers  # noqa: F401 — 导入即触发各业务流程注册
-from app.services.common.approval_registry import get_pending_providers, is_registered
+from app.services.common.approval_metrics import (
+    approved_stats,
+    enrich_pending_item,
+    parse_dt,
+    pending_stats,
+    submitted_stats,
+)
+from app.services.common.approval_registry import (
+    ApprovalActionRequest,
+    get_pending_providers,
+    get_provider,
+    is_registered,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 我已审批 / 我发起的默认时间窗（未显式传日期时限定，避免全历史扫描）
+DEFAULT_MY_WINDOW_DAYS = 90
+MAX_BATCH_SIZE = 50
+
+
+def _match_keyword(item: dict, keyword: str) -> bool:
+    kw = (keyword or "").strip().lower()
+    if not kw:
+        return True
+    haystack = " ".join(str(item.get(k) or "") for k in ("no", "title", "summary", "applicant", "current_node"))
+    return kw in haystack.lower()
+
+
+def _in_date_range(value, date_from: Optional[date], date_to: Optional[date]) -> bool:
+    dt = parse_dt(value)
+    if not dt:
+        return not (date_from or date_to)
+    if date_from and dt.date() < date_from:
+        return False
+    if date_to and dt.date() > date_to:
+        return False
+    return True
+
+
+def _resolve_window(date_from: Optional[date], date_to: Optional[date]) -> tuple[Optional[date], Optional[date]]:
+    if date_from or date_to:
+        return date_from, date_to
+    return date.today() - timedelta(days=DEFAULT_MY_WINDOW_DAYS), None
+
+
+def _paginate(items: list[dict], page: int, page_size: int) -> list[dict]:
+    start = (page - 1) * page_size
+    return items[start:start + page_size]
+
+
+def _sort_key(value):
+    """统一排序键：provider 可能返回 datetime 或 ISO 字符串，混用直接比较会 TypeError。"""
+    return parse_dt(value) or datetime.min
+
+
+def _clean_comment(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _is_today(value) -> bool:
+    dt = parse_dt(value)
+    return bool(dt and dt.date() == date.today())
+
+
+def _clean_version(value) -> Optional[int]:
+    """expected_version 来自请求体，非法值应判为参数错误而不是让引擎 int() 抛 500。"""
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1  # 哨兵：不可能与任何真实 version 相等，交由引擎返回乐观锁冲突
 
 
 @router.get("/pending", response_model=ResponseModel)
 async def list_pending_approvals(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    biz_type: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    overdue_only: bool = Query(False),
+    wait_level: Optional[str] = Query(None, pattern="^(soon|overdue)$"),
+    today_only: bool = Query(False),
     current_user: dict = Depends(get_current_user),
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """聚合全部已注册流程的待我审批条目，各 biz 内部已按审批节点权限过滤（admin 全量）。"""
+    """聚合全部已注册流程的待我审批条目（各 biz 内部已按审批节点权限过滤），支持筛选与分页。
+
+    stats 始终是「全部待办」口径（与业务类型筛选无关），供统计卡与 chips 计数使用；
+    biz_type 只影响 items/total。
+    """
     items: list[dict] = []
     for provider in get_pending_providers():
-        items.extend(await provider.fetch(db, current_user["username"], current_user["role"]))
-    items.sort(key=lambda x: x.get("submitted_at") or "", reverse=True)
-    return ResponseModel(data=items)
+        for it in await provider.fetch(db, current_user["username"], current_user["role"]):
+            items.append(enrich_pending_item(it))
+    items.sort(key=lambda x: _sort_key(x.get("submitted_at")), reverse=True)
+
+    stats = pending_stats(items)
+    filtered = [
+        it for it in items
+        if (not biz_type or it.get("biz_type") == biz_type)
+        and _match_keyword(it, keyword)
+        and _in_date_range(it.get("submitted_at"), date_from, date_to)
+        and (not overdue_only or it.get("wait_level") == "overdue")
+        and (not wait_level or it.get("wait_level") == wait_level)
+        and (not today_only or _is_today(it.get("submitted_at")))
+    ]
+    return ResponseModel(data={
+        "items": _paginate(filtered, page, page_size),
+        "total": len(filtered),
+        "page": page,
+        "page_size": page_size,
+        "stats": stats,
+    })
+
+
+@router.get("/approved", response_model=ResponseModel)
+async def list_my_approved(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    biz_type: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    action: Optional[str] = Query(None, pattern="^(approve|reject)$"),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.pending", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """我已审批：跨业务聚合本人做出的通过/驳回记录（默认近 90 天）。"""
+    win_from, win_to = _resolve_window(date_from, date_to)
+    items: list[dict] = []
+    for provider in get_pending_providers():
+        if biz_type and provider.biz_type != biz_type:
+            continue
+        if not provider.fetch_approved:
+            continue
+        items.extend(await provider.fetch_approved(db, current_user["username"]))
+    items = [
+        it for it in items
+        if _match_keyword(it, keyword)
+        and _in_date_range(it.get("acted_at"), win_from, win_to)
+        and (not action or it.get("my_action") == action)
+    ]
+    items.sort(key=lambda x: _sort_key(x.get("acted_at")), reverse=True)
+    return ResponseModel(data={
+        "items": _paginate(items, page, page_size),
+        "total": len(items),
+        "page": page,
+        "page_size": page_size,
+        "stats": approved_stats(items),
+    })
+
+
+@router.get("/submitted", response_model=ResponseModel)
+async def list_my_submitted(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    biz_type: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    status: Optional[str] = Query(None, pattern="^(pending|approved|rejected|recalled)$"),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.pending", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """我发起的：跨业务聚合本人提交的单据及整体状态（默认近 90 天）。"""
+    win_from, win_to = _resolve_window(date_from, date_to)
+    items: list[dict] = []
+    for provider in get_pending_providers():
+        if biz_type and provider.biz_type != biz_type:
+            continue
+        if not provider.fetch_submitted:
+            continue
+        items.extend(await provider.fetch_submitted(db, current_user["username"]))
+    items = [
+        it for it in items
+        if _match_keyword(it, keyword)
+        and _in_date_range(it.get("submitted_at"), win_from, win_to)
+        and (not status or it.get("status") == status)
+    ]
+    items.sort(key=lambda x: _sort_key(x.get("submitted_at")), reverse=True)
+    return ResponseModel(data={
+        "items": _paginate(items, page, page_size),
+        "total": len(items),
+        "page": page,
+        "page_size": page_size,
+        "stats": submitted_stats(items),
+    })
 
 
 @router.get("/configs", response_model=ResponseModel)
@@ -121,3 +302,118 @@ async def list_role_options(
     """审批链编辑器角色下拉数据源（审批域自有权限，不依赖「角色管理」读权限）。"""
     rows = await db.execute(text("SELECT role_code, role_name FROM sys_role ORDER BY id"))
     return ResponseModel(data={"items": [{"role_code": r[0], "role_name": r[1]} for r in rows]})
+
+
+async def _run_action(biz_type: str, item_id: int, action: str, data: dict, user: dict, db: AsyncSession) -> ResponseModel:
+    provider = get_provider(biz_type)
+    handler = getattr(provider, action, None) if provider else None
+    if not handler:
+        return ResponseModel(code=1, message="该业务不支持在审批中心内审批，请前往业务系统处理")
+    payload = data if isinstance(data, dict) else {}
+    result = await handler(db, ApprovalActionRequest(
+        entity_id=item_id,
+        approver=user["username"],
+        approver_role=user["role"],
+        comment=_clean_comment(payload.get("comment")),
+        expected_version=_clean_version(payload.get("expected_version")),
+    ))
+    if not result.get("success"):
+        return ResponseModel(code=1, message=result.get("message") or "操作失败")
+    return ResponseModel(data=result, message="已通过" if action == "approve" else "已驳回")
+
+
+@router.get("/items/{biz_type}/{item_id}", response_model=ResponseModel)
+async def get_item_preview(
+    biz_type: str,
+    item_id: int,
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.pending", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """审批抽屉详情：关键字段 + 审批进度 + 审批记录 + 是否可操作。"""
+    provider = get_provider(biz_type)
+    if not provider or not provider.preview:
+        return ResponseModel(code=1, message="该业务流程未接入审批中心")
+    data = await provider.preview(db, current_user["username"], current_user["role"], item_id)
+    if not data:
+        return ResponseModel(code=1, message="单据不存在")
+    return ResponseModel(data=data)
+
+
+@router.post("/items/{biz_type}/{item_id}/approve", response_model=ResponseModel)
+async def approve_item(
+    biz_type: str,
+    item_id: int,
+    data: dict = Body(default={}),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.pending", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _run_action(biz_type, item_id, "approve", data, current_user, db)
+
+
+@router.post("/items/{biz_type}/{item_id}/reject", response_model=ResponseModel)
+async def reject_item(
+    biz_type: str,
+    item_id: int,
+    data: dict = Body(default={}),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.pending", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _run_action(biz_type, item_id, "reject", data, current_user, db)
+
+
+@router.post("/batch-approve", response_model=ResponseModel)
+async def batch_approve(
+    data: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.pending", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """批量通过：逐条 SAVEPOINT 隔离，失败/不支持的业务逐条报告，不影响其它单据。"""
+    requested = data.get("items") or [] if isinstance(data, dict) else []
+    if not requested:
+        return ResponseModel(code=1, message="请先选择待审批单据")
+    if len(requested) > MAX_BATCH_SIZE:
+        return ResponseModel(code=1, message=f"单次批量审批最多 {MAX_BATCH_SIZE} 条")
+    comment = _clean_comment(data.get("comment"))
+    passed: list[dict] = []
+    failed: list[dict] = []
+    skipped: list[dict] = []
+    for it in requested:
+        if not isinstance(it, dict):
+            failed.append({"biz_type": None, "id": None, "reason": "请求条目格式不正确"})
+            continue
+        biz_type, item_id = it.get("biz_type"), it.get("id")
+        provider = get_provider(biz_type) if biz_type else None
+        if not provider or not provider.approve:
+            skipped.append({"biz_type": biz_type, "id": item_id, "reason": "该业务不支持在审批中心内审批"})
+            continue
+        try:
+            entity_id = int(item_id)
+        except (TypeError, ValueError):
+            failed.append({"biz_type": biz_type, "id": item_id, "reason": "单据 ID 不正确"})
+            continue
+        savepoint = await db.begin_nested()
+        try:
+            result = await provider.approve(db, ApprovalActionRequest(
+                entity_id=entity_id,
+                approver=current_user["username"],
+                approver_role=current_user["role"],
+                comment=comment,
+                expected_version=_clean_version(it.get("expected_version")),
+            ))
+        except Exception as exc:  # 单条异常不拖垮整批（SAVEPOINT 回滚后外层事务仍可用）
+            logger.warning("批量审批异常 biz=%s id=%s: %s", biz_type, item_id, exc)
+            await savepoint.rollback()
+            failed.append({"biz_type": biz_type, "id": item_id, "reason": "系统异常，请稍后重试"})
+            continue
+        if result.get("success"):
+            await savepoint.commit()
+            passed.append({"biz_type": biz_type, "id": item_id, "finished": bool(result.get("finished"))})
+        else:
+            # 失败路径必须回滚：引擎在乐观锁失败前可能已写入审批日志，否则会留下「未生效的审批记录」
+            await savepoint.rollback()
+            failed.append({"biz_type": biz_type, "id": item_id, "reason": result.get("message") or "操作失败"})
+    return ResponseModel(data={"passed": passed, "failed": failed, "skipped": skipped})

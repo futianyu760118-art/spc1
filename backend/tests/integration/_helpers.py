@@ -49,7 +49,8 @@ async def snap_roles(data):
 
 
 async def pending_items(client, headers, biz_type="supplier_claim"):
-    """统一待审批列表（可按业务类型过滤）。"""
+    """统一待审批列表（可按业务类型过滤；P0 起返回分页结构，取 items）。"""
     r = await client.get("/api/v1/approvals/pending", headers=headers)
     assert r.json()["code"] == 0, r.text
-    return [x for x in r.json()["data"] if biz_type is None or x["biz_type"] == biz_type]
+    items = r.json()["data"]["items"]
+    return [x for x in items if biz_type is None or x["biz_type"] == biz_type]

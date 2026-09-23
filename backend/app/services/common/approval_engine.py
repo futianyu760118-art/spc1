@@ -117,12 +117,13 @@ class ApprovalEngine:
         for node in all_nodes:
             if not _cond_match(node.get("condition"), fields):
                 continue
-            snapshot.append({
-                "seq": node.get("seq"),
-                "label": node.get("label"),
-                "role": node.get("role"),
-                **({"approvers": node["approvers"]} if node.get("approvers") else {}),
-            })
+            snap_node = {"seq": node.get("seq"), "label": node.get("label"), "role": node.get("role")}
+            if node.get("approvers"):
+                snap_node["approvers"] = node["approvers"]
+            # 0 = 不提醒，必须与「未配置」区分，故显式判 None
+            if node.get("timeout_hours") is not None:
+                snap_node["timeout_hours"] = int(node["timeout_hours"])
+            snapshot.append(snap_node)
         # 条件过滤会移除中间节点导致 seq 断档，引擎按 seq+1 找下一节点，必须重排为连续 1..n
         for i, node in enumerate(snapshot, 1):
             node["seq"] = i
