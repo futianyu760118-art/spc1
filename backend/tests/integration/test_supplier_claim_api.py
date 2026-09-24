@@ -358,6 +358,53 @@ async def test_archived_delete_by_admin(client):
 
 # ---------------------------------------------------------------- 配置 / 通知 / 附件引用计数
 
+async def test_stats_counts_and_pending_mine(client):
+    """台账 KPI：状态计数与本月金额全量口径；待我审批按引擎节点权限过滤。"""
+    h_q, h_pm = await login(client, Q), await login(client, PM)
+    await create(client, h_q, 100)                      # draft
+    await create(client, h_q, 1500, submit=True)        # pending，停在第 1 级 PM
+    r = await client.get("/api/v1/quality/supplier-claims/stats", headers=h_q)
+    body = r.json()
+    assert body["code"] == 0, body
+    d = body["data"]
+    assert d["by_status"]["draft"] >= 1 and d["by_status"]["pending"] >= 1
+    assert d["total"] == sum(d["by_status"].values())
+    assert d["month_amount"] >= 1600 and d["month_count"] >= 2
+    # Q 非审批人 → 待我审批 0；PM 是第 1 级当前节点审批人 → ≥1
+    assert d["pending_mine"] == 0
+    r2 = await client.get("/api/v1/quality/supplier-claims/stats", headers=h_pm)
+    assert r2.json()["data"]["pending_mine"] >= 1
+
+async def test_stats_route_not_captured_by_claim_id(client):
+    """/stats 为静态路径，必须先于 /{claim_id} 注册（int 转换失败会 422 而非落到后继路由）。"""
+    h = await login(client, Q)
+    r = await client.get("/api/v1/quality/supplier-claims/stats", headers=h)
+    assert r.status_code == 200 and r.json()["code"] == 0
+
+
+async def test_list_keyword_matches_applicant(client):
+    """搜索关键词口径：单号 / 供应商 / 申请人（与前端搜索框占位一致）。"""
+    h = await login(client, Q)
+    await create(client, h, 100)
+    r = await client.get("/api/v1/quality/supplier-claims", params={"keyword": Q}, headers=h)
+    assert r.json()["code"] == 0 and r.json()["data"]["total"] >= 1
+
+
+async def test_export_csv_and_xlsx(client):
+    """台账导出：与列表同过滤口径，CSV 含表头与中文标签。"""
+    h = await login(client, Q)
+    await create(client, h, 300)
+    r = await client.get("/api/v1/quality/supplier-claims/export",
+                         params={"format": "csv", "keyword": "浩瑞佳"}, headers=h)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "索赔单号" in r.text and "浩瑞佳" in r.text
+    r2 = await client.get("/api/v1/quality/supplier-claims/export",
+                          params={"format": "xlsx"}, headers=h)
+    assert r2.status_code == 200
+    assert "spreadsheetml" in r2.headers["content-type"]
+
+
 async def test_config_update_takes_effect_on_resubmit(client):
     h_admin, h_q = await login(client, "admin"), await login(client, Q)
     nodes = [{"seq": 1, "label": "品质确认", "role": "quality"}]

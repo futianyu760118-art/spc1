@@ -1,13 +1,32 @@
 ﻿"""品质管理 - 供应商索赔通知单 API"""
 
 from fastapi import APIRouter, Depends, Query, Body
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker, oauth2_scheme, decode_access_token
 from app.schemas.common import ResponseModel
-from app.services.quality.supplier_claim_service import SupplierClaimService
+from app.services.common.export_service import GenericExportService, ExportColumn
+from app.services.common.approval_providers import CLAIM_REASON_LABELS
+from app.services.quality.supplier_claim_service import SupplierClaimService, CLAIM_ITEM_LABELS
+
+CLAIM_EXPORT_COLUMNS = [
+    ExportColumn("claim_no", "索赔单号", 18),
+    ExportColumn("supplier_name", "供应商", 24),
+    ExportColumn("supplier_code", "供应商编码", 12),
+    ExportColumn("claim_reason_label", "索赔原因", 12),
+    ExportColumn("claim_items_label", "索赔细项", 20),
+    ExportColumn("claim_amount", "索赔金额(元)", 12),
+    ExportColumn("claim_date", "开单日期", 12),
+    ExportColumn("status_label", "状态", 10),
+    ExportColumn("applicant_display", "申请人", 10),
+    ExportColumn("submitted_at", "提交时间", 16),
+    ExportColumn("approved_at", "归档时间", 16),
+    ExportColumn("remarks", "备注", 18),
+]
+STATUS_LABELS = {"draft": "草稿", "pending": "审批中", "approved": "已归档", "rejected": "已驳回", "recalled": "已撤回"}
 
 
 async def get_current_user_payload(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)) -> dict:
@@ -67,6 +86,58 @@ async def search_suppliers(
         ORDER BY supplier_name LIMIT 10
     """), {"kw": kw})
     return ResponseModel(data={"items": [dict(r._mapping) for r in rows]})
+
+
+@router.get("/stats", response_model=ResponseModel)
+async def claim_stats(
+    user: dict = Depends(get_current_user_payload),
+    _: dict = Depends(PermissionChecker("quality.supplier_claim", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """台账 KPI 带：状态计数 / 本月索赔金额 / 待我审批（复用引擎节点权限过滤）。"""
+    service = SupplierClaimService(db)
+    data = await service.stats(approver_username=user["username"], approver_role=user["role"])
+    return ResponseModel(data=data)
+
+
+@router.get("/export")
+async def export_claims(
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    keyword: str = Query(""),
+    status: str = Query(""),
+    date_start: str = Query(""),
+    date_end: str = Query(""),
+    applicant: str = Query(""),
+    supplier: str = Query(""),
+    _: dict = Depends(PermissionChecker("quality.supplier_claim", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """台账导出（与列表同过滤口径，不分页）；列含中文标签映射。"""
+    items = await SupplierClaimService(db).export_claims(
+        keyword=keyword or None, status=status or None, date_start=date_start or None,
+        date_end=date_end or None, applicant=applicant or None, supplier=supplier or None)
+    rows = [{
+        "claim_no": d.get("claim_no") or "",
+        "supplier_name": d.get("supplier_name") or "",
+        "supplier_code": d.get("supplier_code") or "",
+        "claim_reason_label": CLAIM_REASON_LABELS.get(d.get("claim_reason"), d.get("claim_reason") or ""),
+        "claim_items_label": "、".join(CLAIM_ITEM_LABELS.get(i, i) for i in (d.get("claim_items") or [])),
+        "claim_amount": d.get("claim_amount") if d.get("claim_amount") is not None else "",
+        "claim_date": d.get("claim_date") or "",
+        "status_label": STATUS_LABELS.get(d.get("approval_status"), d.get("approval_status") or ""),
+        "applicant_display": d.get("applicant_display") or d.get("applicant") or "",
+        "submitted_at": (d.get("submitted_at") or "")[:16].replace("T", " "),
+        "approved_at": (d.get("approved_at") or "")[:16].replace("T", " "),
+        "remarks": d.get("remarks") or "",
+    } for d in items]
+    svc = GenericExportService(CLAIM_EXPORT_COLUMNS, rows, sheet_name="供应商索赔单")
+    if format == "csv":
+        return StreamingResponse(
+            svc.to_csv(), media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=supplier_claims.csv"})
+    return StreamingResponse(
+        svc.to_xlsx(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=supplier_claims.xlsx"})
 
 
 @router.get("/{claim_id}", response_model=ResponseModel)

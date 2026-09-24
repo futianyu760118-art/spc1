@@ -1,9 +1,16 @@
 import api from './api'
 
-export const CLAIM_STATUS_MAP: Record<string, { text: string; color: string }> = {
-  draft: { text: '草稿', color: 'default' }, pending: { text: '审批中', color: 'processing' },
-  approved: { text: '已归档', color: 'success' }, rejected: { text: '已驳回', color: 'error' }, recalled: { text: '已撤回', color: 'warning' },
+// 状态 → 中文文案 + 设计系统标签类（台账 chips / 表格状态列 / 详情页头共用）
+export type ClaimStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'recalled'
+export const CLAIM_STATUS_MAP: Record<ClaimStatus, { text: string; cls: string }> = {
+  draft: { text: '草稿', cls: 'sc-tag-wait' },
+  pending: { text: '审批中', cls: 'sc-tag-kit' },
+  approved: { text: '已归档', cls: 'sc-tag-done' },
+  rejected: { text: '已驳回', cls: 'sc-tag-danger' },
+  recalled: { text: '已撤回', cls: 'sc-tag-amber' },
 }
+// 可编辑/可删除（非归档）的状态集合：操作列与详情页头共用
+export const CLAIM_EDITABLE_STATUSES: ClaimStatus[] = ['draft', 'rejected', 'recalled']
 
 export const CLAIM_REASON_OPTIONS = [
   { value: 'field_customer_claim', label: '现场/客户投诉 Field/customer claim' },
@@ -30,7 +37,16 @@ export function claimReasonText(v?: string) { return CLAIM_REASON_OPTIONS.find(o
 export function claimItemText(v?: string) { return CLAIM_ITEM_OPTIONS.find(o => o.value === v)?.label || v }
 export function claimReturnText(v?: string) { return CLAIM_RETURN_OPTIONS.find(o => o.value === v)?.label || '-' }
 
+export interface ClaimStats {
+  total: number
+  by_status: Record<'draft' | 'pending' | 'approved' | 'rejected' | 'recalled', number>
+  month_count: number
+  month_amount: number
+  pending_mine: number
+}
+
 export const qualityApi = {
+  stats: () => api.get('/quality/supplier-claims/stats'),
   list: (params: Record<string, any>) => api.get('/quality/supplier-claims', { params }),
   get: (id: number) => api.get(`/quality/supplier-claims/${id}`),
   create: (data: Record<string, any>) => api.post('/quality/supplier-claims', data),

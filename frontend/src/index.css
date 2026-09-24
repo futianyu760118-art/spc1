@@ -1957,3 +1957,70 @@ a.si-wh-link:hover { color: #4c4dc2; }
 .sca-rd-cell .cmp { font-size: calc(11px * var(--font-size-scale)); margin-top: 1px; }
 .sca-rd-cell .cmp.ok { color: #16a34a; }
 .sca-rd-cell .cmp.bad { color: #dc2626; font-weight: 600; }
+/* ===== 供应商索赔单 —— 原型同构（docs/prototype/quality-center/）===== */
+
+/* 详情 / 新建主布局：左内容 + 右粘性栏 */
+.clm-detail-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(340px, 1fr); gap: 12px; align-items: start; }
+.clm-form-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 1180px) { .clm-detail-grid, .clm-form-grid { grid-template-columns: 1fr; } }
+.clm-sticky { position: sticky; top: 64px; display: flex; flex-direction: column; gap: 12px; }
+
+/* 纸质单（详情屏幕墨色 --clm-ink；打印页置 #000；.sm 为新建页小型预览） */
+.clm-paper-wrap { padding: 20px; display: flex; justify-content: center; background: #f8fafc; border-radius: 0 0 10px 10px; }
+.clm-paper { width: 100%; max-width: 860px; background: #fff; border: 1px solid var(--clm-ink, #475569); border-radius: 3px; padding: 26px 30px; font-size: calc(13px * var(--font-size-scale)); line-height: 1.85; color: #0f172a; }
+.clm-paper .clm-row { display: flex; border: 1px solid var(--clm-ink, #475569); }
+.clm-paper .clm-row > div { padding: 8px 10px; border-right: 1px solid var(--clm-ink, #475569); }
+.clm-paper .clm-row > div:last-child { border-right: none; }
+.clm-paper .clm-co { width: 30%; }
+.clm-paper .clm-co b { font-size: calc(14px * var(--font-size-scale)); }
+.clm-paper .clm-co .en, .clm-paper .clm-ti .en { font-size: 11px; color: #64748b; }
+.clm-paper .clm-ti { flex: 1; text-align: center; align-self: center; font-weight: 700; font-size: calc(17px * var(--font-size-scale)); letter-spacing: .06em; }
+.clm-paper .clm-ti .en { display: block; font-weight: 400; letter-spacing: .02em; margin-top: 2px; }
+.clm-paper .clm-no { width: 150px; font-size: 11px; color: #475569; align-self: center; font-variant-numeric: tabular-nums; }
+.clm-paper .clm-sec { border: 1px solid var(--clm-ink, #475569); border-top: none; padding: 8px 10px; }
+.clm-paper .clm-sec .lbl { color: #475569; }
+.clm-paper .clm-clause { font-size: 11px; color: #64748b; margin-top: 3px; }
+.clm-paper .clm-calc { white-space: pre-line; margin-top: 3px; }
+.clm-paper .clm-amt { margin-top: 5px; }
+.clm-paper .clm-amt b { font-size: calc(14.5px * var(--font-size-scale)); font-variant-numeric: tabular-nums; }
+.clm-paper .clm-sign { text-align: right; margin-top: 5px; color: #334155; }
+.clm-paper .clm-sec .who { text-align: right; color: #475569; font-size: calc(11.5px * var(--font-size-scale)); margin-top: 3px; }
+.clm-paper .clm-sec .who.empty { color: #cbd5e1; }
+.clm-paper.sm { font-size: calc(11px * var(--font-size-scale)); line-height: 1.7; padding: 12px 14px; }
+.clm-paper.sm .clm-row > div, .clm-paper.sm .clm-sec { padding: 5px 7px; }
+.clm-paper.sm .clm-ti { font-size: 12.5px; }
+.clm-paper.sm .clm-co { width: 132px; }
+.clm-paper.sm .clm-no { width: 112px; }
+.clm-paper.sm .clm-amt b { font-size: 12px; }
+
+/* 新建页：单选卡片 / 细项勾选卡片 */
+.clm-rcards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.clm-rcard { display: flex; align-items: flex-start; gap: 10px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; cursor: pointer; background: #fff; transition: border-color .12s, background .12s; align-items: flex-start; margin-right: 0; }
+.clm-rcard:hover { border-color: #cbd5e1; }
+.clm-rcard.on { border-color: #5b5bd6; background: #eef0fe; box-shadow: 0 0 0 3px rgba(91, 91, 214, .1); }
+.clm-rcard .rc-txt { display: inline-block; }
+.clm-rcard .tt { font-size: calc(13px * var(--font-size-scale)); color: #0f172a; font-weight: 500; line-height: 1.45; }
+.clm-rcard .en { font-size: 11px; color: #94a3b8; margin-top: 1px; }
+.clm-ccards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.clm-ccard { display: flex; align-items: center; gap: 8px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 7px 10px; cursor: pointer; font-size: calc(12.5px * var(--font-size-scale)); color: #475569; background: #fff; transition: border-color .12s, background .12s; }
+.clm-ccard:hover { border-color: #cbd5e1; }
+.clm-ccard.on { border-color: #7a7de6; background: #eef0fe; color: #4c4dc2; }
+
+/* 台账：细项 mini 标签 + 附件计数 */
+.clm-itag { font-size: 11px; line-height: 17px; padding: 0 6px; border-radius: 4px; background: #f1f5f9; color: #475569; white-space: nowrap; }
+.clm-itags { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.clm-more-n { font-size: 11px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+
+/* 详情右侧 kv */
+.clm-kv { display: grid; grid-template-columns: 76px 1fr; row-gap: 7px; font-size: calc(13px * var(--font-size-scale)); }
+.clm-kv dt { color: #94a3b8; }
+.clm-kv dd { color: #0f172a; margin: 0; font-variant-numeric: tabular-nums; }
+
+/* 打印页（--clm-ink 置纯黑；工具栏 no-print） */
+.clm-print { --clm-ink: #000; min-height: 60vh; }
+.clm-print .clm-sheet { width: 900px; max-width: 100%; margin: 0 auto; box-shadow: 0 4px 12px rgba(15, 23, 42, .08); }
+@media print {
+  .clm-no-print { display: none !important; }
+  .clm-print .clm-sheet { width: auto; max-width: none; box-shadow: none; }
+  .clm-paper-wrap { background: #fff; padding: 0; border-radius: 0; }
+}

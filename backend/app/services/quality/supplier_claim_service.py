@@ -18,6 +18,11 @@ CLAIM_ITEMS = {
     "replacement", "packing_fee", "transporting_fee", "man_hour_fee",
     "additional_fee", "punishment", "downgrade_use", "direct_loss",
 }
+CLAIM_ITEM_LABELS = {
+    "replacement": "替代件费用", "packing_fee": "包装费用", "transporting_fee": "运输费用",
+    "man_hour_fee": "人工费用", "additional_fee": "额外费用", "punishment": "处罚",
+    "downgrade_use": "降级使用", "direct_loss": "直接损失",
+}
 RETURN_REQUIREMENTS = {"no_return", "return_supplier_fee"}
 
 
@@ -51,12 +56,12 @@ class SupplierClaimService:
 
     # ---------- 查询 ----------
 
-    async def list_claims(self, *, page=1, page_size=20, keyword=None, status=None,
-                          date_start=None, date_end=None, applicant=None, supplier=None):
+    def _filter_conditions(self, *, keyword=None, status=None, date_start=None,
+                           date_end=None, applicant=None, supplier=None):
         conditions = ["1=1"]
         params: dict = {}
         if keyword:
-            conditions.append("(c.claim_no ILIKE :kw OR c.supplier_name ILIKE :kw)")
+            conditions.append("(c.claim_no ILIKE :kw OR c.supplier_name ILIKE :kw OR c.applicant ILIKE :kw)")
             params["kw"] = f"%{keyword}%"
         if status:
             conditions.append("c.approval_status = :st")
@@ -73,19 +78,64 @@ class SupplierClaimService:
         if supplier:
             conditions.append("c.supplier_name ILIKE :sup")
             params["sup"] = f"%{supplier}%"
-        where = " AND ".join(conditions)
+        return " AND ".join(conditions), params
+
+    _LIST_SELECT = """
+        SELECT c.*, COALESCE(u.display_name, c.applicant) AS applicant_display
+        FROM supplier_claim c
+        LEFT JOIN sys_user u ON u.username = c.applicant OR CAST(u.id AS VARCHAR) = c.applicant
+    """
+
+    async def list_claims(self, *, page=1, page_size=20, keyword=None, status=None,
+                          date_start=None, date_end=None, applicant=None, supplier=None):
+        where, params = self._filter_conditions(
+            keyword=keyword, status=status, date_start=date_start, date_end=date_end,
+            applicant=applicant, supplier=supplier)
         total = (await self.db.execute(
             text(f"SELECT COUNT(*) FROM supplier_claim c WHERE {where}"), params
         )).scalar() or 0
         rows = await self.db.execute(text(f"""
-            SELECT c.*, COALESCE(u.display_name, c.applicant) AS applicant_display
-            FROM supplier_claim c
-            LEFT JOIN sys_user u ON u.username = c.applicant OR CAST(u.id AS VARCHAR) = c.applicant
+            {self._LIST_SELECT}
             WHERE {where}
             ORDER BY c.created_at DESC LIMIT :lim OFFSET :off
         """), {**params, "lim": page_size, "off": (page - 1) * page_size})
         items = [self._serialize(dict(r._mapping)) for r in rows]
         return items, total
+
+    async def export_claims(self, **filters) -> list[dict]:
+        """导出用：同 list_claims 的过滤口径，不分页全量。"""
+        where, params = self._filter_conditions(**filters)
+        rows = await self.db.execute(text(f"""
+            {self._LIST_SELECT}
+            WHERE {where}
+            ORDER BY c.claim_date DESC, c.id DESC
+        """), params)
+        return [self._serialize(dict(r._mapping)) for r in rows]
+
+    async def stats(self, *, approver_username: str = "", approver_role: str = "") -> dict:
+        """台账 KPI 带：全量状态计数（与列表 chips 同口径）+ 本月金额 + 待我审批数。"""
+        by_status = {"draft": 0, "pending": 0, "approved": 0, "rejected": 0, "recalled": 0}
+        rows = await self.db.execute(
+            text("SELECT approval_status, COUNT(*) FROM supplier_claim GROUP BY approval_status")
+        )
+        for st, n in rows:
+            if st in by_status:
+                by_status[st] = n
+        month = (await self.db.execute(text("""
+            SELECT COUNT(*), COALESCE(SUM(claim_amount), 0)
+            FROM supplier_claim WHERE claim_date >= date_trunc('month', CURRENT_DATE)
+        """))).fetchone()
+        pending_mine = 0
+        if approver_username or approver_role == "admin":
+            pending_mine = len(await self.pending_approvals(
+                approver_username=approver_username, approver_role=approver_role))
+        return {
+            "total": sum(by_status.values()),
+            "by_status": by_status,
+            "month_count": month[0] or 0,
+            "month_amount": float(month[1] or 0),
+            "pending_mine": pending_mine,
+        }
 
     async def get_claim(self, claim_id: int) -> Optional[dict]:
         row = await self.db.execute(text("""
