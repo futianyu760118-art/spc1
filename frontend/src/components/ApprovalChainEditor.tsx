@@ -1,6 +1,5 @@
-import { useState } from 'react'
-import { Button, Card, Form, Input, InputNumber, Modal, Radio, Select, Space, Table, Tag, Timeline } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
+import { Button, Input, InputNumber, Segmented, Select } from 'antd'
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import type { ApprovalCondition, ApprovalNodeConfig, ApprovalUserOption } from '../services/approval'
 
 // 与后端 approval_metrics.DEFAULT_TIMEOUT_HOURS 对齐：未配置超时的节点按 48 小时提醒
@@ -16,14 +15,10 @@ const OP_OPTIONS = [
   { value: 'in', label: 'in 属于（逗号分隔）' },
 ]
 
-type FormValues = {
-  label: string
-  approverMode: 'role' | 'users'
-  role?: string
-  approvers?: number[]
-  timeout_hours?: number | null
-  conditions?: Array<{ field: string; op: string; value?: string }>
-}
+const APPROVER_MODE_OPTIONS = [
+  { value: 'role', label: '按角色' },
+  { value: 'users', label: '指定人员' },
+]
 
 export default function ApprovalChainEditor({ nodes, onChange, roleOptions, userOptions, fieldOptions }: {
   nodes: ApprovalNodeConfig[]
@@ -32,10 +27,6 @@ export default function ApprovalChainEditor({ nodes, onChange, roleOptions, user
   userOptions: ApprovalUserOption[]
   fieldOptions: Array<{ value: string; label: string }>
 }) {
-  const [editing, setEditing] = useState<ApprovalNodeConfig | null>(null)
-  const [isEdit, setIsEdit] = useState(false)
-  const [form] = Form.useForm<FormValues>()
-
   const userLabel = (username?: string, userId?: number) => {
     const hit = userOptions.find(u => u.username === username || u.id === userId)
     return hit ? `${hit.display_name || hit.username}（${hit.username}）` : username || String(userId ?? '')
@@ -52,170 +43,152 @@ export default function ApprovalChainEditor({ nodes, onChange, roleOptions, user
     return `${fieldLabel(c.field)} ${op} ${val}`
   }
 
-  const openNew = () => {
-    setIsEdit(false)
-    setEditing({ label: '', role: '' })
-    form.setFieldsValue({ label: '', approverMode: 'role', role: undefined, approvers: [], timeout_hours: DEFAULT_TIMEOUT_HOURS, conditions: [] })
+  const condValueText = (c: ApprovalCondition) => (Array.isArray(c.value) ? c.value.join(',') : String(c.value ?? ''))
+
+  const approverText = (node: ApprovalNodeConfig) => node.approvers?.length
+    ? node.approvers.map(a => userLabel(a.username, a.user_id)).join('、')
+    : (node.role ? roleLabel(node.role) : '未指定审批人')
+
+  const timeoutText = (node: ApprovalNodeConfig) => {
+    if (node.timeout_hours) return `${node.timeout_hours}h`
+    return node.timeout_hours === 0 ? '不提醒' : `${DEFAULT_TIMEOUT_HOURS}h（默认）`
   }
 
-  const openEdit = (row: ApprovalNodeConfig) => {
-    setIsEdit(true)
-    setEditing(row)
-    form.setFieldsValue({
-      label: row.label,
-      approverMode: row.approvers?.length ? 'users' : 'role',
-      role: row.role,
-      approvers: (row.approvers || []).map(a => a.user_id).filter(Boolean) as number[],
-      // 历史节点未配超时时后端按默认 48 小时提醒，回填默认值避免「只改别的字段」被静默改成不提醒
-      timeout_hours: row.timeout_hours ?? DEFAULT_TIMEOUT_HOURS,
-      conditions: condsOf(row).map(c => ({
-        field: c.field,
-        op: c.op,
-        value: Array.isArray(c.value) ? c.value.join(',') : String(c.value ?? ''),
-      })),
-    })
-  }
+  const patchNode = (index: number, patch: Partial<ApprovalNodeConfig>) =>
+    onChange(nodes.map((n, i) => (i === index ? { ...n, ...patch } : n)))
 
-  const saveNode = async () => {
-    const v = await form.validateFields()
-    const node: ApprovalNodeConfig = { label: v.label.trim() }
-    if (v.approverMode === 'users') {
-      node.role = ''
-      node.approvers = (v.approvers || []).map(id => {
-        const hit = userOptions.find(u => u.id === id)
-        return { user_id: id, username: hit?.username }
-      })
-    } else {
-      node.role = v.role
-    }
-    node.timeout_hours = v.timeout_hours ?? 0
-    const conditions: ApprovalCondition[] = (v.conditions || [])
-      .filter(c => c && c.field && c.op && c.value !== undefined && c.value !== '')
-      .map(c => ({
-        field: c.field,
-        op: c.op as ApprovalCondition['op'],
-        value: c.op === 'in' ? String(c.value).split(',').map(s => s.trim()).filter(Boolean) : Number(c.value),
-      }))
-    if (conditions.length) node.conditions = conditions
-    const next = isEdit
-      ? nodes.map(n => (n === editing ? node : n))
-      : [...nodes, node]
-    onChange(next.map((n, i) => ({ ...n, seq: i + 1 })))
-    setEditing(null)
-  }
+  // 空数组会被后端判为「触发条件为空」，须整体删键；历史单条件 condition 一并清理，避免双份数据
+  const setConditions = (index: number, conds: ApprovalCondition[]) =>
+    patchNode(index, conds.length
+      ? { conditions: conds, condition: undefined }
+      : { conditions: undefined, condition: undefined })
 
-  const removeNode = (row: ApprovalNodeConfig) => onChange(nodes.filter(n => n !== row).map((n, i) => ({ ...n, seq: i + 1 })))
+  const addCondition = (index: number) =>
+    setConditions(index, [...condsOf(nodes[index]), { field: fieldOptions[0]?.value || '', op: '>=', value: '' }])
+
+  const updateCondition = (index: number, condIndex: number, patch: Partial<ApprovalCondition>) =>
+    setConditions(index, condsOf(nodes[index]).map((c, ci) => (ci === condIndex ? { ...c, ...patch } : c)))
+
+  const removeCondition = (index: number, condIndex: number) =>
+    setConditions(index, condsOf(nodes[index]).filter((_, ci) => ci !== condIndex))
+
+  const setApproverMode = (index: number, mode: 'role' | 'users') =>
+    patchNode(index, mode === 'users' ? { approvers: [] } : { approvers: undefined })
+
+  const setApprovers = (index: number, ids: number[]) =>
+    patchNode(index, { approvers: ids.map(id => ({ user_id: id, username: userOptions.find(u => u.id === id)?.username })) })
+
+  const addNode = () => onChange([
+    ...nodes,
+    { label: `节点 ${nodes.length + 1}`, role: '', timeout_hours: DEFAULT_TIMEOUT_HOURS },
+  ].map((n, i) => ({ ...n, seq: i + 1 })))
+
+  const removeNode = (index: number) =>
+    onChange(nodes.filter((_, i) => i !== index).map((n, i) => ({ ...n, seq: i + 1 })))
 
   const move = (index: number, dir: -1 | 1) => {
-    const next = [...nodes]
     const target = index + dir
-    if (target < 0 || target >= next.length) return
+    if (target < 0 || target >= nodes.length) return
+    const next = [...nodes]
     ;[next[index], next[target]] = [next[target], next[index]]
     onChange(next.map((n, i) => ({ ...n, seq: i + 1 })))
   }
 
   return (
     <div>
-      <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Button icon={<PlusOutlined />} onClick={openNew}>新增节点</Button>
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>节点按顺序执行；触发条件不满足的节点自动跳过；超时 0 表示不提醒</span>
-      </div>
-      <Table<ApprovalNodeConfig> rowKey={(_, i) => String(i)} dataSource={nodes} pagination={false}
-        columns={[
-          { title: '顺序', width: 60, render: (_: any, __: any, i: number) => i + 1 },
-          { title: '节点名称', dataIndex: 'label' },
-          { title: '审批人', width: 220, render: (_: any, r: ApprovalNodeConfig) => r.approvers?.length
-            ? <Space size={4} wrap>{r.approvers.map(a => <Tag key={a.user_id || a.username} color="purple">{userLabel(a.username, a.user_id)}</Tag>)}</Space>
-            : <Tag color="blue">{roleLabel(r.role)}</Tag> },
-          { title: '触发条件', render: (_: any, r: ApprovalNodeConfig) => {
-            const conds = condsOf(r)
-            return conds.length
-              ? <Space size={4} wrap>{conds.map((c, i) => <Tag key={i} color="orange">{condText(c)}</Tag>)}</Space>
-              : <Tag>始终</Tag>
-          } },
-          { title: '超时提醒', width: 100, render: (_: any, r: ApprovalNodeConfig) =>
-            r.timeout_hours ? `${r.timeout_hours} 小时` : <span style={{ color: '#94a3b8' }}>不提醒</span> },
-          { title: '操作', width: 210, render: (_: any, row: ApprovalNodeConfig, i: number) => (
-            <Space size={0}>
-              <Button size="small" type="link" icon={<ArrowUpOutlined />} disabled={i === 0} onClick={() => move(i, -1)} />
-              <Button size="small" type="link" icon={<ArrowDownOutlined />} disabled={i === nodes.length - 1} onClick={() => move(i, 1)} />
-              <Button size="small" type="link" icon={<EditOutlined />} onClick={() => openEdit(row)}>编辑</Button>
-              <Button size="small" type="link" danger icon={<DeleteOutlined />} onClick={() => removeNode(row)} />
-            </Space>
-          ) },
-        ]} />
-      <div style={{ marginTop: 20 }}>
-        <div style={{ fontWeight: 600, marginBottom: 12 }}>链路预览</div>
-        {nodes.length === 0 ? <div style={{ color: '#94a3b8' }}>暂无节点，保存会被拒绝</div> : (
-          <Timeline
-            items={nodes.map((n, i) => ({
-              children: (
-                <Space size={8} wrap>
-                  <span style={{ fontWeight: 600 }}>{i + 1}. {n.label}</span>
-                  {n.approvers?.length
-                    ? n.approvers.map(a => <Tag key={a.user_id || a.username} color="purple">{userLabel(a.username, a.user_id)}</Tag>)
-                    : <Tag>{roleLabel(n.role)}</Tag>}
-                  {condsOf(n).map((c, ci) => <Tag key={ci} color="orange">{condText(c)}</Tag>)}
-                  {n.timeout_hours ? <Tag color="red">超时 {n.timeout_hours}h</Tag> : null}
-                </Space>
-              ),
-            }))}
-          />
-        )}
-      </div>
+      <div className="ac-sec-title">链预览 · 按顺序执行，条件不满足的节点自动跳过</div>
+      {nodes.length === 0 ? (
+        <div className="ac-node-card" style={{ padding: '14px 12px', textAlign: 'center' }}>
+          <span className="sc-note">暂无节点，保存会被拒绝</span>
+        </div>
+      ) : (
+        <div className="ac-node-flow">
+          {nodes.map((node, i) => (
+            <div key={i} className="ac-node">
+              <div className="nd-dot">{i + 1}</div>
+              <div className="nd-name" title={node.label}>{node.label || '未命名节点'}</div>
+              <div className="nd-date">
+                <div>{approverText(node)}</div>
+                {condsOf(node).map((c, ci) => <div key={ci}>{condText(c)}</div>)}
+                <div><b>超时</b> {timeoutText(node)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
-      <Modal title={isEdit ? '编辑节点' : '新增节点'} open={!!editing} onOk={saveNode}
-        onCancel={() => setEditing(null)} destroyOnClose width={640}>
-        <Form form={form} layout="vertical">
-          <Form.Item name="label" label="节点名称" rules={[{ required: true, message: '请输入节点名称' }]}>
-            <Input placeholder="如：采购经理审批" maxLength={32} />
-          </Form.Item>
-          <Form.Item name="approverMode" label="审批人" rules={[{ required: true }]}>
-            <Radio.Group>
-              <Radio.Button value="role">按角色</Radio.Button>
-              <Radio.Button value="users">指定人员</Radio.Button>
-            </Radio.Group>
-          </Form.Item>
-          <Form.Item noStyle shouldUpdate={(p, c) => p.approverMode !== c.approverMode}>
-            {({ getFieldValue }) => getFieldValue('approverMode') === 'users' ? (
-              <Form.Item name="approvers" label="指定审批人（可多选，任一通过即推进）"
-                rules={[{ required: true, message: '请至少选择一位审批人' }]}>
-                <Select mode="multiple" showSearch optionFilterProp="label" placeholder="搜索姓名 / 用户名"
-                  options={userOptions.map(u => ({ value: u.id, label: `${u.display_name || u.username}（${u.username}${u.role_name ? ' · ' + u.role_name : ''}）` }))} />
-              </Form.Item>
-            ) : (
-              <Form.Item name="role" label="审批角色" rules={[{ required: true, message: '请选择审批角色' }]}>
-                <Select options={roleOptions} placeholder="选择审批角色" />
-              </Form.Item>
-            )}
-          </Form.Item>
-          <Form.Item name="timeout_hours" label="超时提醒（小时，0 = 不提醒；到时推送站内信 + 企微，同一节点 24h 去重）">
-            <InputNumber min={0} max={720} precision={0} style={{ width: 200 }} />
-          </Form.Item>
-          <Form.List name="conditions">
-            {(fields, { add, remove }) => (
-              <Card size="small" title="触发条件（全部满足才进入本节点，留空 = 无条件）"
-                extra={<Button size="small" type="link" icon={<PlusOutlined />} onClick={() => add({ field: fieldOptions[0]?.value, op: '>=', value: '' })}>添加条件</Button>}>
-                {fields.length === 0 ? <span style={{ color: '#94a3b8', fontSize: 12 }}>无条件：任何金额都会进入本节点</span> : null}
-                {fields.map(f => (
-                  <Space key={f.key} align="baseline" style={{ display: 'flex', marginBottom: 8 }} wrap>
-                    <Form.Item {...f} name={[f.name, 'field']} rules={[{ required: true, message: '选择字段' }]} style={{ marginBottom: 0 }}>
-                      <Select style={{ width: 180 }} options={fieldOptions} placeholder="条件字段" />
-                    </Form.Item>
-                    <Form.Item {...f} name={[f.name, 'op']} rules={[{ required: true }]} style={{ marginBottom: 0 }}>
-                      <Select style={{ width: 170 }} options={OP_OPTIONS} />
-                    </Form.Item>
-                    <Form.Item {...f} name={[f.name, 'value']} rules={[{ required: true, message: '填写阈值' }]} style={{ marginBottom: 0 }}>
-                      <Input style={{ width: 160 }} placeholder="阈值 / 逗号分隔" />
-                    </Form.Item>
-                    <Button size="small" type="link" danger icon={<DeleteOutlined />} onClick={() => remove(f.name)} />
-                  </Space>
+      <div className="ac-sec-title gap">节点列表 · 可调整顺序与审批人</div>
+      {nodes.map((node, index) => {
+        const conds = condsOf(node)
+        // 用键是否存在而非长度推导：切到「指定人员」的瞬间 approvers 为空数组，按长度推导会立刻弹回「按角色」
+        const useUsers = Array.isArray(node.approvers)
+        return (
+          <div key={index} className="ac-node-card">
+            <div className="ac-nc-head">
+              <span className="ac-nc-seq">{index + 1}</span>
+              <div className="ac-nc-name">
+                <Input variant="borderless" value={node.label} placeholder="节点名称" maxLength={32}
+                  onChange={e => patchNode(index, { label: e.target.value })} />
+              </div>
+              <div className="ac-nc-tools">
+                <Button type="text" size="small" title="上移" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => move(index, -1)} />
+                <Button type="text" size="small" title="下移" icon={<ArrowDownOutlined />} disabled={index === nodes.length - 1} onClick={() => move(index, 1)} />
+                <Button type="text" size="small" danger className="danger" title="删除" icon={<DeleteOutlined />} onClick={() => removeNode(index)} />
+              </div>
+            </div>
+            <div className="ac-nc-body">
+              <div className="ac-nc-field">
+                <label>审批人</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Segmented options={APPROVER_MODE_OPTIONS} value={useUsers ? 'users' : 'role'}
+                    onChange={v => setApproverMode(index, v as 'role' | 'users')} />
+                  {useUsers ? (
+                    <Select mode="multiple" showSearch optionFilterProp="label" placeholder="搜索姓名 / 用户名"
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={(node.approvers || []).map(a => a.user_id).filter((id): id is number => typeof id === 'number')}
+                      options={userOptions.map(u => ({ value: u.id, label: `${u.display_name || u.username}（${u.username}${u.role_name ? ' · ' + u.role_name : ''}）` }))}
+                      onChange={ids => setApprovers(index, ids)} />
+                  ) : (
+                    <Select options={roleOptions} value={node.role || undefined} placeholder="选择审批角色"
+                      style={{ flex: 1, minWidth: 0 }}
+                      onChange={v => patchNode(index, { role: v, approvers: undefined })} />
+                  )}
+                </div>
+              </div>
+              <div className="ac-nc-field">
+                <label>超时提醒（小时，0 = 不提醒）</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <InputNumber min={0} max={720} precision={0} style={{ width: 96 }}
+                    placeholder={String(DEFAULT_TIMEOUT_HOURS)} value={node.timeout_hours ?? undefined}
+                    onChange={v => patchNode(index, { timeout_hours: v ?? null })} />
+                  <span className="ac-nc-hint">到达阈值推送站内信 + 企微，同节点 24h 去重</span>
+                </div>
+              </div>
+              <div className="ac-nc-field full">
+                <label>触发条件（全部满足才进入本节点，留空 = 无条件）</label>
+                {conds.length === 0 ? <div className="ac-nc-hint" style={{ marginBottom: 6 }}>无条件：任何情况都会进入本节点</div> : null}
+                {conds.map((c, ci) => (
+                  <div key={ci} className="ac-cond-row">
+                    <Select className="field" options={fieldOptions} value={c.field || undefined} placeholder="条件字段"
+                      onChange={v => updateCondition(index, ci, { field: v })} />
+                    <Select className="op" options={OP_OPTIONS} value={c.op}
+                      onChange={v => updateCondition(index, ci, { op: v as ApprovalCondition['op'] })} />
+                    <Input className="val" placeholder="阈值 / 逗号分隔" value={condValueText(c)}
+                      onChange={e => updateCondition(index, ci, { value: e.target.value })} />
+                    <span className="rm" title="删除条件" onClick={() => removeCondition(index, ci)}>×</span>
+                  </div>
                 ))}
-              </Card>
-            )}
-          </Form.List>
-        </Form>
-      </Modal>
+                <span className="ac-cond-add" onClick={() => addCondition(index)}>
+                  <PlusOutlined className="ac-ico-sm" />添加条件
+                </span>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+      <div className="ac-add-node" onClick={addNode}>
+        <PlusOutlined className="ac-ico-md" />添加节点
+      </div>
     </div>
   )
 }

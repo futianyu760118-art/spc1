@@ -190,6 +190,14 @@ async def _reject_supplier_claim(db, req: ApprovalActionRequest) -> dict:
     )
 
 
+async def _recall_supplier_claim(db, req: ApprovalActionRequest) -> dict:
+    try:
+        ok = await SupplierClaimService(db).recall(req.entity_id, req.approver, caller_role=req.approver_role)
+    except ValueError as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": bool(ok), "message": None if ok else "单据不存在或当前状态不可撤回"}
+
+
 register_pending_provider(ApprovalPendingProvider(
     biz_type="supplier_claim",
     biz_name="供应商索赔单",
@@ -199,5 +207,6 @@ register_pending_provider(ApprovalPendingProvider(
     preview=_preview_supplier_claim,
     approve=_approve_supplier_claim,
     reject=_reject_supplier_claim,
+    recall=_recall_supplier_claim,
     condition_field_options=CLAIM_CONDITION_FIELDS,
 ))

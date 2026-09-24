@@ -385,3 +385,32 @@ async def test_broken_business_can_be_disabled(client):
     r = await client.get("/api/v1/approvals/businesses", headers=h_admin)
     row = next(x for x in r.json()["data"]["items"] if x["biz_type"] == BROKEN_BIZ)
     assert row["is_active"] is False
+
+
+async def test_pending_provider_mode_filter(client):
+    """provider_mode 筛选：builtin 只留代码 Provider 业务，sql 只留 SQL 接入业务；stats 仍为全量口径。"""
+    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
+    await create(client, h_q, 500, submit=True)
+    assert (await register(client, h_admin)).json()["code"] == 0
+
+    r = await client.get("/api/v1/approvals/pending", params={"provider_mode": "builtin"}, headers=h_admin)
+    data = r.json()["data"]
+    assert {x["biz_type"] for x in data["items"]} == {"supplier_claim"}
+    assert data["stats"]["by_biz"].get(BIZ_TYPE) == 1  # stats 不随接入方式筛选收缩
+
+    r = await client.get("/api/v1/approvals/pending", params={"provider_mode": "sql"}, headers=h_admin)
+    data = r.json()["data"]
+    assert {x["biz_type"] for x in data["items"]} == {BIZ_TYPE}
+
+    r = await client.get("/api/v1/approvals/pending", headers=h_admin)
+    assert {x["biz_type"] for x in r.json()["data"]["items"]} == {"supplier_claim", BIZ_TYPE}
+
+
+async def test_sql_business_recall_rejected_in_center(client):
+    """SQL 接入业务无撤回能力：统一撤回端点返回业务错误。"""
+    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
+    a = await create(client, h_q, 500, submit=True)
+    assert (await register(client, h_admin)).json()["code"] == 0
+    body = (await client.post(f"/api/v1/approvals/items/{BIZ_TYPE}/{a['id']}/recall",
+                              json={}, headers=h_admin)).json()
+    assert body["code"] == 1 and "不支持在审批中心内" in body["message"]

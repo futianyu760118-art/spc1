@@ -38,11 +38,14 @@ class ApprovalPendingProvider:
     biz_type: str
     biz_name: str
     fetch: PendingFetcher
+    # 接入方式：builtin = 代码 provider（可中心内审批），sql = 管理员配置取数（只聚合跳转）
+    mode: str = "builtin"
     fetch_approved: Optional[MyFetcher] = None
     fetch_submitted: Optional[MyFetcher] = None
     preview: Optional[PreviewFetcher] = None
     approve: Optional[ActionHandler] = None
     reject: Optional[ActionHandler] = None
+    recall: Optional[ActionHandler] = None
     condition_field_options: list[dict] = field(default_factory=list)
 
 

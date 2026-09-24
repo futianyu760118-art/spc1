@@ -20,23 +20,14 @@ from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.models.exception.quality_issue import QualityIssue
 from app.models.order.sale_order import SaleOrderLine
 from app.schemas.common import ResponseModel
-from app.services.material.kitting_calc_service import freshness_of
 
-from ..common import ExternalDataPage, PageParamsMixin
+from ..common import ExternalDataPage, PageParamsMixin, freshness_meta
 from ..deps import external_auth
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
 router = APIRouter(prefix="/quality-issues", tags=["品质异常"])
 router_trace = APIRouter(prefix="/quality-trace", tags=["品质追溯"])
-
-
-def _freshness_meta(data_as_of: Optional[datetime]) -> dict:
-    """空集返回 unknown/false（不是过期数据）；有数据复用 6h/24h 阈值。"""
-    if data_as_of is None:
-        return {"data_as_of": None, "data_confidence": "unknown", "stale": False}
-    confidence, stale = freshness_of(data_as_of)
-    return {"data_as_of": data_as_of.isoformat(), "data_confidence": confidence, "stale": stale}
 
 
 def serialize_quality_issue(issue: QualityIssue) -> dict:
@@ -191,7 +182,7 @@ async def quality_issues_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **_freshness_meta(data_as_of),
+        **freshness_meta(data_as_of),
         "request_id": q.request_id,
     }
 
@@ -328,6 +319,6 @@ async def quality_trace_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **_freshness_meta(data_as_of),
+        **freshness_meta(data_as_of),
         "request_id": q.request_id,
     }

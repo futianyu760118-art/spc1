@@ -24,6 +24,7 @@ from . import __version__, contracts
 from .kitting import register_kitting_tools
 from .legacy_compat import register_legacy_tools
 from .orders import query_orders
+from .production import register_production_tools
 from .quality import register_quality_tools
 from .tool_helpers import (
     READ_ONLY_TOOL,
@@ -97,6 +98,11 @@ EXPECTED_TOOLS = [
     "material_supplies_list",
     "quality_issues_list",
     "quality_trace",
+    "production_work_orders_list",
+    "production_operations_list",
+    "production_order_links_list",
+    "production_reports_list",
+    "production_capacity_list",
 ]
 
 
@@ -276,3 +282,6 @@ register_kitting_tools(mcp)
 
 # 质量类工具（质量异常列表/质量追溯），注册后共 16 个只读 Tool
 register_quality_tools(mcp)
+
+# 生产协同类工具（工单/工序/订单关联/报工/产能），注册后共 21 个只读 Tool
+register_production_tools(mcp)

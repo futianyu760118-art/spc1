@@ -5,6 +5,16 @@ export function formatDate(date: string | null | undefined, fmt = 'YYYY-MM-DD') 
   return dayjs(date).format(fmt)
 }
 
+export function daysAgoISO(days: number) {
+  return dayjs().subtract(days, 'day').format('YYYY-MM-DD')
+}
+
+// 本周一（dayjs 默认周日起算，转成周一）；weekOffset=1 即上周一
+export function mondayOf(weekOffset = 0) {
+  const offsetToMonday = (dayjs().day() + 6) % 7
+  return dayjs().subtract(offsetToMonday, 'day').startOf('day').subtract(weekOffset * 7, 'day')
+}
+
 export function formatDateTime(date: string | null | undefined) {
   return formatDate(date, 'YYYY-MM-DD HH:mm')
 }

@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Descriptions, Drawer, Input, Space, Spin, Steps, Tag, Timeline, Typography, message } from 'antd'
+import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Alert, Button, Drawer, Input, Space, Spin, Typography, message } from 'antd'
 import dayjs from 'dayjs'
 import { approvalApi, type ApprovalPreview } from '../services/approval'
 
 const STATE_TEXT: Record<string, string> = { done: '已处理', current: '当前节点', todo: '待处理' }
-const STATE_STATUS: Record<string, 'finish' | 'process' | 'wait'> = { done: 'finish', current: 'process', todo: 'wait' }
+const STATE_TAG: Record<string, string> = { done: 'sc-tag-done', current: 'sc-tag-prod', todo: 'sc-tag-wait' }
+const STATUS_TAG: Record<string, { cls: string; text: string }> = {
+  pending: { cls: 'sc-tag-kit', text: '审批中' },
+  approved: { cls: 'sc-tag-done', text: '已通过' },
+  rejected: { cls: 'sc-tag-danger', text: '已驳回' },
+  recalled: { cls: 'sc-tag-wait', text: '已撤回' },
+}
 
 const fmt = (v?: string) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-')
 
@@ -48,86 +54,97 @@ export default function ApprovalDrawer({ open, bizType, itemId, onClose, onDone 
   }
 
   const canAct = !!data?.can_act
+  const status = data?.status ? STATUS_TAG[data.status] : undefined
 
   return (
     <Drawer
-      title={data ? `${data.title || '-'} · ${data.no || ''}` : '审批详情'}
+      title={data ? (
+        <div>
+          <div className="ac-dr-title">{data.title || '-'}</div>
+          <div className="ac-dr-code">{data.no || '-'} · {data.biz_name}</div>
+        </div>
+      ) : '审批详情'}
       width={640}
       open={open}
       onClose={onClose}
       destroyOnClose
-      extra={data?.deep_link ? (
-        <a href={data.deep_link} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>打开完整详情</a>
-      ) : null}
+      rootClassName="sc-page ac-page sc-drawer ac-drawer"
       footer={canAct ? (
-        <Space direction="vertical" style={{ width: '100%' }}>
+        <div>
+          <div className="f-note">通过可不填意见；驳回必须填写原因，将退回申请人修改后重新提交。</div>
           <Input.TextArea rows={2} value={comment} onChange={e => setComment(e.target.value)}
-            placeholder="审批意见（驳回必填）…" />
-          <div style={{ textAlign: 'right' }}>
+            placeholder="审批意见（驳回必填）…" style={{ marginTop: 10 }} />
+          <div style={{ textAlign: 'right', marginTop: 10 }}>
             <Space>
               <Button danger loading={submitting} onClick={() => act('reject')}>驳回</Button>
-              <Button type="primary" loading={submitting} onClick={() => act('approve')}>通过</Button>
+              <Button type="primary" loading={submitting} onClick={() => act('approve')}>通过并推进到下一节点</Button>
             </Space>
           </div>
-        </Space>
+        </div>
       ) : (
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
           <Typography.Text type="secondary">{data?.action_hint || '该业务不支持在审批中心内审批'}</Typography.Text>
-          {data?.deep_link ? <Button type="primary" onClick={() => window.open(data.deep_link, '_self')}>前往业务页面</Button> : null}
+          {data?.deep_link ? <Button type="primary" onClick={() => window.open(data.deep_link, '_self')}>前往业务系统处理</Button> : null}
         </Space>
       )}
     >
       <Spin spinning={loading}>
         {data ? (
           <>
-            <Space wrap style={{ marginBottom: 12 }}>
-              <Tag color="blue">{data.biz_name}</Tag>
-              {data.current_node ? <Tag>{data.current_node}</Tag> : null}
-              {data.wait_level === 'overdue' ? <Tag color="red">已超时 {data.wait_hours} 小时</Tag> : null}
-              {data.wait_level === 'soon' ? <Tag color="orange">已等待 {data.wait_hours} 小时</Tag> : null}
-            </Space>
+            <div className="ac-dr-tags">
+              <span className={`sc-tag ${data.can_act || data.status === 'pending' ? 'sc-tag-prod' : 'sc-tag-purple'}`}>{data.biz_name}</span>
+              {status ? <span className={`sc-tag ${status.cls}`}>{status.text}</span> : null}
+              {data.wait_level === 'overdue' ? <span className="sc-tag sc-tag-danger"><span className="dot" />已超时 {data.wait_hours} 小时</span> : null}
+              {data.wait_level === 'soon' ? <span className="sc-tag sc-tag-warn"><span className="dot" />已等待 {data.wait_hours} 小时</span> : null}
+              {data.current_node ? <span className="sc-tag sc-tag-amber">{data.current_node}</span> : null}
+              {data.deep_link ? (
+                <a className="ac-dr-link" href={data.deep_link} target="_blank" rel="noreferrer">打开完整详情 ↗</a>
+              ) : null}
+            </div>
 
-            <Descriptions size="small" column={2} bordered style={{ marginBottom: 16 }}>
-              {(data.fields || []).map(f => (
-                <Descriptions.Item key={f.label} label={f.label} span={f.emphasis ? 2 : 1}>
-                  <span style={f.emphasis ? { color: '#dc2626', fontWeight: 600 } : undefined}>{f.value ?? '-'}</span>
-                </Descriptions.Item>
-              ))}
-            </Descriptions>
+            <div className="d-sec">
+              <h4>关键信息</h4>
+              <dl className="d-kv">
+                {(data.fields || []).map(f => (
+                  <Fragment key={f.label}>
+                    <dt>{f.label}</dt>
+                    <dd style={f.emphasis ? { color: '#dc2626', fontWeight: 600 } : undefined}>{f.value ?? '-'}</dd>
+                  </Fragment>
+                ))}
+              </dl>
+            </div>
 
             {(data.progress || []).length > 0 && (
-              <>
-                <Typography.Title level={5}>审批进度</Typography.Title>
-                <Steps
-                  direction="vertical"
-                  size="small"
-                  style={{ marginBottom: 16 }}
-                  items={(data.progress || []).map(n => ({
-                    title: n.label,
-                    status: STATE_STATUS[n.state] || 'wait',
-                    description: (
-                      <div style={{ fontSize: 12, color: '#64748b' }}>
-                        {n.approver_label} · {STATE_TEXT[n.state]}{n.acted_at ? ` · ${fmt(n.acted_at)}` : ''}
-                        {n.comment ? <div style={{ color: '#334155' }}>{n.comment}</div> : null}
+              <div className="d-sec">
+                <h4>审批进度 · 按提交时冻结的快照执行</h4>
+                <div className="ac-flow">
+                  {(data.progress || []).map((n, i) => (
+                    <div key={n.seq ?? i} className={`ac-flow-item${n.state === 'done' ? ' done' : n.state === 'current' ? ' cur' : ''}`}>
+                      <span className="ac-flow-dot" />
+                      <div className="ac-flow-head">
+                        {i + 1}. {n.label}
+                        <span className={`sc-tag ${STATE_TAG[n.state] || 'sc-tag-wait'}`}>{STATE_TEXT[n.state] || n.state}</span>
                       </div>
-                    ),
-                  }))}
-                />
-              </>
+                      <div className="ac-flow-sub">{n.approver_label}{n.acted_at ? ` · ${fmt(n.acted_at)}` : ''}</div>
+                      {n.comment ? <div className="ac-flow-cmt">{n.comment}</div> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
 
-            <Typography.Title level={5}>审批记录</Typography.Title>
-            <Timeline
-              items={(data.logs || []).map(lg => ({
-                children: (
-                  <div style={{ fontSize: 12 }}>
-                    <div style={{ color: '#94a3b8' }}>{fmt(lg.time)}</div>
-                    <div>{lg.who} {lg.action_label || lg.action}</div>
-                    {lg.comment ? <div style={{ color: '#64748b' }}>{lg.comment}</div> : null}
+            <div className="d-sec">
+              <h4>审批记录</h4>
+              <div className="ac-timeline">
+                {(data.logs || []).map((lg, i) => (
+                  <div key={i} className="ac-tl-item done">
+                    <div className="t">{fmt(lg.time)}</div>
+                    <div className="what">{lg.who} {lg.action_label || lg.action}</div>
+                    {lg.comment ? <div className="who">{lg.comment}</div> : null}
                   </div>
-                ),
-              }))}
-            />
+                ))}
+              </div>
+            </div>
           </>
         ) : !loading ? <Alert type="warning" message="未获取到单据详情" /> : null}
       </Spin>

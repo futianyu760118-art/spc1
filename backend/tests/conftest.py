@@ -94,18 +94,29 @@ async def _test_db():
     from app.models.basicdata.bom import Bom
     from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog
     from app.models.basicdata.file_asset import FileAsset
+    from app.models.basicdata.permission import SysPermission
     from app.models.basicdata.user import SysRole, SysUser
     from app.models.basicdata.user_org_scope import UserOrgScope
     from app.models.exception.quality_issue import QualityIssue
     from app.models.order.sale_order import SaleOrder, SaleOrderLine
+    from app.models.production.base_condition import ProductionBaseCondition
+    from app.models.production.capacity_slot import CapacitySlot
+    from app.models.production.order_schedule_snapshot import ProductionOrderScheduleSnapshot
+    from app.models.production.process_progress import ProcessProgress
+    from app.models.production.production_daily_report import ProductionDailyReport
+    from app.models.production.production_task_order import ProductionTaskOrder
     from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprovalLog
     from app.models.common.approval_business import ApprovalBusiness
     tables = [
         SysRole.__table__, SysUser.__table__, UserOrgScope.__table__,
+        SysPermission.__table__,
         SupplierClaim.__table__, SupplierClaimApprovalLog.__table__,
         Notification.__table__, FileAsset.__table__,
         DataSupplyApiKey.__table__, DataSupplyCallLog.__table__,
         QualityIssue.__table__, SaleOrder.__table__, SaleOrderLine.__table__, Bom.__table__,
+        ProductionTaskOrder.__table__, ProcessProgress.__table__,
+        ProductionOrderScheduleSnapshot.__table__, ProductionDailyReport.__table__,
+        CapacitySlot.__table__, ProductionBaseCondition.__table__,
         ApprovalBusiness.__table__,
     ]
     async with engine.begin() as conn:
@@ -185,16 +196,27 @@ async def db(_test_db):
 # 质量对外接口测试用 HMAC Key（假凭证，rate_limit=0 绕过 Redis）
 EXTERNAL_QUALITY_KEY = {"app_key": "ak_pytest_quality", "app_secret": "sk_pytest_quality"}
 EXTERNAL_ORDERS_KEY = {"app_key": "ak_pytest_orders", "app_secret": "sk_pytest_orders"}
+EXTERNAL_PRODUCTION_KEY = {"app_key": "ak_pytest_production", "app_secret": "sk_pytest_production"}
+
+PRODUCTION_ENDPOINT_CODES = [
+    "production.work_orders.list",
+    "production.operations.list",
+    "production.order_links.list",
+    "production.reports.list",
+    "production.capacity.list",
+]
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def external_keys(_test_db):
-    """清空质量/数据供给表并种入两把 HMAC Key：quality（两个新接口）/ orders（未授权对照）。"""
+    """清空质量/生产/数据供给表并种入三把 HMAC Key：quality / orders（未授权对照）/ production。"""
     from app.core.database import engine
 
     async with engine.begin() as conn:
         await conn.execute(text(
             "TRUNCATE quality_issue, sale_order, sale_order_line, scm_bom, "
+            "production_task_order, process_progress, production_order_schedule_snapshot, "
+            "production_daily_report, production_capacity_slot, production_base_condition, "
             "data_supply_api_key, data_supply_call_log RESTART IDENTITY CASCADE"
         ))
         await conn.execute(text("""
@@ -205,12 +227,20 @@ async def external_keys(_test_db):
                 ('pytest-quality', 'ak_pytest_quality', TRUE,
                  '["quality_issues.list", "quality_trace.list"]', 0, :qak, :qas, NULL, 'pytest'),
                 ('pytest-orders', 'ak_pytest_orders', TRUE,
-                 '["orders.list"]', 0, :oak, :oas, NULL, 'pytest')
+                 '["orders.list"]', 0, :oak, :oas, NULL, 'pytest'),
+                ('pytest-production', 'ak_pytest_production', TRUE,
+                 CAST(:pcodes AS jsonb), 0, :pak, :pas, NULL, 'pytest')
         """), {
             "qak": EXTERNAL_QUALITY_KEY["app_key"], "qas": EXTERNAL_QUALITY_KEY["app_secret"],
             "oak": EXTERNAL_ORDERS_KEY["app_key"], "oas": EXTERNAL_ORDERS_KEY["app_secret"],
+            "pak": EXTERNAL_PRODUCTION_KEY["app_key"], "pas": EXTERNAL_PRODUCTION_KEY["app_secret"],
+            "pcodes": json.dumps(PRODUCTION_ENDPOINT_CODES),
         })
-    yield {"quality": EXTERNAL_QUALITY_KEY, "orders": EXTERNAL_ORDERS_KEY}
+    yield {
+        "quality": EXTERNAL_QUALITY_KEY,
+        "orders": EXTERNAL_ORDERS_KEY,
+        "production": EXTERNAL_PRODUCTION_KEY,
+    }
 
 
 @pytest_asyncio.fixture(loop_scope="session")

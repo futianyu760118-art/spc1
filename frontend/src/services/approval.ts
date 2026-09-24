@@ -95,6 +95,7 @@ export type ApprovalConfigItem = {
   biz_name: string
   nodes: ApprovalNodeConfig[]
   is_active?: boolean
+  mode?: 'builtin' | 'sql'
   condition_field_options?: Array<{ value: string; label: string }>
   pending_count?: number | null
   updated_by?: string | null
@@ -147,6 +148,8 @@ export const approvalApi = {
     api.post(`/approvals/items/${bizType}/${id}/approve`, data),
   reject: (bizType: string, id: number, data: { comment: string; expected_version?: number }) =>
     api.post(`/approvals/items/${bizType}/${id}/reject`, data),
+  recall: (bizType: string, id: number) =>
+    api.post(`/approvals/items/${bizType}/${id}/recall`, {}),
   batchApprove: (data: { items: Array<{ biz_type: string; id: number; expected_version?: number }>; comment?: string }) =>
     api.post('/approvals/batch-approve', data),
   configs: () => api.get('/approvals/configs'),

@@ -11,7 +11,7 @@ import { canApproveNode } from '../../../utils/approvalNode'
 import { waitPill } from '../../../utils'
 import { useAuthStore } from '../../../store/auth'
 import { fileApi } from '../../../services/api'
-import ClaimPaper, { opinionsFromClaim } from './components/ClaimPaper'
+import ClaimPaper, { opinionsFromClaim } from '../../../components/ClaimPaper'
 
 const ACTION_TAG: Record<string, { cls: string; text: string }> = {
   submit: { cls: 'sc-tag-kit', text: '提交' },

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, Spin } from 'antd'
 import { ArrowLeftOutlined, PrinterOutlined } from '@ant-design/icons'
 import { qualityApi } from '../../../services/quality'
-import ClaimPaper, { opinionsFromClaim } from './components/ClaimPaper'
+import ClaimPaper, { opinionsFromClaim } from '../../../components/ClaimPaper'
 
 export default function SupplierClaimPrint() {
   const { id } = useParams<{ id: string }>()

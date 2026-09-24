@@ -51,7 +51,8 @@ import { usePermissionStore, PermNode } from '../store/permission'
 import { authApi, notificationApi } from '../services/api'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
-import { FloatingAssistant, TopBarAssistant } from '../components/Assistant'
+import { FloatingAssistant } from '../components/Assistant'
+import GlobalSearch from '../components/GlobalSearch/GlobalSearch'
 import FontSizeSetting from '../components/FontSizeSetting'
 import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
 
@@ -936,8 +937,8 @@ export default function MainLayout() {
             )}
             <b>{crumb.page || crumb.root}</b>
           </div>
+          {!isShareUser() && <GlobalSearch items={navTree} />}
           <div className="tbv2-actions">
-            {!isShareUser() && !isSupplierUser() && canUseTopbar.aiSearch && <TopBarAssistant />}
             {!isShareUser() && !isSupplierUser() && canUseTopbar.share && <ShareButton />}
             {!isSupplierUser() && canUseTopbar.feedback && <FeedbackButton />}
             {canUseTopbar.fontSize && <FontSizeSetting />}

@@ -420,7 +420,7 @@ async def test_submit_creates_notifications(db, client):
     h_q = await login(client, Q)
     a = await create(client, h_q, 500, submit=True)
     row = (await db.execute(text(
-        "SELECT COUNT(*) FROM notification WHERE type='supplier_claim' "
+        "SELECT COUNT(*) FROM notification WHERE type='approval_pending' "
         "AND ref_type='supplier_claim' AND ref_id=:cid"), {"cid": a["id"]})).scalar()
     await db.commit()
     assert row >= 1

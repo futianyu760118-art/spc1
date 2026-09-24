@@ -229,7 +229,8 @@ def build_sql_provider(meta: BizMeta) -> ApprovalPendingProvider:
         return await _preview_sql_item(db, username, role, meta.biz_type, entity_id)
 
     return ApprovalPendingProvider(
-        biz_type=meta.biz_type, biz_name=meta.biz_name, fetch=_fetch, preview=_preview,
+        biz_type=meta.biz_type, biz_name=meta.biz_name, mode="sql",
+        fetch=_fetch, preview=_preview,
         condition_field_options=meta.condition_field_options or [],
     )
 

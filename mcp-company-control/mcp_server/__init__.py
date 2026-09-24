@@ -3,4 +3,4 @@
 遵循 AEOS MCP Integration Specification v0.1.0。
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

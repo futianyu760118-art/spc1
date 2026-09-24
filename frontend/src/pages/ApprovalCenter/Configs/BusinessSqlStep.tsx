@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Alert, Button, Input, Select, Space, Table, message } from 'antd'
-import { DeleteOutlined, PlusOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { Alert, Button, Input, Select, Table, message } from 'antd'
+import { CheckOutlined, CloseOutlined, PlusOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { approvalApi, type ApprovalConditionField, type ApprovalFieldMapping, type TestSqlResult } from '../../../services/approval'
 
 export type SqlStepValue = {
@@ -23,17 +23,6 @@ export const MAPPING_FIELDS: MappingField[] = [
   { key: 'amount', label: '金额', required: false },
 ]
 
-const SQL_EDITOR_STYLE = {
-  fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-  fontSize: 12.5,
-  background: '#0f172a',
-  color: '#cbd5e1',
-  borderColor: '#334155',
-  borderRadius: 10,
-  padding: '12px 16px',
-  lineHeight: 1.8,
-} as const
-
 export default function BusinessSqlStep({ value, onChange }: {
   value: SqlStepValue
   onChange: (patch: Partial<SqlStepValue>) => void
@@ -53,7 +42,7 @@ export default function BusinessSqlStep({ value, onChange }: {
     setTesting(true)
     try {
       const res: any = await approvalApi.testSql(value.sqlText)
-        const result: TestSqlResult = {
+      const result: TestSqlResult = {
         columns: res.data?.columns || [],
         rows: res.data?.rows || [],
         elapsed_ms: res.data?.elapsed_ms ?? 0,
@@ -66,14 +55,14 @@ export default function BusinessSqlStep({ value, onChange }: {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ fontWeight: 600 }}>取数 SQL</span>
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>单条只读 SELECT / WITH；最多返回 200 行，5 秒超时</span>
+      <div className="ac-field-title first">
+        <span>取数 SQL</span>
+        <span className="sc-note" style={{ fontWeight: 400 }}>单条只读 SELECT / WITH；最多返回 200 行，5 秒超时</span>
         <Button style={{ marginLeft: 'auto' }} icon={<PlayCircleOutlined />} loading={testing} onClick={testSql}>
           测试取数
         </Button>
       </div>
-      <Input.TextArea rows={7} value={value.sqlText} style={SQL_EDITOR_STYLE}
+      <Input.TextArea rows={7} value={value.sqlText} className="ac-sql-editor"
         onChange={e => onChange({ sqlText: e.target.value })}
         placeholder={"SELECT id, apply_no AS no, title, applicant, submit_time, current_node\nFROM your_business_table\nWHERE status = 'pending'"} />
 
@@ -90,31 +79,25 @@ export default function BusinessSqlStep({ value, onChange }: {
         </div>
       ) : null}
 
-      <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>
+      <div className="ac-field-title">
         字段映射
-        <span style={{ fontSize: 12, fontWeight: 400, color: '#94a3b8', marginLeft: 8 }}>
-          测试取数后可下拉选择返回列；带 * 为必填
-        </span>
+        <span className="sc-note" style={{ fontWeight: 400 }}>测试取数后可下拉选择返回列；带 * 为必填</span>
       </div>
       <MappingTable mapping={value.mapping} options={columnOptions}
         onChange={(key, column) => onChange({ mapping: { ...value.mapping, [key]: column } })} />
 
-      <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>
+      <div className="ac-field-title">
         深链模板
-        <span style={{ fontSize: 12, fontWeight: 400, color: '#94a3b8', marginLeft: 8 }}>
+        <span className="sc-note" style={{ fontWeight: 400 }}>
           占位符 {'{no}'} / {'{id}'} / {'{title}'} 用映射后的值替换，留空则不提供跳转
         </span>
       </div>
       <Input value={value.deepLink} maxLength={256} placeholder="/purchase/pay/{no}"
         onChange={e => onChange({ deepLink: e.target.value })} />
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '16px 0 8px' }}>
-        <span style={{ fontWeight: 600 }}>条件字段声明</span>
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>声明后可在审批链节点条件中选择</span>
-        <Button size="small" type="link" icon={<PlusOutlined />} style={{ marginLeft: 'auto' }}
-          onClick={() => onChange({ conditionFields: [...value.conditionFields, { value: '', label: '' }] })}>
-          添加字段
-        </Button>
+      <div className="ac-field-title">
+        条件字段声明
+        <span className="sc-note" style={{ fontWeight: 400 }}>声明后可在审批链节点条件中选择</span>
       </div>
       <ConditionFieldsEditor fields={value.conditionFields}
         onChange={fields => onChange({ conditionFields: fields })} />
@@ -128,27 +111,29 @@ function MappingTable({ mapping, options, onChange }: {
   onChange: (key: keyof ApprovalFieldMapping, column?: string) => void
 }) {
   return (
-    <Table<MappingField> size="small" pagination={false} rowKey="key" dataSource={MAPPING_FIELDS}
-      columns={[
-        { title: '内部字段', width: 200, render: (_, f) => (
-          <Space size={6}>
-            <span style={{ fontFamily: 'monospace' }}>{f.key}</span>
-            {f.required
-              ? <span style={{ color: '#dc2626', fontWeight: 600 }}>*</span>
-              : <span style={{ fontSize: 11, color: '#94a3b8' }}>可选</span>}
-          </Space>
-        ) },
-        { title: '来源列', render: (_, f) => (
+    <div>
+      <div className="ac-map-head">
+        <span>内部字段（SPC）</span>
+        <span>来源列（SQL）</span>
+        <span>说明</span>
+        <span />
+      </div>
+      {MAPPING_FIELDS.map(f => (
+        <div className="ac-map-row" key={f.key}>
+          <span className="src">
+            {f.key}{f.required ? <span style={{ color: '#dc2626', fontWeight: 600 }}> *</span> : null}
+          </span>
           <Select allowClear showSearch optionFilterProp="label" style={{ width: '100%' }}
+            size="small"
             placeholder={f.required ? '必填：选择来源列' : '选填'}
             value={mapping[f.key] || undefined}
             options={options}
             onChange={col => onChange(f.key, col)} />
-        ) },
-        { title: '说明', width: 280, render: (_, f) => (
-          <span style={{ fontSize: 12, color: '#64748b' }}>{f.label}{f.hint ? ` · ${f.hint}` : ''}</span>
-        ) },
-      ]} />
+          <span className="sc-note">{f.label}{f.hint ? ` · ${f.hint}` : ''}</span>
+          <span />
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -156,24 +141,53 @@ function ConditionFieldsEditor({ fields, onChange }: {
   fields: ApprovalConditionField[]
   onChange: (fields: ApprovalConditionField[]) => void
 }) {
+  const [editing, setEditing] = useState<number | null>(null)
+
   const updateAt = (index: number, patch: Partial<ApprovalConditionField>) =>
     onChange(fields.map((f, i) => (i === index ? { ...f, ...patch } : f)))
 
-  if (!fields.length) {
-    return <div style={{ fontSize: 12, color: '#94a3b8' }}>未声明条件字段：审批链节点将无法配置触发条件</div>
+  const removeAt = (index: number) => {
+    onChange(fields.filter((_, i) => i !== index))
+    setEditing(prev => prev === null ? null : prev === index ? null : prev > index ? prev - 1 : prev)
   }
+
+  const addField = () => {
+    onChange([...fields, { value: '', label: '' }])
+    setEditing(fields.length)
+  }
+
   return (
     <div>
-      {fields.map((f, i) => (
-        <Space key={i} align="baseline" style={{ display: 'flex', marginBottom: 8 }} wrap>
-          <Input size="small" style={{ width: 200, fontFamily: 'monospace' }} placeholder="字段名（如 amount）"
-            value={f.value} onChange={e => updateAt(i, { value: e.target.value })} />
-          <Input size="small" style={{ width: 200 }} placeholder="显示名称（如 金额）"
-            value={f.label} onChange={e => updateAt(i, { label: e.target.value })} />
-          <Button size="small" type="link" danger icon={<DeleteOutlined />}
-            onClick={() => onChange(fields.filter((_, fi) => fi !== i))} />
-        </Space>
-      ))}
+      {!fields.length ? (
+        <div className="sc-note" style={{ marginBottom: 8 }}>未声明条件字段：审批链节点将无法配置触发条件</div>
+      ) : null}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        {fields.map((f, i) => {
+          // 空字段（新增或值被清空）保持内联输入态；已声明 chip 点击可回到编辑态
+          if (editing === i || !f.value.trim()) {
+            return (
+              <span key={i} className="ac-chip-edit">
+                <Input size="small" className="sc-mono" style={{ width: 150 }} placeholder="字段名（如 amount）"
+                  value={f.value} onChange={e => updateAt(i, { value: e.target.value })} />
+                <Input size="small" style={{ width: 130 }} placeholder="显示名称（如 金额）"
+                  value={f.label} onChange={e => updateAt(i, { label: e.target.value })} />
+                <Button type="text" size="small" title="完成" icon={<CheckOutlined />} onClick={() => setEditing(null)} />
+              </span>
+            )
+          }
+          return (
+            <span key={i} className="ac-chip-sm" title="点击编辑" onClick={() => setEditing(i)}>
+              <span className="sc-mono">{f.value}</span>
+              {f.label ? <span>· {f.label}</span> : null}
+              <CloseOutlined className="ac-ico-xs" style={{ cursor: 'pointer' }}
+                onClick={e => { e.stopPropagation(); removeAt(i) }} />
+            </span>
+          )
+        })}
+        {editing === null ? (
+          <span className="ac-chip-sm add" onClick={addField}><PlusOutlined className="ac-ico-xs" /> 添加条件字段</span>
+        ) : null}
+      </div>
     </div>
   )
 }

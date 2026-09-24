@@ -1,4 +1,4 @@
-"""独立测试脚本 — 34 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
+"""独立测试脚本 — 41 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
 
 运行（在 mcp-company-control/ 目录下）：
     python scripts/test_company_control.py
@@ -53,6 +53,11 @@ EXPECTED_TOOLS = {
     "material_supplies_list",
     "quality_issues_list",
     "quality_trace",
+    "production_work_orders_list",
+    "production_operations_list",
+    "production_order_links_list",
+    "production_reports_list",
+    "production_capacity_list",
 }
 
 DATA_AS_OF = "2026-09-19T18:00:00Z"
@@ -344,6 +349,43 @@ QUALITY_TRACE = [
     },
 ]
 
+PRODUCTION_WORK_ORDERS = [
+    {"work_order_id": "1", "work_order_no": "WO-2609-001", "order_no": "SO-2609-099",
+     "status_raw": "closed", "status": "completed", "workshop_code": "车间A",
+     "planned_qty": 100.0, "completed_qty": 100.0, "uom": None, "blocking": None},
+    {"work_order_id": "2", "work_order_no": "WO-2609-002", "order_no": "SO-2609-001",
+     "status_raw": "started", "status": "in_progress", "workshop_code": "车间B",
+     "planned_qty": 500.0, "completed_qty": 70.0, "uom": None, "blocking": None},
+]
+PRODUCTION_OPERATIONS = [
+    {"operation_id": "11", "order_no": "SO-2609-001", "operation_code": "组装",
+     "status_raw": "in_progress", "status": "in_progress", "work_order_no": None,
+     "work_center_code": None, "planned_qty": 500.0, "qty": 70.0},
+    {"operation_id": "12", "order_no": "SO-2609-001", "operation_code": "包装",
+     "status_raw": "pending", "status": "planned", "work_order_no": None,
+     "work_center_code": None, "planned_qty": 500.0, "qty": None},
+]
+PRODUCTION_ORDER_LINKS = [
+    {"link_id": "production_task:2", "link_type": "production_task", "work_order_no": "WO-2609-002",
+     "order_no": "SO-2609-001", "line_no": None, "order_line_id": None, "allocated_qty": 500.0},
+    {"link_id": "schedule_snapshot:9", "link_type": "schedule_snapshot", "work_order_no": None,
+     "order_no": "SO-2609-001", "line_no": "1", "order_line_id": "501", "allocated_qty": None},
+]
+PRODUCTION_REPORTS = [
+    {"report_id": "21", "work_order_no": "WO-2609-002", "report_type": "daily_erp",
+     "order_no": "SO-2609-001", "reported_qty": 30.0, "reported_at": "2026-09-21",
+     "is_reversed": None, "reversal_of": None, "revision": None},
+    {"report_id": "22", "work_order_no": "WO-2609-002", "report_type": "daily_erp",
+     "order_no": "SO-2609-001", "reported_qty": 40.0, "reported_at": "2026-09-22",
+     "is_reversed": None, "reversal_of": None, "revision": None},
+]
+PRODUCTION_CAPACITY = [
+    {"work_center_code": "车间A:assembly", "capacity_date": "2026-09-23",
+     "available_minutes": 480.0, "planned_load_minutes": 510.0, "occupied_slot_count": 2},
+    {"work_center_code": "车间A:assembly", "capacity_date": "2026-09-27",
+     "available_minutes": 0.0, "planned_load_minutes": 120.0, "occupied_slot_count": 1},
+]
+
 MOCK_STATE = {"mode": "normal", "last_query": None}
 
 # 与 SPC「数据供给」HMAC 机制一致的校验参数
@@ -363,6 +405,11 @@ MOCK_ENDPOINT_CODES = {
     "/external/material-supplies/list": "material.supplies",
     "/external/quality-issues/list": "quality_issues.list",
     "/external/quality-trace/list": "quality_trace.list",
+    "/external/production/work-orders/list": "production.work_orders.list",
+    "/external/production/operations/list": "production.operations.list",
+    "/external/production/order-links/list": "production.order_links.list",
+    "/external/production/reports/list": "production.reports.list",
+    "/external/production/capacity/list": "production.capacity.list",
 }
 
 # 齐套类 mock 路由（stale_kitting 模式只影响这些路径）
@@ -372,6 +419,15 @@ KITTING_MOCK_PATHS = {
     "/external/material-kitting/demands",
     "/external/inventory/availability",
     "/external/material-supplies/list",
+}
+
+# 生产协同类 mock 路由（no_freshness 模式只影响这些路径）
+PRODUCTION_MOCK_PATHS = {
+    "/external/production/work-orders/list",
+    "/external/production/operations/list",
+    "/external/production/order-links/list",
+    "/external/production/reports/list",
+    "/external/production/capacity/list",
 }
 
 MCP_HTTP_TOKEN = "test-http-token"
@@ -467,6 +523,22 @@ class MockHandler(BaseHTTPRequestHandler):
                         "data_as_of": DATA_AS_OF,
                         "data_confidence": "low",
                         "stale": True,
+                    },
+                }
+            )
+        if mode == "no_freshness" and parsed.path in PRODUCTION_MOCK_PATHS:
+            return self._json(
+                {
+                    "code": 0,
+                    "message": "ok",
+                    "data": {
+                        "items": [],
+                        "total": 0,
+                        "page": 1,
+                        "page_size": 20,
+                        "data_as_of": None,
+                        "data_confidence": "unknown",
+                        "stale": False,
                     },
                 }
             )
@@ -624,6 +696,62 @@ class MockHandler(BaseHTTPRequestHandler):
                 if not q.get("order_no") or r.get("order_no") == q["order_no"]
             ]
             return self._json(self._list_envelope(rows, q))
+        if route == "/external/production/work-orders/list":
+            MOCK_STATE["last_query"] = q
+            rows = PRODUCTION_WORK_ORDERS
+            if q.get("work_order_no"):
+                rows = [r for r in rows if r["work_order_no"] == q["work_order_no"]]
+            if q.get("order_no"):
+                rows = [r for r in rows if r["order_no"] == q["order_no"]]
+            if q.get("workshop"):
+                rows = [r for r in rows if r["workshop_code"] == q["workshop"]]
+            if q.get("status"):
+                wanted = {s.strip() for s in q["status"].split(",") if s.strip()}
+                rows = [r for r in rows if r["status"] in wanted]
+            return self._json(self._list_envelope(rows, q))
+        if route == "/external/production/operations/list":
+            if not q.get("order_no"):
+                return self._json({"code": 422, "message": "order_no 必填（SPC 工序进度以订单号为锚点，无工单外键）"})
+            rows = [r for r in PRODUCTION_OPERATIONS if r["order_no"] == q["order_no"]]
+            if q.get("process_type"):
+                wanted = {s.strip() for s in q["process_type"].split(",") if s.strip()}
+                rows = [r for r in rows if r["operation_code"] in wanted]
+            return self._json(self._list_envelope(rows, q))
+        if route == "/external/production/order-links/list":
+            if not (q.get("work_order_no") or q.get("order_no")):
+                return self._json({"code": 422, "message": "work_order_no / order_no 至少提供一个"})
+            rows = list(PRODUCTION_ORDER_LINKS)
+            if q.get("work_order_no"):
+                rows = [r for r in rows if r["work_order_no"] == q["work_order_no"]]
+            if q.get("order_no"):
+                rows = [r for r in rows if r["order_no"] == q["order_no"]]
+            if q.get("link_type"):
+                wanted = {s.strip() for s in q["link_type"].split(",") if s.strip()}
+                rows = [r for r in rows if r["link_type"] in wanted]
+            return self._json(self._list_envelope(rows, q))
+        if route == "/external/production/reports/list":
+            if not q.get("work_order_no"):
+                return self._json({"code": 422, "message": "work_order_no 必填（按生产订单号查询 ERP 生产日报）"})
+            rows = [r for r in PRODUCTION_REPORTS if r["work_order_no"] == q["work_order_no"]]
+            if q.get("order_no"):
+                rows = [r for r in rows if r["order_no"] == q["order_no"]]
+            if q.get("report_date_start"):
+                rows = [r for r in rows if r["reported_at"] >= q["report_date_start"]]
+            if q.get("report_date_end"):
+                rows = [r for r in rows if r["reported_at"] <= q["report_date_end"]]
+            return self._json(self._list_envelope(rows, q))
+        if route == "/external/production/capacity/list":
+            if not (q.get("date_start") and q.get("date_end")):
+                return self._json({"code": 422, "message": "date_start / date_end 必填（产能按日期窗口聚合）"})
+            rows = [
+                r for r in PRODUCTION_CAPACITY
+                if q["date_start"] <= r["capacity_date"] <= q["date_end"]
+            ]
+            if q.get("department"):
+                rows = [r for r in rows if r["work_center_code"].split(":")[0] == q["department"]]
+            if q.get("schedule_bucket"):
+                rows = [r for r in rows if r["work_center_code"].split(":")[1] == q["schedule_bucket"]]
+            return self._json(self._list_envelope(rows, q))
         return self._json({"error": "not found"}, 404)
 
 
@@ -664,7 +792,7 @@ async def call_tool(session, name, args):
 
 async def check_01_initialize(session, init_result):
     assert init_result.server_info.name == "company-control", f"server_info.name={init_result.server_info.name}"
-    assert init_result.server_info.version == "1.1.0", f"server_info.version={init_result.server_info.version!r}"
+    assert init_result.server_info.version == "1.2.0", f"server_info.version={init_result.server_info.version!r}"
 
 
 async def check_02_tools_list(session):
@@ -791,10 +919,10 @@ async def check_12_health(session):
     _, body = await call_tool(session, "get_system_health", {})
     data = body.get("data", {})
     assert data.get("status") == "ok", f"{data}"
-    assert data.get("read_only") is True and data.get("version") == "1.1.0"
+    assert data.get("read_only") is True and data.get("version") == "1.2.0"
     assert set(data.get("capabilities", [])) == EXPECTED_TOOLS
     # §16 顶层字段超集
-    assert body.get("status") == "ok" and body.get("version") == "1.1.0"
+    assert body.get("status") == "ok" and body.get("version") == "1.2.0"
     assert body.get("checked_at") and set(body.get("capabilities", [])) == EXPECTED_TOOLS
 
 
@@ -1054,6 +1182,144 @@ async def check_34_quality_stale(session):
     assert err.get("code") == "STALE_DATA" and err.get("retryable") is True, f"{body}"
 
 
+async def check_35_production_work_orders(session):
+    """production_work_orders_list：过滤、null 占位、evidence、request_id 回显"""
+    _, body = await call_tool(
+        session, "production_work_orders_list",
+        {"workshop": "车间A", "request_id": "req-prod-001"},
+    )
+    assert body and body.get("capability") == "production_work_orders_list", f"{body}"
+    assert body.get("source") == "company-control" and body.get("read_only") is True, f"{body}"
+    rows = body.get("data") or []
+    assert len(rows) == 1 and rows[0]["work_order_no"] == "WO-2609-001", f"workshop 过滤未生效: {rows}"
+    assert rows[0]["status"] == "completed" and rows[0]["uom"] is None and rows[0]["blocking"] is None
+    refs = body.get("evidence_refs") or []
+    assert refs and all(
+        r.startswith("control-platform://production-work-order/") and "@" in r for r in refs
+    ), f"{refs}"
+    assert body.get("request_id") == "req-prod-001", f"request_id 未回显: {body.get('request_id')}"
+
+    _, body = await call_tool(session, "production_work_orders_list", {"status": "in_progress"})
+    rows = body.get("data") or []
+    assert len(rows) == 1 and rows[0]["work_order_no"] == "WO-2609-002", f"status 过滤未生效: {rows}"
+
+
+async def check_36_production_operations(session):
+    """production_operations_list：order_no 必填 + evidence 前缀 production-operation/"""
+    _, body = await call_tool(session, "production_operations_list", {})
+    err = body.get("error", {})
+    assert err.get("code") == "INVALID_ARGUMENT" and err.get("retryable") is False, f"{body}"
+
+    _, body = await call_tool(session, "production_operations_list", {"order_no": "SO-2609-001"})
+    rows = body.get("data") or []
+    assert len(rows) == 2 and all(r["work_order_no"] is None for r in rows), f"{rows}"
+    refs = body.get("evidence_refs") or []
+    assert refs and all(r.startswith("control-platform://production-operation/") for r in refs), f"{refs}"
+
+    _, body = await call_tool(
+        session, "production_operations_list",
+        {"order_no": "SO-2609-001", "process_type": "包装"},
+    )
+    rows = body.get("data") or []
+    assert len(rows) == 1 and rows[0]["status"] == "planned", f"process_type 过滤或状态映射异常: {rows}"
+
+
+async def check_37_production_order_links(session):
+    """production_order_links_list：双源关联 + 锚点必填"""
+    _, body = await call_tool(session, "production_order_links_list", {})
+    err = body.get("error", {})
+    assert err.get("code") == "INVALID_ARGUMENT", f"{body}"
+
+    _, body = await call_tool(session, "production_order_links_list", {"order_no": "SO-2609-001"})
+    rows = body.get("data") or []
+    types = {r["link_type"] for r in rows}
+    assert len(rows) == 2 and types == {"production_task", "schedule_snapshot"}, f"双源关联异常: {rows}"
+    refs = body.get("evidence_refs") or []
+    assert refs and all(r.startswith("control-platform://production-order-link/") for r in refs), f"{refs}"
+
+    _, body = await call_tool(
+        session, "production_order_links_list", {"work_order_no": "WO-2609-002"}
+    )
+    rows = body.get("data") or []
+    assert len(rows) == 1 and rows[0]["link_type"] == "production_task", f"{rows}"
+
+    _, body = await call_tool(
+        session, "production_order_links_list",
+        {"order_no": "SO-2609-001", "link_type": "schedule_snapshot"},
+    )
+    rows = body.get("data") or []
+    assert len(rows) == 1 and rows[0]["order_line_id"] == "501", f"{rows}"
+
+
+async def check_38_production_reports(session):
+    """production_reports_list：work_order_no 必填 + null 撤销占位 + evidence"""
+    _, body = await call_tool(session, "production_reports_list", {})
+    err = body.get("error", {})
+    assert err.get("code") == "INVALID_ARGUMENT", f"{body}"
+
+    _, body = await call_tool(
+        session, "production_reports_list", {"work_order_no": "WO-2609-002"}
+    )
+    rows = body.get("data") or []
+    assert len(rows) == 2 and all(r["report_type"] == "daily_erp" for r in rows), f"{rows}"
+    assert all(r["is_reversed"] is None and r["revision"] is None for r in rows), f"撤销/更正占位异常: {rows}"
+    refs = body.get("evidence_refs") or []
+    assert refs and all(r.startswith("control-platform://production-report/") for r in refs), f"{refs}"
+
+
+async def check_39_production_capacity(session):
+    """production_capacity_list：日期窗口必填 + 反向区间拒绝 + evidence 复合键"""
+    _, body = await call_tool(session, "production_capacity_list", {})
+    err = body.get("error", {})
+    assert err.get("code") == "INVALID_ARGUMENT", f"{body}"
+
+    _, body = await call_tool(
+        session, "production_capacity_list",
+        {"date_start": "2026-09-30", "date_end": "2026-09-23"},
+    )
+    err = body.get("error", {})
+    assert err.get("code") == "INVALID_ARGUMENT", f"反向区间未被拒绝: {body}"
+
+    _, body = await call_tool(
+        session, "production_capacity_list",
+        {"date_start": "2026-09-23", "date_end": "2026-09-23"},
+    )
+    rows = body.get("data") or []
+    assert len(rows) == 1 and rows[0]["planned_load_minutes"] == 510.0, f"{rows}"
+    refs = body.get("evidence_refs") or []
+    assert refs and refs[0].startswith(
+        "control-platform://production-capacity/车间A:assembly/2026-09-23@"
+    ), f"{refs}"
+
+
+async def check_40_production_missing_freshness(session):
+    """生产端点缺 data_as_of/合法置信度 → UPSTREAM_UNAVAILABLE「数据置信度不足」，不返回 data"""
+    MOCK_STATE["mode"] = "no_freshness"
+    try:
+        _, body = await call_tool(
+            session, "production_work_orders_list", {"workshop": "车间A"}
+        )
+    finally:
+        MOCK_STATE["mode"] = "normal"
+    err = body.get("error", {})
+    assert err.get("code") == "UPSTREAM_UNAVAILABLE", f"{body}"
+    assert "数据置信度不足" in err.get("message", ""), f"{body}"
+    assert "data" not in body, f"时效缺失时不应返回 data: {body}"
+
+
+async def check_41_production_stale(session):
+    """生产端点 stale=true → STALE_DATA（沿用质量链路口径，交接文档 §7）"""
+    MOCK_STATE["mode"] = "stale"
+    try:
+        _, body = await call_tool(
+            session, "production_work_orders_list", {"workshop": "车间A"}
+        )
+    finally:
+        MOCK_STATE["mode"] = "normal"
+    err = body.get("error", {})
+    assert err.get("code") == "STALE_DATA" and err.get("retryable") is True, f"{body}"
+
+
 # ---------------- HTTP 检查（双传输补充） ----------------
 
 INIT_BODY = {
@@ -1225,6 +1491,13 @@ CHECKS = [
     ("new", "32 质量追溯节点与 evidence", check_32_quality_trace),
     ("new", "33 质量追溯缺锚点被拒", check_33_quality_trace_requires_anchor),
     ("new", "34 质量数据过期返回 STALE_DATA", check_34_quality_stale),
+    ("new", "35 生产工单查询与 evidence", check_35_production_work_orders),
+    ("new", "36 工序进度锚点必填与 evidence", check_36_production_operations),
+    ("new", "37 工单订单关联双源", check_37_production_order_links),
+    ("new", "38 生产报工锚点必填与 evidence", check_38_production_reports),
+    ("new", "39 产能日期窗口校验与 evidence", check_39_production_capacity),
+    ("new", "40 生产缺时效返回数据置信度不足", check_40_production_missing_freshness),
+    ("new", "41 生产数据过期返回 STALE_DATA", check_41_production_stale),
 ]
 
 

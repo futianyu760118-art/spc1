@@ -96,6 +96,7 @@ import SupplierClaimDetail from './pages/QualityCenter/SupplierClaims/detail'
 import SupplierClaimPrint from './pages/QualityCenter/SupplierClaims/print'
 import ApprovalPending from './pages/ApprovalCenter/Pending'
 import ApprovalConfigs from './pages/ApprovalCenter/Configs'
+import ApprovalItem from './pages/ApprovalCenter/Item'
 import SubjectBalances from './pages/FinanceCenter/SubjectBalances/index'
 import {useAuthStore} from './store/auth'
 import {useThemeStore} from './store/theme'
@@ -281,8 +282,9 @@ export default function App() {
                             <Route path="quality/supplier-claims/new" element={<SupplierClaimNew/>}/>
                             <Route path="quality/supplier-claims/print/:id" element={<SupplierClaimPrint/>}/>
                             <Route path="quality/supplier-claims/:id" element={<SupplierClaimDetail/>}/>
-                            <Route path="approvals/pending" element={<ApprovalPending/>}/>
-                            <Route path="approvals/configs" element={<ApprovalConfigs/>}/>
+      <Route path="approvals/pending" element={<ApprovalPending/>}/>
+      <Route path="approvals/configs" element={<ApprovalConfigs/>}/>
+      <Route path="approvals/items/:bizType/:id" element={<ApprovalItem/>}/>
                             <Route path="finance/subject-balances" element={<SubjectBalances/>} key="finance-subject-balances"/>
                         </Route>
                     </Routes>

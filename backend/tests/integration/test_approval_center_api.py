@@ -1,7 +1,7 @@
 """审批中心 API 回归测试（统一待我审批聚合 / 审批链配置 / 角色选项）。"""
 
 from tests.conftest import DEFAULT_CHAIN, login
-from tests.integration._helpers import FIN, PM, Q, VIEWER, act, create, payload, pending_items, snap_roles
+from tests.integration._helpers import FIN, PM, Q, Q2, VIEWER, act, create, get_claim, payload, pending_items, snap_roles
 
 ADMIN = "admin"
 
@@ -45,6 +45,7 @@ async def test_configs_list_includes_registered_biz(client):
     sc = next((x for x in items if x["biz_type"] == "supplier_claim"), None)
     assert sc is not None and sc["biz_name"] == "供应商索赔单"
     assert len(sc["nodes"]) == 4
+    assert sc["mode"] == "builtin"  # 列表要按接入方式展示，内置/SQL 都要给出 mode
 
 
 async def test_config_save_via_center_takes_effect(client):
@@ -269,6 +270,34 @@ async def test_unified_approve_requires_node_permission(client):
     assert r.json()["code"] == 1 and "无权" in r.json()["message"]
 
 
+async def test_unified_recall_by_applicant(client):
+    """我发起的撤回：发起人页内撤回 → 状态 recalled、审批记录保留留档。"""
+    h_q = await login(client, Q)
+    a = await create(client, h_q, 500, submit=True)
+
+    r = await client.post(f"/api/v1/approvals/items/supplier_claim/{a['id']}/recall", json={}, headers=h_q)
+    body = r.json()
+    assert body["code"] == 0 and "撤回" in body["message"]
+
+    claim = await get_claim(client, h_q, a["id"])
+    assert claim["approval_status"] == "recalled"
+    # 当前轮次已产生的提交记录保留留档
+    assert any(lg["action"] == "submit" for lg in claim["approval_logs"])
+
+    r = await client.get("/api/v1/approvals/submitted", headers=h_q)
+    mine = next(x for x in r.json()["data"]["items"] if x["id"] == a["id"])
+    assert mine["status"] == "recalled" and mine["can_recall"] is False
+
+
+async def test_unified_recall_rejected_for_non_applicant(client):
+    """非发起人撤回被拒（provider 内校验，业务错误而非 500）。"""
+    h_q, h_q2 = await login(client, Q), await login(client, Q2)
+    a = await create(client, h_q, 500, submit=True)
+    r = await client.post(f"/api/v1/approvals/items/supplier_claim/{a['id']}/recall", json={}, headers=h_q2)
+    assert r.status_code == 200 and r.json()["code"] == 1
+    assert "发起人" in r.json()["message"]
+
+
 async def test_unregistered_biz_actions_rejected(client):
     h_admin = await login(client, ADMIN)
     r = await client.post("/api/v1/approvals/items/price_change/1/approve", json={}, headers=h_admin)
@@ -429,3 +458,35 @@ async def test_timeout_reminder_skips_disabled_business(client, db):
     assert (await client.put("/api/v1/approvals/configs/supplier_claim",
                              json={"nodes": nodes, "is_active": False}, headers=h_admin)).json()["code"] == 0
     assert await scheduler._collect_targets(db) == []  # 停用后不再提醒
+
+
+async def test_migrate_permission_names_backfills_old_name(client, db):
+    """权限改名回灌：仅当 DB 仍为旧名时更新（幂等），不覆盖管理员在权限管理里的自定义名。"""
+    from sqlalchemy import text
+
+    from app.core.permission_registry import migrate_permission_names
+
+    await db.execute(text("""
+        INSERT INTO sys_permission (code, name, module, actions, sort_order, is_active)
+        VALUES ('approval.pending', '待我审批', 'approval', '["read"]'::jsonb, 0, TRUE)
+        ON CONFLICT (code) DO UPDATE SET name = '待我审批'
+    """))
+    await db.commit()
+
+    assert await migrate_permission_names(db) == 1
+    name = (await db.execute(text("SELECT name FROM sys_permission WHERE code = 'approval.pending'"))).scalar()
+    assert name == '待办工作台'
+
+    # 幂等：再跑一次无变更
+    assert await migrate_permission_names(db) == 0
+
+    # 管理员自定义名不被覆盖
+    await db.execute(text("UPDATE sys_permission SET name = '自定义名称' WHERE code = 'approval.pending'"))
+    await db.commit()
+    assert await migrate_permission_names(db) == 0
+    name = (await db.execute(text("SELECT name FROM sys_permission WHERE code = 'approval.pending'"))).scalar()
+    assert name == '自定义名称'
+
+    # 收尾：恢复为新名，避免污染同库其它用例
+    await db.execute(text("UPDATE sys_permission SET name = '待办工作台' WHERE code = 'approval.pending'"))
+    await db.commit()

@@ -1,9 +1,12 @@
 """对外接口共享模型与类型"""
 
+from datetime import datetime
 from typing import Generic, List, Optional, TypeVar
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 from typing_extensions import Annotated
+
+from app.services.material.kitting_calc_service import freshness_of
 
 T = TypeVar("T")
 
@@ -23,6 +26,14 @@ class ExternalDataPage(ExternalPage[T]):
     data_confidence: Optional[str] = Field(None, description="数据置信度 high/medium/low")
     stale: Optional[bool] = Field(None, description="数据是否超过新鲜度阈值（24h）")
     request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
+
+
+def freshness_meta(data_as_of: Optional[datetime]) -> dict:
+    """数据新鲜度元信息（列表端点共用）：空集返回 unknown/false（不是过期数据）；有数据复用 6h/24h 阈值。"""
+    if data_as_of is None:
+        return {"data_as_of": None, "data_confidence": "unknown", "stale": False}
+    confidence, stale = freshness_of(data_as_of)
+    return {"data_as_of": data_as_of.isoformat(), "data_confidence": confidence, "stale": stale}
 
 
 class ExternalQuery(BaseModel):

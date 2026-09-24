@@ -5,7 +5,7 @@ import { ArrowLeftOutlined, InboxOutlined, SaveOutlined, SendOutlined } from '@a
 import dayjs from 'dayjs'
 import { qualityApi, CLAIM_REASON_OPTIONS, CLAIM_ITEM_OPTIONS, CLAIM_RETURN_OPTIONS } from '../../../services/quality'
 import { fileApi } from '../../../services/api'
-import ClaimPaper from './components/ClaimPaper'
+import ClaimPaper from '../../../components/ClaimPaper'
 
 type SupplierOption = { id: number; supplier_code: string; supplier_name: string }
 

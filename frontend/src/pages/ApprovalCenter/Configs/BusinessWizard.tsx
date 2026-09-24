@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { Alert, Button, Form, Input, Modal, Radio, Space, Spin, Steps, message } from 'antd'
+import { Fragment, useEffect, useState } from 'react'
+import { Button, Form, Input, Modal, Spin, Tag, message } from 'antd'
+import { ApiOutlined, CodeOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import {
   approvalApi, type ApprovalBusinessItem, type ApprovalBusinessPayload,
   type ApprovalNodeConfig, type ApprovalUserOption,
@@ -8,6 +9,14 @@ import ApprovalChainEditor from '../../../components/ApprovalChainEditor'
 import BusinessSqlStep, { MAPPING_FIELDS, type SqlStepValue } from './BusinessSqlStep'
 
 type BasicValue = { bizType: string; bizName: string; description: string }
+
+const STEP_ITEMS = [
+  { title: '① 基本信息', hint: '名称 / 标识 / 说明' },
+  { title: '② 取数配置', hint: 'SQL · 字段映射 · 条件字段' },
+  { title: '③ 审批链与保存', hint: '节点配置 · 影响确认' },
+]
+
+const STEP_HINTS = ['填写基本信息', '配置取数与字段映射', '确认审批链并保存']
 
 const emptySqlValue = (): SqlStepValue => ({ sqlText: '', mapping: {}, deepLink: '', conditionFields: [] })
 
@@ -112,29 +121,54 @@ export default function BusinessWizard({ mode, record, initialStep = 0, roleOpti
 
   return (
     <Modal open width={900} maskClosable={false} onCancel={onClose}
-      title={isEdit ? `编辑业务接入 - ${record?.biz_name || basic.bizType}` : '新增业务接入'}
-      styles={{ body: { maxHeight: 'calc(100vh - 260px)', overflowY: 'auto' } }}
+      rootClassName="sc-page ac-page"
+      title={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span>{isEdit ? `编辑业务接入 · ${record?.biz_name || basic.bizType}` : '新增业务接入'}</span>
+          <Tag color="blue" style={{ fontWeight: 400 }}>
+            {isEdit ? 'SQL 配置 · 修改后即时生效' : 'SQL 配置 · 即时生效'}
+          </Tag>
+        </span>
+      }
+      styles={{ body: { padding: 0, maxHeight: 'calc(100vh - 260px)', overflowY: 'auto' } }}
       footer={
-        <Space style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="ac-head-hint" style={{ marginRight: 'auto' }}>
+            第 {step + 1} / 3 步 · {STEP_HINTS[step]}
+          </span>
           <Button onClick={onClose}>取消</Button>
           {step > 0 ? <Button onClick={() => setStep(s => s - 1)}>上一步</Button> : null}
           {step < 2
             ? <Button type="primary" onClick={goNext}>下一步</Button>
-            : <Button type="primary" loading={saving} onClick={save}>保存</Button>}
-        </Space>
+            : <Button type="primary" loading={saving} onClick={save}>保存并启用</Button>}
+        </div>
       }>
-      <Steps size="small" current={step} style={{ marginBottom: 20 }}
-        items={[{ title: '基本信息' }, { title: '取数配置' }, { title: '审批链与保存' }]} />
+      <div className="ac-steps">
+        {STEP_ITEMS.map((s, i) => (
+          <Fragment key={i}>
+            {i > 0 ? <span className={`ac-step-line${i <= step ? ' done' : ''}`} /> : null}
+            <div className={`ac-step${i === step ? ' cur' : i < step ? ' done' : ''}`} onClick={() => setStep(i)}>
+              <span className="no">{i + 1}</span>
+              <div>
+                <div className="s-name">{s.title}</div>
+                <div className="s-hint">{s.hint}</div>
+              </div>
+            </div>
+          </Fragment>
+        ))}
+      </div>
 
-      <div style={{ display: step === 0 ? 'block' : 'none' }}>
-        <BasicStep value={basic} isEdit={isEdit} onChange={patch => setBasic(prev => ({ ...prev, ...patch }))} />
-      </div>
-      <div style={{ display: step === 1 ? 'block' : 'none' }}>
-        <BusinessSqlStep value={sqlValue} onChange={patch => setSqlValue(prev => ({ ...prev, ...patch }))} />
-      </div>
-      <div style={{ display: step === 2 ? 'block' : 'none' }}>
-        <ChainStep nodes={nodes} onChange={setNodes} roleOptions={roleOptions} userOptions={userOptions}
-          fieldOptions={fieldOptions} loading={loadingChain} />
+      <div style={{ padding: '16px 20px' }}>
+        <div style={{ display: step === 0 ? 'block' : 'none' }}>
+          <BasicStep value={basic} isEdit={isEdit} onChange={patch => setBasic(prev => ({ ...prev, ...patch }))} />
+        </div>
+        <div style={{ display: step === 1 ? 'block' : 'none' }}>
+          <BusinessSqlStep value={sqlValue} onChange={patch => setSqlValue(prev => ({ ...prev, ...patch }))} />
+        </div>
+        <div style={{ display: step === 2 ? 'block' : 'none' }}>
+          <ChainStep nodes={nodes} onChange={setNodes} roleOptions={roleOptions} userOptions={userOptions}
+            fieldOptions={fieldOptions} loading={loadingChain} />
+        </div>
       </div>
     </Modal>
   )
@@ -155,7 +189,7 @@ function BasicStep({ value, isEdit, onChange }: {
         <Form.Item label="业务标识" required={!isEdit} style={{ flex: 1 }}
           extra={isEdit ? '业务标识保存后不可修改' : '小写字母开头，仅含小写字母/数字/下划线'}>
           <Input value={value.bizType} maxLength={64} disabled={isEdit} placeholder="如：purchase_payment"
-            style={{ fontFamily: 'monospace' }} onChange={e => onChange({ bizType: e.target.value })} />
+            className="sc-mono" onChange={e => onChange({ bizType: e.target.value })} />
         </Form.Item>
       </div>
       <Form.Item label="说明">
@@ -163,11 +197,20 @@ function BasicStep({ value, isEdit, onChange }: {
           onChange={e => onChange({ description: e.target.value })} />
       </Form.Item>
       <Form.Item label="接入方式">
-        <Radio.Group value="sql">
-          <Radio value="sql">SQL 配置（只读取数 SQL + 字段映射，无需开发）</Radio>
-          <Radio value="builtin" disabled>内置 Provider（需开发在代码中注册）</Radio>
-        </Radio.Group>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div className="ac-access-card on">
+            <div className="t"><CodeOutlined /> SQL 配置接入</div>
+            <div className="d">管理员配置只读 SQL + 字段映射，保存即生效，无需开发。仅支持待办聚合与跳转。</div>
+          </div>
+          <div className="ac-access-card" onClick={() => message.info('内置业务需开发接入')}>
+            <div className="t"><ApiOutlined /> 内置 Provider 接入</div>
+            <div className="d">需开发实现取数与审批动作，支持在中心内直接审批、批量通过。请联系开发排期。</div>
+          </div>
+        </div>
       </Form.Item>
+      <div className="f-note">
+        业务标识用于审批链、待办聚合与深链，全局唯一；同一业务不允许重复注册。
+      </div>
     </Form>
   )
 }
@@ -182,8 +225,13 @@ function ChainStep({ nodes, onChange, roleOptions, userOptions, fieldOptions, lo
 }) {
   return (
     <>
-      <Alert type="info" showIcon style={{ marginBottom: 12 }}
-        message="SQL 接入业务的审批链仅用于展示与超时提醒定位审批人，条件不参与流转判断；节点名称需与「当前节点」映射列的取值一致。" />
+      <div className="ac-rule-note">
+        <InfoCircleOutlined />
+        <div>
+          SQL 接入业务的审批链仅用于展示与超时提醒定位审批人，条件不参与流转判断；
+          节点名称需与「当前节点」映射列的取值一致。
+        </div>
+      </div>
       {loading ? <Spin style={{ display: 'block', margin: '40px auto' }} /> : (
         <ApprovalChainEditor nodes={nodes} onChange={onChange} roleOptions={roleOptions}
           userOptions={userOptions} fieldOptions={fieldOptions} />

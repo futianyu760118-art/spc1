@@ -3,7 +3,7 @@
 中台只读能力适配器，接入 AEOS Hub。遵循 **AEOS MCP Integration Specification v0.1.0**。
 
 - **名称**：company-control
-- **版本**：1.1.0
+- **版本**：1.2.0
 - **传输**：stdio（默认，由 AEOS Hub 作为 MCP client 拉起）/ streamable-http（远程客户端，静态 Bearer Token）
 - **技术栈**：Python 3.12+ / 官方 mcp SDK 2.x（`MCPServer`）/ httpx / pydantic
 - **权限等级**：全部 Tool 为 `READ_ONLY`（MCP annotations `readOnlyHint=true` + `server.json` 声明）
@@ -78,19 +78,24 @@ args = ["-m", "mcp_server"]
 1. 登录 SPC → 基础数据中心 → 数据供给 → 新建 API Key
 2. 勾选接口：`int:health.ping`、`orders.list`、`order_details.list`、`boms.tree`、
    `materials.list`、`suppliers.list`、`kitting.results`、`kitting.shortages`、
-   `kitting.demands`、`inventory.availability`、`material.supplies`
+   `kitting.demands`、`inventory.availability`、`material.supplies`、`quality_issues.list`、
+   `quality_trace.list`、`production.work_orders.list`、`production.operations.list`、
+   `production.order_links.list`、`production.reports.list`、`production.capacity.list`
 3. IP 白名单：填 MCP 运行主机 IP（本地调试可留空）
 4. 保存后复制 AppKey / AppSecret（**AppSecret 仅显示一次**），填入 `.env`
 
-**当前端点状态**：13 个端点已就绪（`/common/ping`、`/external/orders/list`、
+**当前端点状态**：18 个端点已就绪（`/common/ping`、`/external/orders/list`、
 `/external/order-details/list`、`/external/boms/tree`、`/external/materials/list`、
 `/external/suppliers/list`、`/external/material-kitting/results`、
 `/external/material-kitting/shortages`、`/external/material-kitting/demands`、
 `/external/inventory/availability`、`/external/material-supplies/list`、
-`/external/quality-issues/list`、`/external/quality-trace/list`）；SPC 指标端点尚未开放，
+`/external/quality-issues/list`、`/external/quality-trace/list`、
+`/external/production/work-orders/list`、`/external/production/operations/list`、
+`/external/production/order-links/list`、`/external/production/reports/list`、
+`/external/production/capacity/list`）；SPC 指标端点尚未开放，
 `catalog_metrics_list` / `metric_query` 返回结构化「能力未开放」错误（不返回伪造数据）。
 
-## Tool 清单（16 个，全部 READ_ONLY）
+## Tool 清单（21 个，全部 READ_ONLY）
 
 | Tool | 说明 | 关键约束 |
 |---|---|---|
@@ -110,6 +115,11 @@ args = ["-m", "mcp_server"]
 | `material_supplies_list` | 未来供给列表（AEOS 文档 §9） | endpoint_code `material.supplies`；四源统一：采购在途/委外回货/自制计划/调拨 |
 | `quality_issues_list` | 质量异常列表（AEOS 异常与质量中心 §7） | endpoint_code `quality_issues.list`；无数据源字段（severity/inspection_result/batch_no/supplier_code/material_code/line_no/blocking/issue_type）返回 null；单页 ≤200 |
 | `quality_trace` | 质量追溯（AEOS 异常与质量中心 §7） | endpoint_code `quality_trace.list`；order_no/product_code/batch_no 三选一；扁平节点（quality_issue/order_line/bom），evidence 用 object_type/object_id |
+| `production_work_orders_list` | 生产工单列表（SPC 生产协同交接文档 §6.1） | endpoint_code `production.work_orders.list`；OA 生产任务单快照；状态映射 planned/released/in_progress/completed/unknown（cancelled 无来源），status_raw 保留源语义；uom/入库/预测完工/owner/blocking 无来源恒 null |
+| `production_operations_list` | 工序进度列表（§6.2） | endpoint_code `production.operations.list`；`order_no` 必填（SPC 无工单级工序）；工单/工作中心/前置工序恒 null，不假设线性工艺 |
+| `production_order_links_list` | 工单与销售订单关系（§6.3） | endpoint_code `production.order_links.list`；`work_order_no`/`order_no` 至少一个；双源：production_task（订单级，line_no 恒 null）+ schedule_snapshot（行级，无工单号）；禁止按产品编码推断 |
+| `production_reports_list` | 生产报工列表（§6.4 P1） | endpoint_code `production.reports.list`；`work_order_no` 必填；ERP 生产日报累计口径；撤销/更正无来源恒 null（is_reversed/reversal_of/revision） |
+| `production_capacity_list` | 产能占用与可用分钟（§6.4 P1） | endpoint_code `production.capacity.list`；date_start/date_end 必填；按（部门, 排产段, 日期）聚合；可用分钟缺基础条件为 null、周日不排产为 0；不做除零负荷率 |
 
 - 全部 Tool 拒绝未定义字段（严格 Schema，`additionalProperties: false`），带 `readOnlyHint` 标注
 - 数据类 Tool 支持可选 `request_id`（≤64 字符）透传上游并在返回包回显，便于审计与链路追踪
@@ -174,17 +184,18 @@ args = ["-m", "mcp_server"]
 python scripts/test_company_control.py
 ```
 
-内置 mock 中台端点，覆盖：stdio 30 项（握手 / tools/list / 结构化返回 / 非法输入 /
+内置 mock 中台端点，覆盖：stdio 37 项（握手 / tools/list / 结构化返回 / 非法输入 /
 未授权 / 超时 / 不可用不崩溃 / evidence / 脱敏 / 无写工具 / 幂等 / 健康检查 / 数据过期 /
 0.1.0 兼容工具与旧 Schema / 能力未开放错误 / 92 天跨度校验 / 物料与供应商功能兼容 /
 订单参数与字段映射 / 健康检查 evidence 与置信度 / 齐套 5 工具 / 质量列表与追溯 /
-质量追溯缺锚点校验 / 质量数据过期映射）
+质量追溯缺锚点校验 / 质量数据过期映射 / 生产 5 工具链路 / 生产锚点与日期窗口校验 /
+生产缺时效返回「数据置信度不足」/ 生产数据过期映射）
 + HTTP 4 项（无 token 401 / 错误 token 401 / 正确 token 握手 / 未配 token 拒绝启动）。
 
 ## 元数据与权限声明
 
 - `server.json`：Server 元数据（name / version / owner / transport / read_only / required_permissions / 依赖 / 维护团队 / 每 Tool 权限等级），提交 AEOS Registry 使用
-- MCP 协议层：`serverInfo.version=1.1.0`；每个 Tool 带 `annotations.readOnlyHint=true`
+- MCP 协议层：`serverInfo.version=1.2.0`；每个 Tool 带 `annotations.readOnlyHint=true`
 
 ## 上游系统依赖
 
@@ -199,7 +210,12 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
   `GET /external/inventory/availability`（`inventory.availability`）、
   `GET /external/material-supplies/list`（`material.supplies`）、
   `GET /external/quality-issues/list`（`quality_issues.list`）、
-  `GET /external/quality-trace/list`（`quality_trace.list`）
+  `GET /external/quality-trace/list`（`quality_trace.list`）、
+  `GET /external/production/work-orders/list`（`production.work_orders.list`）、
+  `GET /external/production/operations/list`（`production.operations.list`）、
+  `GET /external/production/order-links/list`（`production.order_links.list`）、
+  `GET /external/production/reports/list`（`production.reports.list`）、
+  `GET /external/production/capacity/list`（`production.capacity.list`）
 - 调用方需在 API Key 上勾选对应 endpoint_code + IP 白名单
 
 ## 已知限制
@@ -223,6 +239,18 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
   `supplier_code` / `material_code` / `line_no` / `blocking` / `issue_type` 无 SPC 数据源，恒为 `null`；
   `quality_trace` 不支持 `supplier_code` 锚点；上游 `stale=true` 返回 `STALE_DATA`（不返回数据，
   与 orders 类工具一致）
+- 生产类工具（相对交接文档建议契约的已确认偏差，SPC 数据现实）：
+  - 工单以 OA 生产任务单（`production_task_order`）为源，无独立工单表；`cancelled` 无来源永不产出；
+    `uom` / `received_qty` / `estimated_finish_at` / `schedule_version` / `owner` / `blocking` 恒 `null`
+  - 工序无工单外键：`production_operations_list` 必填 `order_no`（非 `work_order_no`）；
+    `work_center_code` / `predecessor_operation_ids` 恒 `null`
+  - 工单-订单关联为订单级（任务单只带 `sale_order_no`），`line_no` / `order_line_id` 恒 `null`；
+    `schedule_snapshot` 源为订单行级排产快照（无工单号）
+  - 报工为 ERP 生产日报累计口径；`is_reversed` / `reversal_of` / `revision` 恒 `null`
+  - 产能按（部门, 排产段, 日期）聚合：`available_minutes` 缺基础条件为 `null`，周日不排产为 `0`；
+    `shift_id` / `calendar_version` / `downtime_minutes` 恒 `null`
+  - 时效强制校验：调用公共 helper 前校验真实 `data_as_of` / 置信度；`stale=true` → `STALE_DATA`；
+    缺失或非法 → `UPSTREAM_UNAVAILABLE`「数据置信度不足」（不落入默认兜底：缺失时间→当前时间 / 未知置信度→high）
 
 ## 目录结构
 
@@ -233,6 +261,7 @@ mcp-company-control/
 │  ├─ server.py           # mcp 实例 + 新版 Tool（orders/details/bom/health）
 │  ├─ kitting.py          # 齐套类 Tool（kitting/短料/需求/库存可用量/未来供给）
 │  ├─ quality.py          # 质量类 Tool（质量异常/追溯）
+│  ├─ production.py       # 生产协同类 Tool（工单/工序/订单关联/报工/产能）
 │  ├─ legacy_compat.py    # 0.1.0 兼容 Tool（detail_orders/metrics/material/supplier）
 │  ├─ tool_helpers.py     # Tool 公共基础设施（错误信封/校验/列表返回）
 │  ├─ orders.py           # 订单表头共享查询 + 兼容字段别名

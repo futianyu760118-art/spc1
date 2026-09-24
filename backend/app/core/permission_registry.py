@@ -125,6 +125,30 @@ DEPRECATED_PERMISSION_CODES = (
 # 幂等:每次启动执行,已迁移的行不再变化。
 MIGRATE_AUDIT_ACTIONS = ("materials.stock_check_audit",)
 
+# 一次性改名迁移：DB 是权限定义的真相源，sync_permissions_to_db 只首次插入不覆盖既有行，
+# 故代码侧改名需在此显式回灌。仅当 DB 仍为旧名时更新——管理员在「权限管理」页自定义的名字不被覆盖。
+RENAME_PERMISSION_NAMES = {
+    # 审批中心首个菜单：与页面实际职能（三 Tab 工作台）对齐
+    "approval.pending": ("待我审批", "待办工作台"),
+}
+
+
+async def migrate_permission_names(db: AsyncSession) -> int:
+    """把已更名的权限 code 从旧名回灌为新名（仅旧名时更新，幂等，每次启动执行）。"""
+    from sqlalchemy import text
+
+    changed = 0
+    for code, (old_name, new_name) in RENAME_PERMISSION_NAMES.items():
+        result = await db.execute(
+            text("UPDATE sys_permission SET name = :new WHERE code = CAST(:code AS text) AND name = :old"),
+            {"code": code, "old": old_name, "new": new_name},
+        )
+        changed += result.rowcount or 0
+    await db.commit()
+    if changed:
+        logger.info(f"[权限注册] 权限改名回灌 {changed} 项")
+    return changed
+
 
 async def migrate_permission_actions(db: AsyncSession) -> int:
     """把 materials.stock_check_audit 的 actions 迁移为标准 CRUD,并把角色 JSON 内的
@@ -333,7 +357,7 @@ declare_permission("quality.supplier_claim.archive_delete", "索赔单归档删�
 
 # 审批中心（2026-09-22）— 统一待我审批 + 审批链配置（新流程注册 provider 即接入）
 declare_permission("approval", "审批中心", module="approval", sort_order=14)
-declare_permission("approval.pending", "待我审批", module="approval", parent_code="approval", route_path="/approvals/pending", sort_order=1)
+declare_permission("approval.pending", "待办工作台", module="approval", parent_code="approval", route_path="/approvals/pending", sort_order=1)
 declare_permission("approval.config", "审批配置", module="approval", parent_code="approval", route_path="/approvals/configs", sort_order=2)
 # 业务接入管理不单独挂菜单路由，避免与「审批配置」菜单重复（在审批配置页内以 Tab 呈现）
 declare_permission("approval.business", "业务接入管理", module="approval", parent_code="approval",

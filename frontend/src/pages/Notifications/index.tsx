@@ -4,7 +4,7 @@ import { Empty, Pagination, Spin, message } from 'antd'
 import {
   SoundOutlined, SettingOutlined, AppstoreOutlined, WarningOutlined,
   MessageOutlined, AuditOutlined, BellOutlined, CheckOutlined, ReloadOutlined,
-  RightOutlined, CheckCircleFilled, TransactionOutlined, MoreOutlined, ClockCircleOutlined,
+  RightOutlined, CheckCircleFilled, TransactionOutlined, MoreOutlined, ClockCircleOutlined, InboxOutlined,
 } from '@ant-design/icons'
 import { notificationApi } from '../../services/api'
 import { useAuthStore } from '../../store/auth'
@@ -30,6 +30,7 @@ const TYPE_DEFS = [
   { key: 'price_change', label: '调价单', icon: TransactionOutlined, color: '#0e7490', bg: '#ecfeff' },
   { key: 'stock_check_audit', label: '盘点抽检', icon: AuditOutlined, color: '#16a34a', bg: '#f0fdf4' },
   { key: 'stock_check_appeal', label: '复议待裁决', icon: AuditOutlined, color: '#1d4ed8', bg: '#dbeafe' },
+  { key: 'approval_pending', label: '审批待办', icon: InboxOutlined, color: '#4c4dc2', bg: '#eef0fe' },
   { key: 'approval_timeout', label: '审批超时', icon: ClockCircleOutlined, color: '#dc2626', bg: '#fef2f2' },
   { key: 'material_alert', label: '物料提醒', icon: AppstoreOutlined, color: '#d97706', bg: '#fffbeb' },
   { key: 'exception_alert', label: '异常提醒', icon: WarningOutlined, color: '#dc2626', bg: '#fef2f2' },
@@ -67,10 +68,21 @@ const PRIORITY_DEFS: Record<string, { label: string; color: string; bg: string }
   normal: { label: '普通', color: '#64748b', bg: '#f1f5f9' },
 }
 
+// 待审批通知：新数据用独立 type='approval_pending'；
+// 历史数据与结果通知同为 type='supplier_claim'（结果通知标题为「[索赔单] 审批通过/被驳回/被撤回」），按标题前缀区分
+function isPendingApprovalNotify(n: NotifItem) {
+  return n.type === 'approval_pending' || (n.type === 'supplier_claim' && n.title.startsWith('[索赔单] 待您审批'))
+}
+
 function jumpTarget(n: NotifItem): { label: string; path: string } | null {
   if (n.type === 'stock_check_appeal' && n.ref_id) return { label: '复议待裁决', path: '/stock-check-audit?tab=appeal' }
-  // 审批超时提醒的 ref_type 就是业务标识（如 supplier_claim），必须先于 ref_type 分支判断，否则会被索赔单详情分支抢走
-  if (n.type === 'approval_timeout') return { label: '待办工作台', path: '/approvals/pending' }
+  // 审批待办 / 超时提醒：ref_type 即业务标识（如 supplier_claim），带单据参数进入待办工作台并自动打开审批抽屉
+  if (n.type === 'approval_timeout' || isPendingApprovalNotify(n)) {
+    const query = n.ref_type && n.ref_id
+      ? `?biz_type=${encodeURIComponent(n.ref_type)}&item_id=${n.ref_id}`
+      : ''
+    return { label: '待办工作台', path: `/approvals/pending${query}` }
+  }
   if (n.ref_type === 'stock_check' && n.ref_id) return { label: `盘点单 #${n.ref_id}`, path: `/stock-check/${n.ref_id}` }
   if (n.ref_type === 'price_change' && n.ref_id) return { label: `调价单 #${n.ref_id}`, path: `/purchase/price-change/${n.ref_id}` }
   if (n.ref_type === 'supplier_claim' && n.ref_id) return { label: `索赔单 #${n.ref_id}`, path: `/quality/supplier-claims/${n.ref_id}` }

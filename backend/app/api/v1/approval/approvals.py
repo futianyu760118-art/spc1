@@ -149,6 +149,7 @@ async def list_pending_approvals(
     overdue_only: bool = Query(False),
     wait_level: Optional[str] = Query(None, pattern="^(soon|overdue)$"),
     today_only: bool = Query(False),
+    provider_mode: Optional[str] = Query(None, pattern="^(builtin|sql)$"),
     current_user: dict = Depends(get_current_user),
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
@@ -156,9 +157,12 @@ async def list_pending_approvals(
     """聚合全部已注册流程的待我审批条目（各 biz 内部已按审批节点权限过滤），支持筛选与分页。
 
     stats 始终是「全部待办」口径（与业务类型筛选无关），供统计卡与 chips 计数使用；
-    biz_type 只影响 items/total。
+    biz_type / provider_mode 只影响 items/total（builtin = 仅代码 Provider 业务，sql = 仅 SQL 接入业务）。
     """
     items: list[dict] = []
+    allowed_biz_types: Optional[set[str]] = None
+    if provider_mode:
+        allowed_biz_types = {p.biz_type for p in get_pending_providers() if p.mode == provider_mode}
     for provider in get_pending_providers():
         fetched = await _safe_provider_call(
             db, provider.fetch(db, current_user["username"], current_user["role"]),
@@ -172,6 +176,7 @@ async def list_pending_approvals(
     filtered = [
         it for it in items
         if (not biz_type or it.get("biz_type") == biz_type)
+        and (allowed_biz_types is None or it.get("biz_type") in allowed_biz_types)
         and _match_keyword(it, keyword)
         and _in_date_range(it.get("submitted_at"), date_from, date_to)
         and (not overdue_only or it.get("wait_level") == "overdue")
@@ -294,6 +299,8 @@ async def list_approval_configs(
             "nodes": [], "is_active": True, "updated_by": None, "updated_at": None,
         })
         row["condition_field_options"] = meta.condition_field_options or []
+        # 列表要按接入方式区分展示（内置 Provider / SQL 配置），这里直接给出，避免前端再查一次业务清单
+        row["mode"] = meta.mode
         provider = get_provider(meta.biz_type)
         if provider and meta.is_active:
             # 系统视角（admin 旁路）统计该业务在途待办数，供「在途 N 单沿用旧快照」提示
@@ -580,7 +587,8 @@ async def _run_action(biz_type: str, item_id: int, action: str, data: dict, user
     ))
     if not result.get("success"):
         return ResponseModel(code=1, message=result.get("message") or "操作失败")
-    return ResponseModel(data=result, message="已通过" if action == "approve" else "已驳回")
+    action_messages = {"approve": "已通过", "reject": "已驳回", "recall": "已撤回，单据已退回可修改状态"}
+    return ResponseModel(data=result, message=action_messages.get(action, "操作成功"))
 
 
 @router.get("/items/{biz_type}/{item_id}", response_model=ResponseModel)
@@ -623,6 +631,19 @@ async def reject_item(
     db: AsyncSession = Depends(get_db),
 ):
     return await _run_action(biz_type, item_id, "reject", data, current_user, db)
+
+
+@router.post("/items/{biz_type}/{item_id}/recall", response_model=ResponseModel)
+async def recall_item(
+    biz_type: str,
+    item_id: int,
+    data: dict = Body(default={}),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.pending", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """撤回我发起的单据（provider 内校验仅发起人可撤回；审批记录保留留档）。"""
+    return await _run_action(biz_type, item_id, "recall", data, current_user, db)
 
 
 @router.post("/batch-approve", response_model=ResponseModel)

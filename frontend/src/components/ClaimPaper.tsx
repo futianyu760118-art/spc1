@@ -1,4 +1,4 @@
-import { CLAIM_ITEM_OPTIONS } from '../../../../services/quality'
+import { CLAIM_ITEM_OPTIONS } from '../services/quality'
 
 const ACTION_TEXT: Record<string, string> = {
   approve: '通过', reject: '驳回', recall: '撤回', auto_skip: '自动通过', revoked: '撤回审批',

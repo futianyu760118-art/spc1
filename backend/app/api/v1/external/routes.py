@@ -8,7 +8,8 @@ from . import endpoints  # noqa: F401
 from .endpoints import (
     bom, bom_detail, bom_tree, human_resources, inventory, inventory_availability,
     masterdata, material_kitting, material_supplies, orders, production,
-    production_task_orders, process_data, purchase, quality, warehouse,
+    production_task_orders, production_coordination, process_data, purchase,
+    quality, warehouse,
 )
 
 external_router = APIRouter()
@@ -17,7 +18,7 @@ for r in (
     masterdata.router,
     bom.router, bom_detail.router, bom_tree.router,
     human_resources.org_router, human_resources.pos_router, human_resources.emp_router,
-    production.router, production_task_orders.router,
+    production.router, production_task_orders.router, production_coordination.router,
     process_data.router,
     purchase.router, inventory.router,
     inventory_availability.router,

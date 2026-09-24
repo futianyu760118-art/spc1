@@ -390,17 +390,18 @@ class SupplierClaimService:
         except (TypeError, ValueError):
             applicant_id = None
         for uid in target_uids:
-            await self._notify_user(uid, title, content, ref_id=rec["id"],
+            await self._notify_user(uid, title, content, notify_type='approval_pending', ref_id=rec["id"],
                                     sender_name=rec.get("applicant"), sender_id=applicant_id)
         await self._notify_wecom(target_uids, rec, label)
 
     async def _notify_user(self, user_id: int, title: str, content: str, *,
+                           notify_type: str = 'supplier_claim',
                            ref_id: int = None, sender_name: str = None, sender_id: int = None):
         try:
             await self.db.execute(text("""
                 INSERT INTO notification (user_id, type, title, content, ref_type, ref_id, sender_id, sender_name, priority, is_read, created_at)
-                VALUES (:uid, 'supplier_claim', :title, :content, 'supplier_claim', :rid, :sid, :sender, 'high', FALSE, NOW())
-            """), {"uid": user_id, "title": title, "content": content, "rid": ref_id,
+                VALUES (:uid, :ntype, :title, :content, 'supplier_claim', :rid, :sid, :sender, 'high', FALSE, NOW())
+            """), {"uid": user_id, "ntype": notify_type, "title": title, "content": content, "rid": ref_id,
                    "sid": sender_id, "sender": sender_name})
         except Exception as e:
             logger.warning(f"索赔单通知推送失败 user_id={user_id}: {e}")
