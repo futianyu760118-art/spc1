@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Button, Input, Select, Table } from 'antd'
 import { CheckCircleOutlined, CloseCircleOutlined, FieldTimeOutlined, SearchOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { approvalApi, type ApprovalItem, type ApprovalStats } from '../../../services/approval'
 import { daysAgoISO, mondayOf } from '../../../utils'
 import ApprovalStatsCards from '../../../components/ApprovalStatsCards'
-import ApprovalDrawer from '../../../components/ApprovalDrawer'
 import type { WorkbenchTabProps } from './index'
 
 const round1 = (v?: number | null) => (v == null ? null : Math.round(v * 10) / 10)
@@ -18,6 +18,7 @@ const STATUS_TAG: Record<string, { cls: string; text: string }> = {
 }
 
 export default function MyApprovedTab({ registerReload, onCount }: WorkbenchTabProps) {
+  const navigate = useNavigate()
   const [items, setItems] = useState<ApprovalItem[]>([])
   const [winStats, setWinStats] = useState<ApprovalStats>({})
   const [weekStats, setWeekStats] = useState<{ cur: ApprovalStats; prev: ApprovalStats } | null>(null)
@@ -27,7 +28,6 @@ export default function MyApprovedTab({ registerReload, onCount }: WorkbenchTabP
   const [days, setDays] = useState(30)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
-  const [drawer, setDrawer] = useState<{ bizType: string; id: number } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -152,12 +152,10 @@ export default function MyApprovedTab({ registerReload, onCount }: WorkbenchTabP
           } },
           { title: '操作', width: 80, fixed: 'right', render: (_: any, r: ApprovalItem) => (
             <span className="sc-row-act">
-              <Button size="small" type="link" onClick={() => setDrawer({ bizType: r.biz_type, id: r.id })}>查看</Button>
+              <Button size="small" type="link" onClick={() => navigate(`/approvals/items/${r.biz_type}/${r.id}`)}>查看</Button>
             </span>
           ) },
         ]} />
-      <ApprovalDrawer open={!!drawer} bizType={drawer?.bizType} itemId={drawer?.id}
-        onClose={() => setDrawer(null)} onDone={() => { load(); loadWinStats(); loadWeekStats() }} />
     </div>
   )
 }

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Button, Input, Modal, Select, Table, message } from 'antd'
 import { CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined, SearchOutlined, UndoOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { approvalApi, type ApprovalItem, type ApprovalStats } from '../../../services/approval'
 import { daysAgoISO } from '../../../utils'
 import ApprovalStatsCards from '../../../components/ApprovalStatsCards'
-import ApprovalDrawer from '../../../components/ApprovalDrawer'
 import type { WorkbenchTabProps } from './index'
 
 const STATUS_TEXT: Record<string, string> = { pending: '审批中', approved: '已通过', rejected: '已驳回', recalled: '已撤回' }
@@ -13,6 +13,7 @@ const STATUS_TAG: Record<string, string> = { pending: 'sc-tag-kit', approved: 's
 const STATUS_KEYS = ['pending', 'approved', 'rejected', 'recalled'] as const
 
 export default function MySubmittedTab({ registerReload, onCount }: WorkbenchTabProps) {
+  const navigate = useNavigate()
   const [items, setItems] = useState<ApprovalItem[]>([])
   const [winStats, setWinStats] = useState<ApprovalStats>({})
   const [loading, setLoading] = useState(false)
@@ -21,7 +22,6 @@ export default function MySubmittedTab({ registerReload, onCount }: WorkbenchTab
   const [days, setDays] = useState(90)
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
-  const [drawer, setDrawer] = useState<{ bizType: string; id: number } | null>(null)
   const [recallTarget, setRecallTarget] = useState<ApprovalItem | null>(null)
   const [recalling, setRecalling] = useState(false)
 
@@ -125,7 +125,7 @@ export default function MySubmittedTab({ registerReload, onCount }: WorkbenchTab
           ) },
           { title: '操作', width: 150, fixed: 'right', render: (_: any, r: ApprovalItem) => (
             <span className="sc-row-act">
-              <Button size="small" type="link" onClick={() => setDrawer({ bizType: r.biz_type, id: r.id })}>查看</Button>
+              <Button size="small" type="link" onClick={() => navigate(`/approvals/items/${r.biz_type}/${r.id}`)}>查看</Button>
               {r.can_recall ? (
                 <Button size="small" type="link" danger onClick={() => setRecallTarget(r)}>撤回</Button>
               ) : null}
@@ -135,8 +135,6 @@ export default function MySubmittedTab({ registerReload, onCount }: WorkbenchTab
             </span>
           ) },
         ]} />
-      <ApprovalDrawer open={!!drawer} bizType={drawer?.bizType} itemId={drawer?.id}
-        onClose={() => setDrawer(null)} onDone={() => { load(); loadWinStats() }} />
 
       <Modal title="撤回单据" open={!!recallTarget} confirmLoading={recalling}
         onOk={doRecall} onCancel={() => setRecallTarget(null)} okText="确认撤回" okButtonProps={{ danger: true }}>

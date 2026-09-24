@@ -137,7 +137,7 @@ ERP 集成是 SQL 驱动的：同步 SQL 与字段映射存在 `sync_sql_config`
 - **接入新业务（SQL 零开发）**：管理员在「审批配置 → 业务接入」用只读 SQL + 字段映射注册（`GET/POST/PUT /api/v1/approvals/businesses`、`POST /api/v1/approvals/businesses/test-sql`）；取数 SQL 限单条 SELECT/WITH、5s 语句超时、强制 LIMIT 200，保存前实跑校验（列存在、`id` 可转整数）；字段映射必需 `id`（数字主键，全链路沿用整数 ID）/ `no` / `title` / `applicant` / `submitted_at` / `current_node`，可选 `summary` / `amount`。SQL 业务只聚合与深链跳转（无动作适配器，中心内审批被拒 `can_act=false`），超时提醒照常。
 - **聚合端点**：`GET /api/v1/approvals/pending` 自动聚合（分页 + keyword / biz_type / provider_mode（builtin|sql，接入方式筛选）/ 日期 / wait_level / today_only 筛选；返回 `stats` 且 stats 恒为全量口径）。
 - **provider 可选能力**：`fetch_approved` / `fetch_submitted` / `preview` / `approve` / `reject` / `recall`；未实现的业务只做聚合与深链跳转。
-- **审批动作**：可在中心内联完成 —— `POST /api/v1/approvals/items/{biz_type}/{id}/approve|reject|recall`、`POST /api/v1/approvals/batch-approve`（逐条 SAVEPOINT 隔离）；业务详情页入口保留。
+- **审批动作**：可在中心内联完成 —— `POST /api/v1/approvals/items/{biz_type}/{id}/approve|reject|recall`、`POST /api/v1/approvals/batch-approve`（逐条 SAVEPOINT 隔离）；业务详情页入口保留。审批走独立**审批详情页** `/approvals/items/:bizType/:id`（非抽屉）：左栏业务完整视图（内置业务复用业务侧展示组件，如索赔单 `frontend/src/components/ClaimPaper.tsx`，需对应业务读权限；其它业务展示映射字段），右栏进度 / 操作 / 记录 / 附件；列表行点击与站内信深链均进入该页，SQL 接入业务在页内跳源系统。
 - **审批链配置**：只允许操作**已注册**的 biz_type（`PUT /api/v1/approvals/configs/{biz_type}` 拒绝未注册业务，防止与其它模块配置页双写；调价单未注册、维持原入口）；支持「按角色 / 指定人员」「多条件 AND」「节点超时小时数（0=不提醒）」「启用停用（停用后不再产生新待办，在途按冻结快照继续）」。
 - **超时提醒**：`app/services/scheduler/approval_timeout_reminder.py` 每小时扫描，站内信 + 企微推送当前节点审批人；Redis 按「单据+节点」24h 去重，Redis/企微不可用时降级。
 - **权限域**：`approval.pending`（审批人，节点权限在引擎内二次校验）、`approval.config`（配置管理员）、`approval.business`（业务接入管理员，read/update）。

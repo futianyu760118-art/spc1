@@ -85,6 +85,11 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "quality.supplier_claim": ["read"],
         "approval.pending": ["read"],
     },
+    "general_manager": {
+        # 审批详情页需读取索赔单完整单据（复用业务侧纸张视图），与其它审批节点角色一致
+        "quality.supplier_claim": ["read"],
+        "approval.pending": ["read"],
+    },
 }
 
 

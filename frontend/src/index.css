@@ -2233,13 +2233,7 @@ a.si-wh-link:hover { color: #4c4dc2; }
 .ac-empty .ac-empty-title { font-size: calc(13.5px * var(--font-size-scale)); color: #64748b; }
 .ac-empty .ac-empty-sub { font-size: calc(12px * var(--font-size-scale)); color: #94a3b8; margin-top: 4px; }
 
-/* ---- 审批抽屉 ---- */
-
-/* 抽屉头部（原型 .dr-head：标题 + 单号 + tags 行） */
-.ac-dr-title { font-size: calc(16px * var(--font-size-scale)); font-weight: 600; line-height: 1.4; color: #0f172a; }
-.ac-dr-code { font-size: calc(12px * var(--font-size-scale)); color: #94a3b8; font-variant-numeric: tabular-nums; margin-top: 2px; }
-.ac-dr-tags { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
-.ac-dr-link { margin-left: auto; font-size: calc(12px * var(--font-size-scale)); color: #4c4dc2; }
+/* ---- 审批详情页：进度节点流 / 记录时间线 ---- */
 
 /* 审批进度 · 纵向节点流（原型 .flow） */
 .ac-flow { position: relative; }
