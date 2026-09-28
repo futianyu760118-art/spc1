@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Card, Col, Drawer, Empty, Form, Input, InputNumber, Row, Select, Space, Switch,
+  Button, Card, Col, DatePicker, Drawer, Empty, Form, Input, InputNumber, Row, Select, Space, Switch,
   Table, Tabs, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { ReactNode } from 'react'
 import { EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
+import type { Dayjs } from 'dayjs'
 import api from '@/services/api'
 import { useAuthStore } from '@/store/auth'
 
@@ -109,6 +111,37 @@ interface SchemeFormValues {
   remark?: string | null
 }
 
+interface SubstituteRow {
+  id: number
+  main_material_id: number
+  substitute_material_id: number
+  main_material_code: string | null
+  main_material_name: string | null
+  substitute_material_code: string | null
+  substitute_material_name: string | null
+  priority: number
+  policy: string
+  ratio: number | null
+  substitute_mode: string
+  valid_from: string | null
+  valid_to: string | null
+  enabled: boolean
+  remark: string | null
+}
+
+interface SubstituteFormValues {
+  main_material_code?: string | null
+  substitute_material_code?: string | null
+  priority: number
+  policy: 'priority' | 'ratio'
+  ratio?: number | null
+  substitute_mode: 'offset' | 'replace'
+  valid_from?: Dayjs | null
+  valid_to?: Dayjs | null
+  enabled: boolean
+  remark?: string | null
+}
+
 const BATCH_POLICY_MAP: Record<string, { label: string; color: string }> = {
   lot_for_lot: { label: '按需', color: 'blue' },
   multiple: { label: '固定倍数', color: 'purple' },
@@ -119,6 +152,16 @@ const DATA_SOURCE_MAP: Record<string, { label: string; color: string }> = {
   manual: { label: '手工', color: 'green' },
   excel: { label: 'Excel', color: 'cyan' },
   erp: { label: 'ERP', color: 'geekblue' },
+}
+
+const SUBSTITUTE_POLICY_MAP: Record<string, { label: string; color: string }> = {
+  priority: { label: '优先', color: 'blue' },
+  ratio: { label: '比例', color: 'purple' },
+}
+
+const SUBSTITUTE_MODE_MAP: Record<string, { label: string; color: string }> = {
+  offset: { label: '抵扣', color: 'geekblue' },
+  replace: { label: '替换', color: 'orange' },
 }
 
 const SCHEME_SWITCH_FIELDS: Array<{ name: SchemeSwitchField; label: string }> = [
@@ -142,6 +185,18 @@ function renderLeadTime(v: number | null): ReactNode {
 
 function renderOptionalNumber(v: number | null): ReactNode {
   return v != null ? fmtQty(v) : <span style={{ color: '#cbd5e1' }}>-</span>
+}
+
+function fmtMaterialLabel(code: string | null, name: string | null, id: number): string {
+  return code || name ? `${name || ''}（${code || ''}）` : `物料 ID ${id}`
+}
+
+function fmtValidity(row: SubstituteRow): ReactNode {
+  const { valid_from: from, valid_to: to } = row
+  if (!from && !to) return <span style={{ color: '#cbd5e1' }}>长期</span>
+  if (from && to) return `${from} ~ ${to}`
+  if (from) return `${from} 起`
+  return `至 ${to}`
 }
 
 function MaterialParameterPane({ canParam }: { canParam: boolean }) {
@@ -556,6 +611,313 @@ function SchemePane({ canParam }: { canParam: boolean }) {
   )
 }
 
+function SubstitutePane({ canParam }: { canParam: boolean }) {
+  const [data, setData] = useState<SubstituteRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [keyword, setKeyword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [editingRow, setEditingRow] = useState<SubstituteRow | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [form] = Form.useForm<SubstituteFormValues>()
+  const policy = Form.useWatch('policy', form)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = (await api.get('/mrp/substitutes', {
+        params: { keyword, page, page_size: pageSize },
+      })) as unknown as ApiResponse<PageData<SubstituteRow>>
+      setData(res.data.items || [])
+      setTotal(res.data.total || 0)
+    } catch {
+      // 全局拦截器已提示
+    } finally {
+      setLoading(false)
+    }
+  }, [keyword, page, pageSize])
+
+  useEffect(() => { load() }, [load])
+
+  const openCreate = () => {
+    setEditingRow(null)
+    form.resetFields()
+    form.setFieldsValue({ priority: 1, policy: 'priority', substitute_mode: 'offset', enabled: true })
+    setDrawerOpen(true)
+  }
+
+  const openEdit = (row: SubstituteRow) => {
+    setEditingRow(row)
+    form.setFieldsValue({
+      priority: row.priority,
+      policy: row.policy === 'ratio' ? 'ratio' : 'priority',
+      ratio: row.ratio,
+      substitute_mode: row.substitute_mode === 'replace' ? 'replace' : 'offset',
+      valid_from: row.valid_from ? dayjs(row.valid_from) : null,
+      valid_to: row.valid_to ? dayjs(row.valid_to) : null,
+      enabled: row.enabled,
+      remark: row.remark,
+    })
+    setDrawerOpen(true)
+  }
+
+  const submit = async () => {
+    const values = await form.validateFields()
+    const payload: Record<string, unknown> = {
+      priority: values.priority,
+      policy: values.policy,
+      ratio: values.policy === 'ratio' ? values.ratio : null,
+      substitute_mode: values.substitute_mode,
+      valid_from: values.valid_from ? dayjs(values.valid_from).format('YYYY-MM-DD') : null,
+      valid_to: values.valid_to ? dayjs(values.valid_to).format('YYYY-MM-DD') : null,
+      enabled: values.enabled,
+      remark: values.remark || null,
+    }
+    if (editingRow == null) {
+      payload.main_material_code = (values.main_material_code || '').trim()
+      payload.substitute_material_code = (values.substitute_material_code || '').trim()
+    } else {
+      payload.main_material_id = editingRow.main_material_id
+      payload.substitute_material_id = editingRow.substitute_material_id
+    }
+    setSaving(true)
+    try {
+      await api.put('/mrp/substitutes', payload, { skipErrorToast: true })
+      message.success('替代规则已保存')
+      setDrawerOpen(false)
+      await load()
+    } catch (error) {
+      const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        || (error as Error)?.message
+        || '保存失败'
+      message.error(detail)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const columns: ColumnsType<SubstituteRow> = [
+    {
+      title: '主料编码', dataIndex: 'main_material_code', width: 180, ellipsis: true,
+      render: (v: string | null, row) => v || (
+        <span style={{ color: '#cbd5e1', fontFamily: 'monospace', fontSize: 12 }}>#{row.main_material_id}</span>
+      ),
+    },
+    {
+      title: '主料名称', dataIndex: 'main_material_name', width: 160, ellipsis: true,
+      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>—</span>,
+    },
+    {
+      title: '替代料编码', dataIndex: 'substitute_material_code', width: 180, ellipsis: true,
+      render: (v: string | null, row) => v || (
+        <span style={{ color: '#cbd5e1', fontFamily: 'monospace', fontSize: 12 }}>#{row.substitute_material_id}</span>
+      ),
+    },
+    {
+      title: '替代料名称', dataIndex: 'substitute_material_name', width: 160, ellipsis: true,
+      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>—</span>,
+    },
+    { title: '优先级', dataIndex: 'priority', width: 80, align: 'right' },
+    {
+      title: '策略', dataIndex: 'policy', width: 80,
+      render: (v: string) => {
+        const m = SUBSTITUTE_POLICY_MAP[v] || { label: v, color: 'default' }
+        return <Tag color={m.color}>{m.label}</Tag>
+      },
+    },
+    {
+      title: '比例', dataIndex: 'ratio', width: 90, align: 'right',
+      render: (v: number | null, row) => (row.policy === 'ratio' && v != null ? `${fmtQty(v)}%` : '-'),
+    },
+    {
+      title: '模式', dataIndex: 'substitute_mode', width: 80,
+      render: (v: string) => {
+        const m = SUBSTITUTE_MODE_MAP[v] || { label: v, color: 'default' }
+        return <Tag color={m.color}>{m.label}</Tag>
+      },
+    },
+    { title: '生效期', width: 200, render: (_: unknown, row) => fmtValidity(row) },
+    {
+      title: '启用', dataIndex: 'enabled', width: 70,
+      render: (v: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
+    },
+    {
+      title: '备注', dataIndex: 'remark', width: 160, ellipsis: true,
+      render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
+    },
+    ...(canParam ? [{
+      title: '操作', width: 80, fixed: 'right' as const,
+      render: (_: unknown, row: SubstituteRow) => (
+        <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>编辑</Button>
+      ),
+    }] : []),
+  ]
+
+  return (
+    <div>
+      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
+        <Row gutter={12} align="middle">
+          <Col>
+            <Input.Search
+              placeholder="主料/替代料编码或名称关键字"
+              style={{ width: 260 }}
+              allowClear
+              onSearch={(v) => { setKeyword(v.trim()); setPage(1) }}
+            />
+          </Col>
+          <Col flex="auto" />
+          <Col>
+            <Space>
+              <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>刷新</Button>
+              {canParam && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增</Button>}
+            </Space>
+          </Col>
+        </Row>
+      </div>
+
+      <div className="card-modern" style={{ padding: '0 0 4px' }}>
+        <Table<SubstituteRow>
+          rowKey="id"
+          dataSource={data}
+          columns={columns}
+          loading={loading}
+          size="small"
+          scroll={{ x: 1440 }}
+          pagination={{
+            total, current: page, pageSize,
+            showSizeChanger: true, showTotal: (t) => `共 ${t} 条`,
+          }}
+          onChange={(pagination) => {
+            setPage(pagination.current || 1)
+            setPageSize(pagination.pageSize || 20)
+          }}
+        />
+      </div>
+
+      <Drawer
+        title={editingRow == null
+          ? '新增替代规则'
+          : `编辑替代规则（${editingRow.main_material_code || editingRow.main_material_id} → ${editingRow.substitute_material_code || editingRow.substitute_material_id}）`}
+        width={560}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        destroyOnClose
+        footer={(
+          <Space style={{ float: 'right' }}>
+            <Button onClick={() => setDrawerOpen(false)}>取消</Button>
+            <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={submit}>保存</Button>
+          </Space>
+        )}
+      >
+        <Form form={form} layout="vertical">
+          <Row gutter={16}>
+            <Col span={12}>
+              {editingRow == null ? (
+                <Form.Item
+                  name="main_material_code"
+                  label="主料编码"
+                  tooltip="按编码精确匹配物料主数据，保存后自动关联 erp_material_id"
+                  rules={[{ required: true, message: '请输入主料编码' }]}
+                >
+                  <Input placeholder="如 1.3.1.HJ-5110-03-001" allowClear />
+                </Form.Item>
+              ) : (
+                <Form.Item label="主料" tooltip="编辑时不可更换主料/替代料">
+                  <Input
+                    disabled
+                    value={fmtMaterialLabel(
+                      editingRow.main_material_code,
+                      editingRow.main_material_name,
+                      editingRow.main_material_id,
+                    )}
+                  />
+                </Form.Item>
+              )}
+            </Col>
+            <Col span={12}>
+              {editingRow == null ? (
+                <Form.Item
+                  name="substitute_material_code"
+                  label="替代料编码"
+                  tooltip="按编码精确匹配物料主数据，保存后自动关联 erp_material_id"
+                  rules={[{ required: true, message: '请输入替代料编码' }]}
+                >
+                  <Input placeholder="如 1.3.1.HJ-5110-03-001" allowClear />
+                </Form.Item>
+              ) : (
+                <Form.Item label="替代料" tooltip="编辑时不可更换主料/替代料">
+                  <Input
+                    disabled
+                    value={fmtMaterialLabel(
+                      editingRow.substitute_material_code,
+                      editingRow.substitute_material_name,
+                      editingRow.substitute_material_id,
+                    )}
+                  />
+                </Form.Item>
+              )}
+            </Col>
+            <Col span={12}>
+              <Form.Item name="priority" label="优先级" tooltip="数值小者优先" rules={[{ required: true, message: '请输入优先级' }]}>
+                <InputNumber style={{ width: '100%' }} min={1} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="policy" label="策略" rules={[{ required: true }]}>
+                <Select
+                  options={[
+                    { value: 'priority', label: '按优先级（priority）' },
+                    { value: 'ratio', label: '按比例（ratio）' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            {policy === 'ratio' && (
+              <Col span={12}>
+                <Form.Item name="ratio" label="比例(%)" tooltip="同主料下合计 100" rules={[{ required: true, message: '请输入比例' }]}>
+                  <InputNumber style={{ width: '100%' }} min={0.0001} max={100} precision={4} />
+                </Form.Item>
+              </Col>
+            )}
+            <Col span={12}>
+              <Form.Item name="substitute_mode" label="模式" rules={[{ required: true }]}>
+                <Select
+                  options={[
+                    { value: 'offset', label: '抵扣余额（offset）' },
+                    { value: 'replace', label: '缺口改落替代料（replace）' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="valid_from" label="生效日期">
+                <DatePicker style={{ width: '100%' }} placeholder="不填则立即生效" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="valid_to" label="失效日期">
+                <DatePicker style={{ width: '100%' }} placeholder="不填则长期有效" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="enabled" label="启用" valuePropName="checked">
+                <Switch />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="remark" label="备注">
+                <Input.TextArea rows={2} />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Drawer>
+    </div>
+  )
+}
+
 export default function ParametersTab() {
   const hasPermission = useAuthStore((s) => s.hasPermission) as (resource: string, action: string) => boolean
   const canParam = hasPermission('materials.mrp', 'param')
@@ -565,6 +927,7 @@ export default function ParametersTab() {
       items={[
         { key: 'parameters', label: '物料参数', children: <MaterialParameterPane canParam={canParam} /> },
         { key: 'scheme', label: '计划方案', children: <SchemePane canParam={canParam} /> },
+        { key: 'substitutes', label: '替代规则', children: <SubstitutePane canParam={canParam} /> },
       ]}
     />
   )

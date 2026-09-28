@@ -36,6 +36,7 @@ api_router.include_router(mrp.suggestions_router, prefix="/mrp", tags=["MRP-建�
 api_router.include_router(mrp.exceptions_router, prefix="/mrp", tags=["MRP-例外"])
 api_router.include_router(mrp.parameters_router, prefix="/mrp", tags=["MRP-参数"])
 api_router.include_router(mrp.comparison_router, prefix="/mrp", tags=["MRP-对比"])
+api_router.include_router(mrp.substitutes_router, prefix="/mrp", tags=["MRP-替代规则"])
 
 # Production center
 api_router.include_router(production.router, prefix="/production", tags=["生产协同中心"])

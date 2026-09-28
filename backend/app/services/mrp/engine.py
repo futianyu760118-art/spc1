@@ -15,6 +15,7 @@ from app.core.database import AsyncSessionLocal
 from app.models.mrp.bucket import MrpBucket
 from app.models.mrp.exception import MrpException
 from app.models.mrp.run import MrpRun
+from app.models.mrp.substitute import MrpSubstitute
 from app.models.mrp.suggestion import MrpSuggestion
 from app.services.mrp import snapshot as snapshot_service
 from app.services.mrp.bom_explosion import (
@@ -38,10 +39,18 @@ from app.services.mrp.parameter_service import (
     ResolvedParam,
     ensure_default_scheme,
     load_parameters,
+    resolve_param,
     scheme_snapshot,
     total_lead_time,
 )
 from app.services.mrp.snapshot import SupplyRecord
+from app.services.mrp.substitute_calc import (
+    LendableBalance,
+    SubstituteRule,
+    SuggestionDraft,
+    apply_substitutes,
+    build_lendable_balance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +162,26 @@ class MrpEngine:
 
             async with AsyncSessionLocal() as db:
                 snapshot = await snapshot_service.collect(db, scope or {})
+                substitute_rule_rows = (
+                    await db.execute(
+                        select(MrpSubstitute).where(MrpSubstitute.enabled.is_(True))
+                    )
+                ).scalars().all()
+            substitute_rules = [
+                SubstituteRule(
+                    id=row.id,
+                    main_material_id=row.main_material_id,
+                    substitute_material_id=row.substitute_material_id,
+                    priority=row.priority or 1,
+                    policy=row.policy or "priority",
+                    ratio=Decimal(str(row.ratio)) if row.ratio is not None else None,
+                    substitute_mode=row.substitute_mode or "offset",
+                    valid_from=row.valid_from,
+                    valid_to=row.valid_to,
+                    enabled=row.enabled,
+                )
+                for row in substitute_rule_rows
+            ]
 
             child_reqs: dict[int, list[ChildRequirement]] = defaultdict(list)
             for demand in snapshot.demands:
@@ -262,7 +291,6 @@ class MrpEngine:
 
                 param: ResolvedParam = params.get(material_id)
                 if param is None:
-                    from app.services.mrp.parameter_service import resolve_param
                     param = resolve_param(None, material_id, None)
                 if not scheme.consider_safety_stock:
                     param = ResolvedParam(**{**param.__dict__, "safety_stock": _ZERO})
@@ -344,6 +372,113 @@ class MrpEngine:
                             pegging_by_key[(child.material_id, child.need_date)].extend(
                                 plan.pegging or []
                             )
+
+            substitute_stats = {
+                "offset_count": 0,
+                "offset_qty": _ZERO,
+                "replace_count": 0,
+                "replace_skipped": 0,
+            }
+            if substitute_rules and suggestion_payloads:
+                balances: dict[int, LendableBalance] = {}
+                for substitute_material_id in {r.substitute_material_id for r in substitute_rules}:
+                    sub_param = params.get(substitute_material_id)
+                    opening = snapshot.opening_by_material.get(substitute_material_id, _ZERO)
+                    if not scheme.consider_inventory:
+                        opening = _ZERO
+                    safety_stock = sub_param.safety_stock if sub_param else _ZERO
+                    if not scheme.consider_safety_stock:
+                        safety_stock = _ZERO
+                    balances[substitute_material_id] = build_lendable_balance(
+                        opening=opening,
+                        supplies=[
+                            (record.supply_date, record.qty)
+                            for record in supplies_by_material.get(substitute_material_id, [])
+                            if record.supply_date is not None
+                            and supply_enabled.get(record.source_type, True)
+                        ],
+                        own_demands=[
+                            (req.need_date, req.qty)
+                            for req in child_reqs.get(substitute_material_id, [])
+                        ],
+                        safety_stock=safety_stock,
+                    )
+
+                pairs = [
+                    [
+                        SuggestionDraft(
+                            suggestion_id=idx,
+                            material_id=payload["material_id"],
+                            need_date=payload["need_date"],
+                            qty=Decimal(str(payload["suggest_qty"])),
+                        ),
+                        payload,
+                    ]
+                    for idx, payload in enumerate(suggestion_payloads)
+                ]
+                pairs.sort(key=lambda pair: (pair[0].need_date, pair[0].material_id))
+                for new_idx, pair in enumerate(pairs):
+                    pair[0].suggestion_id = new_idx
+
+                _, outcome = apply_substitutes(
+                    suggestions=[pair[0] for pair in pairs],
+                    rules=substitute_rules,
+                    balances=balances,
+                    run_date=run_date,
+                )
+
+                for draft, payload in pairs:
+                    payload.setdefault("is_substitute", False)
+                    payload.setdefault("substitute_for_material_id", None)
+                    if draft.qty != Decimal(str(payload["suggest_qty"])):
+                        payload["suggest_qty"] = draft.qty.quantize(Decimal("0.0001"))
+                for idx, substitute_material_id in outcome.replace_targets.items():
+                    draft, payload = pairs[idx]
+                    sub_bill_type = bill_type_for(
+                        snapshot.property_by_material.get(substitute_material_id),
+                        bool(snapshot.bom_by_material.get(substitute_material_id)),
+                    )
+                    if sub_bill_type != 11010:  # 自制/委外替代料的子件展开不在本简化内
+                        substitute_stats["replace_skipped"] += 1
+                        continue
+                    sub_param = params.get(substitute_material_id)
+                    if sub_param is None:
+                        sub_param = resolve_param(None, substitute_material_id, None)
+                    qty = Decimal(str(payload["suggest_qty"]))
+                    payload["material_id"] = substitute_material_id
+                    payload["material_code"] = snapshot.code_by_material.get(
+                        substitute_material_id, payload.get("material_code", "")
+                    )
+                    payload["material_name"] = snapshot.name_by_material.get(substitute_material_id, "")
+                    payload["is_substitute"] = True
+                    payload["substitute_for_material_id"] = draft.material_id
+                    payload["bill_type"] = sub_bill_type
+                    payload["action_date"] = payload["need_date"] - timedelta(
+                        days=total_lead_time(sub_param, sub_bill_type, qty)
+                    )
+                    payload["suggested_supplier_id"] = sub_param.default_supplier_id
+                    substitute_stats["replace_count"] += 1
+
+                bucket_index = {(p["material_id"], p["bucket_date"]): p for p in bucket_payloads}
+                for item in outcome.offsets:
+                    main_row = bucket_index.get((item["main_material_id"], item["need_date"]))
+                    if main_row is not None:
+                        main_row["substitute_in_qty"] = (
+                            Decimal(str(main_row.get("substitute_in_qty") or 0)) + item["qty"]
+                        )
+                    sub_row = bucket_index.get((item["substitute_material_id"], item["need_date"]))
+                    if sub_row is not None:
+                        sub_row["substitute_out_qty"] = (
+                            Decimal(str(sub_row.get("substitute_out_qty") or 0)) + item["qty"]
+                        )
+                substitute_stats["offset_count"] = len(outcome.offsets)
+                substitute_stats["offset_qty"] = sum((o["qty"] for o in outcome.offsets), _ZERO)
+
+                suggestion_payloads = [
+                    payload
+                    for payload in suggestion_payloads
+                    if Decimal(str(payload["suggest_qty"])) > 0
+                ]
 
             exception_payloads: list[dict] = []
             if scheme.exception_enabled:
@@ -433,6 +568,12 @@ class MrpEngine:
                     "suggestions": len(suggestion_payloads),
                     "exceptions": len(exception_payloads),
                     "exceptions_by_type": dict(exceptions_by_type),
+                    "substitute": {
+                        "offset_count": substitute_stats["offset_count"],
+                        "offset_qty": float(substitute_stats["offset_qty"]),
+                        "replace_count": substitute_stats["replace_count"],
+                        "replace_skipped": substitute_stats["replace_skipped"],
+                    },
                     "duration_sec": round(time.time() - started, 2),
                     "data_issues": {
                         key: len(value) for key, value in snapshot.data_issues.items()

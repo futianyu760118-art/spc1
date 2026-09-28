@@ -211,3 +211,38 @@ class BatchHandleRequest(BaseModel):
     exception_ids: list[int] = Field(min_length=1)
     action: Literal["ignore", "reschedule", "cancel_reduce", "notify"]
     comment: str = ""
+
+
+class SubstituteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    main_material_id: int
+    substitute_material_id: int
+    main_material_code: Optional[str] = None
+    main_material_name: Optional[str] = None
+    substitute_material_code: Optional[str] = None
+    substitute_material_name: Optional[str] = None
+    priority: int
+    policy: str
+    ratio: Optional[float] = None
+    substitute_mode: str
+    valid_from: Optional[date] = None
+    valid_to: Optional[date] = None
+    enabled: bool
+    remark: Optional[str] = None
+
+
+class SubstituteUpsertRequest(BaseModel):
+    main_material_id: Optional[int] = None
+    main_material_code: Optional[str] = None
+    substitute_material_id: Optional[int] = None
+    substitute_material_code: Optional[str] = None
+    priority: int = Field(default=1, ge=1)
+    policy: Literal["priority", "ratio"] = "priority"
+    ratio: Optional[float] = Field(default=None, gt=0, le=100)
+    substitute_mode: Literal["offset", "replace"] = "offset"
+    valid_from: Optional[date] = None
+    valid_to: Optional[date] = None
+    enabled: bool = True
+    remark: Optional[str] = None

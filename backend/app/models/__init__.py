@@ -19,7 +19,7 @@ from app.models.material.transfer_order import TransferOrder  # noqa: F401
 from app.models.material.purchase_requisition import PurchaseRequisition, PurchaseRequisitionLine, PurchaseRequisitionApprovalLog  # noqa: F401
 
 # MRP 域（2026-09-24）
-from app.models.mrp import MrpBucket, MrpParameter, MrpRun, MrpScheme, MrpSuggestion  # noqa: F401
+from app.models.mrp import MrpBucket, MrpParameter, MrpRun, MrpScheme, MrpSubstitute, MrpSuggestion  # noqa: F401
 
 # 生产协同中心
 from app.models.production.process_progress import ProcessProgress
