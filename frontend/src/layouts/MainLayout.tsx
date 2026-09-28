@@ -210,6 +210,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/subcontract-orders', icon: <ProfileOutlined />, label: '委外订单', permission: 'materials.subcontract_orders' },
       { key: '/scrap-inventory', icon: <DeleteOutlined />, label: '报废物料库存查询', permission: 'materials.scrap_inventory' },
       { key: '/material-occupancy', icon: <AppstoreOutlined />, label: '物料占用分析', permission: 'materials.occupancy' },
+      { key: '/mrp', label: 'MRP 运算', permission: 'materials.mrp' },
     ],
   },
   {
@@ -518,6 +519,7 @@ const pathToPermission: Record<string, string> = {
   '/subcontract-orders': 'materials.subcontract_orders',
   '/scrap-inventory': 'materials.scrap_inventory',
   '/material-occupancy': 'materials.occupancy',
+  '/mrp': 'materials.mrp',
   '/issues': 'exceptions.pool',
   '/quality-issues': 'exceptions.quality',
   '/product-samples': 'exceptions.product_samples',

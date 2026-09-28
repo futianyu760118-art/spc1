@@ -370,3 +370,12 @@ declare_permission(
     actions=["read", "manage"],
     route_path="/deploy-versions", sort_order=12,
 )
+
+# MRP 运算（2026-09-24）— 计划方案/引擎/建议/对比
+# 动作: read 查看 / run 触发运算 / review 建议审核 / convert 转化(P2) / param 参数维护
+declare_permission(
+    "materials.mrp", "MRP 运算",
+    module="materials", parent_code="materials",
+    actions=["read", "run", "review", "convert", "param"],
+    route_path="/mrp", sort_order=14,
+)

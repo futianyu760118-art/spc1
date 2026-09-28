@@ -23,6 +23,7 @@ import TaskStockCoverage from './pages/MaterialCenter/TaskStockCoverage'
 import SubcontractOrders from './pages/MaterialCenter/SubcontractOrders/index'
 import ScrapInventory from './pages/MaterialCenter/ScrapInventory'
 import MaterialOccupancy from './pages/MaterialCenter/MaterialOccupancy'
+import MrpWorkbench from './pages/MaterialCenter/MrpWorkbench/index'
 import IssueLedger from './pages/ExceptionCenter/IssueLedger/index'
 import ExceptionPool from './pages/ExceptionCenter/ExceptionPool/index'
 import QualityIssues from './pages/ExceptionCenter/QualityIssues/index'
@@ -206,6 +207,7 @@ export default function App() {
                             <Route path="subcontract-orders" element={<SubcontractOrders/>}/>
                             <Route path="scrap-inventory" element={<ScrapInventory/>}/>
                             <Route path="material-occupancy" element={<MaterialOccupancy/>}/>
+                            <Route path="mrp" element={<MrpWorkbench/>}/>
                             <Route path="kit-analysis" element={<KitAnalysis/>}/>
                             <Route path="supplier-risk" element={<SupplierRisk/>}/>
                             <Route path="supplier-payment" element={<SupplierPayment/>}/>

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import approval, assistant, basicdata, common, dashboard, exception, external, masterdata, material, order, production, purchase, quality, rules, system, writeback
+from app.api.v1 import approval, assistant, basicdata, common, dashboard, exception, external, masterdata, material, mrp, order, production, purchase, quality, rules, system, writeback
 
 api_router = APIRouter()
 
@@ -28,6 +28,12 @@ api_router.include_router(material.stock_check_router, prefix="/materials", tags
 api_router.include_router(material.scrap_inventory_router, prefix="/materials", tags=["物料齐套中心-报废物料库存查询"])
 api_router.include_router(material.inventory_board_router, prefix="/materials/inventory-board", tags=["物料齐套中心-库存看板"])
 api_router.include_router(material.occupancy_router, prefix="/materials/occupancy", tags=["物料齐套中心-物料占用分析"])
+
+# MRP（2026-09-24）
+api_router.include_router(mrp.runs_router, prefix="/mrp", tags=["MRP-批次"])
+api_router.include_router(mrp.suggestions_router, prefix="/mrp", tags=["MRP-建议"])
+api_router.include_router(mrp.parameters_router, prefix="/mrp", tags=["MRP-参数"])
+api_router.include_router(mrp.comparison_router, prefix="/mrp", tags=["MRP-对比"])
 
 # Production center
 api_router.include_router(production.router, prefix="/production", tags=["生产协同中心"])

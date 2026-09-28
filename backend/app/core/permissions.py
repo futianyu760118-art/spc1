@@ -26,6 +26,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "approval.pending": ["read"],
         "approval.config": ["read", "update"],
         "approval.business": ["read", "update"],
+        "materials.mrp": ["read", "run", "review", "convert", "param"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],
@@ -35,12 +36,14 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.task_stock_check": ["read"],
         "materials.inventory_board": ["read"],
         "materials.occupancy": ["read"],
+        "materials.mrp": ["read", "run", "review", "param"],
     },
     "purchaser": {
         "materials.scrap_inventory": ["read"],
         "materials.task_stock_check": ["read"],
         "materials.inventory_board": ["read"],
         "materials.occupancy": ["read"],
+        "materials.mrp": ["read", "review", "convert"],
     },
     "manager": {
         "production.schedule_plans": ["read", "update"],
@@ -59,6 +62,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.occupancy": ["read"],
         "quality.supplier_claim": ["read"],
         "approval.pending": ["read"],
+        "materials.mrp": ["read"],
     },
     "warehouse_Keeper": {
         "materials.subcontract_orders": ["read"],
