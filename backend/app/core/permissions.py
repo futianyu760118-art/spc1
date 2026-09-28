@@ -27,6 +27,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "approval.config": ["read", "update"],
         "approval.business": ["read", "update"],
         "materials.mrp": ["read", "run", "review", "convert", "param"],
+        "materials.purchase_requisition": ["read", "create", "update", "convert"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],
@@ -37,6 +38,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.inventory_board": ["read"],
         "materials.occupancy": ["read"],
         "materials.mrp": ["read", "run", "review", "param"],
+        "materials.purchase_requisition": ["read", "create", "update", "convert"],
     },
     "purchaser": {
         "materials.scrap_inventory": ["read"],
@@ -44,6 +46,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.inventory_board": ["read"],
         "materials.occupancy": ["read"],
         "materials.mrp": ["read", "review", "convert"],
+        "materials.purchase_requisition": ["read", "update", "convert"],
     },
     "manager": {
         "production.schedule_plans": ["read", "update"],
@@ -63,6 +66,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "quality.supplier_claim": ["read"],
         "approval.pending": ["read"],
         "materials.mrp": ["read"],
+        "materials.purchase_requisition": ["read"],
     },
     "warehouse_Keeper": {
         "materials.subcontract_orders": ["read"],

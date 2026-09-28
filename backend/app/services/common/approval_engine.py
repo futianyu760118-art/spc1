@@ -110,6 +110,8 @@ class ApprovalEngine:
         condition_fields: Optional[list[str]] = None,
         notify_approvers: Optional[NotifyApproversHook] = None,
         notify_applicant: Optional[NotifyApplicantHook] = None,
+        biz_label: str = "索赔单",
+        doc_no_field: str = "claim_no",
     ):
         self.db = db
         self.biz_type = biz_type
@@ -117,6 +119,8 @@ class ApprovalEngine:
         self.log_table = log_table
         self.ref_col = ref_col
         self.condition_fields = condition_fields or []
+        self.biz_label = biz_label
+        self.doc_no_field = doc_no_field
         self._notify_approvers = notify_approvers
         self._notify_applicant = notify_applicant
 
@@ -287,7 +291,7 @@ class ApprovalEngine:
                     return {"success": False, "message": "数据已被他人更新，请刷新后重试"}
                 fresh = await self.load(entity_id)
                 if self._notify_applicant:
-                    await self._notify_applicant(fresh, "[索赔单] 审批通过", f"您的索赔单 {rec.get('claim_no', '')} 已全部审批通过，已归档。")
+                    await self._notify_applicant(fresh, f"[{self.biz_label}] 审批通过", f"您的{self.biz_label} {rec.get(self.doc_no_field, '')} 已全部审批通过，已归档。")
                 return {"success": True, "finished": True, "skipped": skipped}
             next_approvers = await self.get_node_approver_usernames(next_node)
             skip = approver in next_approvers
@@ -336,8 +340,8 @@ class ApprovalEngine:
             return {"success": False, "message": "数据已被他人更新，请刷新后重试"}
         fresh = await self.load(entity_id)
         if self._notify_applicant:
-            await self._notify_applicant(fresh, "[索赔单] 审批被驳回",
-                                         f"您的索赔单 {rec.get('claim_no', '')} 被 {approver} 驳回。意见：{comment or '无'}。请修改后重新提交。")
+            await self._notify_applicant(fresh, f"[{self.biz_label}] 审批被驳回",
+                                         f"您的{self.biz_label} {rec.get(self.doc_no_field, '')} 被 {approver} 驳回。意见：{comment or '无'}。请修改后重新提交。")
         return {"success": True}
 
     async def recall(self, entity_id: int, applicant: str = "") -> bool:
@@ -390,8 +394,8 @@ class ApprovalEngine:
             return {"success": False, "message": "状态已变化，请刷新后重试"}
         fresh = await self.load(entity_id)
         if self._notify_applicant:
-            await self._notify_applicant(fresh, "[索赔单] 审批被撤回",
-                                         f"您的索赔单 {rec.get('claim_no', '')} 被 {revoker} 撤回了审批，已回退到第{rollback_level}级重新审批。")
+            await self._notify_applicant(fresh, f"[{self.biz_label}] 审批被撤回",
+                                         f"您的{self.biz_label} {rec.get(self.doc_no_field, '')} 被 {revoker} 撤回了审批，已回退到第{rollback_level}级重新审批。")
         await self._notify_level(fresh, rollback_level, "重新待您审批")
         return {"success": True, "level": rollback_level}
 

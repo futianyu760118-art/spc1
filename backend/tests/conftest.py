@@ -94,10 +94,17 @@ async def _test_db():
     from app.models.basicdata.bom import Bom
     from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog
     from app.models.basicdata.file_asset import FileAsset
+    from app.models.basicdata.material import Material
     from app.models.basicdata.permission import SysPermission
     from app.models.basicdata.user import SysRole, SysUser
     from app.models.basicdata.user_org_scope import UserOrgScope
     from app.models.exception.quality_issue import QualityIssue
+    from app.models.material.purchase_order import PurchaseOrder
+    from app.models.material.purchase_requisition import (
+        PurchaseRequisition,
+        PurchaseRequisitionApprovalLog,
+        PurchaseRequisitionLine,
+    )
     from app.models.order.sale_order import SaleOrder, SaleOrderLine
     from app.models.production.base_condition import ProductionBaseCondition
     from app.models.production.capacity_slot import CapacitySlot
@@ -118,6 +125,9 @@ async def _test_db():
         ProductionOrderScheduleSnapshot.__table__, ProductionDailyReport.__table__,
         CapacitySlot.__table__, ProductionBaseCondition.__table__,
         ApprovalBusiness.__table__,
+        Material.__table__, PurchaseOrder.__table__,
+        PurchaseRequisition.__table__, PurchaseRequisitionLine.__table__,
+        PurchaseRequisitionApprovalLog.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -171,8 +181,9 @@ async def client(_test_db):
 
     async with engine.begin() as conn:
         await conn.execute(text(
-            "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset "
-            "RESTART IDENTITY CASCADE"
+            "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, "
+            "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
+            "purchase_order RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
         await conn.execute(text("""

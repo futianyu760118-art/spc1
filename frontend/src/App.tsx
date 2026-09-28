@@ -24,6 +24,8 @@ import SubcontractOrders from './pages/MaterialCenter/SubcontractOrders/index'
 import ScrapInventory from './pages/MaterialCenter/ScrapInventory'
 import MaterialOccupancy from './pages/MaterialCenter/MaterialOccupancy'
 import MrpWorkbench from './pages/MaterialCenter/MrpWorkbench/index'
+import PurchaseRequisitionList from './pages/MaterialCenter/PurchaseRequisition/index'
+import PurchaseRequisitionDetail from './pages/MaterialCenter/PurchaseRequisition/detail'
 import IssueLedger from './pages/ExceptionCenter/IssueLedger/index'
 import ExceptionPool from './pages/ExceptionCenter/ExceptionPool/index'
 import QualityIssues from './pages/ExceptionCenter/QualityIssues/index'
@@ -208,6 +210,8 @@ export default function App() {
                             <Route path="scrap-inventory" element={<ScrapInventory/>}/>
                             <Route path="material-occupancy" element={<MaterialOccupancy/>}/>
                             <Route path="mrp" element={<MrpWorkbench/>}/>
+                            <Route path="purchase-requisitions" element={<PurchaseRequisitionList/>}/>
+                            <Route path="purchase-requisitions/:id" element={<PurchaseRequisitionDetail/>}/>
                             <Route path="kit-analysis" element={<KitAnalysis/>}/>
                             <Route path="supplier-risk" element={<SupplierRisk/>}/>
                             <Route path="supplier-payment" element={<SupplierPayment/>}/>

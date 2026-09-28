@@ -13,6 +13,7 @@ from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.material import Material
 from app.models.material.purchase_order import PurchaseOrder
+from app.models.material.purchase_requisition import PurchaseRequisition, PurchaseRequisitionLine
 from app.models.material.subcontract_order import SubcontractOrder
 from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.material.transfer_order import TransferOrder
@@ -36,7 +37,7 @@ class SupplyRecord:
     material_id: int
     supply_date: Optional[date]
     qty: Decimal
-    source_type: str  # po / task / subcontract / transfer
+    source_type: str  # po / task / subcontract / transfer / requisition
     source_doc_no: str
     source_line_no: str
     source_id: int
@@ -279,6 +280,35 @@ async def _load_supplies(db: AsyncSession, snapshot: Snapshot, code_to_id: dict[
             continue
         snapshot.supplies.append(
             SupplyRecord(mid, expected_arrival or transfer_date, Decimal(str(qty)), "transfer", transfer_no or "", str(entry_id or ""), int(pk))
+        )
+
+    req_rows = (
+        await db.execute(
+            select(
+                PurchaseRequisitionLine.id, PurchaseRequisition.req_no,
+                PurchaseRequisitionLine.line_no, PurchaseRequisitionLine.material_code,
+                PurchaseRequisitionLine.req_qty, PurchaseRequisitionLine.converted_qty,
+                PurchaseRequisitionLine.need_date,
+            )
+            .join(PurchaseRequisition, PurchaseRequisitionLine.req_id == PurchaseRequisition.id)
+            .where(
+                PurchaseRequisition.status == "approved",
+                PurchaseRequisitionLine.status.in_(["open", "partially_converted"]),
+                PurchaseRequisitionLine.material_code.isnot(None),
+            )
+        )
+    ).all()
+    for pk, req_no, line_no, material_code, req_qty, converted_qty, need_date in req_rows:
+        mid = code_to_id.get(material_code)
+        if mid is None:
+            continue
+        outstanding = (Decimal(str(req_qty)) if req_qty is not None else _ZERO) - (
+            Decimal(str(converted_qty)) if converted_qty is not None else _ZERO
+        )
+        if outstanding <= 0:
+            continue
+        snapshot.supplies.append(
+            SupplyRecord(mid, need_date, outstanding, "requisition", req_no or "", str(line_no or ""), int(pk))
         )
 
 

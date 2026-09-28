@@ -82,12 +82,18 @@ class SuggestionOut(BaseModel):
     compare_status: Optional[str] = None
     k3_qty: Optional[float] = None
     k3_need_date: Optional[date] = None
+    converted_target_type: Optional[str] = None
+    converted_target_id: Optional[int] = None
 
 
 class BatchReviewRequest(BaseModel):
     suggestion_ids: list[int] = Field(min_length=1)
     action: Literal["approve", "reject"]
     comment: str = ""
+
+
+class SuggestionConvertRequest(BaseModel):
+    suggestion_ids: list[int] = Field(min_length=1)
 
 
 class SchemeOut(BaseModel):
@@ -171,3 +177,37 @@ class ParameterUpsertRequest(BaseModel):
     batch_qty: Optional[float] = Field(default=None, gt=0)
     default_supplier_id: Optional[int] = None
     remark: Optional[str] = None
+
+
+class MrpExceptionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    run_id: int
+    material_id: int
+    material_code: str
+    material_name: Optional[str] = None
+    exception_code: int
+    exception_type: str
+    source_type: str
+    source_doc_no: Optional[str] = None
+    source_line_no: Optional[str] = None
+    source_id: Optional[int] = None
+    need_date: Optional[date] = None
+    doc_date: Optional[date] = None
+    adjust_days: Optional[int] = None
+    suggest_date: Optional[date] = None
+    suggest_qty: Optional[float] = None
+    detail: Optional[str] = None
+    pegging: Optional[list] = None
+    status: str
+    handled_by: Optional[str] = None
+    handled_at: Optional[datetime] = None
+    handle_action: Optional[str] = None
+    created_at: datetime
+
+
+class BatchHandleRequest(BaseModel):
+    exception_ids: list[int] = Field(min_length=1)
+    action: Literal["ignore", "reschedule", "cancel_reduce", "notify"]
+    comment: str = ""

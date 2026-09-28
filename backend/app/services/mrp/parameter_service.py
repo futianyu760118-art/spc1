@@ -203,6 +203,7 @@ def scheme_snapshot(scheme: MrpScheme, param_stats: dict) -> dict:
             "consider_requisition": scheme.consider_requisition,
             "consider_safety_stock": scheme.consider_safety_stock,
             "supply_priority": scheme.supply_priority,
+            "exception_enabled": scheme.exception_enabled,
             "exception_grace_days": scheme.exception_grace_days,
             "compare_window_days": scheme.compare_window_days,
             "compare_qty_threshold_pct": (

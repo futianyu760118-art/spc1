@@ -23,6 +23,7 @@ api_router.include_router(material.supplier_risk_router, prefix="/materials/supp
 api_router.include_router(material.supplier_payment_router, prefix="/materials/supplier-payment", tags=["物料齐套中心-供应商付款排程"])
 api_router.include_router(material.supplier_message_router, prefix="/materials/supplier-messages", tags=["物料齐套中心-供应商即时沟通"])
 api_router.include_router(material.subcontract_orders_router, prefix="/materials/subcontract-orders", tags=["物料齐套中心-委外订单"])
+api_router.include_router(material.purchase_requisitions_router, prefix="/materials/purchase-requisitions", tags=["物料齐套中心-采购申请单"])
 api_router.include_router(material.po_router, prefix="/materials", tags=["物料齐套中心-ERP采购订单"])
 api_router.include_router(material.stock_check_router, prefix="/materials", tags=["物料齐套中心-物料盘点"])
 api_router.include_router(material.scrap_inventory_router, prefix="/materials", tags=["物料齐套中心-报废物料库存查询"])
@@ -32,6 +33,7 @@ api_router.include_router(material.occupancy_router, prefix="/materials/occupanc
 # MRP（2026-09-24）
 api_router.include_router(mrp.runs_router, prefix="/mrp", tags=["MRP-批次"])
 api_router.include_router(mrp.suggestions_router, prefix="/mrp", tags=["MRP-建议"])
+api_router.include_router(mrp.exceptions_router, prefix="/mrp", tags=["MRP-例外"])
 api_router.include_router(mrp.parameters_router, prefix="/mrp", tags=["MRP-参数"])
 api_router.include_router(mrp.comparison_router, prefix="/mrp", tags=["MRP-对比"])
 

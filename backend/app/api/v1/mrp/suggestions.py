@@ -12,7 +12,7 @@ from app.core.security import PermissionChecker
 from app.models.mrp.run import MrpRun
 from app.models.mrp.suggestion import MrpSuggestion
 from app.schemas.common import PageResult, ResponseModel
-from app.schemas.mrp.schemas import BatchReviewRequest, SuggestionOut
+from app.schemas.mrp.schemas import BatchReviewRequest, SuggestionConvertRequest, SuggestionOut
 
 suggestions_router = APIRouter()
 
@@ -90,3 +90,26 @@ async def batch_review(
         row.reviewed_by = reviewer
         row.reviewed_at = datetime.now()
     return ResponseModel(data={"updated": len(rows), "status": target_status})
+
+
+@suggestions_router.post("/suggestions/convert", response_model=ResponseModel[dict])
+async def convert_suggestions(
+    payload: SuggestionConvertRequest,
+    current_user: dict = Depends(PermissionChecker("materials.mrp", "convert")),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.material.purchase_requisition_service import (
+        PurchaseRequisitionService,
+        RequisitionStateError,
+    )
+
+    try:
+        req = await PurchaseRequisitionService().create_from_suggestions(
+            db, username=current_user.get("username"), suggestion_ids=payload.suggestion_ids,
+        )
+    except RequisitionStateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await db.flush()
+    return ResponseModel(data={"requisition_id": req.id, "req_no": req.req_no, "line_count": len(payload.suggestion_ids)})

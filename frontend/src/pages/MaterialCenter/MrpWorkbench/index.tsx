@@ -4,6 +4,7 @@ import { Tabs } from 'antd'
 import RunsTab from './RunsTab'
 import SuggestionsTab from './SuggestionsTab'
 import MaterialBalanceTab from './MaterialBalanceTab'
+import ExceptionsTab from './ExceptionsTab'
 import ComparisonTab from './ComparisonTab'
 import ParametersTab from './ParametersTab'
 
@@ -25,6 +26,7 @@ export default function MrpWorkbench() {
           { key: 'runs', label: '运算批次', children: <RunsTab onOpenRun={handleOpenRun} /> },
           { key: 'suggestions', label: '计划建议', children: <SuggestionsTab runId={activeRunId} /> },
           { key: 'balance', label: '物料平衡', children: <MaterialBalanceTab runId={activeRunId} /> },
+          { key: 'exceptions', label: '例外', children: <ExceptionsTab runId={activeRunId} /> },
           { key: 'comparison', label: 'K3 对比', children: <ComparisonTab runId={activeRunId} /> },
           { key: 'parameters', label: '参数维护', children: <ParametersTab /> },
         ]}

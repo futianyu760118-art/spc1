@@ -13,3 +13,4 @@ from app.api.v1.material.subcontract_orders import router as subcontract_orders_
 from app.api.v1.material.scrap_inventory import router as scrap_inventory_router
 from app.api.v1.material.inventory_board import router as inventory_board_router
 from app.api.v1.material.occupancy import router as occupancy_router
+from app.api.v1.material.purchase_requisitions import router as purchase_requisitions_router

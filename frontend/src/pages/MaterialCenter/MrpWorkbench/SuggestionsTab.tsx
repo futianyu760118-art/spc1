@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Input, Popconfirm, Popover, Row, Col, Select, Space, Table, Tag, Typography, message,
+  Button, Input, Popconfirm, Popover, Row, Col, Select, Space, Table, Tag, Tooltip, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined } from '@ant-design/icons'
 import type { Key } from 'react'
+import { Link } from 'react-router-dom'
 import api from '@/services/api'
 import { useAuthStore } from '@/store/auth'
 
@@ -48,6 +49,8 @@ interface SuggestionRow {
   status: string
   reviewed_by: string | null
   reviewed_at: string | null
+  converted_target_type?: string | null
+  converted_target_id?: number | null
   pegging: PeggingItem[] | null
   compare_status: string | null
   k3_qty: number | null
@@ -87,6 +90,7 @@ function fmtQty(v: number | null | undefined): string {
 export default function SuggestionsTab({ runId }: { runId: number | null }) {
   const hasPermission = useAuthStore((s) => s.hasPermission) as (resource: string, action: string) => boolean
   const canReview = hasPermission('materials.mrp', 'review')
+  const canConvert = hasPermission('materials.mrp', 'convert')
 
   const [runOptions, setRunOptions] = useState<RunOption[]>([])
   const [selectedRunId, setSelectedRunId] = useState<number | null>(runId)
@@ -99,7 +103,9 @@ export default function SuggestionsTab({ runId }: { runId: number | null }) {
   const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
+  const [selectedRows, setSelectedRows] = useState<SuggestionRow[]>([])
   const [reviewing, setReviewing] = useState(false)
+  const [converting, setConverting] = useState(false)
 
   useEffect(() => {
     if (runId != null) setSelectedRunId(runId)
@@ -158,11 +164,51 @@ export default function SuggestionsTab({ runId }: { runId: number | null }) {
       })) as unknown as ApiResponse<{ updated: number; status: string }>
       message.success(`已${action === 'approve' ? '通过' : '驳回'} ${res.data.updated} 条建议`)
       setSelectedRowKeys([])
+      setSelectedRows([])
       await load()
     } catch {
       // 全局拦截器已提示
     } finally {
       setReviewing(false)
+    }
+  }
+
+  const canSelectRow = (row: SuggestionRow) =>
+    (canReview && row.status === 'pending') ||
+    (canConvert && row.bill_type === 11010 && row.status === 'approved')
+
+  const convertibleSelection =
+    selectedRows.length > 0 && selectedRows.every((r) => r.bill_type === 11010 && r.status === 'approved')
+
+  const convertHint = selectedRows.length === 0
+    ? '请先勾选建议'
+    : '仅「已通过」的「外购」建议可转为采购申请单'
+
+  const convert = async () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先勾选建议')
+      return
+    }
+    setConverting(true)
+    try {
+      const res = (await api.post(
+        '/mrp/suggestions/convert',
+        { suggestion_ids: selectedRowKeys.map(Number) },
+        { skipErrorToast: true },
+      )) as unknown as ApiResponse<{ requisition_id: number; req_no: string; line_count: number }>
+      message.success(`已生成 ${res.data.req_no}`)
+      setSelectedRowKeys([])
+      setSelectedRows([])
+      await load()
+    } catch (err) {
+      const response = (err as { response?: { status?: number; data?: { detail?: string } } })?.response
+      if (response?.status === 409) {
+        message.error('状态已变化，请刷新')
+      } else {
+        message.error(response?.data?.detail || (err as Error)?.message || '转换为采购申请单失败')
+      }
+    } finally {
+      setConverting(false)
     }
   }
 
@@ -196,9 +242,17 @@ export default function SuggestionsTab({ runId }: { runId: number | null }) {
       },
     },
     {
-      title: '状态', dataIndex: 'status', width: 100,
-      render: (v: string) => {
+      title: '状态', dataIndex: 'status', width: 150,
+      render: (v: string, row: SuggestionRow) => {
         const m = STATUS_MAP[v] || { label: v, color: 'default' }
+        if (v === 'converted' && row.converted_target_id != null) {
+          return (
+            <Space size={4}>
+              <Tag color={m.color}>{m.label}</Tag>
+              <Link to={`/purchase-requisitions/${row.converted_target_id}`}>查看申请单</Link>
+            </Space>
+          )
+        }
         return <Tag color={m.color}>{m.label}</Tag>
       },
     },
@@ -226,7 +280,6 @@ export default function SuggestionsTab({ runId }: { runId: number | null }) {
         return <Popover content={content} title="来源订单" trigger="hover">{v.length} 条</Popover>
       },
     },
-    // P2：在此接入「转化为采购申请」操作列（converted_target_type/id）
   ]
 
   return (
@@ -302,6 +355,20 @@ export default function SuggestionsTab({ runId }: { runId: number | null }) {
                   </Popconfirm>
                 </>
               )}
+              {canConvert && (
+                <Tooltip title={convertibleSelection ? undefined : convertHint}>
+                  <span style={{ display: 'inline-block' }}>
+                    <Button
+                      type="primary"
+                      disabled={!convertibleSelection}
+                      loading={converting}
+                      onClick={convert}
+                    >
+                      转为采购申请单
+                    </Button>
+                  </span>
+                </Tooltip>
+              )}
             </Space>
           </Col>
         </Row>
@@ -320,10 +387,10 @@ export default function SuggestionsTab({ runId }: { runId: number | null }) {
             loading={loading}
             size="small"
             scroll={{ x: 1400 }}
-            rowSelection={canReview ? {
+            rowSelection={(canReview || canConvert) ? {
               selectedRowKeys,
-              onChange: (keys) => setSelectedRowKeys(keys),
-              getCheckboxProps: (row) => ({ disabled: row.status !== 'pending' }),
+              onChange: (keys, rows) => { setSelectedRowKeys(keys); setSelectedRows(rows) },
+              getCheckboxProps: (row) => ({ disabled: !canSelectRow(row) }),
             } : undefined}
             pagination={{
               total, current: page, pageSize,

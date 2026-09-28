@@ -5,8 +5,9 @@ import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, FileImageOutlined, Fil
 import dayjs from 'dayjs'
 import { approvalApi, type ApprovalPreview } from '../../../services/approval'
 import { qualityApi } from '../../../services/quality'
-import { fileApi } from '../../../services/api'
+import { fileApi, materialApi } from '../../../services/api'
 import ClaimPaper, { opinionsFromClaim } from '../../../components/ClaimPaper'
+import PurchaseRequisitionPaper from '../../../components/PurchaseRequisitionPaper'
 
 const STATE_TEXT: Record<string, string> = { done: '已处理', current: '当前节点', todo: '待处理' }
 const STATE_TAG: Record<string, string> = { done: 'sc-tag-done', current: 'sc-tag-prod', todo: 'sc-tag-wait' }
@@ -31,6 +32,7 @@ export default function ApprovalItemPage() {
   const navigate = useNavigate()
   const [data, setData] = useState<ApprovalPreview | null>(null)
   const [claim, setClaim] = useState<any>(null)
+  const [requisition, setRequisition] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [comment, setComment] = useState('')
   const [acting, setActing] = useState(false)
@@ -42,11 +44,19 @@ export default function ApprovalItemPage() {
       const res: any = await approvalApi.preview(bizType, itemId)
       setData(res.data || null)
       // 内置业务复用业务侧完整视图；取数失败时降级为映射字段展示
+      setClaim(null)
+      setRequisition(null)
       if (bizType === 'supplier_claim') {
         try {
           const cRes: any = await qualityApi.get(itemId)
           setClaim(cRes.data || null)
         } catch { setClaim(null) }
+      }
+      if (bizType === 'purchase_requisition') {
+        try {
+          const rRes: any = await materialApi.getPurchaseRequisition(itemId)
+          setRequisition(rRes.data || null)
+        } catch { setRequisition(null) }
       }
     } catch { /* 全局拦截器已提示 */ } finally { setLoading(false) }
   }, [bizType, itemId])
@@ -113,6 +123,8 @@ export default function ApprovalItemPage() {
           </div>
           {claim ? (
             <div className="clm-paper-wrap"><ClaimPaper claim={claim} opinions={opinionsFromClaim(claim)} /></div>
+          ) : requisition ? (
+            <div className="clm-paper-wrap"><PurchaseRequisitionPaper req={requisition} small /></div>
           ) : (
             <div style={{ padding: 16 }}>
               <dl className="ac-kv">

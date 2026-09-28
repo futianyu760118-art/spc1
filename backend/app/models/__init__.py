@@ -16,6 +16,7 @@ from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.material.supplier_message import SupplierMessage
 from app.models.material.kitting import KittingResult, KittingRun, KittingShortage  # noqa: F401
 from app.models.material.transfer_order import TransferOrder  # noqa: F401
+from app.models.material.purchase_requisition import PurchaseRequisition, PurchaseRequisitionLine, PurchaseRequisitionApprovalLog  # noqa: F401
 
 # MRP 域（2026-09-24）
 from app.models.mrp import MrpBucket, MrpParameter, MrpRun, MrpScheme, MrpSuggestion  # noqa: F401

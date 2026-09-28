@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.models.mrp.bucket import MrpBucket
+from app.models.mrp.exception import MrpException
 from app.models.mrp.run import MrpRun
 from app.models.mrp.suggestion import MrpSuggestion
 from app.services.mrp import snapshot as snapshot_service
@@ -24,6 +25,14 @@ from app.services.mrp.bom_explosion import (
     flatten_phantom,
 )
 from app.services.mrp.comparison import build_comparison
+from app.services.mrp.exception_detector import (
+    EXC_BELOW_SAFETY,
+    EXC_NO_BOM,
+    DemandInfo,
+    SupplyInfo,
+    detect_material_exceptions,
+    make_exception_payload,
+)
 from app.services.mrp.netting import DemandEvent, SupplyEvent, net_requirements
 from app.services.mrp.parameter_service import (
     ResolvedParam,
@@ -165,6 +174,7 @@ class MrpEngine:
                 "task": bool(scheme.consider_task),
                 "subcontract": bool(scheme.consider_subcontract),
                 "transfer": bool(scheme.consider_transfer),
+                "requisition": bool(scheme.consider_requisition),
             }
 
             bom_edges: dict[int, set[int]] = defaultdict(set)
@@ -200,9 +210,10 @@ class MrpEngine:
 
             bucket_payloads: list[dict] = []
             suggestion_payloads: list[dict] = []
-            no_bom_materials: list[int] = []
+            no_bom_materials: set[int] = set()
             unknown_property: list[int] = []
             processed_materials = 0
+            safety_gaps: dict[int, list[tuple[date, Decimal]]] = defaultdict(list)
 
             for material_id in ordered:
                 demands_here = child_reqs.get(material_id, [])
@@ -269,6 +280,11 @@ class MrpEngine:
                     batch_qty=param.batch_qty,
                 )
 
+                if param.safety_stock > 0:
+                    for row in buckets:
+                        if row.net_demand_qty > 0:
+                            safety_gaps[material_id].append((row.bucket_date, row.net_demand_qty))
+
                 code = snapshot.code_by_material.get(material_id, "")
                 name = snapshot.name_by_material.get(material_id, "")
                 for row in buckets:
@@ -318,7 +334,7 @@ class MrpEngine:
                     )
                     if bill_type in (11011, 11012):
                         if not bom_id:
-                            no_bom_materials.append(material_id)
+                            no_bom_materials.add(material_id)
                             continue
                         parent_start = plan.need_date - timedelta(
                             days=total_lead_time(param, bill_type, plan.qty)
@@ -329,14 +345,94 @@ class MrpEngine:
                                 plan.pegging or []
                             )
 
+            exception_payloads: list[dict] = []
+            if scheme.exception_enabled:
+                grace = int(scheme.exception_grace_days or 0)
+                for material_id in ordered:
+                    if material_id in snapshot.phantom_ids:
+                        continue
+                    material_demands = child_reqs.get(material_id) or []
+                    material_supplies = [
+                        record
+                        for record in (supplies_by_material.get(material_id) or [])
+                        if supply_enabled.get(record.source_type, True)
+                    ]
+                    if not material_demands:
+                        continue
+                    material_code = snapshot.code_by_material.get(material_id, "")
+                    material_name = snapshot.name_by_material.get(material_id, "")
+                    supply_infos = [
+                        SupplyInfo(
+                            date=r.supply_date, qty=r.qty, source_type=r.source_type,
+                            doc_no=r.source_doc_no or "", line_no=r.source_line_no or "",
+                            source_id=r.source_id,
+                        )
+                        for r in material_supplies
+                    ]
+                    demand_qty_by_key: dict[tuple, Decimal] = {}
+                    for demand in material_demands:
+                        pegging = (pegging_by_key.get((material_id, demand.need_date)) or [{}])[0]
+                        key = (
+                            demand.need_date,
+                            pegging.get("sale_order_no", ""),
+                            pegging.get("line_no", ""),
+                        )
+                        demand_qty_by_key[key] = demand_qty_by_key.get(key, _ZERO) + demand.qty
+                    demand_infos = [
+                        DemandInfo(need_date=need_date, qty=qty, order_no=order_no, line_no=line_no)
+                        for (need_date, order_no, line_no), qty in demand_qty_by_key.items()
+                    ]
+                    exception_payloads.extend(
+                        detect_material_exceptions(
+                            material_id=material_id,
+                            material_code=material_code,
+                            material_name=material_name,
+                            supplies=supply_infos,
+                            demands=demand_infos,
+                            grace_days=grace,
+                            run_date=run_date,
+                        )
+                    )
+                    gaps = safety_gaps.get(material_id) or []
+                    if gaps:
+                        earliest_gap = min(g[0] for g in gaps)
+                        total_gap = sum((g[1] for g in gaps), _ZERO)
+                        exception_payloads.append(
+                            make_exception_payload(
+                                material_id, material_code, material_name,
+                                code=EXC_BELOW_SAFETY, type_="below_safety_stock",
+                                source_type="mrp_material",
+                                need_date=earliest_gap, suggest_date=earliest_gap,
+                                suggest_qty=total_gap,
+                                detail=f"净需求不足，共 {len(gaps)} 个时段低于安全库存，缺口合计 {total_gap}",
+                            )
+                        )
+                    if material_id in no_bom_materials:
+                        exception_payloads.append(
+                            make_exception_payload(
+                                material_id, material_code, material_name,
+                                code=EXC_NO_BOM, type_="no_bom",
+                                source_type="mrp_material",
+                                detail="发出自制/委外建议但未维护有效 BOM，无法展开下阶需求",
+                            )
+                        )
+                for payload in exception_payloads:
+                    payload["run_id"] = run_id
+
             async with AsyncSessionLocal() as db:
                 await self._bulk_insert(db, MrpBucket, bucket_payloads)
                 await self._bulk_insert(db, MrpSuggestion, suggestion_payloads)
+                await self._bulk_insert(db, MrpException, exception_payloads)
+                exceptions_by_type: dict[str, int] = defaultdict(int)
+                for payload in exception_payloads:
+                    exceptions_by_type[payload["exception_type"]] += 1
                 stats = {
                     "demand_lines": len(snapshot.demands),
                     "materials_processed": processed_materials,
                     "buckets": len(bucket_payloads),
                     "suggestions": len(suggestion_payloads),
+                    "exceptions": len(exception_payloads),
+                    "exceptions_by_type": dict(exceptions_by_type),
                     "duration_sec": round(time.time() - started, 2),
                     "data_issues": {
                         key: len(value) for key, value in snapshot.data_issues.items()
@@ -372,6 +468,7 @@ class MrpEngine:
         async with AsyncSessionLocal() as db:
             await db.execute(delete(MrpBucket).where(MrpBucket.run_id == run_id))
             await db.execute(delete(MrpSuggestion).where(MrpSuggestion.run_id == run_id))
+            await db.execute(delete(MrpException).where(MrpException.run_id == run_id))
             run = (await db.execute(select(MrpRun).where(MrpRun.id == run_id))).scalar_one_or_none()
             if run is not None:
                 run.status = "failed"
@@ -398,6 +495,7 @@ class MrpEngine:
         if not stale_ids:
             return
         await db.execute(delete(MrpBucket).where(MrpBucket.run_id.in_(stale_ids)))
+        await db.execute(delete(MrpException).where(MrpException.run_id.in_(stale_ids)))
         await db.execute(
             delete(MrpSuggestion).where(
                 MrpSuggestion.run_id.in_(stale_ids),

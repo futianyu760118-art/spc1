@@ -379,3 +379,11 @@ declare_permission(
     actions=["read", "run", "review", "convert", "param"],
     route_path="/mrp", sort_order=14,
 )
+
+# 采购申请单（2026-09-24 · MRP P2）
+declare_permission(
+    "materials.purchase_requisition", "采购申请单",
+    module="materials", parent_code="materials",
+    actions=["read", "create", "update", "convert"],
+    route_path="/purchase-requisitions", sort_order=15,
+)

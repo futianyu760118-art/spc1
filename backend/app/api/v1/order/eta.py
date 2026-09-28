@@ -5,11 +5,11 @@ from typing import Optional
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker
-from app.core.audit import log_audit
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.order.eta_update import ETAUpdate
 from app.schemas.common import ResponseModel, PageResult
 from app.schemas.material.schemas import ETAUpdateRequest, ETAUpdateOut, PurchaseOrderOut
+from app.services.order.eta_service import update_purchase_order_eta
 
 router = APIRouter()
 
@@ -21,27 +21,13 @@ async def update_eta(
     current_user: dict = Depends(PermissionChecker("materials.purchase_plan", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(PurchaseOrder).where(PurchaseOrder.po_no == po_no))
-    po = result.scalar_one_or_none()
-    if not po:
-        raise HTTPException(status_code=404, detail="PO不存在")
-
-    old_eta = po.eta
-
-    po.eta = data.new_eta
-
-    eta_record = ETAUpdate(
-        po_no=po_no,
-        old_eta=old_eta,
-        new_eta=data.new_eta,
-        updater=current_user["username"],
-        update_reason=data.update_reason,
-        remark=data.remark,
-    )
-    db.add(eta_record)
-
-    await log_audit(db, "purchase_order", po.id, "update", field_name="eta", old_value=str(old_eta) if old_eta else None, new_value=str(data.new_eta), operator=current_user["username"])
-    await db.commit()
+    try:
+        po = await update_purchase_order_eta(
+            db, po_no=po_no, new_eta=data.new_eta, updater=current_user["username"],
+            update_reason=data.update_reason, remark=data.remark,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     await db.refresh(po)
     return ResponseModel(data=PurchaseOrderOut.model_validate(po))
 

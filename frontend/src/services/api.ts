@@ -497,6 +497,19 @@ export const materialApi = {
     const fd = new FormData(); fd.append('file', file)
     return api.post('/materials/scrap-inventory/query-file', fd, { skipErrorToast: true })
   },
+  // 采购申请单（MRP P2）
+  listPurchaseRequisitions: (params: Record<string, any>) =>
+    api.get('/materials/purchase-requisitions', { params }),
+  getPurchaseRequisition: (id: number) =>
+    api.get(`/materials/purchase-requisitions/${id}`),
+  createPurchaseRequisition: (data: Record<string, any>) =>
+    api.post('/materials/purchase-requisitions', data),
+  updatePurchaseRequisition: (id: number, data: Record<string, any>) =>
+    api.put(`/materials/purchase-requisitions/${id}`, data),
+  submitPurchaseRequisition: (id: number) =>
+    api.post(`/materials/purchase-requisitions/${id}/submit`, {}),
+  convertPurchaseRequisitionToPo: (id: number, items: Array<{ line_id: number; qty: number }>) =>
+    api.post(`/materials/purchase-requisitions/${id}/convert-to-po`, { items }),
 }
 
 // ============ 供应商即时沟通 ============
