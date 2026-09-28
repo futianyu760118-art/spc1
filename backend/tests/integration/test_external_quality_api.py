@@ -95,15 +95,14 @@ async def test_endpoint_not_authorized_403(ext_client, external_keys):
     assert r.status_code == 403
 
 
-async def test_empty_list_returns_zero_items(ext_client, external_keys):
+async def test_empty_list_returns_503_source_unavailable(ext_client, external_keys):
+    """源表无数据且无同步来源 → 信封级结构化错误，不返回空数据 + high。"""
     r = await signed_get(ext_client, QUALITY_LIST, "quality_issues.list", external_keys["quality"])
     assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["items"] == []
-    assert data["total"] == 0
-    assert data["data_as_of"] is None
-    assert data["data_confidence"] == "unknown"
-    assert data["stale"] is False
+    body = r.json()
+    assert body["code"] == 503
+    assert body["data"] is None
+    assert "数据源不可用" in body["message"]
 
 
 async def test_pagination(ext_client, external_keys, seeded):
@@ -134,7 +133,18 @@ async def test_filters(ext_client, external_keys, seeded):
 
     r = await signed_get(ext_client, QUALITY_LIST, "quality_issues.list", key,
                          {"updated_after": "2999-01-01T00:00:00"})
-    assert r.json()["data"]["total"] == 0
+    data = r.json()["data"]
+    assert data["total"] == 0
+    assert data["data_as_of"] is not None  # 全表口径：空过滤结果不是源异常
+
+
+async def test_empty_filter_keeps_source_freshness(ext_client, external_keys, seeded):
+    r = await signed_get(ext_client, QUALITY_LIST, "quality_issues.list", external_keys["quality"],
+                         {"issue_no": "QI-NOT-EXIST"})
+    data = r.json()["data"]
+    assert data["total"] == 0
+    assert data["data_as_of"] is not None
+    assert data["data_confidence"] in ("high", "medium")
 
 
 async def test_soft_deleted_excluded(ext_client, external_keys, seeded):

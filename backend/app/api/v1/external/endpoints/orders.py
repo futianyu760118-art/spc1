@@ -22,7 +22,8 @@ from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.production.labor_price_audit import ProductionLaborPriceAudit
 from app.schemas.common import ResponseModel
 
-from ..common import ExternalPage, PageParamsMixin
+from ..common import ExternalDataPage, PageParamsMixin
+from ..freshness import freshness_meta, source_as_of
 from ..deps import external_auth
 from ..log_wrap import log_external_call
 from ..registry import register_external
@@ -72,6 +73,7 @@ class OrdersListQuery(PageParamsMixin):
     promised_date_start: Optional[date] = Field(None, description="合同交期范围起 YYYY-MM-DD")
     promised_date_end: Optional[date] = Field(None, description="合同交期范围止 YYYY-MM-DD")
     updated_after: Optional[datetime] = Field(None, description="增量同步，仅返回 updated_at >= 此时间的记录（ISO 8601）")
+    request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
 
 
 class OrderOut(BaseModel):
@@ -100,7 +102,7 @@ class OrderOut(BaseModel):
     updated_at: Optional[datetime] = Field(None, description="最后更新时间（增量同步锚点）")
 
 
-@router.get("/list", response_model=ResponseModel[ExternalPage[OrderOut]],
+@router.get("/list", response_model=ResponseModel[ExternalDataPage[OrderOut]],
             summary="订单列表", description="endpoint_code: orders.list")
 @register_external(
     "orders.list", "订单列表", method="GET", path="/orders/list",
@@ -193,7 +195,17 @@ async def orders_list(
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         })
 
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        **freshness_meta(
+            await source_as_of(db, columns=(SaleOrder.updated_at,), sync_types=("orders",)),
+            "订单",
+        ),
+        "request_id": q.request_id,
+    }
 
 
 class OrderDetailsListQuery(PageParamsMixin):
@@ -205,6 +217,7 @@ class OrderDetailsListQuery(PageParamsMixin):
     promised_date_start: Optional[date] = Field(None, description="合同交期范围起 YYYY-MM-DD")
     promised_date_end: Optional[date] = Field(None, description="合同交期范围止 YYYY-MM-DD")
     updated_after: Optional[datetime] = Field(None, description="增量同步，仅返回 updated_at >= 此时间的记录（ISO 8601）")
+    request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
 
 
 class OrderDetailOut(BaseModel):
@@ -232,7 +245,7 @@ class OrderDetailOut(BaseModel):
     updated_at: Optional[datetime] = Field(None, description="最后更新时间")
 
 
-@router_details.get("/list", response_model=ResponseModel[ExternalPage[OrderDetailOut]],
+@router_details.get("/list", response_model=ResponseModel[ExternalDataPage[OrderDetailOut]],
                     summary="订单明细列表", description="endpoint_code: order_details.list")
 @register_external(
     "order_details.list", "订单明细列表", method="GET", path="/order-details/list",
@@ -355,4 +368,14 @@ async def order_details_list(
             "updated_at": line.updated_at.isoformat() if line.updated_at else None,
         })
 
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        **freshness_meta(
+            await source_as_of(db, columns=(SaleOrderLine.updated_at,), sync_types=("order_details",)),
+            "订单明细",
+        ),
+        "request_id": q.request_id,
+    }

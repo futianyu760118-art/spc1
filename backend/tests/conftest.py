@@ -8,6 +8,7 @@
 
 import json
 import os
+from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 
 from app.core.config import get_settings  # config 模块无副作用，不建引擎
@@ -26,6 +27,9 @@ def _swap_db(url: str, db_name: str) -> str:
 
 os.environ["DATABASE_URL"] = _swap_db(_base.DATABASE_URL, TEST_DB_NAME)
 os.environ["DATABASE_URL_SYNC"] = _swap_db(_base.DATABASE_URL_SYNC, TEST_DB_NAME)
+# Redis 指向不可达地址：通知推送等 Redis 调用走降级分支。测试用户 id 与开发库重叠，
+# 不隔离会把 spc_test 的 notif:{user_id} 事件推给正在使用的开发环境
+os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
 get_settings.cache_clear()
 
 # ---------------------------------------------------------------- 环境就绪，以下才能导入 app 模块
@@ -91,12 +95,16 @@ async def _test_db():
     # 2) 只建本套件所需的最小表集合——全量 create_all 会被遗留模型的
     #    order_material_po_binding 非法外键（po_no 无唯一约束）卡死，且与本功能无关
     from app.models.basicdata.announcement import Notification
+    from app.models.basicdata.audit_log import AuditLog
     from app.models.basicdata.bom import Bom
+    from app.models.basicdata.bom_detail import BomDetail
     from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog
     from app.models.basicdata.file_asset import FileAsset
     from app.models.basicdata.material import Material
     from app.models.basicdata.permission import SysPermission
+    from app.models.basicdata.sync_sql_config import SyncSqlConfig
     from app.models.basicdata.user import SysRole, SysUser
+    from app.models.basicdata.supplier import Supplier
     from app.models.basicdata.user_org_scope import UserOrgScope
     from app.models.exception.quality_issue import QualityIssue
     from app.models.material.purchase_order import PurchaseOrder
@@ -120,11 +128,12 @@ async def _test_db():
         SupplierClaim.__table__, SupplierClaimApprovalLog.__table__,
         Notification.__table__, FileAsset.__table__,
         DataSupplyApiKey.__table__, DataSupplyCallLog.__table__,
-        QualityIssue.__table__, SaleOrder.__table__, SaleOrderLine.__table__, Bom.__table__,
+        QualityIssue.__table__, SaleOrder.__table__, SaleOrderLine.__table__,
+        Bom.__table__, BomDetail.__table__, Supplier.__table__,
         ProductionTaskOrder.__table__, ProcessProgress.__table__,
         ProductionOrderScheduleSnapshot.__table__, ProductionDailyReport.__table__,
         CapacitySlot.__table__, ProductionBaseCondition.__table__,
-        ApprovalBusiness.__table__,
+        ApprovalBusiness.__table__, SyncSqlConfig.__table__, AuditLog.__table__,
         Material.__table__, PurchaseOrder.__table__,
         PurchaseRequisition.__table__, PurchaseRequisitionLine.__table__,
         PurchaseRequisitionApprovalLog.__table__,
@@ -169,6 +178,24 @@ async def _test_db():
             VALUES ('supplier_claim', '供应商索赔单', CAST(:nodes AS jsonb), TRUE, 'pytest')
             ON CONFLICT (biz_type) DO NOTHING
         """), {"nodes": json.dumps(DEFAULT_CHAIN)})
+        # 生产协同对外接口空表时的 data_as_of 回退源（固定旧值使断言稳定）
+        await conn.execute(text("""
+            INSERT INTO sync_sql_config
+                (sync_type, description, sql_text, sync_interval, sync_strategy,
+                 sync_priority, sync_enabled, is_active, last_sync_time)
+            VALUES ('production_daily_reports', 'pytest 时效回退种子', 'SELECT 1', '1h', 'full',
+                    5, TRUE, TRUE, :t)
+            ON CONFLICT (sync_type) DO UPDATE SET last_sync_time = EXCLUDED.last_sync_time
+        """), {"t": datetime(2026, 8, 6, 15, 44, 3)})
+        # 工序表全空时回退的 CSV 导入时间（audit_log，先删旧种子保证幂等）
+        await conn.execute(text(
+            "DELETE FROM audit_log WHERE table_name = 'process_progress' AND operator = 'pytest'"
+        ))
+        await conn.execute(text("""
+            INSERT INTO audit_log
+                (table_name, record_id, action, field_name, new_value, operator, operated_at)
+            VALUES ('process_progress', 0, 'import', 'assembly_csv', 'pytest.csv', 'pytest', :t)
+        """), {"t": datetime(2026, 9, 20, 10, 0, 0)})
     yield
     await engine.dispose()
 
@@ -225,9 +252,10 @@ async def external_keys(_test_db):
 
     async with engine.begin() as conn:
         await conn.execute(text(
-            "TRUNCATE quality_issue, sale_order, sale_order_line, scm_bom, "
-            "production_task_order, process_progress, production_order_schedule_snapshot, "
-            "production_daily_report, production_capacity_slot, production_base_condition, "
+            "TRUNCATE quality_issue, sale_order, sale_order_line, scm_bom, scm_bom_detail, "
+            "scm_material, scm_supplier, production_task_order, process_progress, "
+            "production_order_schedule_snapshot, production_daily_report, "
+            "production_capacity_slot, production_base_condition, "
             "data_supply_api_key, data_supply_call_log RESTART IDENTITY CASCADE"
         ))
         await conn.execute(text("""
@@ -238,7 +266,8 @@ async def external_keys(_test_db):
                 ('pytest-quality', 'ak_pytest_quality', TRUE,
                  '["quality_issues.list", "quality_trace.list"]', 0, :qak, :qas, NULL, 'pytest'),
                 ('pytest-orders', 'ak_pytest_orders', TRUE,
-                 '["orders.list"]', 0, :oak, :oas, NULL, 'pytest'),
+                 '["orders.list", "order_details.list", "boms.tree", "materials.list", "suppliers.list"]',
+                 0, :oak, :oas, NULL, 'pytest'),
                 ('pytest-production', 'ak_pytest_production', TRUE,
                  CAST(:pcodes AS jsonb), 0, :pak, :pas, NULL, 'pytest')
         """), {

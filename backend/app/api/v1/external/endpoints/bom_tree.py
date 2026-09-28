@@ -16,7 +16,7 @@
 """
 
 from decimal import Decimal, InvalidOperation
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.basicdata.bom import Bom
+from app.models.basicdata.bom_detail import BomDetail
 from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.schemas.common import ResponseModel
 from app.schemas.order.schemas import BomDetailItemOut
@@ -32,6 +33,7 @@ from app.services.order.order_materials_service import _expand_bom_tree
 
 from ..common import ExternalQuery
 from ..deps import external_auth
+from ..freshness import freshness_meta, source_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -42,6 +44,7 @@ class BomsTreeQuery(ExternalQuery):
     bom_id: str = Field(..., description="顶层 BOM ID（必填），以其为根向下展开多级")
     demand_qty: Optional[str] = Field(None, description="根需求量（订单数量），数字字符串。缺省取根 BOM 的 base_qty，再缺省取 1")
     flatten: Optional[str] = Field(None, description="true/1 时返回扁平列表 items，否则返回嵌套树 tree")
+    request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
 
 
 class BomTreeData(BaseModel):
@@ -59,6 +62,10 @@ class BomTreeData(BaseModel):
     message: Optional[str] = Field(None, description="提示信息（如未找到 BOM 时）")
     tree: Optional[List[BomDetailItemOut]] = Field(None, description="嵌套树（flatten=false 时返回）")
     items: Optional[List[BomDetailItemOut]] = Field(None, description="扁平列表（flatten=true 时返回，含 bom_id/level/parent_material_id 供还原关系）")
+    data_as_of: str = Field(..., description="数据业务时点（源表最近修改与最近成功同步时间的较晚者，ISO 8601）")
+    data_confidence: Literal["high", "medium", "low"] = Field(..., description="数据置信度")
+    stale: bool = Field(..., description="数据是否超过新鲜度阈值（24h）")
+    request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
 
 
 def _to_decimal(value, default: Decimal) -> Decimal:
@@ -140,6 +147,15 @@ async def boms_tree(
     """
     flatten = str(q.flatten if q.flatten is not None else "").lower() in ("1", "true", "yes")
 
+    meta = freshness_meta(
+        await source_as_of(
+            db,
+            columns=(Bom.update_time, BomDetail.update_time),
+            sync_types=("boms", "bom_details"),
+        ),
+        "BOM",
+    )
+
     root_bom = await _resolve_root_bom(db, q.bom_id)
     if not root_bom:
         return {
@@ -148,6 +164,8 @@ async def boms_tree(
             "total_nodes": 0,
             "max_level": 0,
             "message": "未找到该 bom_id 对应的 BOM",
+            **meta,
+            "request_id": q.request_id,
         }
 
     # 根需求量：显式参数 > 根 BOM base_qty > 1
@@ -175,5 +193,5 @@ async def boms_tree(
     }
 
     if flatten:
-        return {**root_info, "items": _flatten_nodes(tree)}
-    return {**root_info, "tree": [n.model_dump(mode="json") for n in tree]}
+        return {**root_info, "items": _flatten_nodes(tree), **meta, "request_id": q.request_id}
+    return {**root_info, "tree": [n.model_dump(mode="json") for n in tree], **meta, "request_id": q.request_id}

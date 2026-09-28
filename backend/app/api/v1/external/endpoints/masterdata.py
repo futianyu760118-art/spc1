@@ -21,8 +21,9 @@ from app.models.basicdata.product import Product
 from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.schemas.common import ResponseModel
 
-from ..common import ExternalPage, IntCsv, PageParamsMixin
+from ..common import ExternalDataPage, ExternalPage, IntCsv, PageParamsMixin
 from ..deps import external_auth
+from ..freshness import freshness_meta, source_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -140,6 +141,7 @@ class SuppliersListQuery(PageParamsMixin):
     supplier_type: Optional[str] = Field(None, description="供应商类型精确匹配")
     status: IntCsv = Field(None, description="状态，多选逗号分隔（1-启用 0-禁用），如 1,0")
     updated_after: Optional[datetime] = Field(None, description="增量同步，仅返回 update_time >= 此时间的记录（ISO 8601）")
+    request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
 
 
 class SupplierOut(BaseModel):
@@ -156,7 +158,7 @@ class SupplierOut(BaseModel):
     update_time: Optional[datetime] = Field(None, description="更新时间（增量同步锚点）")
 
 
-@router.get("/suppliers/list", response_model=ResponseModel[ExternalPage[SupplierOut]],
+@router.get("/suppliers/list", response_model=ResponseModel[ExternalDataPage[SupplierOut]],
             summary="供应商列表", description="endpoint_code: suppliers.list")
 @register_external(
     "suppliers.list",
@@ -228,7 +230,17 @@ async def suppliers_list(
         "update_time": r.update_time.isoformat() if r.update_time else None,
     } for r in rows]
 
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        **freshness_meta(
+            await source_as_of(db, columns=(Supplier.update_time,), sync_types=("suppliers",)),
+            "供应商",
+        ),
+        "request_id": q.request_id,
+    }
 
 
 # ═══════════════════════════════════════════
@@ -242,6 +254,7 @@ class MaterialsListQuery(PageParamsMixin):
     is_produce: Optional[int] = Field(None, description="是否可生产 (0/1)")
     status: IntCsv = Field(None, description="状态，多选逗号分隔（1-启用 0-禁用），如 1,0")
     updated_after: Optional[datetime] = Field(None, description="增量同步，仅返回 update_time >= 此时间的记录（ISO 8601）")
+    request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
 
 
 class MaterialOut(BaseModel):
@@ -264,7 +277,7 @@ class MaterialOut(BaseModel):
     update_time: Optional[datetime] = Field(None, description="更新时间（增量同步锚点）")
 
 
-@router.get("/materials/list", response_model=ResponseModel[ExternalPage[MaterialOut]],
+@router.get("/materials/list", response_model=ResponseModel[ExternalDataPage[MaterialOut]],
             summary="物料列表", description="endpoint_code: materials.list")
 @register_external(
     "materials.list",
@@ -351,7 +364,17 @@ async def materials_list(
         "update_time": m.update_time.isoformat() if m.update_time else None,
     } for m, supplier_name in rows]
 
-    return {"items": items, "total": total, "page": page, "page_size": page_size}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        **freshness_meta(
+            await source_as_of(db, columns=(Material.update_time,), sync_types=("materials_masterdata",)),
+            "物料",
+        ),
+        "request_id": q.request_id,
+    }
 
 
 # ═══════════════════════════════════════════

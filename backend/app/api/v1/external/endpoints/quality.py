@@ -21,7 +21,8 @@ from app.models.exception.quality_issue import QualityIssue
 from app.models.order.sale_order import SaleOrderLine
 from app.schemas.common import ResponseModel
 
-from ..common import ExternalDataPage, PageParamsMixin, freshness_meta
+from ..common import ExternalDataPage, PageParamsMixin
+from ..freshness import freshness_meta, table_max_as_of
 from ..deps import external_auth
 from ..log_wrap import log_external_call
 from ..registry import register_external
@@ -163,9 +164,7 @@ async def quality_issues_list(
     conditions = _quality_conditions(q)
 
     total = (await db.execute(select(func.count(QualityIssue.id)).where(*conditions))).scalar() or 0
-    data_as_of = (
-        await db.execute(select(func.max(QualityIssue.updated_at)).where(*conditions))
-    ).scalar()
+    data_as_of = (await db.execute(select(func.max(QualityIssue.updated_at)))).scalar()
 
     rows = (
         await db.execute(
@@ -182,7 +181,7 @@ async def quality_issues_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **freshness_meta(data_as_of),
+        **freshness_meta(data_as_of, "质量异常"),
         "request_id": q.request_id,
     }
 
@@ -310,7 +309,10 @@ async def quality_trace_list(
     updated_candidates = [i.updated_at for i in issues if i.updated_at] + [
         ln.updated_at for ln in lines if ln.updated_at
     ]
-    data_as_of = max(updated_candidates) if updated_candidates else None
+    data_as_of = (
+        max(updated_candidates) if updated_candidates
+        else await table_max_as_of(db, QualityIssue.updated_at, SaleOrderLine.updated_at)
+    )
 
     total = len(nodes)
     start = (page - 1) * page_size
@@ -319,6 +321,6 @@ async def quality_trace_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **freshness_meta(data_as_of),
+        **freshness_meta(data_as_of, "质量追溯"),
         "request_id": q.request_id,
     }

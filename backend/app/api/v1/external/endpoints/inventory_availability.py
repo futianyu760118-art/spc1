@@ -16,10 +16,10 @@ from app.core.database import get_db
 from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.models.basicdata.inventory import Inventory
 from app.schemas.common import ResponseModel
-from app.services.material.kitting_calc_service import freshness_of, load_source_as_of, min_as_of
 
 from ..common import ExternalDataPage, PageParamsMixin
 from ..deps import external_auth
+from ..freshness import freshness_meta, sync_only_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -111,16 +111,12 @@ async def inventory_availability_list(
         for r in rows
     ]
 
-    source_as_of = await load_source_as_of(db, ("inventory",))
-    data_as_of = min_as_of(source_as_of)
-    confidence, stale = freshness_of(data_as_of)
+    meta = freshness_meta(await sync_only_as_of(db, ("inventory",)), "库存可用量")
     return {
         "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
-        "data_as_of": data_as_of.isoformat() if data_as_of else None,
-        "data_confidence": confidence,
-        "stale": stale,
+        **meta,
         "request_id": q.request_id,
     }

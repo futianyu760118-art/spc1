@@ -3,12 +3,24 @@
 数据源仅现有表：
 - work-orders  ← production_task_order（OA 生产任务单）
 - operations   ← process_progress（工序进度统一模型；SPC 无工单级工序，order_no 必填）
-- order-links  ← production_task_order.sale_order_no（订单级）+ production_order_schedule_snapshot（行级），link_type 区分
+- order-links  ← production_task_order（订单级）+ production_order_schedule_snapshot（行级），link_type 区分
 - reports      ← production_daily_report（ERP 生产日报）
 - capacity     ← production_capacity_slot + production_base_condition 按（部门, 排产段, 日期）聚合
 
 契约无来源的字段恒返回 null，不虚构；状态映射为建议口径（待生产负责人 D0 签认），status_raw 保留源语义。
-data_as_of = 源表全表 max(updated_at)（非过滤集），空过滤结果仍携带真实刷新时间。
+任务单不冗余订单号（production_task_order.sale_order_no 生产库全空），work-orders / order-links
+的 order_no 输出与 order_no 过滤一律经 sale_order.erp_id = production_task_order.sale_order_id
+解析（同 stock_check / front_process 口径）。
+data_as_of = 源表全表 max(updated_at)（非过滤集），空过滤结果仍携带真实刷新时间；源表无任何行时
+回退该表同步类型的最近成功同步时间（sync_sql_config.last_sync_time）或 CSV 导入时间（audit_log），
+皆无则返回 code=503 结构化错误。data_confidence 仅 high/medium/low，不使用请求时间兜底。
+工序表（process_progress）无行时以生产任务单同步时间（production_task_orders，生产协同数据域基线）
+兜底：数据源已成功同步，空结果照常返回真实时效且不判过期。
+
+时效口径（2026-09-24 AEOS 确认）：
+- 工序/报工/产能为历史快照基线（计划/累计报工/已排产能），有 data_as_of 即 stale=false，
+  置信度仅 high（≤6h）/ medium，不按 24h 判过期；无任何数据源返回 code=503 结构化错误。
+- 工单/工单-订单关系仍按 6h/24h 实时口径如实返回 stale。
 """
 
 from datetime import date, datetime
@@ -20,7 +32,9 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.models.basicdata.audit_log import AuditLog
 from app.models.basicdata.data_supply import DataSupplyApiKey
+from app.models.order.sale_order import SaleOrder
 from app.models.production.base_condition import ProductionBaseCondition
 from app.models.production.capacity_slot import CapacitySlot
 from app.models.production.order_schedule_snapshot import ProductionOrderScheduleSnapshot
@@ -28,9 +42,11 @@ from app.models.production.process_progress import ProcessProgress
 from app.models.production.production_daily_report import ProductionDailyReport
 from app.models.production.production_task_order import ProductionTaskOrder
 from app.schemas.common import ResponseModel
+from app.services.material.kitting_calc_service import load_source_as_of, min_as_of
 
-from ..common import ExternalDataPage, PageParamsMixin, freshness_meta
+from ..common import ExternalDataPage, PageParamsMixin
 from ..deps import external_auth
+from ..freshness import freshness_meta, table_max_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -60,14 +76,30 @@ def _page(q) -> tuple[int, int]:
     return page, page_size
 
 
-async def _table_as_of(db: AsyncSession, *columns) -> Optional[datetime]:
-    """源表全表 max(updated_at)：空过滤结果仍携带真实刷新时间。"""
-    latest = None
-    for column in columns:
-        value = (await db.execute(select(func.max(column)))).scalar()
-        if value is not None and (latest is None or value > latest):
-            latest = value
-    return latest
+async def _latest_import_at(db: AsyncSession, *table_names: str) -> Optional[datetime]:
+    """CSV 导入最近一次发生时间（audit_log action='import'）：源表全空时的真实回退时间源。"""
+    return (await db.execute(
+        select(func.max(AuditLog.operated_at)).where(
+            AuditLog.table_name.in_(table_names), AuditLog.action == "import",
+        )
+    )).scalar()
+
+
+async def _freshness(
+    db: AsyncSession, *columns, sync_types: tuple[str, ...] = (),
+    import_tables: tuple[str, ...] = (), baseline: bool = False,
+) -> dict:
+    """生产协同时效元信息：源表全表 max → 同步时间 → 导入时间回退；全空 → code=503 结构化错误。
+
+    baseline=True（工序/报工/产能：历史快照即有效基线，24h 过期口径不适用）：
+    有数据时置信度仅 high（≤6h）/ medium，stale 恒 false；全空同样返回结构化错误。
+    """
+    as_of = await table_max_as_of(db, *columns)
+    if as_of is None and sync_types:
+        as_of = min_as_of(await load_source_as_of(db, sync_types))
+    if as_of is None and import_tables:
+        as_of = await _latest_import_at(db, *import_tables)
+    return freshness_meta(as_of, "生产协同", baseline=baseline)
 
 
 # ---------------------------------------------------------------- work-orders
@@ -109,7 +141,25 @@ def _wo_status_condition(statuses: list[str]):
     return or_(*(branch[s] for s in statuses if s in branch))
 
 
-def _serialize_task_order(row: ProductionTaskOrder) -> dict:
+def _order_no_filter(order_no: str):
+    """order_no 精确匹配：主口径经 sale_order.erp_id 解析（任务单 sale_order_no 生产库全空），
+    保留已回填值的兼容匹配。"""
+    resolved_ids = select(SaleOrder.erp_id).where(SaleOrder.order_no == order_no)
+    return or_(
+        ProductionTaskOrder.sale_order_no == order_no,
+        ProductionTaskOrder.sale_order_id.in_(resolved_ids),
+    )
+
+
+def _task_orders_with_order_no():
+    """任务单行 + 解析出的销售订单号（sale_order.erp_id = task.sale_order_id，同 stock_check 口径）。"""
+    return (
+        select(ProductionTaskOrder, SaleOrder.order_no)
+        .outerjoin(SaleOrder, SaleOrder.erp_id == ProductionTaskOrder.sale_order_id)
+    )
+
+
+def _serialize_task_order(row: ProductionTaskOrder, order_no: Optional[str] = None) -> dict:
     status_raw, status = _map_task_status(row)
     return {
         "work_order_id": str(row.id),
@@ -140,7 +190,7 @@ def _serialize_task_order(row: ProductionTaskOrder) -> dict:
         "owner": None,
         "blocking": None,
         "blocking_reason": None,
-        "order_no": row.sale_order_no,
+        "order_no": order_no or row.sale_order_no,
         "sale_order_id": row.sale_order_id,
         "task_type": row.task_type,
         "task_id": row.task_id,
@@ -223,7 +273,7 @@ async def production_work_orders_list(
     if q.work_order_no:
         conditions.append(ProductionTaskOrder.task_no == q.work_order_no)
     if q.order_no:
-        conditions.append(ProductionTaskOrder.sale_order_no == q.order_no)
+        conditions.append(_order_no_filter(q.order_no))
     if q.product_code:
         conditions.append(ProductionTaskOrder.material_code == q.product_code)
     if q.workshop:
@@ -242,20 +292,20 @@ async def production_work_orders_list(
     total = (await db.execute(select(func.count(ProductionTaskOrder.id)).where(*conditions))).scalar() or 0
     rows = (
         await db.execute(
-            select(ProductionTaskOrder)
+            _task_orders_with_order_no()
             .where(*conditions)
             .order_by(ProductionTaskOrder.updated_at.desc(), ProductionTaskOrder.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
-    ).scalars().all()
+    ).all()
 
     return {
-        "items": [_serialize_task_order(r) for r in rows],
+        "items": [_serialize_task_order(row, order_no) for row, order_no in rows],
         "total": total,
         "page": page,
         "page_size": page_size,
-        **freshness_meta(await _table_as_of(db, ProductionTaskOrder.updated_at)),
+        **await _freshness(db, ProductionTaskOrder.updated_at, sync_types=("production_task_orders",)),
         "request_id": q.request_id,
     }
 
@@ -408,20 +458,22 @@ async def production_operations_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **freshness_meta(await _table_as_of(db, ProcessProgress.updated_at)),
+        **await _freshness(db, ProcessProgress.updated_at,
+                           sync_types=("production_task_orders",),
+                           import_tables=("process_progress",), baseline=True),
         "request_id": q.request_id,
     }
 
 
 # ---------------------------------------------------------------- order-links
 
-def _serialize_task_link(row: ProductionTaskOrder) -> dict:
+def _serialize_task_link(row: ProductionTaskOrder, order_no: Optional[str] = None) -> dict:
     return {
         "link_id": f"production_task:{row.id}",
         "link_type": "production_task",
         "work_order_id": str(row.id),
         "work_order_no": row.task_no,
-        "order_no": row.sale_order_no,
+        "order_no": order_no or row.sale_order_no,
         "line_no": None,
         "order_line_id": None,
         "allocated_qty": _n(row.task_qty),
@@ -485,7 +537,7 @@ class OrderLinksListQuery(PageParamsMixin):
             summary="工单与销售订单关系", description="endpoint_code: production.order_links.list")
 @register_external(
     "production.order_links.list", "工单与销售订单关系", method="GET", path="/production/order-links/list",
-    description="双源：production_task（任务单→订单，订单级，line_no 恒 null）+ schedule_snapshot（订单行级排产快照，无工单号）；不做产品编码推断",
+    description="双源：production_task（任务单→订单，订单级，line_no 恒 null；订单号经 sale_order.erp_id 解析）+ schedule_snapshot（订单行级排产快照，无工单号）；不做产品编码推断",
     tags=["生产协同"],
 )
 @log_external_call("production.order_links.list")
@@ -506,11 +558,11 @@ async def production_order_links_list(
         if q.work_order_no:
             conditions.append(ProductionTaskOrder.task_no == q.work_order_no)
         if q.order_no:
-            conditions.append(ProductionTaskOrder.sale_order_no == q.order_no)
+            conditions.append(_order_no_filter(q.order_no))
         tasks = (await db.execute(
-            select(ProductionTaskOrder).where(*conditions).order_by(ProductionTaskOrder.id)
-        )).scalars().all()
-        links.extend(_serialize_task_link(t) for t in tasks)
+            _task_orders_with_order_no().where(*conditions).order_by(ProductionTaskOrder.id)
+        )).all()
+        links.extend(_serialize_task_link(row, order_no) for row, order_no in tasks)
 
     if "schedule_snapshot" in link_types and q.order_no:
         snapshots = (await db.execute(
@@ -534,8 +586,9 @@ async def production_order_links_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **freshness_meta(await _table_as_of(
-            db, ProductionTaskOrder.updated_at, ProductionOrderScheduleSnapshot.updated_at)),
+        **await _freshness(
+            db, ProductionTaskOrder.updated_at, ProductionOrderScheduleSnapshot.updated_at,
+            sync_types=("production_task_orders",)),
         "request_id": q.request_id,
     }
 
@@ -652,7 +705,8 @@ async def production_reports_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **freshness_meta(await _table_as_of(db, ProductionDailyReport.updated_at)),
+        **await _freshness(db, ProductionDailyReport.updated_at,
+                           sync_types=("production_daily_reports",), baseline=True),
         "request_id": q.request_id,
     }
 
@@ -774,6 +828,6 @@ async def production_capacity_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **freshness_meta(await _table_as_of(db, CapacitySlot.updated_at)),
+        **await _freshness(db, CapacitySlot.updated_at, baseline=True),
         "request_id": q.request_id,
     }

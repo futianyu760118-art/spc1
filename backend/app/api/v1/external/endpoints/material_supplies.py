@@ -18,10 +18,10 @@ from app.models.material.subcontract_order import SubcontractOrder
 from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.material.transfer_order import TransferOrder
 from app.schemas.common import ResponseModel
-from app.services.material.kitting_calc_service import freshness_of, load_source_as_of, min_as_of
 
 from ..common import ExternalDataPage, PageParamsMixin
 from ..deps import external_auth
+from ..freshness import freshness_meta, sync_only_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -222,16 +222,12 @@ async def material_supplies_list(
         for r in rows
     ]
 
-    source_as_of = await load_source_as_of(db, _SUPPLY_SYNC_TYPES)
-    data_as_of = min_as_of(source_as_of)
-    confidence, stale = freshness_of(data_as_of)
+    meta = freshness_meta(await sync_only_as_of(db, _SUPPLY_SYNC_TYPES), "未来供给")
     return {
         "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
-        "data_as_of": data_as_of.isoformat() if data_as_of else None,
-        "data_confidence": confidence,
-        "stale": stale,
+        **meta,
         "request_id": q.request_id,
     }

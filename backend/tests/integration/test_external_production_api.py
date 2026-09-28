@@ -2,7 +2,9 @@
 
 独立测试库 spc_test + ASGI 内存客户端 + HMAC 签名（rate_limit=0 绕过 Redis）。
 覆盖：鉴权 401/403、工单状态映射与 DB 层过滤、工序/关联/报工锚点校验、
-双源关联、产能聚合（含周日口径）、空过滤仍携带 data_as_of、request_id 回显。
+双源关联、产能聚合（含周日口径）、空过滤仍携带 data_as_of、request_id 回显、
+任务单订单号经 sale_order.erp_id 解析（输出与过滤）、
+工序/报工/产能快照基线时效（旧数据不判过期，空表回退导入/同步时间）。
 """
 
 from datetime import date, datetime
@@ -150,6 +152,41 @@ async def test_work_orders_filters(ext_client, external_keys, prod_seeded):
     assert r.json()["data"]["total"] == 0
 
 
+async def test_work_order_sale_order_resolution(ext_client, external_keys, db):
+    """任务单不冗余订单号（sale_order_no 生产库全空）：经 sale_order.erp_id 解析并支持 order_no 过滤。"""
+    from app.models.order.sale_order import SaleOrder
+    from app.models.production.production_task_order import ProductionTaskOrder
+
+    db.add_all([
+        SaleOrder(order_no="HJ202609-0023-0213", line_no="10", erp_id=5919, status="open"),
+        ProductionTaskOrder(task_no="WORK110790", task_id=110790, workshop="车间A",
+                            material_code="P-100", task_qty=10, sale_order_id=5919),
+    ])
+    await db.commit()
+
+    r = await signed_get(ext_client, WO_LIST, "production.work_orders.list",
+                         external_keys["production"], {"work_order_no": "WORK110790"})
+    item = r.json()["data"]["items"][0]
+    assert item["order_no"] == "HJ202609-0023-0213"
+    assert item["sale_order_id"] == 5919
+
+    r = await signed_get(ext_client, WO_LIST, "production.work_orders.list",
+                         external_keys["production"], {"order_no": "HJ202609-0023-0213"})
+    data = r.json()["data"]
+    assert data["total"] == 1 and data["items"][0]["work_order_no"] == "WORK110790"
+
+    r = await signed_get(ext_client, LINKS_LIST, "production.order_links.list",
+                         external_keys["production"], {"work_order_no": "WORK110790"})
+    links = r.json()["data"]["items"]
+    assert len(links) == 1 and links[0]["link_type"] == "production_task"
+    assert links[0]["order_no"] == "HJ202609-0023-0213"
+
+    r = await signed_get(ext_client, LINKS_LIST, "production.order_links.list",
+                         external_keys["production"], {"order_no": "HJ202609-0023-0213"})
+    links = r.json()["data"]["items"]
+    assert len(links) == 1 and links[0]["work_order_no"] == "WORK110790"
+
+
 async def test_work_orders_freshness_and_echo(ext_client, external_keys, prod_seeded):
     key = external_keys["production"]
     r = await signed_get(ext_client, WO_LIST, "production.work_orders.list", key,
@@ -161,6 +198,68 @@ async def test_work_orders_freshness_and_echo(ext_client, external_keys, prod_se
     assert data["data_confidence"] in ("high", "medium")
     assert data["stale"] is False
     assert data["request_id"] == "prod-001"
+
+
+async def test_empty_table_freshness_contract(ext_client, external_keys):
+    """源表无任何行：工序/报工回退真实刷新时间（导入/同步），产能无回退源则 code=503 结构化错误。"""
+    key = external_keys["production"]
+
+    r = await signed_get(ext_client, OPS_LIST, "production.operations.list", key,
+                         {"order_no": "SO-NOT-EXIST", "request_id": "prod-empty-ops"})
+    data = r.json()["data"]
+    assert data["items"] == [] and data["total"] == 0
+    # 表为空且无生产任务单同步配置 → 回退 audit_log 的 process_progress 最近导入时间；快照基线口径
+    assert data["data_as_of"] == "2026-09-20T10:00:00"
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False
+    assert data["request_id"] == "prod-empty-ops"
+
+    r = await signed_get(ext_client, REPORTS_LIST, "production.reports.list", key,
+                         {"work_order_no": "WO-NOT-EXIST"})
+    data = r.json()["data"]
+    assert data["items"] == [] and data["total"] == 0
+    # 表为空 → 回退 sync_sql_config 的 production_daily_reports 最近成功同步时间
+    assert data["data_as_of"] == "2026-08-06T15:44:03"
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False
+
+    r = await signed_get(ext_client, CAPACITY_LIST, "production.capacity.list", key,
+                         {"date_start": "2026-09-23", "date_end": "2026-09-23"})
+    assert r.status_code == 200
+    body = r.json()
+    # 产能无同步/导入来源，全空时返回结构化错误，不返回可被误用的空数据
+    assert body["code"] == 503
+    assert body["data"] is None
+    assert "数据源不可用" in body["message"]
+
+
+async def test_operations_sync_fallback_freshness(ext_client, external_keys, db):
+    """工序表全空且无导入记录时，回退生产任务单同步时间：数据源已成功同步 → 真实时效 + stale=false。"""
+    from sqlalchemy import delete, text
+
+    from app.models.basicdata.sync_sql_config import SyncSqlConfig
+
+    await db.execute(text("""
+        INSERT INTO sync_sql_config
+            (sync_type, description, sql_text, sync_interval, sync_strategy,
+             sync_priority, sync_enabled, is_active, last_sync_time)
+        VALUES ('production_task_orders', 'pytest 工序时效回退种子', 'SELECT 1', '1h', 'full',
+                5, TRUE, TRUE, :t)
+        ON CONFLICT (sync_type) DO UPDATE SET last_sync_time = EXCLUDED.last_sync_time
+    """), {"t": datetime(2026, 8, 10, 9, 0, 0)})
+    await db.commit()
+    try:
+        r = await signed_get(ext_client, OPS_LIST, "production.operations.list",
+                             external_keys["production"], {"order_no": "SO-NOT-EXIST"})
+        data = r.json()["data"]
+        assert data["items"] == [] and data["total"] == 0
+        assert data["data_as_of"] == "2026-08-10T09:00:00"
+        assert data["data_confidence"] == "medium"
+        assert data["stale"] is False
+    finally:
+        await db.execute(delete(SyncSqlConfig).where(
+            SyncSqlConfig.sync_type == "production_task_orders"))
+        await db.commit()
 
 
 async def test_operations_anchor_required_422(ext_client, external_keys):
@@ -278,3 +377,56 @@ async def test_capacity_aggregation(ext_client, external_keys, prod_seeded):
     r = await signed_get(ext_client, CAPACITY_LIST, "production.capacity.list", key,
                          {"date_start": "2026-09-23", "date_end": "2026-09-27", "schedule_bucket": "lean"})
     assert r.json()["data"]["total"] == 0
+
+
+async def test_capacity_baseline_freshness(ext_client, external_keys, db):
+    """产能为排产快照基线：槽陈旧也返回真实 data_as_of + medium，stale 恒 false（不按 24h 判过期）。"""
+    from app.models.production.capacity_slot import CapacitySlot
+
+    db.add(CapacitySlot(department="车间Z", schedule_bucket="lean", slot_date=datetime(2026, 9, 23),
+                        hours=2, updated_at=datetime(2026, 8, 27, 16, 10, 46)))
+    await db.commit()
+
+    r = await signed_get(ext_client, CAPACITY_LIST, "production.capacity.list",
+                         external_keys["production"],
+                         {"date_start": "2026-09-23", "date_end": "2026-09-23"})
+    data = r.json()["data"]
+    assert data["total"] == 1
+    assert data["data_as_of"] == "2026-08-27T16:10:46"
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False
+
+
+async def test_operations_baseline_freshness(ext_client, external_keys, db):
+    """工序为计划快照基线：旧 updated_at 返回真实时间 + medium + stale=false。"""
+    from app.models.production.process_progress import ProcessProgress
+
+    db.add(ProcessProgress(process_type="组装", order_no="SO-OLD-001", status="pending",
+                           plan_date=date(2026, 9, 1), updated_at=datetime(2026, 8, 20, 9, 30)))
+    await db.commit()
+
+    r = await signed_get(ext_client, OPS_LIST, "production.operations.list",
+                         external_keys["production"], {"order_no": "SO-OLD-001"})
+    data = r.json()["data"]
+    assert data["total"] == 1
+    assert data["data_as_of"] == "2026-08-20T09:30:00"
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False
+
+
+async def test_reports_baseline_freshness(ext_client, external_keys, db):
+    """报工为累计日报基线：旧 updated_at 返回真实时间 + medium + stale=false。"""
+    from app.models.production.production_daily_report import ProductionDailyReport
+
+    db.add(ProductionDailyReport(oa_id="DR-OLD", oa_detail_id=9, report_date=date(2026, 8, 20),
+                                 production_order_no="WO-OLD-001", completed_qty=10,
+                                 updated_at=datetime(2026, 8, 20, 18, 0)))
+    await db.commit()
+
+    r = await signed_get(ext_client, REPORTS_LIST, "production.reports.list",
+                         external_keys["production"], {"work_order_no": "WO-OLD-001"})
+    data = r.json()["data"]
+    assert data["total"] == 1
+    assert data["data_as_of"] == "2026-08-20T18:00:00"
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False

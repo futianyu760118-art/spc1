@@ -13,15 +13,11 @@ from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.models.material.kitting import KittingResult, KittingShortage
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.schemas.common import ResponseModel
-from app.services.material.kitting_calc_service import (
-    KITTING_RESULT_SYNC_TYPES,
-    freshness_of,
-    load_source_as_of,
-    min_as_of,
-)
+from app.services.material.kitting_calc_service import KITTING_RESULT_SYNC_TYPES
 
 from ..common import ExternalDataPage, PageParamsMixin
 from ..deps import external_auth
+from ..freshness import freshness_meta, sync_only_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -29,14 +25,8 @@ router = APIRouter(prefix="/material-kitting", tags=["物料齐套"])
 
 
 async def _page_meta(db: AsyncSession) -> dict:
-    source_as_of = await load_source_as_of(db, KITTING_RESULT_SYNC_TYPES)
-    data_as_of = min_as_of(source_as_of)
-    confidence, stale = freshness_of(data_as_of)
-    return {
-        "data_as_of": data_as_of.isoformat() if data_as_of else None,
-        "data_confidence": confidence,
-        "stale": stale,
-    }
+    """齐套结果/缺料时效：相关同步类型最近成功时间 min；全空 → code=503 错误。"""
+    return freshness_meta(await sync_only_as_of(db, KITTING_RESULT_SYNC_TYPES), "物料齐套")
 
 
 class KittingResultsQuery(PageParamsMixin):
@@ -324,9 +314,7 @@ async def kitting_demands_list(
 ):
     page = max(q.page or 1, 1)
     page_size = min(max(q.page_size if q.page_size is not None else 20, 1), 200)
-    source_as_of = await load_source_as_of(db, ("orders", "order_details"))
-    data_as_of = min_as_of(source_as_of)
-    confidence, stale = freshness_of(data_as_of)
+    meta = freshness_meta(await sync_only_as_of(db, ("orders", "order_details")), "齐套需求")
 
     query = (
         select(SaleOrderLine, SaleOrder)
@@ -406,8 +394,6 @@ async def kitting_demands_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "data_as_of": data_as_of.isoformat() if data_as_of else None,
-        "data_confidence": confidence,
-        "stale": stale,
+        **meta,
         "request_id": q.request_id,
     }

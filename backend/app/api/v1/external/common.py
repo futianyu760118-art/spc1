@@ -1,12 +1,9 @@
 """对外接口共享模型与类型"""
 
-from datetime import datetime
-from typing import Generic, List, Optional, TypeVar
+from typing import Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 from typing_extensions import Annotated
-
-from app.services.material.kitting_calc_service import freshness_of
 
 T = TypeVar("T")
 
@@ -20,20 +17,12 @@ class ExternalPage(BaseModel, Generic[T]):
 
 
 class ExternalDataPage(ExternalPage[T]):
-    """带数据新鲜度元信息的分页响应（齐套/供给类接口专用；MCP 层读取顶层 data_as_of/stale）"""
+    """带数据时效元信息的分页响应（本次接入时效字段的对外接口共用；算不出时效返回 code=503 信封错误）"""
 
-    data_as_of: Optional[str] = Field(None, description="数据业务时点（源表最近成功同步时间最小值，ISO 8601）")
-    data_confidence: Optional[str] = Field(None, description="数据置信度 high/medium/low")
-    stale: Optional[bool] = Field(None, description="数据是否超过新鲜度阈值（24h）")
+    data_as_of: str = Field(..., description="数据业务时点（源表最近修改与最近成功同步时间的较晚者，ISO 8601）")
+    data_confidence: Literal["high", "medium", "low"] = Field(..., description="数据置信度")
+    stale: bool = Field(..., description="数据是否超过新鲜度阈值（24h）")
     request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
-
-
-def freshness_meta(data_as_of: Optional[datetime]) -> dict:
-    """数据新鲜度元信息（列表端点共用）：空集返回 unknown/false（不是过期数据）；有数据复用 6h/24h 阈值。"""
-    if data_as_of is None:
-        return {"data_as_of": None, "data_confidence": "unknown", "stale": False}
-    confidence, stale = freshness_of(data_as_of)
-    return {"data_as_of": data_as_of.isoformat(), "data_confidence": confidence, "stale": stale}
 
 
 class ExternalQuery(BaseModel):
