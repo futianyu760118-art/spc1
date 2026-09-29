@@ -38,7 +38,7 @@ class RunFailure(Exception):
     """单条反馈处理失败（原因会回写到反馈单）。"""
 
 
-def run_command(cmd, cwd=None, timeout=None, check=False, shell=False, input_text=None):
+def run_command(cmd, cwd=None, timeout=None, check=False, shell=False, input_text=None, env=None):
     result = subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
@@ -49,6 +49,7 @@ def run_command(cmd, cwd=None, timeout=None, check=False, shell=False, input_tex
         errors="replace",
         shell=shell,
         input=input_text,
+        env=env,
     )
     if check and result.returncode != 0:
         raise RunFailure(f"命令失败({result.returncode}): {cmd}\n{result.stderr[-2000:]}")
@@ -83,14 +84,20 @@ def load_config(path: Path) -> dict:
     cfg["gates"].setdefault("timeout_minutes", 30)
     cfg["claude"].setdefault("command", "claude")
     cfg["claude"].setdefault("timeout_minutes", 60)
+    try:
+        cfg["gates"]["timeout_minutes"] = max(1, int(cfg["gates"]["timeout_minutes"]))
+        cfg["claude"]["timeout_minutes"] = max(1, int(cfg["claude"]["timeout_minutes"]))
+    except (TypeError, ValueError):
+        raise SystemExit("timeout_minutes 必须是整数")
     cfg["claude"].setdefault("allowed_tools", [
         "Read", "Edit", "Write", "Glob", "Grep",
-        "Bash(python:*)", "Bash(npm run build:*)", "Bash(npx tsc:*)",
+        "Bash(python -m pytest:*)", "Bash(py -m pytest:*)",
+        "Bash(npm run build:*)", "Bash(npx tsc:*)",
         "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
     ])
     cfg.setdefault("blocked_globs", [
-        ".env", ".env.*", "**/.env", "**/.env.*",
-        "scripts/deploy-*", "docker-compose-prod.yml",
+        ".env", ".env.*", "*.env", "**/.env", "**/.env.*", "**/*.env",
+        "scripts/deploy-*", "**/scripts/deploy-*", "docker-compose-prod.yml",
     ])
     return cfg
 
@@ -473,7 +480,9 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
             raise RunFailure("代理未产生任何文件改动")
         blocked = sensitive_hits(cfg, files)
         if blocked:
-            raise RunFailure(f"改动触碰敏感文件，已阻断: {', '.join(blocked)}")
+            git(cfg, "worktree", "remove", "--force", str(worktree), check=False)
+            git(cfg, "branch", "-D", branch, check=False)
+            raise RunFailure(f"改动触碰敏感文件，已阻断并删除分支: {', '.join(blocked)}")
 
         gate_summary = run_gates(cfg, worktree, files, run_dir)
 

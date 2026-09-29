@@ -17,12 +17,13 @@
     "timeout_minutes": 60,
     "allowed_tools": [
       "Read", "Edit", "Write", "Glob", "Grep",
-      "Bash(python:*)", "Bash(npm run build:*)", "Bash(npx tsc:*)",
+      "Bash(python -m pytest:*)", "Bash(py -m pytest:*)",
+      "Bash(npm run build:*)", "Bash(npx tsc:*)",
       "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)"
     ]
   },
   "blocked_globs": [
-    ".env", ".env.*", "**/.env", "**/.env.*",
-    "scripts/deploy-*", "docker-compose-prod.yml"
+    ".env", ".env.*", "*.env", "**/.env", "**/.env.*", "**/*.env",
+    "scripts/deploy-*", "**/scripts/deploy-*", "docker-compose-prod.yml"
   ]
 }
