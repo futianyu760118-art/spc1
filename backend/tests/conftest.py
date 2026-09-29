@@ -100,6 +100,7 @@ async def _test_db():
     from app.models.basicdata.bom_detail import BomDetail
     from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog
     from app.models.basicdata.file_asset import FileAsset
+    from app.models.basicdata.feedback import Feedback
     from app.models.basicdata.material import Material
     from app.models.basicdata.permission import SysPermission
     from app.models.basicdata.sync_sql_config import SyncSqlConfig
@@ -128,6 +129,7 @@ async def _test_db():
         SysPermission.__table__,
         SupplierClaim.__table__, SupplierClaimApprovalLog.__table__,
         Notification.__table__, FileAsset.__table__,
+        Feedback.__table__,
         DataSupplyApiKey.__table__, DataSupplyCallLog.__table__,
         QualityIssue.__table__, SaleOrder.__table__, SaleOrderLine.__table__,
         Bom.__table__, BomDetail.__table__, Supplier.__table__,
@@ -212,7 +214,7 @@ async def client(_test_db):
 
     async with engine.begin() as conn:
         await conn.execute(text(
-            "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, "
+            "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, feedback, "
             "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
             "purchase_order, approval_instance, approval_task, approval_record RESTART IDENTITY CASCADE"
         ))
