@@ -11,7 +11,7 @@
 | 文件             | 服务器位置                                   | 用途                                                                                               |
 | -------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `nginx.conf`   | `/home/ubuntu/apps/hj-spc/nginx.conf`   | 前端容器 nginx 配置（compose 挂载，覆盖镜像内置）：监听 18084；`/api/`、`/uploads/` 反代 backend，resolver 动态解析防容器重建后 502 |
-| `backup-db.sh` | `/home/ubuntu/apps/hj-spc/backup-db.sh` | 每日 3:30 pg_dump 备份到 `backups/`，保留 7 天，含完整性校验；恢复命令见文件头注释                                          |
+| `backup-db.sh` | `/home/ubuntu/apps/hj-spc/backup-db.sh` | 应急手工备份（backend 不可用时；日常定时已由系统「备份管理」接管）：pg_dump 到 `backups/`，保留 7 天，含完整性校验；恢复命令见文件头注释 |
 
 ## 同步命令（仓库根目录执行）
 
@@ -26,16 +26,16 @@ scp -i D:\wanghuazheng\whz_server.pem scripts\remote\backup-db.sh ubuntu@150.158
 cd /home/ubuntu/apps/hj-spc && docker compose -f docker-compose-prod.yml restart frontend
 ```
 
-cron 安装（幂等，重复执行不会产生重复条目）：
+给脚本执行权限（定时备份由系统「备份管理」负责，本脚本不再装 cron）：
 
 ```bash
 chmod +x /home/ubuntu/apps/hj-spc/backup-db.sh
-( crontab -l 2>/dev/null | grep -v backup-db.sh; echo '30 3 * * * /home/ubuntu/apps/hj-spc/backup-db.sh >> /home/ubuntu/apps/hj-spc/backups/backup.log 2>&1' ) | crontab -
 ```
 
 > 2026-09 起「备份管理」已内置到系统（基础数据与集成中心 → 备份管理）：手动/定时备份、下载、一键恢复。
-> 上线备份管理并配置定时后，应移除本机 crontab 中的 backup-db.sh 行，避免双份备份。
 > backup-db.sh 保留为应急手册（backend 不可用时手工备份/恢复）。
+> 历史服务器若还装着旧 cron：先在「备份管理」启用定时并手动跑通一次，再执行
+> `crontab -l 2>/dev/null | grep -v backup-db.sh | crontab -` 移除，避免无备份或双份备份。
 
 ## 迁移新服务器 checklist
 
@@ -43,7 +43,7 @@ chmod +x /home/ubuntu/apps/hj-spc/backup-db.sh
 2. 建目录：`mkdir -p /home/ubuntu/apps/hj-spc/{data/uploads,data/wecom_verify,data/postgres,backups}`
 3. 本机执行一次完整部署（自动拉起 postgres/redis/backend/frontend 并初始化版本管理）：
    `powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteractive`
-4. 上传本目录两个文件（见"同步命令"）+ 装 cron + `chmod +x`
+4. 上传本目录两个文件（见"同步命令"）+ `chmod +x`（不装 cron；定时备份由系统「备份管理」负责，迁库后登录确认其定时配置已启用）
 5. `.env`（**不在仓库，含密码**）：从旧服务器拷贝 `/home/ubuntu/apps/hj-spc/.env`，
    或参照 `docker-compose-prod.yml` 的 environment 字段手工创建；
    必须包含 `POSTGRES_PASSWORD` / `REDIS_PASSWORD`（compose 变量替换用）
