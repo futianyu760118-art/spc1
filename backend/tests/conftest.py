@@ -122,6 +122,7 @@ async def _test_db():
     from app.models.production.production_task_order import ProductionTaskOrder
     from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprovalLog
     from app.models.common.approval_business import ApprovalBusiness
+    from app.models.common.approval_center import ApprovalInstance, ApprovalRecord, ApprovalTask
     tables = [
         SysRole.__table__, SysUser.__table__, UserOrgScope.__table__,
         SysPermission.__table__,
@@ -134,6 +135,7 @@ async def _test_db():
         ProductionOrderScheduleSnapshot.__table__, ProductionDailyReport.__table__,
         CapacitySlot.__table__, ProductionBaseCondition.__table__,
         ApprovalBusiness.__table__, SyncSqlConfig.__table__, AuditLog.__table__,
+        ApprovalInstance.__table__, ApprovalTask.__table__, ApprovalRecord.__table__,
         Material.__table__, PurchaseOrder.__table__,
         PurchaseRequisition.__table__, PurchaseRequisitionLine.__table__,
         PurchaseRequisitionApprovalLog.__table__,
@@ -210,7 +212,7 @@ async def client(_test_db):
         await conn.execute(text(
             "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, "
             "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
-            "purchase_order RESTART IDENTITY CASCADE"
+            "purchase_order, approval_instance, approval_task, approval_record RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
         await conn.execute(text("""
