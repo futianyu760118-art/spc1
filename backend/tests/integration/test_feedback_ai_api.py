@@ -134,3 +134,39 @@ async def test_list_filter_by_ai_status(client):
     )
     items = r.json()["data"]["items"]
     assert [item["id"] for item in items] == [fb_queued["id"]]
+
+
+async def test_ai_finish_failure_then_retry(client):
+    headers = await login(client, "admin")
+    fb = await _create_feedback(client, headers, title="失败回写后重试")
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-claim", headers=headers)
+
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={"success": False, "error": "代理执行超时"},
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0
+    assert body["data"]["ai_status"] == "failed"
+    assert body["data"]["ai_note"] == "代理执行超时"
+    assert "AI 自动实现失败" in body["data"]["reply"]
+
+    r = await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    assert r.json()["data"]["ai_status"] == "queued"
+
+
+async def test_ai_queue_rejected_for_done(client):
+    headers = await login(client, "admin")
+    fb = await _create_feedback(client, headers, title="已完成不可重新派单")
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-claim", headers=headers)
+    await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={"success": True},
+        headers=headers,
+    )
+
+    r = await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    assert r.status_code == 400
