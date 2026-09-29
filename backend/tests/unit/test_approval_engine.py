@@ -1,6 +1,6 @@
 """公共审批引擎纯函数单元测试（不依赖数据库）。"""
 
-from app.services.common.approval_engine import _cond_match, check_node_permission
+from app.services.common.approval_engine import cond_match, check_node_permission
 
 NODE_NO_CONDITION = {"seq": 1, "label": "节点1", "role": "purchase_manager"}
 NODE_DYNAMIC = {"seq": 1, "label": "动态节点", "approvers": [{"username": "张三", "user_id": 7}]}
@@ -42,67 +42,67 @@ class TestCheckNodePermission:
 
 class TestCondMatch:
     def test_no_condition_matches(self):
-        assert _cond_match(None, {}) is True
-        assert _cond_match({}, {"claim_amount": 1}) is True
+        assert cond_match(None, {}) is True
+        assert cond_match({}, {"claim_amount": 1}) is True
 
     def test_condition_without_field_matches(self):
-        assert _cond_match({"op": ">=", "value": 1000}, {}) is True
+        assert cond_match({"op": ">=", "value": 1000}, {}) is True
 
     def test_in_operator(self):
         cond = {"field": "claim_reason", "op": "in", "value": ["a", "b"]}
-        assert _cond_match(cond, {"claim_reason": "a"}) is True
-        assert _cond_match(cond, {"claim_reason": "c"}) is False
+        assert cond_match(cond, {"claim_reason": "a"}) is True
+        assert cond_match(cond, {"claim_reason": "c"}) is False
 
     def test_gte_boundary(self):
         cond = {"field": "claim_amount", "op": ">=", "value": 1000}
-        assert _cond_match(cond, {"claim_amount": 1000}) is True
-        assert _cond_match(cond, {"claim_amount": 999.99}) is False
+        assert cond_match(cond, {"claim_amount": 1000}) is True
+        assert cond_match(cond, {"claim_amount": 999.99}) is False
 
     def test_all_comparison_operators(self):
-        assert _cond_match({"field": "v", "op": ">", "value": 1}, {"v": 2}) is True
-        assert _cond_match({"field": "v", "op": "<", "value": 1}, {"v": 2}) is False
-        assert _cond_match({"field": "v", "op": "<=", "value": 2}, {"v": 2}) is True
-        assert _cond_match({"field": "v", "op": "==", "value": 2}, {"v": 2}) is True
-        assert _cond_match({"field": "v", "op": "!=", "value": 2}, {"v": 2}) is False
+        assert cond_match({"field": "v", "op": ">", "value": 1}, {"v": 2}) is True
+        assert cond_match({"field": "v", "op": "<", "value": 1}, {"v": 2}) is False
+        assert cond_match({"field": "v", "op": "<=", "value": 2}, {"v": 2}) is True
+        assert cond_match({"field": "v", "op": "==", "value": 2}, {"v": 2}) is True
+        assert cond_match({"field": "v", "op": "!=", "value": 2}, {"v": 2}) is False
 
     def test_non_numeric_value_fails_closed(self):
-        assert _cond_match({"field": "v", "op": ">=", "value": 1}, {"v": "abc"}) is False
-        assert _cond_match({"field": "v", "op": ">=", "value": 1}, {"v": None}) is False
+        assert cond_match({"field": "v", "op": ">=", "value": 1}, {"v": "abc"}) is False
+        assert cond_match({"field": "v", "op": ">=", "value": 1}, {"v": None}) is False
 
     def test_missing_field_value_fails_closed(self):
-        assert _cond_match({"field": "v", "op": ">=", "value": 1}, {}) is False
+        assert cond_match({"field": "v", "op": ">=", "value": 1}, {}) is False
 
 
 class TestConditionsMatch:
     def test_multi_conditions_and(self):
-        from app.services.common.approval_engine import _conditions_match
+        from app.services.common.approval_engine import conditions_match
 
         node = {"conditions": [
             {"field": "amount", "op": ">=", "value": 1000},
             {"field": "dept", "op": "in", "value": ["采购部", "质量部"]},
         ]}
-        assert _conditions_match(node, {"amount": 1500, "dept": "采购部"}) is True
-        assert _conditions_match(node, {"amount": 1500, "dept": "财务部"}) is False
-        assert _conditions_match(node, {"amount": 500, "dept": "采购部"}) is False
+        assert conditions_match(node, {"amount": 1500, "dept": "采购部"}) is True
+        assert conditions_match(node, {"amount": 1500, "dept": "财务部"}) is False
+        assert conditions_match(node, {"amount": 500, "dept": "采购部"}) is False
 
     def test_legacy_single_condition(self):
-        from app.services.common.approval_engine import _conditions_match
+        from app.services.common.approval_engine import conditions_match
 
-        assert _conditions_match({"condition": {"field": "amount", "op": ">=", "value": 1000}}, {"amount": 1000}) is True
-        assert _conditions_match({"condition": {"field": "amount", "op": ">=", "value": 1000}}, {"amount": 999}) is False
+        assert conditions_match({"condition": {"field": "amount", "op": ">=", "value": 1000}}, {"amount": 1000}) is True
+        assert conditions_match({"condition": {"field": "amount", "op": ">=", "value": 1000}}, {"amount": 999}) is False
 
     def test_no_condition_always_matches(self):
-        from app.services.common.approval_engine import _conditions_match
+        from app.services.common.approval_engine import conditions_match
 
-        assert _conditions_match({}, {"amount": 1}) is True
-        assert _conditions_match({"conditions": None}, {"amount": 1}) is True
+        assert conditions_match({}, {"amount": 1}) is True
+        assert conditions_match({"conditions": None}, {"amount": 1}) is True
 
     def test_in_accepts_comma_string(self):
-        from app.services.common.approval_engine import _conditions_match
+        from app.services.common.approval_engine import conditions_match
 
         node = {"condition": {"field": "dept", "op": "in", "value": "采购部, 质量部"}}
-        assert _conditions_match(node, {"dept": "质量部"}) is True
-        assert _conditions_match(node, {"dept": "财务部"}) is False
+        assert conditions_match(node, {"dept": "质量部"}) is True
+        assert conditions_match(node, {"dept": "财务部"}) is False
 
 
 class TestResolveNodeApproverUserIds:
