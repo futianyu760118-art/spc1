@@ -1,8 +1,13 @@
 import type { CreateBusinessEntry } from '../engine/types'
+import { priceChangeBusiness } from './priceChange'
 import { purchaseRequisitionBusiness } from './purchaseRequisition'
 import { supplierClaimBusiness } from './supplierClaim'
 
-const BUSINESSES: CreateBusinessEntry[] = [supplierClaimBusiness, purchaseRequisitionBusiness]
+const BUSINESSES: CreateBusinessEntry[] = [
+  supplierClaimBusiness,
+  purchaseRequisitionBusiness,
+  priceChangeBusiness,
+]
 
 export function listBusinesses(): CreateBusinessEntry[] {
   return BUSINESSES

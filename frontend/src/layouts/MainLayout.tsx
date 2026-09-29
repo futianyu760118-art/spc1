@@ -753,6 +753,9 @@ export default function MainLayout() {
           setUnreadTotal(data.total || 0)
         } catch { /* silent */ }
       })
+      // 订阅降级（Redis 断链退避重连中）：轮询兜底；恢复后停止
+      es.addEventListener('degraded', () => { startPolling() })
+      es.addEventListener('recovered', () => { stopPolling() })
       es.addEventListener('error', () => {
         // 断开/Redis 故障：关 SSE → 启动降级轮询；30s 后尝试恢复实时
         try { es?.close() } catch { /* silent */ }

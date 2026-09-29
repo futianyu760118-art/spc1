@@ -52,8 +52,10 @@ export interface CreateBusinessEntry {
   name: string
   description: string
   permission: [string, string]
-  schema: FormSchema
-  adapter: CreateAdapter
+  schema?: FormSchema
+  adapter?: CreateAdapter
+  // 组件式业务（表单过于复杂、复用业务侧组件时用）；存在时 FormPage 优先渲染组件
+  component?: ComponentType<{ editId?: number; variant?: 'business' | 'center' }>
 }
 
 export interface WidgetProps {

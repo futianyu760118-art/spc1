@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.common.approval_engine import ApprovalEngine
 from app.services.common.approval_notify import send_approval_wecom_textcard
+from app.services.notification.notification_broker import publish_unread_update
 
 logger = logging.getLogger(__name__)
 
@@ -405,6 +406,9 @@ class SupplierClaimService:
                    "sid": sender_id, "sender": sender_name})
         except Exception as e:
             logger.warning(f"索赔单通知推送失败 user_id={user_id}: {e}")
+            return
+        # 同 session 未提交也能查到刚插入的行，推送未读数让顶栏角标实时刷新
+        await publish_unread_update(self.db, user_id)
 
     async def _notify_wecom(self, user_ids: list, rec: dict, label: str):
         """企微 textcard 推送，未配置/失败时降级，不影响审批流程。"""

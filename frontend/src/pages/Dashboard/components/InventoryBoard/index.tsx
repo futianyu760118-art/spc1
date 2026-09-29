@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Spin, Tooltip } from 'antd'
+import { Button, Select, Spin, Tooltip } from 'antd'
 import { FullscreenOutlined, FullscreenExitOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { inventoryBoardApi } from '@/services/api'
@@ -9,7 +9,7 @@ import { useThemeStore } from '@/store/theme'
  * 库存看板（驾驶舱 · 大屏版）— 复刻 docs/prototype/redesign/inventory-board.html
  * 2×2 一屏栅格（无滚动）+ 四类手绘 SVG 图形：
  *   库存分布·按仓库[环形图] / 库存分布·按类别[100%堆叠条] / 盘点覆盖[半环仪表] / 盘点进度[面积折线]
- * 口径：仓库 chips 作用于库存分布 2 区块 + 盘点覆盖；盘点进度为全仓口径
+ * 口径：仓库筛选作用于库存分布 2 区块 + 盘点覆盖；盘点进度为全仓口径
  *      已盘 = 该「物料×仓库」在窗口内实盘过（与库存页「近期已盘」同口径）
  */
 
@@ -140,22 +140,11 @@ const css = `
 .ivb-stat b { font-size: 1.18em; font-weight: 700; font-variant-numeric: tabular-nums; color: #0f172a; }
 .ivb-stat em { font-style: normal; font-size: 0.68em; color: #94a3b8; }
 .ivb-stat.warn b { color: #d97706; }
-.ivb-chips {
-  display: flex; align-items: center; gap: 0.4em; margin-left: auto;
-  flex-wrap: nowrap; overflow-x: auto; min-width: 0; max-width: 100%;
-  scrollbar-width: none;
-}
-.ivb-chips::-webkit-scrollbar { display: none; }
-.ivb-chips .lbl { font-size: 0.72em; color: #94a3b8; flex: none; }
-.ivb-chip {
-  border: 1px solid #e2e8f0; background: #fff; border-radius: 999px; padding: 0.2em 0.75em;
-  font-size: 0.74em; color: #64748b; cursor: pointer; user-select: none; white-space: nowrap;
-  transition: all .15s; flex: none;
-}
-.ivb-chip b { font-weight: 600; margin-left: 0.25em; color: #0f172a; }
-.ivb-chip:hover { border-color: #a3a9f5; color: #0f172a; }
-.ivb-chip.on { background: #5b5bd6; border-color: #5b5bd6; color: #fff; }
-.ivb-chip.on b { color: #fff; }
+.ivb-whpick { display: flex; align-items: center; gap: 0.4em; margin-left: auto; }
+.ivb-whpick .lbl { font-size: 0.72em; color: #94a3b8; flex: none; }
+.ivb-whpick .ant-select { min-width: 9em; max-width: 15em; }
+.ivb-whpick .ant-select-selection-item,
+.ivb-whpick .ant-select-item-option-content { font-size: calc(12px * var(--font-size-scale)); }
 .ivb-clock { font-size: 0.82em; font-weight: 600; font-variant-numeric: tabular-nums; color: #64748b; white-space: nowrap; }
 
 .ivb-board {
@@ -556,23 +545,24 @@ export default function InventoryBoard() {
           <span className="ivb-stat">覆盖仓库 <b>{num(kpi?.warehouse_count)}</b><em>个</em></span>
           <span className="ivb-stat warn">库龄 180 天+ <b>{agedCount}</b><em>项</em></span>
         </div>
-        <div className="ivb-chips">
+        <div className="ivb-whpick">
           <span className="lbl">仓库</span>
-          <span className={`ivb-chip${whFilter === 'all' ? ' on' : ''}`} onClick={() => setWhFilter('all')}>
-            全部 <b>{whCount}</b>
-          </span>
-          {(base?.by_warehouse ?? [])
-            .slice()
-            .sort((a, b) => num(b.total_qty) - num(a.total_qty))
-            .map(w => (
-              <span
-                key={w.warehouse_id}
-                className={`ivb-chip${whFilter === w.warehouse_id ? ' on' : ''}`}
-                onClick={() => setWhFilter(w.warehouse_id)}
-              >
-                {w.warehouse_name} <b>{num(w.material_count)}</b>
-              </span>
-            ))}
+          <Select
+            size="small"
+            value={whFilter}
+            onChange={setWhFilter}
+            showSearch
+            optionFilterProp="label"
+            popupMatchSelectWidth={false}
+            getPopupContainer={(node) => node.parentElement ?? document.body}
+            options={[
+              { value: 'all', label: `全部仓库 (${whCount})` },
+              ...(base?.by_warehouse ?? [])
+                .slice()
+                .sort((a, b) => num(b.total_qty) - num(a.total_qty))
+                .map(w => ({ value: w.warehouse_id, label: `${w.warehouse_name} (${num(w.material_count)})` })),
+            ]}
+          />
         </div>
         <Tooltip title={fullscreen ? '退出全屏 (ESC)' : '全屏 / 大屏模式'}>
           <Button

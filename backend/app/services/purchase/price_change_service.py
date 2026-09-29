@@ -1263,6 +1263,10 @@ class PriceChangeService:
             """), {"uid": user_id, "title": title, "content": content, "rt": ref_type, "rid": ref_id, "sid": sender_id, "sender": sender_name, "p": priority})
         except Exception as e:
             logger.warning(f"通知推送失败 user_id={user_id} title={title}: {e}")
+            return
+        # 同 session 未提交也能查到刚插入的行，推送未读数让顶栏角标实时刷新
+        from app.services.notification.notification_broker import publish_unread_update
+        await publish_unread_update(self.db, user_id)
 
     async def _notify_approvers_of_level(self, change_id: int, level: int, *, title_prefix: str = "待您审批"):
         """通知某个级别的审批人。动态节点取 approvers.user_id；固定角色节点查库。"""

@@ -232,6 +232,102 @@ function dormantColumn(
   }
 }
 
+/** 库存量快捷预设: positive=有库存(>0) / zero=零库存(=0) / negative=负库存(<0) */
+type QtyFilterMode = 'positive' | 'zero' | 'negative'
+/** 库存量筛选: 快捷预设 或 自定义最小值/最大值区间; 作用在「库存量」(明细行) 与 SUM(库存量)(按仓库统计) 口径 */
+type QtyRangeFilterValue = { min?: number; max?: number; mode?: QtyFilterMode }
+type QtyPreset = 'all' | QtyFilterMode | 'custom'
+
+const QTY_PRESET_OPTIONS = [
+  { value: 'all', label: '全部' },
+  { value: 'positive', label: '有库存' },
+  { value: 'zero', label: '零库存' },
+  { value: 'negative', label: '负库存' },
+  { value: 'custom', label: '自定义' },
+]
+
+const qtyRangeParams = (v?: QtyRangeFilterValue | null): Record<string, number | string> => {
+  if (!v) return {}
+  const p: Record<string, number | string> = {}
+  if (v.mode) p.qty_mode = v.mode
+  if (v.min != null) p.qty_min = v.min
+  if (v.max != null) p.qty_max = v.max
+  return p
+}
+
+function QtyRangeFilterDropdown({ value, onApply }: { value?: QtyRangeFilterValue; onApply: (v?: QtyRangeFilterValue) => void }) {
+  const [preset, setPreset] = useState<QtyPreset>(
+    value?.mode ?? ((value?.min != null || value?.max != null) ? 'custom' : 'all'),
+  )
+  const [min, setMin] = useState<number | null>(value?.min ?? null)
+  const [max, setMax] = useState<number | null>(value?.max ?? null)
+
+  const changePreset = (p: QtyPreset) => {
+    setPreset(p)
+    if (p === 'custom') return
+    if (p === 'all') { onApply(undefined); return }
+    onApply({ mode: p })
+  }
+
+  const applyCustom = (clear?: boolean) => {
+    if (clear) { setMin(null); setMax(null); onApply(undefined); return }
+    if (min == null && max == null) { onApply(undefined); return }
+    if (min != null && max != null && min > max) { message.warning('最小值不能大于最大值'); return }
+    onApply({ min: min ?? undefined, max: max ?? undefined })
+  }
+
+  return (
+    <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8, width: 300 }}>
+      <Space wrap size={4}>
+        {QTY_PRESET_OPTIONS.map((o) => (
+          <Button
+            key={o.value}
+            size="small"
+            type={preset === o.value ? 'primary' : 'default'}
+            onClick={() => changePreset(o.value as QtyPreset)}
+          >
+            {o.label}
+          </Button>
+        ))}
+      </Space>
+      {preset === 'custom' && (
+        <>
+          <InputNumber
+            size="small" style={{ width: '100%' }} placeholder="最小值"
+            value={min ?? undefined} onChange={(v) => setMin(v ?? null)} onPressEnter={() => applyCustom()}
+          />
+          <InputNumber
+            size="small" style={{ width: '100%' }} placeholder="最大值"
+            value={max ?? undefined} onChange={(v) => setMax(v ?? null)} onPressEnter={() => applyCustom()}
+          />
+          <Space style={{ justifyContent: 'flex-end' }}>
+            <Button size="small" onClick={() => applyCustom(true)}>清除</Button>
+            <Button size="small" type="primary" onClick={() => applyCustom()}>确定</Button>
+          </Space>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** 库存量列: 表头带 快捷预设/自定义区间 筛选(服务端), 应用后回到第 1 页 */
+function qtyColumn(
+  value: QtyRangeFilterValue | undefined,
+  apply: (v?: QtyRangeFilterValue) => void,
+  width: number,
+): any {
+  return {
+    title: '库存量', dataIndex: 'qty_on_hand', key: 'qty_on_hand', width, align: 'right' as const, sorter: true, render: numFmt,
+    filtered: !!value,
+    filterDropdown: (dp: any) => (
+      <QtyRangeFilterDropdown
+        value={value}
+        onApply={(v) => { apply(v); dp?.confirm?.({ closeDropdown: true }) }}
+      />
+    ),
+  }
+}
+
 /** 导出字段选项（key 与后端导出列一致） */
 const DETAIL_EXPORT_OPTIONS: ExportColumnOption[] = [
   { field: 'material_code', label: '物料编码' },
@@ -517,6 +613,13 @@ function InventoryDetail() {
     fetchData(1, pagination.pageSize, { dormant: next })
   }
   const dormantCol = dormantColumn(dormantFilter ?? undefined, applyDormant)
+  // 库存量默认筛选「有库存」: 零库存默认不显示, 可通过列筛选切换查看
+  const [qtyFilter, setQtyFilter] = useState<QtyRangeFilterValue | null>({ mode: 'positive' })
+  const applyQtyFilter = (v?: QtyRangeFilterValue) => {
+    const next = v ?? null
+    setQtyFilter(next)
+    fetchData(1, pagination.pageSize, { qtyFilter: next })
+  }
   const timeCol = (field: TimeFilterField, title: string): any => ({
     title, dataIndex: field, key: field, width: 140, sorter: true, render: dtFmt,
     filtered: !!timeFilters[field],
@@ -554,7 +657,7 @@ function InventoryDetail() {
   const fetchData = useCallback(async (
     page = 1,
     pageSize = 20,
-    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters; dormant?: DormantFilterValue | null },
+    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters; dormant?: DormantFilterValue | null; qtyFilter?: QtyRangeFilterValue | null },
   ) => {
     setLoading(true)
     try {
@@ -563,6 +666,7 @@ function InventoryDetail() {
       const params: any = { page, page_size: pageSize }
       Object.assign(params, timeFilterParams(override?.timeFilters ?? timeFilters))
       Object.assign(params, dormantParams(override?.dormant !== undefined ? override.dormant : dormantFilter))
+      Object.assign(params, qtyRangeParams(override?.qtyFilter !== undefined ? override.qtyFilter : qtyFilter))
       if (keyword) params.keyword = keyword
       if (s.sort_by) params.sort_by = s.sort_by
       if (s.sort_order) params.sort_order = s.sort_order
@@ -600,7 +704,7 @@ function InventoryDetail() {
     } finally {
       setLoading(false)
     }
-  }, [keyword, sortInfo, filters, recentDays, timeFilters, dormantFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, sortInfo, filters, recentDays, timeFilters, dormantFilter, qtyFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useRecentDaysDebounce(recentDays, () => fetchData(1, pagination.pageSize))
 
@@ -642,6 +746,7 @@ function InventoryDetail() {
     const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
     Object.assign(params, timeFilterParams(timeFilters))
     Object.assign(params, dormantParams(dormantFilter ?? undefined))
+    Object.assign(params, qtyRangeParams(qtyFilter ?? undefined))
     if (keyword) params.keyword = keyword
     if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
     if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
@@ -661,7 +766,7 @@ function InventoryDetail() {
     { title: '仓库编码', dataIndex: 'wh_code', key: 'wh_code', width: 100, sorter: true, filters: optList(filterOptions.wh_codes), filterSearch: true },
     { title: '仓库名称', dataIndex: 'wh_name', key: 'wh_name', width: 120, filters: optList(filterOptions.wh_names), filterSearch: true },
     { title: '库位名称', dataIndex: 'location_name', key: 'location_name', width: 120, ellipsis: true },
-    { title: '库存量', dataIndex: 'qty_on_hand', key: 'qty_on_hand', width: 100, align: 'right' as const, sorter: true, render: numFmt },
+    qtyColumn(qtyFilter ?? undefined, applyQtyFilter, 100),
     { title: '锁定数量', dataIndex: 'locked_qty', key: 'locked_qty', width: 100, align: 'right' as const, sorter: true, render: numFmt },
     { title: '结存数量', dataIndex: 'balance_qty', key: 'balance_qty', width: 100, align: 'right' as const, sorter: true, render: numFmt },
     { title: '在途库存', dataIndex: 'qty_in_transit', key: 'qty_in_transit', width: 100, align: 'right' as const, sorter: true, render: numFmt },
@@ -761,6 +866,13 @@ function InventoryByWarehouse() {
     fetchData(1, pagination.pageSize, { dormant: next })
   }
   const dormantCol = dormantColumn(dormantFilter ?? undefined, applyDormant)
+  // 库存量默认筛选「有库存」: 零库存默认不显示, 可通过列筛选切换查看
+  const [qtyFilter, setQtyFilter] = useState<QtyRangeFilterValue | null>({ mode: 'positive' })
+  const applyQtyFilter = (v?: QtyRangeFilterValue) => {
+    const next = v ?? null
+    setQtyFilter(next)
+    fetchData(1, pagination.pageSize, { qtyFilter: next })
+  }
   const timeCol = (field: TimeFilterField, title: string): any => ({
     title, dataIndex: field, key: field, width: 140, sorter: true, render: dtFmt,
     filtered: !!timeFilters[field],
@@ -798,7 +910,7 @@ function InventoryByWarehouse() {
   const fetchData = useCallback(async (
     page = 1,
     pageSize = 20,
-    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters; dormant?: DormantFilterValue | null },
+    override?: { sort?: { sort_by?: string; sort_order?: string }; filters?: Record<string, string[]>; timeFilters?: TimeFilters; dormant?: DormantFilterValue | null; qtyFilter?: QtyRangeFilterValue | null },
   ) => {
     setLoading(true)
     try {
@@ -807,6 +919,7 @@ function InventoryByWarehouse() {
       const params: any = { page, page_size: pageSize }
       Object.assign(params, timeFilterParams(override?.timeFilters ?? timeFilters))
       Object.assign(params, dormantParams(override?.dormant !== undefined ? override.dormant : dormantFilter))
+      Object.assign(params, qtyRangeParams(override?.qtyFilter !== undefined ? override.qtyFilter : qtyFilter))
       if (keyword) params.keyword = keyword
       if (s.sort_by) params.sort_by = s.sort_by
       if (s.sort_order) params.sort_order = s.sort_order
@@ -842,7 +955,7 @@ function InventoryByWarehouse() {
     } finally {
       setLoading(false)
     }
-  }, [keyword, sortInfo, filters, recentDays, timeFilters, dormantFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, sortInfo, filters, recentDays, timeFilters, dormantFilter, qtyFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useRecentDaysDebounce(recentDays, () => fetchData(1, pagination.pageSize))
 
@@ -883,6 +996,7 @@ function InventoryByWarehouse() {
     const params: Record<string, any> = { format: 'xlsx', columns: selectedColumns.join(',') }
     Object.assign(params, timeFilterParams(timeFilters))
     Object.assign(params, dormantParams(dormantFilter ?? undefined))
+    Object.assign(params, qtyRangeParams(qtyFilter ?? undefined))
     if (keyword) params.keyword = keyword
     if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
     if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
@@ -904,7 +1018,7 @@ function InventoryByWarehouse() {
       title: '库位数', dataIndex: 'location_count', key: 'location_count', width: 80, align: 'right' as const,
       render: (v: number) => (v != null ? v.toLocaleString() : '-'),
     },
-    { title: '库存量', dataIndex: 'qty_on_hand', key: 'qty_on_hand', width: 110, align: 'right' as const, sorter: true, render: numFmt },
+    qtyColumn(qtyFilter ?? undefined, applyQtyFilter, 110),
     { title: '锁定数量', dataIndex: 'locked_qty', key: 'locked_qty', width: 110, align: 'right' as const, sorter: true, render: numFmt },
     { title: '结存数量', dataIndex: 'balance_qty', key: 'balance_qty', width: 110, align: 'right' as const, sorter: true, render: numFmt },
     { title: '在途库存', dataIndex: 'qty_in_transit', key: 'qty_in_transit', width: 110, align: 'right' as const, sorter: true, render: numFmt },

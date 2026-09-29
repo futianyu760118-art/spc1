@@ -150,16 +150,29 @@ export default function Notifications() {
     if (!originalToken) return
     let es: EventSource | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let pollTimer: ReturnType<typeof setInterval> | null = null
     let closed = false
+    const stopPolling = () => {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+    }
+    const startPolling = () => {
+      if (pollTimer) return
+      fetchCountsRef.current()
+      pollTimer = setInterval(() => fetchCountsRef.current(), 60000)
+    }
     const connect = () => {
       if (closed) return
       try {
         es = new EventSource(`/api/v1/notifications/stream?token=${encodeURIComponent(originalToken)}`)
       } catch { return }
-      es.addEventListener('open', () => setSseOn(true))
+      es.addEventListener('open', () => { setSseOn(true); stopPolling() })
       es.addEventListener('unread', () => { fetchCountsRef.current(); fetchListRef.current() })
+      // 订阅降级（Redis 断链退避重连中）：轮询兜底；恢复后停止（unread 补偿帧会刷新列表）
+      es.addEventListener('degraded', () => { setSseOn(false); startPolling() })
+      es.addEventListener('recovered', () => { setSseOn(true); stopPolling() })
       es.addEventListener('error', () => {
         setSseOn(false)
+        startPolling()
         try { es?.close() } catch { /* silent */ }
         es = null
         if (retryTimer) clearTimeout(retryTimer)
@@ -170,6 +183,7 @@ export default function Notifications() {
     return () => {
       closed = true
       if (retryTimer) clearTimeout(retryTimer)
+      stopPolling()
       setSseOn(false)
       try { es?.close() } catch { /* silent */ }
     }

@@ -119,11 +119,6 @@ def _inventory_material_active_cond():
     )
 
 
-def _inventory_nonzero_qty_cond():
-    """库存行排除零库存：qty_on_hand 为 0/NULL 的行不参与页面统计与导出。"""
-    return func.coalesce(Inventory.qty_on_hand, 0) != 0
-
-
 def _inventory_filter_conds(
     keyword: Optional[str] = None,
     material_code: Optional[str] = None,
@@ -134,8 +129,8 @@ def _inventory_filter_conds(
     recent_days: Optional[int] = None,
     time_filters: Optional[dict] = None,
 ) -> list:
-    """库存列表/导出共用的筛选条件（含排除已删除物料与零库存）。"""
-    conds = [_inventory_material_active_cond(), _inventory_nonzero_qty_cond()]
+    """库存列表/导出共用的筛选条件（含排除已删除物料）。"""
+    conds = [_inventory_material_active_cond()]
     if keyword:
         like = f"%{keyword}%"
         conds.append(or_(
@@ -273,6 +268,25 @@ def _inventory_dormant_conds(getter, params: Optional[dict] = None) -> list:
         conds.append(ref <= now - timedelta(days=int(gt) + 1))
     if lt is not None:
         conds.append(ref > now - timedelta(days=int(lt)))
+    return conds
+
+
+def _inventory_qty_filter_conds(col, qty_min: Optional[float] = None, qty_max: Optional[float] = None, qty_mode: Optional[str] = None) -> list:
+    """库存量筛选条件,与展示口径一致:
+    行级传 Inventory.qty_on_hand;按仓库聚合视图传 SUM(qty_on_hand) 聚合表达式(组级语义)。
+    - qty_mode: positive=有库存(>0) / zero=零库存(=0) / negative=负库存(<0)
+    - qty_min/qty_max: 库存量区间(>= 下限 / <= 上限),可与 qty_mode 叠加"""
+    conds = []
+    if qty_mode == "positive":
+        conds.append(col > 0)
+    elif qty_mode == "zero":
+        conds.append(col == 0)
+    elif qty_mode == "negative":
+        conds.append(col < 0)
+    if qty_min is not None:
+        conds.append(col >= qty_min)
+    if qty_max is not None:
+        conds.append(col <= qty_max)
     return conds
 
 
@@ -2049,6 +2063,9 @@ async def list_inventory(
     batch_no: Optional[str] = Query(None, description="批次号精确筛选"),
     recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
     recent_days: Optional[int] = Query(None, ge=-1, le=100000, description="近 N 天内已盘算近期已盘;-1 或 99999=不限(全部历史);省略=服务端配置默认"),
+    qty_min: Optional[float] = Query(None, description="库存量下限"),
+    qty_max: Optional[float] = Query(None, description="库存量上限"),
+    qty_mode: Optional[str] = Query(None, pattern="^(positive|zero|negative)$", description="库存量快捷筛选:positive=有库存(>0),zero=零库存(=0),negative=负库存(<0)"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
@@ -2068,14 +2085,14 @@ async def list_inventory(
     counted_materials_query = select(func.count(func.distinct(Inventory.material_id))).where(_recent_checked_exists_cond(recent_days))
 
     active_cond = _inventory_material_active_cond()
-    nonzero_cond = _inventory_nonzero_qty_cond()
     time_conds = _inventory_time_conds(lambda f: getattr(Inventory, f), tf)
     dormant_conds = _inventory_dormant_conds(lambda f: getattr(Inventory, f), tf)
-    query = query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
-    count_query = count_query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
-    sums_query = sums_query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
-    total_materials_query = total_materials_query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
-    counted_materials_query = counted_materials_query.where(active_cond, nonzero_cond, *time_conds, *dormant_conds)
+    qty_conds = _inventory_qty_filter_conds(Inventory.qty_on_hand, qty_min, qty_max, qty_mode)
+    query = query.where(active_cond, *time_conds, *dormant_conds, *qty_conds)
+    count_query = count_query.where(active_cond, *time_conds, *dormant_conds, *qty_conds)
+    sums_query = sums_query.where(active_cond, *time_conds, *dormant_conds, *qty_conds)
+    total_materials_query = total_materials_query.where(active_cond, *time_conds, *dormant_conds, *qty_conds)
+    counted_materials_query = counted_materials_query.where(active_cond, *time_conds, *dormant_conds, *qty_conds)
 
     if keyword:
         like = f"%{keyword}%"
@@ -2217,6 +2234,9 @@ async def list_inventory_by_warehouse(
     wh_name: Optional[str] = Query(None, description="仓库名称精确筛选"),
     recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
     recent_days: Optional[int] = Query(None, ge=-1, le=100000, description="近 N 天内已盘算近期已盘;-1 或 99999=不限(全部历史);省略=服务端配置默认"),
+    qty_min: Optional[float] = Query(None, description="库存量下限"),
+    qty_max: Optional[float] = Query(None, description="库存量上限"),
+    qty_mode: Optional[str] = Query(None, pattern="^(positive|zero|negative)$", description="库存量快捷筛选:positive=有库存(>0),zero=零库存(=0),negative=负库存(<0)"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
@@ -2224,7 +2244,7 @@ async def list_inventory_by_warehouse(
     tf: dict = Depends(_inventory_time_query_params),
 ):
     """按 物料 x 仓库 聚合的即时库存视图（合并库位维度）。"""
-    filters = [_inventory_material_active_cond(), _inventory_nonzero_qty_cond()]
+    filters = [_inventory_material_active_cond()]
     if keyword:
         like = f"%{keyword}%"
         filters.append(or_(
@@ -2267,12 +2287,13 @@ async def list_inventory_by_warehouse(
     }
     time_conds = _inventory_time_conds(lambda f: max_cols[f], tf)
     dormant_conds = _inventory_dormant_conds(lambda f: max_cols[f], tf)
+    qty_conds = _inventory_qty_filter_conds(sum_qty, qty_min, qty_max, qty_mode)
 
     groups = select(*group_cols, sum_qty, sum_locked, sum_balance, sum_transit, sum_ending, cnt_locations, max_last_inbound, max_last_outbound, max_last_picking).group_by(*group_cols)
     for f in filters:
         groups = groups.where(f)
-    # 组级排除零库存（防正负抵消为 0 的组）+ 组级时间/呆滞筛选（作用于 MAX 聚合值，NULL 视为超过 N 天）
-    groups = groups.having(sum_qty != 0, *time_conds, *dormant_conds)
+    # 组级时间/呆滞/库存量筛选（作用于聚合值，NULL 视为超过 N 天）
+    groups = groups.having(*time_conds, *dormant_conds, *qty_conds)
 
     sortable = {
         "material_code": Inventory.material_code,
@@ -2388,21 +2409,20 @@ async def inventory_filter_options(
 ):
     """库存列筛选选项：全量去重值（仓库编码/名称全量；物料编码/批次号上限 3000 条）。"""
     active_cond = _inventory_material_active_cond()
-    nonzero_cond = _inventory_nonzero_qty_cond()
     material_codes = (await db.execute(
-        select(Inventory.material_code).where(Inventory.material_code.isnot(None), active_cond, nonzero_cond)
+        select(Inventory.material_code).where(Inventory.material_code.isnot(None), active_cond)
         .distinct().order_by(Inventory.material_code).limit(3000)
     )).scalars().all()
     wh_codes = (await db.execute(
-        select(Inventory.wh_code).where(Inventory.wh_code.isnot(None), active_cond, nonzero_cond)
+        select(Inventory.wh_code).where(Inventory.wh_code.isnot(None), active_cond)
         .distinct().order_by(Inventory.wh_code)
     )).scalars().all()
     wh_names = (await db.execute(
-        select(Inventory.wh_name).where(Inventory.wh_name.isnot(None), active_cond, nonzero_cond)
+        select(Inventory.wh_name).where(Inventory.wh_name.isnot(None), active_cond)
         .distinct().order_by(Inventory.wh_name)
     )).scalars().all()
     batch_nos = (await db.execute(
-        select(Inventory.batch_no).where(Inventory.batch_no.isnot(None), active_cond, nonzero_cond)
+        select(Inventory.batch_no).where(Inventory.batch_no.isnot(None), active_cond)
         .distinct().order_by(Inventory.batch_no).limit(3000)
     )).scalars().all()
     return ResponseModel(data={
@@ -2467,13 +2487,16 @@ async def export_inventory(
     batch_no: Optional[str] = Query(None, description="批次号精确筛选"),
     recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
     recent_days: Optional[int] = Query(None, ge=-1, le=100000, description="近 N 天内已盘算近期已盘;-1 或 99999=不限(全部历史);省略=服务端配置默认"),
+    qty_min: Optional[float] = Query(None, description="库存量下限"),
+    qty_max: Optional[float] = Query(None, description="库存量上限"),
+    qty_mode: Optional[str] = Query(None, pattern="^(positive|zero|negative)$", description="库存量快捷筛选:positive=有库存(>0),zero=零库存(=0),negative=负库存(<0)"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data.inventory", "read")),
     tf: dict = Depends(_inventory_time_query_params),
 ):
-    """库存明细导出（物料 x 仓库 x 库位），按当前筛选/排序全量导出，零库存行已排除。"""
+    """库存明细导出（物料 x 仓库 x 库位），按当前筛选/排序全量导出。"""
     selected_keys = [c.strip() for c in columns.split(",") if c.strip()] if columns else []
     allowed = {col.key for col in INVENTORY_DETAIL_EXPORT_COLUMNS}
     invalid_columns = [key for key in selected_keys if key not in allowed]
@@ -2484,6 +2507,7 @@ async def export_inventory(
         raise HTTPException(status_code=400, detail="请选择至少一个有效导出字段")
     conds = _inventory_filter_conds(keyword, material_code, wh_code, wh_name, batch_no, recent_checked, recent_days, time_filters=tf)
     conds.extend(_inventory_dormant_conds(lambda f: getattr(Inventory, f), tf))
+    conds.extend(_inventory_qty_filter_conds(Inventory.qty_on_hand, qty_min, qty_max, qty_mode))
     query = select(Inventory).where(*conds)
     if sort_by == "days_in_stock":
         query = query.order_by(_inventory_dormant_sort_clause(Inventory.last_outbound_at, Inventory.last_inbound_at, sort_order))
@@ -2557,13 +2581,16 @@ async def export_inventory_by_warehouse(
     wh_name: Optional[str] = Query(None, description="仓库名称精确筛选"),
     recent_checked: Optional[str] = Query(None, description="近期已盘筛选:true=仅近期已盘,false=仅未盘"),
     recent_days: Optional[int] = Query(None, ge=-1, le=100000, description="近 N 天内已盘算近期已盘;-1 或 99999=不限(全部历史);省略=服务端配置默认"),
+    qty_min: Optional[float] = Query(None, description="库存量下限"),
+    qty_max: Optional[float] = Query(None, description="库存量上限"),
+    qty_mode: Optional[str] = Query(None, pattern="^(positive|zero|negative)$", description="库存量快捷筛选:positive=有库存(>0),zero=零库存(=0),negative=负库存(<0)"),
     sort_by: Optional[str] = Query(None),
     sort_order: Optional[str] = Query("asc"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(PermissionChecker("basicdata.data.inventory", "read")),
     tf: dict = Depends(_inventory_time_query_params),
 ):
-    """按 物料 x 仓库 聚合的即时库存导出，按当前筛选/排序全量导出，零库存行/组已排除。"""
+    """按 物料 x 仓库 聚合的即时库存导出，按当前筛选/排序全量导出。"""
     selected_keys = [c.strip() for c in columns.split(",") if c.strip()] if columns else []
     allowed = {col.key for col in INVENTORY_BYWH_EXPORT_COLUMNS}
     invalid_columns = [key for key in selected_keys if key not in allowed]
@@ -2592,13 +2619,14 @@ async def export_inventory_by_warehouse(
     query = select(*group_cols, sum_qty, sum_locked, sum_balance, sum_transit, sum_ending, cnt_locations, max_last_inbound, max_last_outbound, max_last_picking).group_by(*group_cols)
     for f in filters:
         query = query.where(f)
-    # 组级时间筛选（作用于 MAX 聚合值，NULL 视为超过 N 天）
+    # 组级时间/库存量筛选（作用于聚合值，NULL 视为超过 N 天）
     max_cols = {
         "last_inbound_at": max_last_inbound,
         "last_outbound_at": max_last_outbound,
         "last_picking_at": max_last_picking,
     }
-    query = query.having(sum_qty != 0, *_inventory_time_conds(lambda f: max_cols[f], tf), *_inventory_dormant_conds(lambda f: max_cols[f], tf))
+    qty_conds = _inventory_qty_filter_conds(sum_qty, qty_min, qty_max, qty_mode)
+    query = query.having(*_inventory_time_conds(lambda f: max_cols[f], tf), *_inventory_dormant_conds(lambda f: max_cols[f], tf), *qty_conds)
 
     sortable = {
         "material_code": Inventory.material_code,

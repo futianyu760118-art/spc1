@@ -166,19 +166,35 @@ const PERMISSION_ACTIONS = [
   { key: 'import', label: '导入' },
 ]
 const PERMISSION_ACTION_KEYS = PERMISSION_ACTIONS.map(a => a.key)
-// 页面专属子权限动作：仅存在于对应页面下（如 用户管理-重置密码、问题反馈-处理），不作为通用列
+// 专属动作：不占通用列的动作（如 重置密码 / 处理 / MRP 的 运算、审核、转单、参数）
 const SPECIAL_ACTION_LABELS: Record<string, string> = {
   reset_password: '重置密码',
   handle: '处理',
+  run: '运算',
+  review: '审核',
+  convert: '转单',
+  param: '参数',
 }
 
-// 收集定义中包含非通用动作的叶子节点（页面专属子权限）
+// 节点声明的专属动作（非通用列动作）
+function getSpecialActions(node: PermTreeNode): string[] {
+  return (node.actions || []).filter(a => !PERMISSION_ACTION_KEYS.includes(a))
+}
+
+// 纯专属子权限节点：所有声明动作均为专属动作（如 重置密码、处理问题反馈），整体不占通用列。
+// 混合节点（如 MRP 运算：read + run/review/...）仍需按通用列管理 read，不能当作纯专属节点。
+function isSpecialOnlyLeaf(node: PermTreeNode): boolean {
+  const specials = getSpecialActions(node)
+  return !node.children?.length && specials.length > 0 && specials.length === (node.actions || []).length
+}
+
+// 收集纯专属子权限叶子节点（批量授权时不可直接勾选，随所属父节点保存）
 function collectSpecialLeafKeys(nodes: PermTreeNode[]): string[] {
   const result: string[] = []
   for (const n of nodes) {
     if (n.children?.length) {
       result.push(...collectSpecialLeafKeys(n.children))
-    } else if (n.actions?.some(a => !PERMISSION_ACTION_KEYS.includes(a))) {
+    } else if (isSpecialOnlyLeaf(n)) {
       result.push(n.key)
     }
   }
@@ -187,7 +203,7 @@ function collectSpecialLeafKeys(nodes: PermTreeNode[]): string[] {
 
 function buildTreeData(nodes: PermTreeNode[]): any[] {
   return nodes.map(n => {
-    const isSpecialLeaf = !n.children?.length && n.actions?.some(a => !PERMISSION_ACTION_KEYS.includes(a))
+    const isSpecialLeaf = isSpecialOnlyLeaf(n)
     return {
       title: isSpecialLeaf ? `${n.label}（子权限）` : n.label,
       key: n.key,
@@ -282,8 +298,11 @@ function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<s
     } else {
       // 叶子节点 或 自带动作的父节点：只动自身
       const isLeaf = !children || children.length === 0
-      const specialActs = isLeaf && node ? (node.actions || []).filter(a => !PERMISSION_ACTION_KEYS.includes(a)) : []
-      next[key] = checked ? [...(specialActs.length > 0 ? specialActs : allActs)] : []
+      const specialActs = isLeaf && node ? getSpecialActions(node) : []
+      const isSpecialOnly = Boolean(isLeaf && node && isSpecialOnlyLeaf(node))
+      // 纯专属节点只写专属动作；混合节点（如 MRP 运算）必须连同通用动作授予，否则缺 read 无法进入页面
+      const rowActs = isSpecialOnly ? [...specialActs] : [...new Set([...allActs, ...specialActs])]
+      next[key] = checked ? rowActs : []
     }
     onChange(next)
   }
@@ -304,11 +323,12 @@ function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<s
     const isExpanded = expanded[node.key]
     const isOwnParent = Boolean(node && isOwnActionParent(node))
     const actions = getActions(node.key, node.children, node)
-    // 页面专属子权限（如 重置密码、处理）：不占用通用操作列，合并单元格单独展示
-    const specialActs = !hasChildren ? (node.actions || []).filter(a => !PERMISSION_ACTION_KEYS.includes(a)) : []
-    const allChecked = specialActs.length > 0
+    // 专属动作（如 重置密码、处理、运算、审核）：不占通用列，单独勾选框展示
+    const specialActs = hasChildren ? [] : getSpecialActions(node)
+    const isSpecialOnly = !hasChildren && isSpecialOnlyLeaf(node)
+    const allChecked = isSpecialOnly
       ? specialActs.every(a => actions.includes(a))
-      : PERMISSION_ACTIONS.every(a => actions.includes(a.key))
+      : PERMISSION_ACTIONS.every(a => actions.includes(a.key)) && specialActs.every(a => actions.includes(a))
     const rowIndeterminate = isOwnParent
       ? (actions.length > 0 && !allChecked)
       : (hasChildren
@@ -328,8 +348,19 @@ function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<s
           )}
           <Checkbox checked={allChecked} indeterminate={rowIndeterminate} onChange={e => toggleRow(node.key, e.target.checked, node.children, node)} />
           <span style={{ marginLeft: 6 }}>{node.label}</span>
+          {specialActs.length > 0 && !isSpecialOnly &&
+            specialActs.map(a => (
+              <Checkbox
+                key={a}
+                checked={actions.includes(a)}
+                onChange={() => toggleLeaf(node.key, a)}
+                style={{ marginLeft: 12, fontWeight: 400 }}
+              >
+                {SPECIAL_ACTION_LABELS[a] || a}
+              </Checkbox>
+            ))}
         </td>
-        {specialActs.length > 0 ? (
+        {isSpecialOnly ? (
           <td colSpan={PERMISSION_ACTIONS.length} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '1px solid #f1f5f9', background: '#f0fdf4' }}>
             <span style={{ color: '#16a34a', fontSize: 11, fontWeight: 600, marginRight: 10 }}>专属子权限</span>
             {specialActs.map(a => (
@@ -436,6 +467,28 @@ export default function RoleManagement() {
   const [bgMode, setBgMode] = useState<'grant' | 'revoke' | 'replace'>('grant')
   const [bgSubmitting, setBgSubmitting] = useState(false)
   const [bgRoles, setBgRoles] = useState<RoleItem[]>([])
+
+  // 批量授权可选动作：通用动作 + 所选节点声明的专属动作（如 MRP 的 运算/审核/转单/参数）
+  const bgActionOptions = useMemo(() => {
+    const selected = new Set(bgKeys)
+    const seen = new Set(PERMISSION_ACTION_KEYS)
+    const options: { key: string; label: string }[] = [...PERMISSION_ACTIONS]
+    const walk = (nodes: PermTreeNode[]) => {
+      for (const n of nodes) {
+        if (selected.has(n.key)) {
+          getSpecialActions(n).forEach(a => {
+            if (!seen.has(a)) {
+              seen.add(a)
+              options.push({ key: a, label: SPECIAL_ACTION_LABELS[a] || a })
+            }
+          })
+        }
+        if (n.children) walk(n.children)
+      }
+    }
+    walk(currentPermissionTree)
+    return options
+  }, [bgKeys, currentPermissionTree])
 
   const fetchRoles = async () => {
     setRoleLoading(true)
@@ -750,7 +803,7 @@ export default function RoleManagement() {
           <div className="sc-toolbar-hint" style={{ marginBottom: 8, fontWeight: 500, color: '#334155' }}>
             权限配置
             <span style={{ fontWeight: 400, color: '#94a3b8', marginLeft: 8 }}>
-              行 = 权限节点（父行级联子节点） · 列 = 通用动作 · 绿底行 = 专属子权限
+              行 = 权限节点（父行级联子节点） · 列 = 通用动作 · 节点后勾选框 / 绿底行 = 专属动作
             </span>
           </div>
           <PermissionMatrix value={rolePermissions} onChange={setRolePermissions} permissionTree={currentPermissionTree} />
@@ -806,7 +859,7 @@ export default function RoleManagement() {
               <span className="sys-step-no" style={{ width: 20, height: 20, borderRadius: '50%', background: '#5b5bd6', color: '#fff', fontSize: 11, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>2</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 500, marginBottom: 6 }}>授权动作 <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 'calc(12px * var(--font-size-scale))' }}>默认仅授予「查看」</span></div>
-                <Checkbox.Group value={bgActions} onChange={(v) => setBgActions(v as string[])} options={PERMISSION_ACTIONS.map(a => ({ value: a.key, label: a.label }))} />
+                <Checkbox.Group value={bgActions} onChange={(v) => setBgActions(v as string[])} options={bgActionOptions.map(a => ({ value: a.key, label: a.label }))} />
               </div>
             </div>
           </div>

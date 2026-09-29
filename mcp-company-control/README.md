@@ -244,13 +244,16 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
     `uom` / `received_qty` / `estimated_finish_at` / `schedule_version` / `owner` / `blocking` 恒 `null`
   - 工序无工单外键：`production_operations_list` 必填 `order_no`（非 `work_order_no`）；
     `work_center_code` / `predecessor_operation_ids` 恒 `null`
-  - 工单-订单关联为订单级（任务单只带 `sale_order_no`），`line_no` / `order_line_id` 恒 `null`；
-    `schedule_snapshot` 源为订单行级排产快照（无工单号）
+  - 工单-订单关联为订单级（任务单存 ERP 订单 ID，接口经 `sale_order.erp_id` 解析订单号），
+    `line_no` / `order_line_id` 恒 `null`；`schedule_snapshot` 源为订单行级排产快照（无工单号）
   - 报工为 ERP 生产日报累计口径；`is_reversed` / `reversal_of` / `revision` 恒 `null`
   - 产能按（部门, 排产段, 日期）聚合：`available_minutes` 缺基础条件为 `null`，周日不排产为 `0`；
     `shift_id` / `calendar_version` / `downtime_minutes` 恒 `null`
   - 时效强制校验：调用公共 helper 前校验真实 `data_as_of` / 置信度；`stale=true` → `STALE_DATA`；
     缺失或非法 → `UPSTREAM_UNAVAILABLE`「数据置信度不足」（不落入默认兜底：缺失时间→当前时间 / 未知置信度→high）
+  - 上游时效口径（2026-09-24 确认）：工序/报工/产能为历史快照基线，有 `data_as_of` 即 `stale=false`、
+    置信度 high（≤6h）/ medium，不按 24h 判过期；工单/工单-订单关系仍按 6h/24h 实时口径。
+    工序表空且无导入记录时回退生产任务单同步时间（生产协同数据域基线），空结果照常返回真实时效
 
 ## 目录结构
 
@@ -268,5 +271,6 @@ mcp-company-control/
 │  ├─ upstream_client.py  # 中台端点客户端（超时/错误映射/受限重试）
 │  └─ contracts.py        # 标准返回包/错误/Evidence/脱敏
 ├─ scripts/test_company_control.py
+├─ docs/                  # 字段清单、AEOS-Hub 链路排查指南
 ├─ requirements.txt / .env.example / CHANGELOG.md
 ```

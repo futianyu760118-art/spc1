@@ -3,9 +3,14 @@
 publish_unread_update: 供 API/service 层在通知变更后调用，推未读计数到 Redis。
 subscribe_stream: 供 SSE 端点使用，长连接订阅 notif:{user_id} 并 yield SSE 帧。
 
-Redis 不可用时：publish 静默丢弃；subscribe 降级为 snapshot + 心跳，不抛异常、
-不结束流（流一旦结束，浏览器 EventSource 会每 3s 重连，形成重连风暴）。
-结构克隆自 app/services/material/stock_check_broker.py。
+事件约定（前端 MainLayout / 通知中心监听）：
+- unread：未读计数帧（total/by_type），首帧快照、实时推送、重连补偿快照都用它；
+- degraded：订阅断开进入退避重连，前端据此启动降级轮询；
+- recovered：订阅恢复（此前发过 degraded 才发），前端据此停止轮询。
+
+Redis 不可用/订阅中断时绝不结束流（流一结束浏览器 EventSource 会每 3s 重连形成风暴），
+而是指数退避自动重订阅，期间只发心跳与 degraded，恢复后补一帧最新快照再发 recovered。
+结构源自 app/services/material/stock_check_broker.py，重连与降级通知为通知域增强。
 """
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 CHANNEL_FMT = "notif:{user_id}"
 HEARTBEAT_SEC = 15
+# 首次失败立即重试(0)，此后指数退避封顶 60s：连接抖动时不打重连风暴
+RECONNECT_BACKOFF_SEC = (0, 5, 10, 20, 30, 60)
 
 
 async def compute_unread_counts(db: AsyncSession, user_id: int) -> dict:
@@ -76,6 +83,35 @@ def _unread_chunk(payload: dict) -> str:
     )
 
 
+def _control_chunk(event: str) -> str:
+    return f"event: {event}\ndata: {{}}\n\n"
+
+
+async def _snapshot(user_id: int) -> dict:
+    """短命会话算未读计数，用完立刻归还连接池（SSE 流可能活几小时）。"""
+    from app.core.database import AsyncSessionLocal
+
+    try:
+        async with AsyncSessionLocal() as db:
+            return await compute_unread_counts(db, user_id)
+    except Exception as e:
+        logger.warning("notification_broker.subscribe snapshot failed: %s", e)
+        return {"total": 0, "by_type": {}}
+
+
+async def _open_pubsub(channel: str):
+    """新建独立订阅连接；失败时释放半开资源并把异常抛给调用方。"""
+    client = make_pubsub_client()
+    pubsub = None
+    try:
+        pubsub = client.pubsub()
+        await pubsub.subscribe(channel)
+        return pubsub, client
+    except BaseException:
+        await _close_pubsub(pubsub, client)
+        raise
+
+
 async def _close_pubsub(pubsub, client) -> None:
     """释放订阅连接与专属客户端。"""
     if pubsub is not None:
@@ -95,43 +131,51 @@ async def subscribe_stream(
 ) -> AsyncGenerator[str, None]:
     """SSE 端点生成器。首帧 snapshot(当前未读计数)，后续 unread 事件 + 15s 心跳。
 
-    快照用短命会话算完立刻归还,订阅循环只走 Redis:流可活几小时,
-    持有调用方 db 会话会占住连接池的一条连接。
-    订阅失败/订阅中断一律降级为心跳模式保活流,绝不让流异常结束。
+    订阅失败/中断不结束流，改为指数退避自动重订阅；期间发 degraded 让前端轮询兜底，
+    恢复后补一帧最新快照(覆盖订阅空窗期)再发 recovered。快照用短命会话算完立刻归还,
+    订阅循环只走 Redis:流可活几小时,持有调用方 db 会话会占住连接池的一条连接。
     """
-    from app.core.database import AsyncSessionLocal
-
-    try:
-        async with AsyncSessionLocal() as db:
-            snapshot = await compute_unread_counts(db, user_id)
-    except Exception as e:
-        logger.warning("notification_broker.subscribe snapshot failed: %s", e)
-        snapshot = {"total": 0, "by_type": {}}
-    yield _unread_chunk(snapshot)
+    yield _unread_chunk(await _snapshot(user_id))
 
     channel = CHANNEL_FMT.format(user_id=user_id)
     pubsub = None
     client = None
-    try:
-        client = make_pubsub_client()
-        pubsub = client.pubsub()
-        await pubsub.subscribe(channel)
-    except asyncio.CancelledError:
-        await _close_pubsub(pubsub, client)
-        raise
-    except Exception as e:
-        logger.warning("notification_broker.subscribe failed (%s), SSE 降级为心跳模式", e)
-        await _close_pubsub(pubsub, client)
-        pubsub = None
-        client = None
+    degraded = False
+    retry_idx = 0
+
+    async def _backoff_frames() -> AsyncGenerator[str, None]:
+        """统一失败出口：首发 degraded 让前端轮询兜底，再退避等待（分片心跳保活）。"""
+        nonlocal degraded, retry_idx
+        if not degraded:
+            degraded = True
+            yield _control_chunk("degraded")
+        delay = RECONNECT_BACKOFF_SEC[min(retry_idx, len(RECONNECT_BACKOFF_SEC) - 1)]
+        retry_idx += 1
+        while delay > 0:
+            step = min(delay, HEARTBEAT_SEC)
+            await asyncio.sleep(step)
+            delay -= step
+            yield ": keep-alive\n\n"
 
     try:
-        degraded = pubsub is None
         while True:
-            if degraded:
-                await asyncio.sleep(HEARTBEAT_SEC)
-                yield ": keep-alive\n\n"
+            if pubsub is None:
+                try:
+                    pubsub, client = await _open_pubsub(channel)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning("notification_broker.subscribe failed (%s)，退避重连", e)
+                    async for chunk in _backoff_frames():
+                        yield chunk
+                    continue
+                # 订阅成功：补一帧最新快照(覆盖订阅空窗期)，此前降级过再解除
+                yield _unread_chunk(await _snapshot(user_id))
+                if degraded:
+                    degraded = False
+                    yield _control_chunk("recovered")
                 continue
+
             try:
                 msg = await pubsub.get_message(
                     ignore_subscribe_messages=True, timeout=HEARTBEAT_SEC
@@ -139,9 +183,14 @@ async def subscribe_stream(
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning("notification_broker.subscribe loop error (%s), 降级为心跳模式", e)
-                degraded = True
+                logger.warning("notification_broker.subscribe loop error (%s)，退避重连", e)
+                await _close_pubsub(pubsub, client)
+                pubsub = None
+                client = None
+                async for chunk in _backoff_frames():
+                    yield chunk
                 continue
+            retry_idx = 0
             if msg is None:
                 yield ": keep-alive\n\n"
                 continue

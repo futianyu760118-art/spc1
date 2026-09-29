@@ -1185,7 +1185,7 @@ tr.ant-table-row:hover .sc-row-act { opacity: 1; }
   border-color: #5b5bd6 !important;
   box-shadow: 0 0 0 3px rgba(91, 91, 214, 0.14) !important;
 }
-.sc-page .ant-select:not(.ant-select-customize-input) .ant-select-selector { height: 32px; }
+.sc-page .ant-select:not(.ant-select-multiple):not(.ant-select-customize-input) .ant-select-selector { height: 32px; }
 .sc-page .ant-select-selection-placeholder,
 .sc-page .ant-select-selection-item { font-size: calc(13.5px * var(--font-size-scale)); }
 

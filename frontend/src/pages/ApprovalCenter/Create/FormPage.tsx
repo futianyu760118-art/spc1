@@ -12,23 +12,33 @@ export default function ApprovalCreateForm() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const business = bizType ? getBusiness(bizType) : undefined
+  const schema = business?.schema
+  const adapter = business?.adapter
   const numericId = id ? Number(id) : undefined
   const editId = numericId !== undefined && Number.isFinite(numericId) ? numericId : undefined
 
   useEffect(() => {
-    if (!business) return
-    form.setFieldsValue(business.adapter.initialValues || {})
+    if (!schema || !adapter) return
+    form.setFieldsValue(adapter.initialValues || {})
     if (!editId) return
     setLoading(true)
     ;(async () => {
       try {
-        const values = await business.adapter.loadForEdit(editId)
+        const values = await adapter.loadForEdit(editId)
         form.setFieldsValue(values)
       } catch { /* 全局拦截器已提示 */ } finally { setLoading(false) }
     })()
   }, [bizType, editId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!business) {
+  if (business?.component) {
+    const CenterForm = business.component
+    return (
+      <div className="sc-page">
+        <CenterForm variant="center" />
+      </div>
+    )
+  }
+  if (!business || !schema || !adapter) {
     return (
       <div className="sc-page">
         <Card>未注册的发起业务：{bizType}</Card>
@@ -41,8 +51,8 @@ export default function ApprovalCreateForm() {
       const values = await form.validateFields()
       setSaving(true)
       const res = isSubmit
-        ? await business.adapter.submit(values, editId)
-        : await business.adapter.saveDraft(values, editId)
+        ? await adapter.submit(values, editId)
+        : await adapter.saveDraft(values, editId)
       message.success(isSubmit ? '已提交审批' : '草稿已保存')
       if (isSubmit) {
         navigate(`/approvals/items/${business.bizType}/${res.id}`)
@@ -62,10 +72,10 @@ export default function ApprovalCreateForm() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/approvals/create')}>返回</Button>
         <div style={{ fontSize: 18, fontWeight: 600 }}>
-          {editId ? `编辑${business.schema.title}` : `新建${business.schema.title}`}
+          {editId ? `编辑${schema.title}` : `新建${schema.title}`}
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          {business.schema.actions.draft ? (
+          {schema.actions.draft ? (
             <Button icon={<SaveOutlined />} loading={saving} onClick={() => doSave(false)}>仅存草稿</Button>
           ) : null}
           <Popconfirm title="提交审批" description="提交后进入审批链，确认提交？"
@@ -75,7 +85,7 @@ export default function ApprovalCreateForm() {
         </div>
       </div>
       <Spin spinning={loading}>
-        <FormEngine schema={business.schema} form={form} />
+        <FormEngine schema={schema} form={form} />
       </Spin>
     </div>
   )
