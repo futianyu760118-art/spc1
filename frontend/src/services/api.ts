@@ -737,6 +737,8 @@ export const feedbackApi = {
     api.post(`/basicdata/feedback/${id}/reply`, data),
   updateStatus: (id: number, status: string) =>
     api.patch(`/basicdata/feedback/${id}/status`, { status }),
+  aiQueue: (id: number) => api.post(`/basicdata/feedback/${id}/ai-queue`),
+  aiCancel: (id: number) => api.post(`/basicdata/feedback/${id}/ai-cancel`),
   remove: (id: number) => api.delete(`/basicdata/feedback/${id}`),
 }
 
