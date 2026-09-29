@@ -30,6 +30,13 @@ const statusMeta: Record<string, { label: string; cls: string }> = {
   closed: { label: '已关闭', cls: 'sc-tag-wait' },
 }
 
+const aiStatusMeta: Record<string, { label: string; cls: string }> = {
+  queued: { label: '排队中', cls: 'sc-tag-wait' },
+  running: { label: '实现中', cls: 'sc-tag-kit' },
+  done: { label: '已实现', cls: 'sc-tag-done' },
+  failed: { label: '失败', cls: 'sc-tag-danger' },
+}
+
 const STATUS_CLS = (k?: string) => (k ? statusMeta[k]?.cls || 'sc-tag-plain' : 'sc-tag-plain')
 const STATUS_LBL = (k?: string) => (k ? statusMeta[k]?.label || k : '—')
 
@@ -78,6 +85,9 @@ export default function FeedbackManagement() {
   const [filterType, setFilterType] = useState<string | undefined>(undefined)
   const [filterSeverity, setFilterSeverity] = useState<string | undefined>(undefined)
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined)
+  const [filterAiStatus, setFilterAiStatus] = useState<string | undefined>(undefined)
+  const [aiBusyId, setAiBusyId] = useState<number | null>(null)
+  const [aiConfirm, setAiConfirm] = useState<{ record: any } | null>(null)
   const [sortInfo, setSortInfo] = useState<{ sort_by?: string; sort_order?: string }>({})
 
   const [detail, setDetail] = useState<any>(null)
@@ -91,7 +101,7 @@ export default function FeedbackManagement() {
   const fetchData = async (
     page = pagination.current,
     pageSize = pagination.pageSize,
-    overrides: { kw?: string; type?: string; severity?: string; status?: string } = {},
+    overrides: { kw?: string; type?: string; severity?: string; status?: string; aiStatus?: string } = {},
   ) => {
     setLoading(true)
     try {
@@ -101,6 +111,8 @@ export default function FeedbackManagement() {
       const t = overrides.type !== undefined ? overrides.type : filterType
       const s = overrides.severity !== undefined ? overrides.severity : filterSeverity
       const st = overrides.status !== undefined ? overrides.status : filterStatus
+      const aiSt = overrides.aiStatus !== undefined ? overrides.aiStatus : filterAiStatus
+      if (aiSt) params.ai_status = aiSt
       if (t) params.type = t
       if (s) params.severity = s
       if (st) params.status = st
@@ -123,7 +135,7 @@ export default function FeedbackManagement() {
   useEffect(() => {
     const t = setTimeout(() => { fetchData(1, pagination.pageSize) }, 300)
     return () => clearTimeout(t)
-  }, [keyword, filterType, filterSeverity, filterStatus, sortInfo]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [keyword, filterType, filterSeverity, filterStatus, filterAiStatus, sortInfo]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const openDetail = (record: any) => {
     setDetail(record)
@@ -148,6 +160,14 @@ export default function FeedbackManagement() {
       // 错误已由全局拦截器提示
     })
   }, [searchParams, setSearchParams])
+
+  // AI 任务进行中时每 15s 自动刷新
+  useEffect(() => {
+    const hasActiveAi = data.some((r: any) => r.ai_status === 'queued' || r.ai_status === 'running')
+    if (!hasActiveAi) return
+    const timer = setInterval(() => { fetchData() }, 15000)
+    return () => clearInterval(timer)
+  }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleReply = async () => {
     try {
@@ -204,6 +224,32 @@ export default function FeedbackManagement() {
     } finally {
       setDeleting(false)
     }
+  }
+
+  const handleAi = async (action: 'queue' | 'cancel', record: any) => {
+    setAiBusyId(record.id)
+    try {
+      const res: any = action === 'queue'
+        ? await feedbackApi.aiQueue(record.id)
+        : await feedbackApi.aiCancel(record.id)
+      message.success(action === 'queue' ? '已派给 AI，等待 runner 处理' : '已取消排队')
+      if (detail?.id === record.id) setDetail(res.data)
+      fetchData()
+    } catch {
+      // 错误已由全局拦截器提示
+    } finally {
+      setAiBusyId(null)
+      setAiConfirm(null)
+    }
+  }
+
+  const aiAction = (r: any) => {
+    if (aiBusyId === r.id) return <SyncOutlined spin />
+    if (r.ai_status === 'queued') return <a onClick={() => handleAi('cancel', r)}>取消排队</a>
+    if (r.ai_status === 'running') return <a onClick={() => setAiConfirm({ record: r })}>重新排队</a>
+    if (r.ai_status === 'failed') return <a onClick={() => handleAi('queue', r)}>重试</a>
+    if (r.ai_status === 'done' || r.status === 'resolved' || r.status === 'closed') return null
+    return <a onClick={() => handleAi('queue', r)}>交 AI 实现</a>
   }
 
   // ---------- 状态流转按钮 ----------
@@ -277,6 +323,12 @@ export default function FeedbackManagement() {
       title: '状态', dataIndex: 'status', key: 'status', width: 105,
       render: (v: string) => <span className={`sc-tag ${statusMeta[v]?.cls || 'sc-tag-plain'}`}><span className="dot" />{statusMeta[v]?.label || v}</span>,
     },
+    {
+      title: 'AI 实现', dataIndex: 'ai_status', key: 'ai_status', width: 100,
+      render: (v: string) => (v && v !== 'none'
+        ? <span className={`sc-tag ${aiStatusMeta[v]?.cls || 'sc-tag-plain'}`}>{aiStatusMeta[v]?.label || v}</span>
+        : <span className="sc-note">—</span>),
+    },
     { title: '提交人', dataIndex: 'submitter_name', key: 'submitter_name', width: 140, render: (v: string) => <Operator name={v} /> },
     {
       title: '提交时间', dataIndex: 'created_at', key: 'created_at', width: 170,
@@ -292,10 +344,11 @@ export default function FeedbackManagement() {
       render: (_: any, r: any) => (r.replied_by ? <Operator name={r.replied_by} /> : <span className="sc-note">—</span>),
     },
     {
-      title: '操作', key: 'action', width: 110, fixed: 'right' as const,
+      title: '操作', key: 'action', width: 190, fixed: 'right' as const,
       render: (_: any, r: any) => (
         <span className="sc-row-act">
           <a onClick={() => openDetail(r)}>查看</a>
+          {canHandle && aiAction(r)}
           {canDelete && <a style={{ color: '#dc2626' }} onClick={() => setDeleteTarget(r)}>删除</a>}
         </span>
       ),
@@ -333,6 +386,20 @@ export default function FeedbackManagement() {
           onChange={setFilterSeverity}
           options={Object.entries(severityMeta).map(([k, v]) => ({ label: v.label, value: k }))}
         />
+        <Select
+          allowClear
+          placeholder="全部 AI 状态"
+          style={{ width: 140 }}
+          value={filterAiStatus}
+          onChange={setFilterAiStatus}
+          options={[
+            { label: '未派单', value: 'none' },
+            { label: '排队中', value: 'queued' },
+            { label: '实现中', value: 'running' },
+            { label: '已实现', value: 'done' },
+            { label: '失败', value: 'failed' },
+          ]}
+        />
         <ChipsFilter
           options={chipOptions}
           value={filterStatus ?? 'all'}
@@ -350,7 +417,7 @@ export default function FeedbackManagement() {
           rowKey="id"
           loading={loading}
           size="small"
-          scroll={{ x: 1250 }}
+          scroll={{ x: 1450 }}
           onChange={(_pag: any, tableFilters: any, sorter: any) => {
             const sortField = sorter.field
             const sortOrder = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : undefined
@@ -493,6 +560,23 @@ export default function FeedbackManagement() {
           {statusConfirm?.next === 'closed'
             ? <>关闭后提交人将看到已关闭状态；如未完全解决可先回复并保持「处理中」。</>
             : '提交人可在详情中看到最新状态。'}
+        </p>
+      </Modal>
+
+      {/* AI 重新排队确认 */}
+      <Modal
+        title="重新排队"
+        open={!!aiConfirm}
+        onCancel={() => setAiConfirm(null)}
+        onOk={() => aiConfirm && handleAi('queue', aiConfirm.record)}
+        confirmLoading={!!aiBusyId}
+        okText="确认重新排队"
+        cancelText="取消"
+        width={480}
+        rootClassName="sc-page"
+      >
+        <p style={{ fontSize: 'calc(13.5px * var(--font-size-scale))', color: '#475569', lineHeight: 1.8 }}>
+          确认将 <b>#{aiConfirm?.record?.id}</b> 重新排入 AI 实现队列？当前正在执行的结果将被忽略（反馈回到「排队中」）。
         </p>
       </Modal>
 
