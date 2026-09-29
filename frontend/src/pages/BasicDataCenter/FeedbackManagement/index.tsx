@@ -506,6 +506,31 @@ export default function FeedbackManagement() {
               </div>
             </DrawerSection>
 
+            {detail.ai_status && detail.ai_status !== 'none' && (
+              <DrawerSection title="AI 实现">
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span className={`sc-tag ${aiStatusMeta[detail.ai_status]?.cls || 'sc-tag-plain'}`}>
+                    {aiStatusMeta[detail.ai_status]?.label || detail.ai_status}
+                  </span>
+                  {detail.ai_branch && (
+                    <span className="sc-mono" style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#475569' }}>
+                      {detail.ai_branch}
+                    </span>
+                  )}
+                  {canHandle && aiAction(detail)}
+                </div>
+                {detail.ai_note && (
+                  <div style={{
+                    marginTop: 8, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
+                    padding: '8px 12px', whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto',
+                    fontSize: 'calc(12.5px * var(--font-size-scale))', color: '#334155', lineHeight: 1.7,
+                  }}>
+                    {detail.ai_note}
+                  </div>
+                )}
+              </DrawerSection>
+            )}
+
             {detail.reply && (
               <DrawerSection title="处理回复">
                 <div style={{ display: 'flex', gap: 10 }}>
