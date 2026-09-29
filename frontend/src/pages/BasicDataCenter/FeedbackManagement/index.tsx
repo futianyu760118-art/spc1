@@ -246,9 +246,10 @@ export default function FeedbackManagement() {
   const aiAction = (r: any) => {
     if (aiBusyId === r.id) return <SyncOutlined spin />
     if (r.ai_status === 'queued') return <a onClick={() => handleAi('cancel', r)}>取消排队</a>
+    if (r.status === 'resolved' || r.status === 'closed') return null
     if (r.ai_status === 'running') return <a onClick={() => setAiConfirm({ record: r })}>重新排队</a>
     if (r.ai_status === 'failed') return <a onClick={() => handleAi('queue', r)}>重试</a>
-    if (r.ai_status === 'done' || r.status === 'resolved' || r.status === 'closed') return null
+    if (r.ai_status === 'done') return null
     return <a onClick={() => handleAi('queue', r)}>交 AI 实现</a>
   }
 
