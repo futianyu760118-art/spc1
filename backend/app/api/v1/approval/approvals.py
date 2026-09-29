@@ -45,7 +45,9 @@ from app.services.common.approval_sql import (
     validate_sql_and_mapping,
     validate_writeback_config,
 )
-# Task 9: 此处将 import 业务 Adapter 模块以完成注册
+# builtin Adapter 注册：import 即注册（审批配置 / 中心详情 / 草稿聚合都依赖）
+from app.services.quality import supplier_claim_adapter  # noqa: F401
+from app.services.material import purchase_requisition_adapter  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

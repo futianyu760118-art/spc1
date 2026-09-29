@@ -1,4 +1,4 @@
-"""供应商索赔通知单 - 业务逻辑（raw SQL + 公共审批引擎）"""
+"""供应商索赔通知单 - 业务逻辑（raw SQL + 审批中心）"""
 
 import json
 import logging
@@ -8,9 +8,8 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.common.approval_engine import ApprovalEngine
-from app.services.common.approval_notify import send_approval_wecom_textcard
-from app.services.notification.notification_broker import publish_unread_update
+from app.services.common.approval_center_service import ApprovalCenterService
+from app.services.common.approval_engine import check_node_permission
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +43,6 @@ def _to_date(value) -> Optional[date]:
 class SupplierClaimService:
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.engine = ApprovalEngine(
-            db,
-            biz_type="supplier_claim",
-            table="supplier_claim",
-            log_table="supplier_claim_approval_log",
-            ref_col="claim_id",
-            condition_fields=["claim_amount"],
-            notify_approvers=self._notify_approvers_of_level,
-            notify_applicant=self._notify_applicant_hook,
-        )
 
     # ---------- 查询 ----------
 
@@ -231,7 +220,7 @@ class SupplierClaimService:
         }
 
     async def create_claim(self, data: dict, *, applicant: str = "", submit: bool = False) -> dict:
-        """先落库为 draft，提交动作统一走 engine.submit（保证快照/日志/通知一致）。"""
+        """先落库为 draft，提交动作统一走审批中心（保证快照/流水/通知一致）。"""
         err = self._validate(data)
         if err:
             raise ValueError(err)
@@ -289,7 +278,7 @@ class SupplierClaimService:
         await self.db.execute(text("DELETE FROM supplier_claim WHERE id = :eid"), {"eid": claim_id})
         return {"success": True, "message": "已删除"}
 
-    # ---------- 审批（委托引擎） ----------
+    # ---------- 审批（委托审批中心） ----------
 
     async def _do_submit(self, claim_id: int, applicant: str):
         rec = await self.get_claim(claim_id)
@@ -297,9 +286,7 @@ class SupplierClaimService:
             raise ValueError("仅草稿/驳回/撤回状态可提交")
         if not (rec.get("supplier_name") or "").strip():
             raise ValueError("供应商不能为空，无法提交")
-        fresh = await self.engine.submit(claim_id, applicant)  # 链未配置/已停用会抛 ValueError，原样上抛
-        if not fresh:
-            raise ValueError("提交失败，请刷新后重试")
+        await ApprovalCenterService(self.db).submit("supplier_claim", claim_id, applicant)  # 链未配置/已停用抛 ValueError，原样上抛
         # 绑定附件引用计数，避免孤儿清理误删已被单据引用的文件
         try:
             from app.services.common.file_service import FileService
@@ -320,13 +307,15 @@ class SupplierClaimService:
 
     async def approve(self, claim_id: int, approver: str, comment: str = "", *,
                       approver_role: str = "", expected_version: Optional[int] = None) -> dict:
-        return await self.engine.approve(claim_id, approver, comment,
-                                         approver_role=approver_role, expected_version=expected_version)
+        return await ApprovalCenterService(self.db).approve(
+            "supplier_claim", claim_id, approver, comment,
+            operator_role=approver_role, expected_version=expected_version)
 
     async def reject(self, claim_id: int, approver: str, comment: str = "", *,
                      approver_role: str = "", expected_version: Optional[int] = None) -> dict:
-        return await self.engine.reject(claim_id, approver, comment,
-                                        approver_role=approver_role, expected_version=expected_version)
+        return await ApprovalCenterService(self.db).reject(
+            "supplier_claim", claim_id, approver, comment,
+            operator_role=approver_role, expected_version=expected_version)
 
     async def recall(self, claim_id: int, applicant: str = "", *, caller_role: str = "") -> bool:
         rec = await self.get_claim(claim_id)
@@ -334,10 +323,13 @@ class SupplierClaimService:
             return False
         if caller_role != "admin" and rec.get("applicant") != applicant:
             raise ValueError("仅发起人可撤回该索赔单")
-        return await self.engine.recall(claim_id, applicant)
+        result = await ApprovalCenterService(self.db).recall(
+            "supplier_claim", claim_id, applicant, operator_role=caller_role)
+        return bool(result.get("success"))
 
     async def revoke(self, claim_id: int, revoker: str, *, revoker_role: str = "") -> dict:
-        return await self.engine.revoke(claim_id, revoker, revoker_role=revoker_role)
+        # 中心化后暂不提供反审核；保留方法兼容业务端点
+        return {"success": False, "message": "暂不支持"}
 
     async def pending_approvals(self, *, approver_username: str = "", approver_role: str = "") -> list[dict]:
         rows = await self.db.execute(text("""
@@ -346,10 +338,22 @@ class SupplierClaimService:
         items = []
         for r in rows:
             d = self._serialize(dict(r._mapping))
-            if approver_role != "admin" and not self.engine.is_current_node_approver(d, approver_username, approver_role):
+            if approver_role != "admin" and not self._is_current_node_approver(d, approver_username, approver_role):
                 continue
             items.append(d)
         return items
+
+    @staticmethod
+    def _current_node(d: dict) -> Optional[dict]:
+        snap = d.get("approval_snapshot") or []
+        return next((n for n in snap if n.get("seq") == d.get("approval_level")), None)
+
+    def _is_current_node_approver(self, d: dict, approver: str, approver_role: str) -> bool:
+        node = self._current_node(d)
+        if not node:
+            return False
+        ok, _ = check_node_permission(node, approver, approver_role)
+        return ok
 
     async def approved_by_me(self, approver: str) -> list[dict]:
         """我已审批：我最近一次 approve/reject 的单据（被反审核的审批已置 revoked，不计入）。"""
@@ -372,65 +376,3 @@ class SupplierClaimService:
         """), {"ap": applicant})
         return [self._serialize(dict(r._mapping)) for r in rows]
 
-    # ---------- 通知（引擎 hook） ----------
-
-    async def _notify_approvers_of_level(self, rec: dict, level: int, title_prefix: str):
-        snap = rec.get("approval_snapshot") or []
-        node = next((n for n in snap if n.get("seq") == level), None)
-        if not node:
-            return
-        target_uids = await self.engine.get_node_approver_user_ids(node)
-        if not target_uids:
-            return
-        label = node.get("label", f"L{level}")
-        title = f"[索赔单] {title_prefix} - {label}"
-        content = (f"索赔单 {rec.get('claim_no', '')}（供应商：{rec.get('supplier_name', '')}，"
-                   f"申请人：{rec.get('applicant', '')}，金额：{rec.get('claim_amount', 0)} 元）需要您{label}。")
-        try:
-            applicant_id = int(rec.get("applicant"))
-        except (TypeError, ValueError):
-            applicant_id = None
-        for uid in target_uids:
-            await self._notify_user(uid, title, content, notify_type='approval_pending', ref_id=rec["id"],
-                                    sender_name=rec.get("applicant"), sender_id=applicant_id)
-        await self._notify_wecom(target_uids, rec, label)
-
-    async def _notify_user(self, user_id: int, title: str, content: str, *,
-                           notify_type: str = 'supplier_claim',
-                           ref_id: int = None, sender_name: str = None, sender_id: int = None):
-        try:
-            await self.db.execute(text("""
-                INSERT INTO notification (user_id, type, title, content, ref_type, ref_id, sender_id, sender_name, priority, is_read, created_at)
-                VALUES (:uid, :ntype, :title, :content, 'supplier_claim', :rid, :sid, :sender, 'high', FALSE, NOW())
-            """), {"uid": user_id, "ntype": notify_type, "title": title, "content": content, "rid": ref_id,
-                   "sid": sender_id, "sender": sender_name})
-        except Exception as e:
-            logger.warning(f"索赔单通知推送失败 user_id={user_id}: {e}")
-            return
-        # 同 session 未提交也能查到刚插入的行，推送未读数让顶栏角标实时刷新
-        await publish_unread_update(self.db, user_id)
-
-    async def _notify_wecom(self, user_ids: list, rec: dict, label: str):
-        """企微 textcard 推送，未配置/失败时降级，不影响审批流程。"""
-        if not user_ids:
-            return
-        await send_approval_wecom_textcard(
-            self.db,
-            user_ids=[int(uid) for uid in user_ids],
-            title=f"索赔单待审批 - {label}",
-            description=(f"索赔单 {rec.get('claim_no', '')}\n供应商：{rec.get('supplier_name', '')}\n"
-                         f"申请人：{rec.get('applicant', '')}\n审批节点：{label}\n点击查看详情并处理审批。"),
-            path=f"/quality/supplier-claims/{rec['id']}",
-        )
-
-    async def _notify_applicant_hook(self, rec: dict, title: str, content: str):
-        applicant = rec.get("applicant")
-        if not applicant:
-            return
-        row = await self.db.execute(
-            text("SELECT id FROM sys_user WHERE id::text = :a OR username = :a LIMIT 1"),
-            {"a": str(applicant)},
-        )
-        r = row.fetchone()
-        if r:
-            await self._notify_user(r[0], title, content, ref_id=rec["id"])

@@ -1,20 +1,18 @@
 """物料齐套中心 — 采购申请单业务逻辑（编号 / CRUD / 提交审批 / 转采购订单）。
 
-审批对接镜像供应商索赔单（supplier_claim_service）：主表带审批引擎约定列 + 独立日志表，
-提交/审批/驳回/撤回委托公共 ApprovalEngine，通知走站内信 + 企微。服务内只 flush，不 commit。
+审批对接镜像供应商索赔单（supplier_claim_service）：主表带审批约定列，提交/审批/驳回/撤回
+委托审批中心（ApprovalCenterService），通知由中心统一发送。服务内只 flush，不 commit。
 """
 
 import logging
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from functools import partial
 from typing import Optional
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
-from app.models.basicdata.announcement import Notification
 from app.models.basicdata.material import Material
 from app.models.basicdata.supplier import Supplier
 from app.models.material.purchase_order import PurchaseOrder
@@ -24,10 +22,9 @@ from app.models.material.purchase_requisition import (
     PurchaseRequisitionLine,
 )
 from app.models.mrp.suggestion import MrpSuggestion
-from app.services.common.approval_engine import ApprovalEngine, resolve_node_approver_user_ids
-from app.services.common.approval_notify import send_approval_wecom_textcard
+from app.services.common.approval_center_service import ApprovalCenterService
+from app.services.common.approval_engine import check_node_permission
 from app.services.common.approval_registry import ApprovalActionRequest
-from app.services.notification.notification_broker import publish_unread_update
 
 logger = logging.getLogger(__name__)
 
@@ -75,87 +72,10 @@ def _iso(value):
 
 
 class PurchaseRequisitionService:
-    # ---------- 引擎 / 通知 ----------
-
-    def _engine(self, db: AsyncSession) -> ApprovalEngine:
-        return ApprovalEngine(
-            db,
-            biz_type="purchase_requisition",
-            table="purchase_requisition",
-            log_table="purchase_requisition_approval_log",
-            ref_col="req_id",
-            notify_approvers=partial(self._notify_approvers_of_level, db),
-            notify_applicant=partial(self._notify_applicant_hook, db),
-            biz_label="采购申请单",
-            doc_no_field="req_no",
-        )
-
-    async def _notify_user(self, db: AsyncSession, user_id: int, title: str, content: str, *,
-                           notify_type: str = "purchase_requisition", ref_id: Optional[int] = None,
-                           sender_name: Optional[str] = None, sender_id: Optional[int] = None) -> None:
-        try:
-            db.add(Notification(
-                user_id=user_id, type=notify_type, title=title, content=content,
-                ref_type="purchase_requisition", ref_id=ref_id,
-                sender_id=sender_id, sender_name=sender_name, priority="high", is_read=False,
-            ))
-            await db.flush()
-        except Exception as e:
-            logger.warning("采购申请单通知推送失败 user_id=%s: %s", user_id, e)
-            return
-        await publish_unread_update(db, user_id)
-
-    async def _notify_wecom(self, db: AsyncSession, user_ids: list, rec: dict, label: str) -> None:
-        """企微 textcard 推送，未配置/失败时降级，不影响审批流程。"""
-        if not user_ids:
-            return
-        await send_approval_wecom_textcard(
-            db,
-            user_ids=[int(uid) for uid in user_ids],
-            title=f"采购申请单待审批 - {label}",
-            description=(f"采购申请单 {rec.get('req_no', '')}\n申请人：{rec.get('applicant', '') or '-'}\n"
-                         f"部门：{rec.get('department', '') or '-'}\n审批节点：{label}\n点击查看详情并处理审批。"),
-            path=f"/purchase-requisitions/{rec['id']}",
-        )
-
-    async def _notify_approvers_of_level(self, db: AsyncSession, rec: dict, level: int, title_prefix: str) -> None:
-        snap = rec.get("approval_snapshot") or []
-        node = next((n for n in snap if n.get("seq") == level), None)
-        if not node:
-            return
-        target_uids = await resolve_node_approver_user_ids(db, node)
-        if not target_uids:
-            return
-        label = node.get("label", f"L{level}")
-        title = f"[采购申请单] {title_prefix} - {label}"
-        content = (f"采购申请单 {rec.get('req_no', '')}（申请人：{rec.get('applicant', '') or '-'}，"
-                   f"部门：{rec.get('department', '') or '-'}）需要您{label}。")
-        try:
-            applicant_id = int(rec.get("applicant"))
-        except (TypeError, ValueError):
-            applicant_id = None
-        for uid in target_uids:
-            await self._notify_user(db, uid, title, content, notify_type="approval_pending",
-                                    ref_id=rec.get("id"), sender_name=rec.get("applicant"),
-                                    sender_id=applicant_id)
-        await self._notify_wecom(db, target_uids, rec, label)
-
-    async def _notify_applicant_hook(self, db: AsyncSession, rec: dict, title: str, content: str) -> None:
-        applicant = rec.get("applicant")
-        if not applicant:
-            return
-        row = await db.execute(
-            text("SELECT id FROM sys_user WHERE id::text = :a OR username = :a LIMIT 1"),
-            {"a": str(applicant)},
-        )
-        r = row.fetchone()
-        if r:
-            await self._notify_user(db, r[0], title, content, ref_id=rec.get("id"))
-
     # ---------- 基础查询 ----------
 
     async def _load_req(self, db: AsyncSession, req_id: int) -> PurchaseRequisition:
-        """populate_existing：引擎用原生 SQL 改审批列后，必须强制刷新 ORM 缓存避免读到旧值。
+        """populate_existing：中心 on_transition 用原生 SQL 改审批列后，必须强制刷新 ORM 缓存避免读到旧值。
 
         找不到时抛 RequisitionNotFoundError（API 层映射 404）；只读入口 get_detail 捕获后返回 None。
         """
@@ -538,55 +458,40 @@ class PurchaseRequisitionService:
         await db.flush()
         return req
 
-    # ---------- 提交 / 审批（委托引擎） ----------
+    # ---------- 提交 / 审批（委托审批中心） ----------
 
     async def submit(self, db: AsyncSession, req_id: int, username: str) -> dict:
         req = await self._load_req(db, req_id)
         if req.status not in EDITABLE_STATUSES:
             raise ValueError("仅草稿/驳回状态可提交审批")
-        fresh = await self._engine(db).submit(req_id, username)  # 链未配置/已停用抛 ValueError，原样上抛
-        if not fresh:
-            raise ValueError("提交失败，请刷新后重试")
-        req = await self._load_req(db, req_id)
-        req.status = "approving"
+        await ApprovalCenterService(db).submit("purchase_requisition", req_id, username)  # 链未配置/已停用抛 ValueError，原样上抛
+        db.expire_all()  # 中心 on_transition 是裸 SQL，先过期同 session 已加载对象再重读
+        await self._load_req(db, req_id)
         await db.flush()
         return await self.get_detail(db, req_id)
 
     async def approve(self, db: AsyncSession, request: ApprovalActionRequest) -> dict:
-        result = await self._engine(db).approve(
-            request.entity_id, request.approver, request.comment,
-            approver_role=request.approver_role, expected_version=request.expected_version,
-        )
-        if result.get("success") and result.get("finished"):
-            req = await self._load_req(db, request.entity_id)
-            req.status = "approved"
-            await db.flush()
-        return result
+        return await ApprovalCenterService(db).approve(
+            "purchase_requisition", request.entity_id, request.approver, request.comment,
+            operator_role=request.approver_role, expected_version=request.expected_version)
 
     async def reject(self, db: AsyncSession, request: ApprovalActionRequest) -> dict:
-        result = await self._engine(db).reject(
-            request.entity_id, request.approver, request.comment,
-            approver_role=request.approver_role, expected_version=request.expected_version,
-        )
-        if result.get("success"):
-            req = await self._load_req(db, request.entity_id)
-            req.status = "rejected"
-            await db.flush()
-        return result
+        return await ApprovalCenterService(db).reject(
+            "purchase_requisition", request.entity_id, request.approver, request.comment,
+            operator_role=request.approver_role, expected_version=request.expected_version)
 
     async def recall(self, db: AsyncSession, request: ApprovalActionRequest) -> dict:
-        try:
-            req = await self._load_req(db, request.entity_id)
-        except RequisitionNotFoundError:
-            return {"success": False, "message": "采购申请单不存在"}
-        if request.approver_role != "admin" and req.applicant != request.approver:
-            return {"success": False, "message": "仅发起人可撤回该采购申请单"}
-        ok = await self._engine(db).recall(request.entity_id, request.approver)
-        if not ok:
-            return {"success": False, "message": "仅审批中状态可撤回"}
-        req = await self._load_req(db, request.entity_id)
-        req.status = "draft"
-        await db.flush()
+        if request.approver_role != "admin":
+            try:
+                req = await self._load_req(db, request.entity_id)
+            except RequisitionNotFoundError:
+                return {"success": False, "message": "采购申请单不存在"}
+            if req.applicant != request.approver:
+                return {"success": False, "message": "仅发起人可撤回该采购申请单"}
+        result = await ApprovalCenterService(db).recall(
+            "purchase_requisition", request.entity_id, request.approver, operator_role=request.approver_role)
+        if not result.get("success"):
+            return result
         return {"success": True, "message": "已撤回"}
 
     # ---------- 审批中心取数 ----------
@@ -598,16 +503,27 @@ class PurchaseRequisitionService:
             .where(PurchaseRequisition.approval_status == "pending")
             .order_by(PurchaseRequisition.submitted_at.desc().nulls_last())
         )).scalars().all()
-        engine = self._engine(db)
         stats = await self._line_stats(db, [r.id for r in rows])
         items = []
         for req in rows:
             count, amount = stats.get(req.id, (0, _ZERO))
             data = self._serialize_req(req, line_count=count, total_amount=amount)
-            if approver_role != "admin" and not engine.is_current_node_approver(data, approver_username, approver_role):
+            if approver_role != "admin" and not self._is_current_node_approver(data, approver_username, approver_role):
                 continue
             items.append(data)
         return items
+
+    @staticmethod
+    def _current_node(d: dict) -> Optional[dict]:
+        snap = d.get("approval_snapshot") or []
+        return next((n for n in snap if n.get("seq") == d.get("approval_level")), None)
+
+    def _is_current_node_approver(self, d: dict, approver: str, approver_role: str) -> bool:
+        node = self._current_node(d)
+        if not node:
+            return False
+        ok, _ = check_node_permission(node, approver, approver_role)
+        return ok
 
     async def approved_requisitions(self, db: AsyncSession, approver: str) -> list[dict]:
         """我已审批：我最近一次 approve/reject 的单据（被反审核的审批已置 revoked，不计入）。"""
