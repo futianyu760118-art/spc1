@@ -17,6 +17,8 @@ class ApprovalBusiness(Base):
     field_mapping_json = Column(Text, nullable=False, default="{}", comment="字段映射 JSON：内部字段 -> 来源列")
     condition_fields_json = Column(Text, nullable=False, default="[]", comment="条件字段声明 [{value,label}]")
     deep_link_template = Column(String(256), nullable=True, comment="业务详情链接模板，如 /purchase/pay/{no}")
+    writeback_json = Column(Text, nullable=False, default="{}",
+                            comment="声明式回写配置 JSON：{table,id_column,status_column,status_map}")
     description = Column(String(256), nullable=True, comment="业务说明")
     is_active = Column(Boolean, nullable=False, default=True, comment="停用后不再聚合与提醒")
     created_by = Column(String(64), nullable=True)

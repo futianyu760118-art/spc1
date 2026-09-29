@@ -294,6 +294,9 @@ class DatabaseInitializer:
                 "counter_user_id": "BIGINT",
                 "manager_id": "BIGINT",
             },
+            "approval_business": {
+                "writeback_json": "TEXT",
+            },
             "quality_issue": {
                 "erp_quality_id": "VARCHAR(64)",
                 "submit_dept": "VARCHAR(64)",
