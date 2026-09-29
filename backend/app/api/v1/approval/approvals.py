@@ -250,6 +250,8 @@ async def list_my_approved(
 ):
     """我已审批：我在任务上做出的通过/驳回（默认近 90 天）。"""
     win_from, _ = _resolve_window(date_from, date_to)
+    # 只传 date_to 时 _resolve_window 返回 None 起点——回退默认窗，避免 combine(None) 抛错
+    win_from = win_from or (date.today() - timedelta(days=DEFAULT_MY_WINDOW_DAYS))
     rows = await db.execute(text("""
         SELECT i.*, t.status AS task_status, t.comment AS my_comment, t.acted_at
         FROM approval_task t JOIN approval_instance i ON i.id = t.instance_id
