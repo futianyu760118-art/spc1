@@ -39,6 +39,13 @@ class FeedbackStatusUpdate(BaseModel):
     status: str  # pending/processing/resolved/closed
 
 
+class FeedbackAiFinish(BaseModel):
+    success: bool
+    branch: Optional[str] = None
+    summary: Optional[str] = None
+    error: Optional[str] = None
+
+
 class FeedbackOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -56,6 +63,11 @@ class FeedbackOut(BaseModel):
     submitter_id: int
     submitter_name: str
     created_at: Optional[datetime] = None
+    ai_status: Optional[str] = "none"
+    ai_branch: Optional[str] = None
+    ai_note: Optional[str] = None
+    ai_requested_by: Optional[str] = None
+    ai_requested_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
 
