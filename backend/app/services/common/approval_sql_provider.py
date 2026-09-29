@@ -21,18 +21,13 @@ from app.services.common.approval_registry import (
     register_pending_provider, unregister_provider,
 )
 from app.services.common.approval_sql import (
-    FETCH_LIMIT, execute_readonly_sql, normalize_sql_row, pick_mapped_value, render_deep_link,
+    FIELD_LABELS, FETCH_LIMIT, execute_readonly_sql, normalize_sql_row, pick_mapped_value, render_deep_link,
 )
 
 logger = logging.getLogger(__name__)
 
 # 本模块注册过的 SQL 业务标识：同步时据此注销，绝不误删内置 provider
 _sql_registered: set[str] = set()
-
-FIELD_LABELS = {
-    "no": "单号", "title": "标题", "summary": "摘要", "applicant": "申请人",
-    "submitted_at": "提交时间", "current_node": "当前节点", "amount": "金额",
-}
 
 
 @dataclass(frozen=True)

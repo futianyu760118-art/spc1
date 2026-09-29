@@ -19,6 +19,13 @@ STATEMENT_TIMEOUT_MS = 5000
 REQUIRED_MAPPINGS = ("id", "no", "title", "applicant", "submitted_at", "current_node")
 OPTIONAL_MAPPINGS = ("summary", "amount")
 
+IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+FIELD_LABELS = {
+    "no": "单号", "title": "标题", "summary": "摘要", "applicant": "申请人",
+    "submitted_at": "提交时间", "current_node": "当前节点", "amount": "金额",
+}
+
 _LEADING_OK = ("select", "with")
 _FORBIDDEN = {
     "insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke",
@@ -206,3 +213,36 @@ def render_deep_link(template: Optional[str], item: dict) -> str:
     if not template:
         return ""
     return re.sub(r"\{(\w+)\}", lambda m: quote(str(item.get(m.group(1)) or ""), safe=""), template)
+
+
+WRITEBACK_STATUSES = ("pending", "approved", "rejected", "recalled")
+
+
+async def validate_writeback_config(db: AsyncSession, writeback) -> Optional[str]:
+    """校验声明式回写配置；空配置（不同步业务表）合法。返回错误信息，None 表示通过。"""
+    if not writeback:
+        return None
+    if not isinstance(writeback, dict):
+        return "回写配置格式不正确"
+    table = writeback.get("table")
+    id_col = writeback.get("id_column")
+    st_col = writeback.get("status_column")
+    for name, v in (("table", table), ("id_column", id_col), ("status_column", st_col)):
+        if not isinstance(v, str) or not IDENTIFIER_RE.match(v):
+            return f"回写配置 {name} 必须是合法的数据库标识符"
+    status_map = writeback.get("status_map")
+    if not isinstance(status_map, dict):
+        return "回写状态映射格式不正确"
+    for status in WRITEBACK_STATUSES:
+        v = status_map.get(status)
+        if v is None or str(v) == "":
+            return f"回写状态映射缺少终态/状态值：{status}"
+    rows = await db.execute(text(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = :t"), {"t": table})
+    columns = {r[0] for r in rows}
+    if not columns:
+        return f"回写表 {table} 不存在"
+    for name, v in (("id_column", id_col), ("status_column", st_col)):
+        if v not in columns:
+            return f"回写表 {table} 不存在列 {v}"
+    return None
