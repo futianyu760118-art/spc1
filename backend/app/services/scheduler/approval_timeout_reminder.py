@@ -1,6 +1,6 @@
 """审批中心 - 超时未审批提醒调度器。
 
-每小时扫描各业务待办（admin 旁路取全量），对「已超时且节点配了超时阈值」的单据，
+每小时扫描审批中心在途实例，对「已超时且节点配了超时阈值」的单据，
 给当前节点审批人推送站内信 + 企微 textcard；同一单据同一节点 24 小时内只提醒一次
 （Redis SET NX + TTL，Redis 不可用时放行，宁可多提醒不漏提醒）。企微未配置/失败降级。
 
@@ -14,10 +14,8 @@ from datetime import datetime
 from sqlalchemy import text
 
 from app.core.database import AsyncSessionLocal
-from app.services.common import approval_providers  # noqa: F401 — 导入即注册各业务 provider
 from app.services.common.approval_metrics import enrich_pending_item
 from app.services.common.approval_notify import send_approval_wecom_textcard
-from app.services.common.approval_registry import get_pending_providers
 
 logger = logging.getLogger(__name__)
 
@@ -61,24 +59,37 @@ class ApprovalTimeoutReminderScheduler:
         return {r[0] for r in rows}
 
     async def _collect_targets(self, db) -> list[dict]:
-        targets: list[dict] = []
+        """直接扫中心实例表：pending + 配了超时阈值的在途单据。"""
         active = await self._active_biz_types(db)
-        for provider in get_pending_providers():
-            if provider.biz_type not in active:
+        if not active:
+            return []
+        rows = await db.execute(text("""
+            SELECT i.id AS instance_id, i.biz_type, i.biz_id, i.biz_no, i.title, i.applicant,
+                   i.submitted_at, i.timeout_hours, i.current_level,
+                   COALESCE((SELECT t.node_label FROM approval_task t
+                             WHERE t.instance_id = i.id AND t.node_seq = i.current_level
+                               AND t.status = 'active' LIMIT 1), '') AS current_node
+            FROM approval_instance i
+            WHERE i.status = 'pending' AND COALESCE(i.timeout_hours, 0) > 0
+        """))
+        targets = []
+        for r in rows:
+            d = dict(r._mapping)
+            if d["biz_type"] not in active:
                 continue
-            # SAVEPOINT 隔离：失败语句会让 session 事务进入 aborted 态，
-            # 不回滚会让后面所有业务被静默跳过
-            savepoint = await db.begin_nested()
-            try:
-                # 系统视角扫描：admin 旁路节点权限过滤，取该业务全量在途
-                items = await provider.fetch(db, "", "admin")
-            except Exception as exc:
-                await savepoint.rollback()
-                logger.warning("[审批超时提醒] 取数失败 biz=%s: %s", provider.biz_type, exc)
-                continue
-            await savepoint.commit()
-            targets.extend(select_reminder_targets([enrich_pending_item(it) for it in items]))
-        return targets
+            item = {
+                "biz_type": d["biz_type"], "id": d["biz_id"], "biz_no": d["biz_no"],
+                "no": d["biz_no"], "title": d["title"], "applicant": d["applicant"],
+                "submitted_at": d["submitted_at"], "timeout_hours": d["timeout_hours"],
+                "current_level": d["current_level"], "current_node": d["current_node"],
+                "approver_user_ids": [x[0] for x in await db.execute(text("""
+                    SELECT DISTINCT u.id FROM approval_task t
+                    JOIN sys_user u ON u.username = t.approver AND u.is_active = TRUE
+                    WHERE t.instance_id = :iid AND t.status = 'active'
+                """), {"iid": d["instance_id"]}) if x[0]],
+            }
+            targets.append(enrich_pending_item(item))
+        return select_reminder_targets(targets)
 
     async def _notify(self, db, item: dict):
         title = f"[审批超时] {item.get('biz_name') or item.get('biz_type')} 待您审批已超时"
