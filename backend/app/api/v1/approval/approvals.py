@@ -1,14 +1,15 @@
 """审批中心 - 统一待我审批 / 审批配置 API。
 
-待审批列表由 approval_registry 注册的各业务流程 provider 聚合而成（新流程只需注册）；
-审批链配置只允许操作「已注册」的 biz_type，避免与其它模块的配置页产生双写路径。
+查询直接读中心三表（approval_instance / approval_task / approval_record）：真分页、
+无聚合行数上限；审批链配置只允许操作「已接入」的 biz_type（builtin Adapter ∪ 表内
+声明式业务），避免与其它模块的配置页产生双写路径。
 """
 
 import json
 import logging
 import re
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Query
@@ -20,7 +21,11 @@ from app.core.database import get_db
 from app.core.dependencies import get_current_user
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
-from app.services.common import approval_providers  # noqa: F401 — 导入即触发各业务流程注册
+from app.services.common.approval_adapters import adapter_instance, get_adapter_class
+from app.services.common.approval_center_service import (
+    ApprovalCenterService,
+    ApprovalConflictError,
+)
 from app.services.common.approval_chain import validate_nodes
 from app.services.common.approval_metrics import (
     approved_stats,
@@ -29,22 +34,18 @@ from app.services.common.approval_metrics import (
     pending_stats,
     submitted_stats,
 )
-from app.services.common.approval_registry import (
-    ApprovalActionRequest,
-    get_pending_providers,
-    get_provider,
-)
 from app.services.common.approval_sql import (
+    FIELD_LABELS,
+    OPTIONAL_MAPPINGS,
+    REQUIRED_MAPPINGS,
     preview_readonly_sql,
+    render_deep_link,
     validate_field_mapping,
     validate_readonly_sql,
     validate_sql_and_mapping,
+    validate_writeback_config,
 )
-from app.services.common.approval_sql_provider import (
-    list_biz_metas,
-    resolve_biz_meta,
-    sync_sql_providers,
-)
+# Task 9: 此处将 import 业务 Adapter 模块以完成注册
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ def _paginate(items: list[dict], page: int, page_size: int) -> list[dict]:
 
 
 def _sort_key(value):
-    """统一排序键：provider 可能返回 datetime 或 ISO 字符串，混用直接比较会 TypeError。"""
+    """统一排序键：来源可能是 datetime 或 ISO 字符串，混用直接比较会 TypeError。"""
     return parse_dt(value) or datetime.min
 
 
@@ -111,23 +112,6 @@ def _clean_bool(value, *, default: bool) -> bool:
     return bool(value)
 
 
-async def _safe_provider_call(db: AsyncSession, coro, *, biz_type: str, action: str, default):
-    """单条业务取数失败不得拖垮整个聚合列表：SAVEPOINT 隔离 + 降级为 default。
-
-    必须回滚 savepoint：否则失败语句会让共享 session 的事务进入 aborted 态，
-    同一次请求里「之后」的业务查询会全部报 InFailedSQLTransactionError 而被静默跳过。
-    """
-    savepoint = await db.begin_nested()
-    try:
-        result = await coro
-    except Exception as exc:
-        await savepoint.rollback()
-        logger.warning("审批中心聚合取数失败 action=%s biz=%s: %s", action, biz_type, exc)
-        return default
-    await savepoint.commit()
-    return result
-
-
 def _clean_version(value) -> Optional[int]:
     """expected_version 来自请求体，非法值应判为参数错误而不是让引擎 int() 抛 500。"""
     if value is None or value == "":
@@ -136,6 +120,65 @@ def _clean_version(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return -1  # 哨兵：不可能与任何真实 version 相等，交由引擎返回乐观锁冲突
+
+
+def _snapshot_of(inst: dict) -> list:
+    raw = inst.get("snapshot_json")
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+
+
+def _render_deep_link(template, inst: dict) -> str:
+    return render_deep_link(template, {"id": inst.get("biz_id"), "no": inst.get("biz_no"),
+                                       "title": inst.get("title")})
+
+
+def _instance_to_item(inst: dict, metas: dict[str, dict]) -> dict:
+    meta = metas.get(inst["biz_type"]) or {}
+    snap = _snapshot_of(inst)
+    level = inst.get("current_level") or 1
+    node = next((n for n in snap if n.get("seq") == level), None)
+    return {
+        "biz_type": inst["biz_type"],
+        "biz_name": meta.get("biz_name") or inst["biz_type"],
+        "mode": meta.get("mode"),
+        "id": inst["biz_id"],
+        "no": inst.get("biz_no"),
+        "title": inst.get("title"),
+        "summary": inst.get("summary"),
+        "applicant": inst.get("applicant"),
+        "submitted_at": inst.get("submitted_at"),
+        "current_level": level,
+        "current_node": node.get("label") if node else None,
+        "timeout_hours": (node or {}).get("timeout_hours"),
+        "version": inst.get("version"),
+        "status": inst.get("status"),
+        "deep_link": _render_deep_link(meta.get("deep_link_template"), inst),
+    }
+
+
+@router.post("/instances", response_model=ResponseModel)
+async def submit_approval_instance(
+    data: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("approval.initiate", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """提交审批实例：builtin 与声明式业务共用；声明式业务由中心按取数 SQL 生成摘要。"""
+    biz_type = (data.get("biz_type") or "").strip()
+    try:
+        biz_id = int(data.get("biz_id"))
+    except (TypeError, ValueError):
+        return ResponseModel(code=1, message="biz_id 必须是数字主键")
+    try:
+        result = await ApprovalCenterService(db).submit(biz_type, biz_id, current_user["username"])
+    except ValueError as exc:
+        return ResponseModel(code=1, message=str(exc))
+    return ResponseModel(data=result, message="已提交审批")
 
 
 @router.get("/pending", response_model=ResponseModel)
@@ -154,29 +197,33 @@ async def list_pending_approvals(
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """聚合全部已注册流程的待我审批条目（各 biz 内部已按审批节点权限过滤），支持筛选与分页。
-
-    stats 始终是「全部待办」口径（与业务类型筛选无关），供统计卡与 chips 计数使用；
-    biz_type / provider_mode 只影响 items/total（builtin = 仅代码 Provider 业务，sql = 仅 SQL 接入业务）。
-    """
-    items: list[dict] = []
-    allowed_biz_types: Optional[set[str]] = None
-    if provider_mode:
-        allowed_biz_types = {p.biz_type for p in get_pending_providers() if p.mode == provider_mode}
-    for provider in get_pending_providers():
-        fetched = await _safe_provider_call(
-            db, provider.fetch(db, current_user["username"], current_user["role"]),
-            biz_type=provider.biz_type, action="fetch", default=[],
-        )
-        for it in fetched:
-            items.append(enrich_pending_item(it))
-    items.sort(key=lambda x: _sort_key(x.get("submitted_at")), reverse=True)
-
+    """待我审批 = 我的 active 任务（admin 看全部在途实例）。stats 恒为「全部待办」口径。"""
+    svc = ApprovalCenterService(db)
+    metas = {m["biz_type"]: m for m in await svc.list_biz_metas()}
+    if current_user["role"] == "admin":
+        rows = await db.execute(text(
+            "SELECT * FROM approval_instance WHERE status = 'pending'"
+            " ORDER BY submitted_at DESC NULLS LAST"))
+    else:
+        rows = await db.execute(text("""
+            SELECT i.* FROM approval_instance i
+            JOIN approval_task t ON t.instance_id = i.id AND t.status = 'active'
+            WHERE i.status = 'pending' AND t.approver = :u
+            ORDER BY i.submitted_at DESC NULLS LAST
+        """), {"u": current_user["username"]})
+    items = []
+    for r in rows:
+        item = _instance_to_item(dict(r._mapping), metas)
+        item["can_act"] = True  # 能看到即有权操作（admin 旁路在引擎侧二次校验）
+        items.append(enrich_pending_item(item))
     stats = pending_stats(items)
+    allowed = None
+    if provider_mode:
+        allowed = {bt for bt, m in metas.items() if m["mode"] == provider_mode}
     filtered = [
         it for it in items
         if (not biz_type or it.get("biz_type") == biz_type)
-        and (allowed_biz_types is None or it.get("biz_type") in allowed_biz_types)
+        and (allowed is None or it.get("biz_type") in allowed)
         and _match_keyword(it, keyword)
         and _in_date_range(it.get("submitted_at"), date_from, date_to)
         and (not overdue_only or it.get("wait_level") == "overdue")
@@ -184,95 +231,98 @@ async def list_pending_approvals(
         and (not today_only or _is_today(it.get("submitted_at")))
     ]
     return ResponseModel(data={
-        "items": _paginate(filtered, page, page_size),
-        "total": len(filtered),
-        "page": page,
-        "page_size": page_size,
-        "stats": stats,
+        "items": _paginate(filtered, page, page_size), "total": len(filtered),
+        "page": page, "page_size": page_size, "stats": stats,
     })
 
 
 @router.get("/approved", response_model=ResponseModel)
 async def list_my_approved(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    biz_type: Optional[str] = Query(None),
-    keyword: Optional[str] = Query(None),
-    date_from: Optional[date] = Query(None),
-    date_to: Optional[date] = Query(None),
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+    biz_type: Optional[str] = Query(None), keyword: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None), date_to: Optional[date] = Query(None),
     action: Optional[str] = Query(None, pattern="^(approve|reject)$"),
     current_user: dict = Depends(get_current_user),
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """我已审批：跨业务聚合本人做出的通过/驳回记录（默认近 90 天）。"""
-    win_from, win_to = _resolve_window(date_from, date_to)
-    items: list[dict] = []
-    for provider in get_pending_providers():
-        if biz_type and provider.biz_type != biz_type:
-            continue
-        if not provider.fetch_approved:
-            continue
-        items.extend(await _safe_provider_call(
-            db, provider.fetch_approved(db, current_user["username"]),
-            biz_type=provider.biz_type, action="fetch_approved", default=[],
-        ))
+    """我已审批：我在任务上做出的通过/驳回（默认近 90 天）。"""
+    win_from, _ = _resolve_window(date_from, date_to)
+    rows = await db.execute(text("""
+        SELECT i.*, t.status AS task_status, t.comment AS my_comment, t.acted_at
+        FROM approval_task t JOIN approval_instance i ON i.id = t.instance_id
+        WHERE t.approver = :u AND t.status IN ('approved', 'rejected') AND t.acted_at >= :win
+        ORDER BY t.acted_at DESC
+    """), {"u": current_user["username"], "win": datetime.combine(win_from, dt_time.min)})
+    svc = ApprovalCenterService(db)
+    metas = {m["biz_type"]: m for m in await svc.list_biz_metas()}
+    items = []
+    for r in rows:
+        d = dict(r._mapping)
+        item = _instance_to_item(d, metas)
+        item.update({
+            "my_action": "approve" if d.get("task_status") == "approved" else "reject",
+            "my_comment": d.get("my_comment"), "acted_at": d.get("acted_at"), "can_act": False,
+        })
+        items.append(item)
     items = [
         it for it in items
-        if _match_keyword(it, keyword)
-        and _in_date_range(it.get("acted_at"), win_from, win_to)
+        if (not biz_type or it.get("biz_type") == biz_type)
+        and _match_keyword(it, keyword)
+        and _in_date_range(it.get("acted_at"), date_from, date_to)
         and (not action or it.get("my_action") == action)
     ]
-    items.sort(key=lambda x: _sort_key(x.get("acted_at")), reverse=True)
-    return ResponseModel(data={
-        "items": _paginate(items, page, page_size),
-        "total": len(items),
-        "page": page,
-        "page_size": page_size,
-        "stats": approved_stats(items),
-    })
+    return ResponseModel(data={"items": _paginate(items, page, page_size), "total": len(items),
+                               "page": page, "page_size": page_size, "stats": approved_stats(items)})
 
 
 @router.get("/submitted", response_model=ResponseModel)
 async def list_my_submitted(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    biz_type: Optional[str] = Query(None),
-    keyword: Optional[str] = Query(None),
-    date_from: Optional[date] = Query(None),
-    date_to: Optional[date] = Query(None),
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+    biz_type: Optional[str] = Query(None), keyword: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None), date_to: Optional[date] = Query(None),
     status: Optional[str] = Query(None, pattern="^(draft|pending|approved|rejected|recalled)$"),
     current_user: dict = Depends(get_current_user),
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """我发起的：跨业务聚合本人提交的单据及整体状态（默认近 90 天）。"""
-    win_from, win_to = _resolve_window(date_from, date_to)
-    items: list[dict] = []
-    for provider in get_pending_providers():
-        if biz_type and provider.biz_type != biz_type:
+    """我发起的：我的审批实例（默认近 90 天）+ builtin 业务草稿（未提交、无实例）。"""
+    win_from, _ = _resolve_window(date_from, date_to)
+    rows = await db.execute(text(
+        "SELECT * FROM approval_instance WHERE applicant = :a"
+        " ORDER BY submitted_at DESC NULLS LAST"), {"a": current_user["username"]})
+    svc = ApprovalCenterService(db)
+    metas = {m["biz_type"]: m for m in await svc.list_biz_metas()}
+    items = []
+    for r in rows:
+        item = _instance_to_item(dict(r._mapping), metas)
+        item["can_act"] = False
+        item["can_recall"] = item.get("status") == "pending"
+        items.append(item)
+    for bt, meta in metas.items():
+        if meta["mode"] != "builtin" or (biz_type and biz_type != bt):
             continue
-        if not provider.fetch_submitted:
+        adapter = adapter_instance(db, bt)
+        if adapter is None:
             continue
-        items.extend(await _safe_provider_call(
-            db, provider.fetch_submitted(db, current_user["username"]),
-            biz_type=provider.biz_type, action="fetch_submitted", default=[],
-        ))
+        for draft in await adapter.fetch_drafts(db, current_user["username"]):
+            draft.setdefault("biz_type", bt)
+            draft.setdefault("biz_name", meta["biz_name"])
+            draft.setdefault("status", "draft")
+            draft.setdefault("can_act", False)
+            draft.setdefault("can_recall", False)
+            items.append(draft)
     items = [
         it for it in items
-        if _match_keyword(it, keyword)
+        if (not biz_type or it.get("biz_type") == biz_type)
+        and _match_keyword(it, keyword)
         # 草稿无 submitted_at（未提交），入窗与排序回退创建时间，保证草稿可在「我发起的」编辑
-        and _in_date_range(it.get("submitted_at") or it.get("created_at"), win_from, win_to)
+        and _in_date_range(it.get("submitted_at") or it.get("created_at"), win_from, date_to)
         and (not status or it.get("status") == status)
     ]
     items.sort(key=lambda x: _sort_key(x.get("submitted_at") or x.get("created_at")), reverse=True)
-    return ResponseModel(data={
-        "items": _paginate(items, page, page_size),
-        "total": len(items),
-        "page": page,
-        "page_size": page_size,
-        "stats": submitted_stats(items),
-    })
+    return ResponseModel(data={"items": _paginate(items, page, page_size), "total": len(items),
+                               "page": page, "page_size": page_size, "stats": submitted_stats(items)})
 
 
 @router.get("/configs", response_model=ResponseModel)
@@ -280,7 +330,7 @@ async def list_approval_configs(
     _: dict = Depends(PermissionChecker("approval.config", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """审批链列表：已接入的业务流程（内置 provider + 表内 SQL 业务，含停用）∪ 其 approval_config 配置行。"""
+    """审批链列表：已接入的业务流程（builtin Adapter + 表内 SQL 业务，含停用）∪ 其 approval_config 配置行。"""
     rows = await db.execute(text(
         "SELECT biz_type, biz_name, nodes, is_active, updated_by, updated_at FROM approval_config"
     ))
@@ -293,26 +343,19 @@ async def list_approval_configs(
             d["updated_at"] = d["updated_at"].isoformat()
         existing[d["biz_type"]] = d
 
+    counts = {r[0]: r[1] for r in await db.execute(text(
+        "SELECT biz_type, COUNT(*) FROM approval_instance WHERE status = 'pending' GROUP BY biz_type"))}
     items = []
-    for meta in await list_biz_metas(db):
-        row = existing.pop(meta.biz_type, {
-            "biz_type": meta.biz_type, "biz_name": meta.biz_name,
+    for meta in await ApprovalCenterService(db).list_biz_metas():
+        row = existing.pop(meta["biz_type"], {
+            "biz_type": meta["biz_type"], "biz_name": meta["biz_name"],
             "nodes": [], "is_active": True, "updated_by": None, "updated_at": None,
         })
-        row["condition_field_options"] = meta.condition_field_options or []
-        # 列表要按接入方式区分展示（内置 Provider / SQL 配置），这里直接给出，避免前端再查一次业务清单
-        row["mode"] = meta.mode
-        provider = get_provider(meta.biz_type)
-        if provider and meta.is_active:
-            # 系统视角（admin 旁路）统计该业务在途待办数，供「在途 N 单沿用旧快照」提示
-            fetched = await _safe_provider_call(
-                db, provider.fetch(db, "", "admin"),
-                biz_type=meta.biz_type, action="pending_count", default=None,
-            )
-            row["pending_count"] = len(fetched) if fetched is not None else None
-        else:
-            # 停用的 SQL 业务没有在途聚合，不误报为 0
-            row["pending_count"] = None
+        row["condition_field_options"] = meta["condition_field_options"] or []
+        # 列表要按接入方式区分展示（内置 Adapter / SQL 配置），这里直接给出，避免前端再查一次业务清单
+        row["mode"] = meta["mode"]
+        # 系统视角统计该业务在途待办数，供「在途 N 单沿用旧快照」提示；停用业务不误报为 0
+        row["pending_count"] = counts.get(meta["biz_type"], 0) if meta["is_active"] else None
         items.append(row)
     return ResponseModel(data={"items": items})
 
@@ -323,7 +366,7 @@ async def get_approval_config(
     _: dict = Depends(PermissionChecker("approval.config", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    meta = await resolve_biz_meta(db, biz_type)
+    meta = await ApprovalCenterService(db).biz_meta(biz_type)
     if not meta:
         return ResponseModel(code=1, message="该业务流程未接入审批中心")
     row = await db.execute(text(
@@ -332,13 +375,13 @@ async def get_approval_config(
     r = row.fetchone()
     if not r:
         return ResponseModel(data={"biz_type": biz_type, "nodes": [], "is_active": True,
-                                   "condition_field_options": meta.condition_field_options or []})
+                                   "condition_field_options": meta["condition_field_options"] or []})
     d = dict(r._mapping)
     if isinstance(d.get("nodes"), str):
         d["nodes"] = json.loads(d.get("nodes") or "[]")
     if isinstance(d.get("updated_at"), datetime):
         d["updated_at"] = d["updated_at"].isoformat()
-    d["condition_field_options"] = meta.condition_field_options or []
+    d["condition_field_options"] = meta["condition_field_options"] or []
     return ResponseModel(data=d)
 
 
@@ -350,15 +393,15 @@ async def save_approval_config(
     _: dict = Depends(PermissionChecker("approval.config", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    meta = await resolve_biz_meta(db, biz_type)
+    meta = await ApprovalCenterService(db).biz_meta(biz_type)
     if not meta:
         return ResponseModel(code=1, message="该业务流程未接入审批中心")
     nodes = data.get("nodes", [])
-    allowed = [o.get("value") for o in (meta.condition_field_options or []) if o.get("value")]
+    allowed = [o.get("value") for o in (meta["condition_field_options"] or []) if o.get("value")]
     err = validate_nodes(nodes, allowed_condition_fields=allowed)
     if err:
         return ResponseModel(code=1, message=err)
-    biz_name = data.get("biz_name") or meta.biz_name
+    biz_name = data.get("biz_name") or meta["biz_name"]
     is_active = _clean_bool(data.get("is_active"), default=True)
     row = await db.execute(text("SELECT id FROM approval_config WHERE biz_type = :bt LIMIT 1"), {"bt": biz_type})
     if row.fetchone():
@@ -382,12 +425,12 @@ async def list_approval_businesses(
     _: dict = Depends(PermissionChecker("approval.business", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """业务接入清单：内置 provider + 表内 SQL 业务（含停用），附在途数与链节点数。
+    """业务接入清单：builtin Adapter + 表内声明式业务（含停用），附在途数与链节点数。
 
     管理员专用端点：SQL 业务额外返回 sql_text / field_mapping / condition_fields /
-    deep_link_template 供前端向导编辑回填；内置业务这四项为空。
+    deep_link_template / writeback 供前端向导编辑回填；内置业务这几项为空。
     """
-    metas = await list_biz_metas(db)
+    metas = await ApprovalCenterService(db).list_biz_metas()
     chain_rows = await db.execute(text("SELECT biz_type, nodes FROM approval_config"))
     chains: dict[str, list] = {}
     for r in chain_rows:
@@ -395,28 +438,27 @@ async def list_approval_businesses(
         if isinstance(nodes, str):
             nodes = json.loads(nodes or "[]")
         chains[r[0]] = nodes or []
+    counts = {r[0]: r[1] for r in await db.execute(text(
+        "SELECT biz_type, COUNT(*) FROM approval_instance WHERE status = 'pending' GROUP BY biz_type"))}
     items = []
-    for meta in metas:
-        pending_count = None
-        provider = get_provider(meta.biz_type)
-        if provider and meta.is_active:
-            fetched = await _safe_provider_call(
-                db, provider.fetch(db, "", "admin"),
-                biz_type=meta.biz_type, action="pending_count", default=None,
-            )
-            pending_count = len(fetched) if fetched is not None else None
-        is_sql = meta.mode == "sql"
+    for m in metas:
+        is_sql = m["mode"] == "sql"
         items.append({
-            "biz_type": meta.biz_type, "biz_name": meta.biz_name, "mode": meta.mode,
-            "is_active": meta.is_active, "description": meta.description,
-            "pending_count": pending_count, "chain_node_count": len(chains.get(meta.biz_type, [])),
-            "has_sql": bool(meta.sql_text), "updated_by": meta.updated_by, "updated_at": meta.updated_at,
-            "sql_text": meta.sql_text if is_sql else None,
-            "field_mapping": (meta.field_mapping or {}) if is_sql else {},
-            "condition_fields": (meta.condition_field_options or []) if is_sql else [],
-            "deep_link_template": meta.deep_link_template if is_sql else None,
+            "biz_type": m["biz_type"], "biz_name": m["biz_name"], "mode": m["mode"],
+            "is_active": m["is_active"], "description": m["description"],
+            "pending_count": counts.get(m["biz_type"], 0) if m["is_active"] else None,
+            "chain_node_count": len(chains.get(m["biz_type"], [])),
+            "has_sql": bool(m["sql_text"]), "updated_by": m["updated_by"], "updated_at": m["updated_at"],
+            "sql_text": m["sql_text"] if is_sql else None,
+            "field_mapping": (m["field_mapping"] or {}) if is_sql else {},
+            "condition_fields": (m["condition_field_options"] or []) if is_sql else [],
+            "deep_link_template": m["deep_link_template"] if is_sql else None,
+            "writeback": m["writeback"] if is_sql else None,
         })
-    return ResponseModel(data={"items": items})
+    return ResponseModel(data={"items": items, "mapping_fields": [
+        {"key": k, "label": FIELD_LABELS.get(k, k), "required": k in REQUIRED_MAPPINGS}
+        for k in REQUIRED_MAPPINGS + OPTIONAL_MAPPINGS
+    ]})
 
 
 async def _validate_sql_business_payload(
@@ -430,7 +472,7 @@ async def _validate_sql_business_payload(
         biz_type = (data.get("biz_type") or "").strip()
         if not BIZ_TYPE_RE.match(biz_type):
             return "业务标识需为小写字母开头、仅含小写字母/数字/下划线的 3~64 位字符串"
-        if get_provider(biz_type):
+        if get_adapter_class(biz_type):
             return "该业务标识已被内置业务占用"
     if not (data.get("biz_name") or "").strip():
         return "业务名称不能为空"
@@ -443,6 +485,9 @@ async def _validate_sql_business_payload(
     options = data.get("condition_fields") or []
     if not isinstance(options, list) or any(not isinstance(o, dict) or not (o.get("value") or "").strip() for o in options):
         return "条件字段声明格式不正确"
+    err = await validate_writeback_config(db, data.get("writeback"))
+    if err:
+        return err
     return None
 
 
@@ -453,8 +498,8 @@ async def create_approval_business(
     _: dict = Depends(PermissionChecker("approval.business", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    """注册 SQL 接入业务：保存后立即注册 provider（本进程即时生效，多实例需重启）。"""
-    # 先查表判断重名：SQL 业务的 provider 也在内存注册表里，交给下面校验会误报「已被内置业务占用」
+    """注册声明式 SQL 业务：中心每次查询按表内配置聚合，无需重启进程。"""
+    # 先查表判断重名，交给下面校验会漏掉表内同名行（内置占用检查只看 Adapter 注册表）
     biz_type = (data.get("biz_type") or "").strip()
     exists = (await db.execute(text("SELECT id FROM approval_business WHERE biz_type = :bt"), {"bt": biz_type})).fetchone()
     if exists:
@@ -466,18 +511,18 @@ async def create_approval_business(
         await db.execute(text("""
             INSERT INTO approval_business
                 (biz_type, biz_name, mode, sql_text, field_mapping_json, condition_fields_json,
-                 deep_link_template, description, is_active, created_by, updated_by)
-            VALUES (:bt, :bn, 'sql', :sql, :fm, :cf, :dl, :desc, TRUE, :ub, :ub)
+                 deep_link_template, description, is_active, created_by, updated_by, writeback_json)
+            VALUES (:bt, :bn, 'sql', :sql, :fm, :cf, :dl, :desc, TRUE, :ub, :ub, :wb)
         """), {"bt": biz_type, "bn": data["biz_name"].strip(), "sql": data["sql_text"],
                "fm": json.dumps(data.get("field_mapping") or {}, ensure_ascii=False),
                "cf": json.dumps(data.get("condition_fields") or [], ensure_ascii=False),
                "dl": (data.get("deep_link_template") or "").strip() or None,
-               "desc": (data.get("description") or "").strip() or None, "ub": current_user["username"]})
+               "desc": (data.get("description") or "").strip() or None, "ub": current_user["username"],
+               "wb": json.dumps(data.get("writeback") or {}, ensure_ascii=False)})
     except IntegrityError:
         # 并发注册同名业务：唯一约束兜底，返回业务错误而不是 500
         await db.rollback()
         return ResponseModel(code=1, message="该业务标识已注册")
-    await sync_sql_providers(db)
     return ResponseModel(data={"biz_type": biz_type}, message="已接入，待办工作台将自动聚合该业务")
 
 
@@ -489,33 +534,33 @@ async def update_approval_business(
     _: dict = Depends(PermissionChecker("approval.business", "update")),
     db: AsyncSession = Depends(get_db),
 ):
-    """更新 SQL 接入业务（含启停）；内置业务由代码接入，不可经此修改。"""
-    meta = await resolve_biz_meta(db, biz_type)
+    """更新声明式 SQL 业务（含启停）；内置业务由代码接入，不可经此修改。"""
+    meta = await ApprovalCenterService(db).biz_meta(biz_type)
     if not meta:
         return ResponseModel(code=1, message="该业务未注册")
-    if meta.mode != "sql":
+    if meta["mode"] != "sql":
         return ResponseModel(code=1, message="内置业务由代码接入，不支持在此修改")
     # 只改启停/说明时不重跑取数：否则源表失效的坏业务将无法停用（管理员失去自救手段）
-    sql_changed = (data.get("sql_text") or "") != (meta.sql_text or "")
-    mapping_changed = (data.get("field_mapping") or {}) != (meta.field_mapping or {})
+    sql_changed = (data.get("sql_text") or "") != (meta["sql_text"] or "")
+    mapping_changed = (data.get("field_mapping") or {}) != (meta["field_mapping"] or {})
     err = await _validate_sql_business_payload(
         db, data, for_create=False, run_sql_check=sql_changed or mapping_changed,
     )
     if err:
         return ResponseModel(code=1, message=err)
-    is_active = _clean_bool(data.get("is_active"), default=meta.is_active)
+    is_active = _clean_bool(data.get("is_active"), default=meta["is_active"])
     await db.execute(text("""
         UPDATE approval_business SET biz_name = :bn, sql_text = :sql, field_mapping_json = :fm,
                condition_fields_json = :cf, deep_link_template = :dl, description = :desc,
-               is_active = :ia, updated_by = :ub, updated_at = NOW()
+               is_active = :ia, updated_by = :ub, updated_at = NOW(), writeback_json = :wb
         WHERE biz_type = :bt
     """), {"bn": data["biz_name"].strip(), "sql": data["sql_text"],
            "fm": json.dumps(data.get("field_mapping") or {}, ensure_ascii=False),
            "cf": json.dumps(data.get("condition_fields") or [], ensure_ascii=False),
            "dl": (data.get("deep_link_template") or "").strip() or None,
            "desc": (data.get("description") or "").strip() or None,
-           "ia": is_active, "ub": current_user["username"], "bt": biz_type})
-    await sync_sql_providers(db)
+           "ia": is_active, "ub": current_user["username"],
+           "wb": json.dumps(data.get("writeback") or {}, ensure_ascii=False), "bt": biz_type})
     return ResponseModel(data={"biz_type": biz_type, "is_active": is_active}, message="保存成功")
 
 
@@ -573,19 +618,28 @@ async def list_role_options(
     return ResponseModel(data={"items": [{"role_code": r[0], "role_name": r[1]} for r in rows]})
 
 
-async def _run_action(biz_type: str, item_id: int, action: str, data: dict, user: dict, db: AsyncSession) -> ResponseModel:
-    provider = get_provider(biz_type)
-    handler = getattr(provider, action, None) if provider else None
-    if not handler:
-        return ResponseModel(code=1, message="该业务不支持在审批中心内审批，请前往业务系统处理")
+async def _run_center_action(biz_type: str, item_id: int, action: str, data: dict,
+                             user: dict, db: AsyncSession) -> ResponseModel:
+    svc = ApprovalCenterService(db)
+    meta = await svc.biz_meta(biz_type)
+    if not meta:
+        return ResponseModel(code=1, message="该业务流程未接入审批中心")
     payload = data if isinstance(data, dict) else {}
-    result = await handler(db, ApprovalActionRequest(
-        entity_id=item_id,
-        approver=user["username"],
-        approver_role=user["role"],
-        comment=_clean_comment(payload.get("comment")),
-        expected_version=_clean_version(payload.get("expected_version")),
-    ))
+    comment = _clean_comment(payload.get("comment"))
+    if action == "reject" and not comment:
+        return ResponseModel(code=1, message="驳回必须填写审批意见")
+    kwargs = {"operator_role": user["role"], "expected_version": _clean_version(payload.get("expected_version"))}
+    handlers = {
+        "approve": lambda: svc.approve(biz_type, item_id, user["username"], comment, **kwargs),
+        "reject": lambda: svc.reject(biz_type, item_id, user["username"], comment, **kwargs),
+        "recall": lambda: svc.recall(biz_type, item_id, user["username"], operator_role=user["role"]),
+    }
+    try:
+        result = await handlers[action]()
+    except ApprovalConflictError as exc:
+        # 写后冲突：事务里已有孤儿流水，必须整体回滚后再返回业务错误
+        await db.rollback()
+        return ResponseModel(code=1, message=str(exc) or "数据已被他人更新，请刷新后重试")
     if not result.get("success"):
         return ResponseModel(code=1, message=result.get("message") or "操作失败")
     action_messages = {"approve": "已通过", "reject": "已驳回", "recall": "已撤回，单据已退回可修改状态"}
@@ -594,19 +648,16 @@ async def _run_action(biz_type: str, item_id: int, action: str, data: dict, user
 
 @router.get("/items/{biz_type}/{item_id}", response_model=ResponseModel)
 async def get_item_preview(
-    biz_type: str,
-    item_id: int,
+    biz_type: str, item_id: int,
     current_user: dict = Depends(get_current_user),
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """审批抽屉详情：关键字段 + 审批进度 + 审批记录 + 是否可操作。"""
-    provider = get_provider(biz_type)
-    if not provider or not provider.preview:
-        return ResponseModel(code=1, message="该业务流程未接入审批中心")
-    data = await provider.preview(db, current_user["username"], current_user["role"], item_id)
+    """审批详情页：实例 + 进度（真实流水）+ 业务字段（Adapter 或声明式映射）。"""
+    data = await ApprovalCenterService(db).get_detail(
+        biz_type, item_id, current_user["username"], current_user["role"])
     if not data:
-        return ResponseModel(code=1, message="单据不存在")
+        return ResponseModel(code=1, message="单据不存在或未提交过审批")
     return ResponseModel(data=data)
 
 
@@ -619,7 +670,7 @@ async def approve_item(
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _run_action(biz_type, item_id, "approve", data, current_user, db)
+    return await _run_center_action(biz_type, item_id, "approve", data, current_user, db)
 
 
 @router.post("/items/{biz_type}/{item_id}/reject", response_model=ResponseModel)
@@ -631,7 +682,7 @@ async def reject_item(
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _run_action(biz_type, item_id, "reject", data, current_user, db)
+    return await _run_center_action(biz_type, item_id, "reject", data, current_user, db)
 
 
 @router.post("/items/{biz_type}/{item_id}/recall", response_model=ResponseModel)
@@ -643,8 +694,8 @@ async def recall_item(
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """撤回我发起的单据（provider 内校验仅发起人可撤回；审批记录保留留档）。"""
-    return await _run_action(biz_type, item_id, "recall", data, current_user, db)
+    """撤回我发起的单据（中心服务内校验仅发起人可撤回；审批记录保留留档）。"""
+    return await _run_center_action(biz_type, item_id, "recall", data, current_user, db)
 
 
 @router.post("/batch-approve", response_model=ResponseModel)
@@ -669,9 +720,8 @@ async def batch_approve(
             failed.append({"biz_type": None, "id": None, "reason": "请求条目格式不正确"})
             continue
         biz_type, item_id = it.get("biz_type"), it.get("id")
-        provider = get_provider(biz_type) if biz_type else None
-        if not provider or not provider.approve:
-            skipped.append({"biz_type": biz_type, "id": item_id, "reason": "该业务不支持在审批中心内审批"})
+        if not biz_type or not await ApprovalCenterService(db).biz_meta(biz_type):
+            skipped.append({"biz_type": biz_type, "id": item_id, "reason": "该业务流程未接入审批中心"})
             continue
         try:
             entity_id = int(item_id)
@@ -680,13 +730,14 @@ async def batch_approve(
             continue
         savepoint = await db.begin_nested()
         try:
-            result = await provider.approve(db, ApprovalActionRequest(
-                entity_id=entity_id,
-                approver=current_user["username"],
-                approver_role=current_user["role"],
-                comment=comment,
-                expected_version=_clean_version(it.get("expected_version")),
-            ))
+            result = await ApprovalCenterService(db).approve(
+                biz_type, entity_id, current_user["username"], comment,
+                operator_role=current_user["role"],
+                expected_version=_clean_version(it.get("expected_version")))
+        except ApprovalConflictError:
+            await savepoint.rollback()
+            failed.append({"biz_type": biz_type, "id": item_id, "reason": "数据已被他人更新，请刷新后重试"})
+            continue
         except Exception as exc:  # 单条异常不拖垮整批（SAVEPOINT 回滚后外层事务仍可用）
             logger.warning("批量审批异常 biz=%s id=%s: %s", biz_type, item_id, exc)
             await savepoint.rollback()
@@ -696,7 +747,7 @@ async def batch_approve(
             await savepoint.commit()
             passed.append({"biz_type": biz_type, "id": item_id, "finished": bool(result.get("finished"))})
         else:
-            # 失败路径必须回滚：引擎在乐观锁失败前可能已写入审批日志，否则会留下「未生效的审批记录」
+            # 失败路径必须回滚：引擎在乐观锁失败前可能已写入流水，否则会留下「未生效的审批记录」
             await savepoint.rollback()
             failed.append({"biz_type": biz_type, "id": item_id, "reason": result.get("message") or "操作失败"})
     return ResponseModel(data={"passed": passed, "failed": failed, "skipped": skipped})

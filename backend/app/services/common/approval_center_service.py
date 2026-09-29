@@ -39,6 +39,14 @@ def _loads(raw, default):
         return default
 
 
+class ApprovalConflictError(RuntimeError):
+    """审批动作在写完 record/task 之后遭遇版本/状态冲突（守卫 UPDATE 未命中）。
+
+    此时事务里已存在孤儿流水，必须整体回滚（单条端点 rollback / 批量走 SAVEPOINT
+    回滚）后向调用方返回冲突信息，不能吞掉异常照常提交。
+    """
+
+
 class ApprovalCenterService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -47,17 +55,20 @@ class ApprovalCenterService:
 
     async def biz_meta(self, biz_type: str) -> Optional[dict]:
         """统一业务元数据：{biz_name, mode(builtin|sql), is_active, deep_link_template,
-        condition_field_options, sql_text, field_mapping, writeback}。未接入返回 None。"""
+        condition_field_options, sql_text, field_mapping, writeback,
+        description, updated_by, updated_at}。未接入返回 None。"""
         from app.services.common.approval_adapters import get_adapter_class
         cls = get_adapter_class(biz_type)
         if cls is not None:
             return {"biz_type": biz_type, "biz_name": cls.biz_name, "mode": "builtin",
                     "is_active": True, "deep_link_template": cls.deep_link_template,
                     "condition_field_options": cls.condition_field_options or [],
-                    "sql_text": None, "field_mapping": None, "writeback": None}
+                    "sql_text": None, "field_mapping": None, "writeback": None,
+                    "description": None, "updated_by": None, "updated_at": None}
         row = (await self.db.execute(
             text("SELECT biz_type, biz_name, is_active, deep_link_template, condition_fields_json,"
-                 " sql_text, field_mapping_json, writeback_json FROM approval_business WHERE biz_type = :bt LIMIT 1"),
+                 " sql_text, field_mapping_json, writeback_json, description, updated_by, updated_at"
+                 " FROM approval_business WHERE biz_type = :bt LIMIT 1"),
             {"bt": biz_type},
         )).fetchone()
         if not row:
@@ -67,7 +78,9 @@ class ApprovalCenterService:
                 "is_active": bool(d["is_active"]), "deep_link_template": d["deep_link_template"],
                 "condition_field_options": _loads(d["condition_fields_json"], []),
                 "sql_text": d["sql_text"], "field_mapping": _loads(d["field_mapping_json"], {}),
-                "writeback": _loads(d["writeback_json"], {})}
+                "writeback": _loads(d["writeback_json"], {}),
+                "description": d["description"], "updated_by": d["updated_by"],
+                "updated_at": d["updated_at"].isoformat() if isinstance(d["updated_at"], datetime) else d["updated_at"]}
 
     async def list_biz_metas(self) -> list[dict]:
         """业务清单：builtin Adapter + 表内 SQL 业务（含停用，便于重新启用）。"""
@@ -77,10 +90,12 @@ class ApprovalCenterService:
             metas.append({"biz_type": cls.biz_type, "biz_name": cls.biz_name, "mode": "builtin",
                           "is_active": True, "deep_link_template": cls.deep_link_template,
                           "condition_field_options": cls.condition_field_options or [],
-                          "sql_text": None, "field_mapping": None, "writeback": None})
+                          "sql_text": None, "field_mapping": None, "writeback": None,
+                          "description": None, "updated_by": None, "updated_at": None})
         rows = await self.db.execute(text(
             "SELECT biz_type, biz_name, is_active, deep_link_template, condition_fields_json,"
-            " sql_text, field_mapping_json, writeback_json FROM approval_business ORDER BY id"))
+            " sql_text, field_mapping_json, writeback_json, description, updated_by, updated_at"
+            " FROM approval_business ORDER BY id"))
         for r in rows:
             d = dict(r._mapping)
             metas.append({"biz_type": d["biz_type"], "biz_name": d["biz_name"] or d["biz_type"],
@@ -88,7 +103,9 @@ class ApprovalCenterService:
                           "deep_link_template": d["deep_link_template"],
                           "condition_field_options": _loads(d["condition_fields_json"], []),
                           "sql_text": d["sql_text"], "field_mapping": _loads(d["field_mapping_json"], {}),
-                          "writeback": _loads(d["writeback_json"], {})})
+                          "writeback": _loads(d["writeback_json"], {}),
+                          "description": d["description"], "updated_by": d["updated_by"],
+                          "updated_at": d["updated_at"].isoformat() if isinstance(d["updated_at"], datetime) else d["updated_at"]})
         return metas
 
     # ---------- 实例读写 ----------
@@ -291,7 +308,7 @@ class ApprovalCenterService:
                     WHERE id=:iid AND version=:v
                 """), {"now": now, "iid": iid, "v": inst["version"]})
                 if result.rowcount == 0:
-                    return {"success": False, "message": "数据已被他人更新，请刷新后重试"}
+                    raise ApprovalConflictError("数据已被他人更新，请刷新后重试")
                 fresh = await self._instance_row(iid)
                 meta = await self.biz_meta(biz_type)
                 await self._notify_applicant(
@@ -318,7 +335,7 @@ class ApprovalCenterService:
             " WHERE id=:iid AND version=:v"),
             {"lv": next_level, "to": next_node.get("timeout_hours"), "iid": iid, "v": inst["version"]})
         if result.rowcount == 0:
-            return {"success": False, "message": "数据已被他人更新，请刷新后重试"}
+            raise ApprovalConflictError("数据已被他人更新，请刷新后重试")
         await self._activate_level(iid, next_level, next_node)
         await self._sync_business(await self._instance_row(iid))
         return {"success": True, "finished": False, "skipped": skipped}
@@ -352,7 +369,7 @@ class ApprovalCenterService:
             " WHERE id=:iid AND version=:v"),
             {"now": now, "iid": iid, "v": inst["version"]})
         if result.rowcount == 0:
-            return {"success": False, "message": "数据已被他人更新，请刷新后重试"}
+            raise ApprovalConflictError("数据已被他人更新，请刷新后重试")
         fresh = await self._instance_row(iid)
         meta = await self.biz_meta(biz_type)
         await self._notify_applicant(
@@ -372,9 +389,11 @@ class ApprovalCenterService:
         await self.db.execute(text(
             "UPDATE approval_task SET status='canceled', acted_at=:now"
             " WHERE instance_id=:iid AND status='active'"), {"now": now, "iid": iid})
-        await self.db.execute(text(
+        result = await self.db.execute(text(
             "UPDATE approval_instance SET status='recalled', finished_at=:now, version=version+1, updated_at=NOW()"
-            " WHERE id=:iid"), {"now": now, "iid": iid})
+            " WHERE id=:iid AND status='pending'"), {"now": now, "iid": iid})
+        if result.rowcount == 0:
+            raise ApprovalConflictError("仅审批中状态可撤回")
         await self._sync_business(await self._instance_row(iid))
         return {"success": True}
 
