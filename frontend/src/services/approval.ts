@@ -64,6 +64,7 @@ export type ApprovalPreview = ApprovalItem & {
   progress?: ApprovalProgressNode[]
   logs?: ApprovalLog[]
   action_hint?: string
+  attachments?: Array<{ name?: string; key: string }>
 }
 
 export type ApprovalUserOption = {
@@ -109,6 +110,13 @@ export type ApprovalFieldMapping = Partial<Record<
 
 export type ApprovalConditionField = { value: string; label: string }
 
+export type ApprovalWriteback = {
+  table?: string
+  id_column?: string
+  status_column?: string
+  status_map?: Record<string, string>
+}
+
 export type ApprovalBusinessItem = {
   biz_type: string
   biz_name: string
@@ -125,6 +133,7 @@ export type ApprovalBusinessItem = {
   field_mapping?: ApprovalFieldMapping
   condition_fields?: ApprovalConditionField[]
   deep_link_template?: string | null
+  writeback?: ApprovalWriteback | null
 }
 
 export type ApprovalBusinessPayload = {
@@ -136,9 +145,16 @@ export type ApprovalBusinessPayload = {
   deep_link_template?: string
   description?: string
   is_active?: boolean
+  writeback?: ApprovalWriteback
 }
 
 export type TestSqlResult = { columns: string[]; rows: Record<string, any>[]; elapsed_ms: number }
+
+export interface ApprovalMappingField { key: string; label: string; required: boolean }
+
+export async function submitInstance(bizType: string, bizId: number) {
+  return api.post('/approvals/instances', { biz_type: bizType, biz_id: bizId })
+}
 
 export const approvalApi = {
   pending: (params?: Record<string, any>) => api.get('/approvals/pending', { params }),

@@ -105,19 +105,6 @@ export default function SupplierClaimDetail() {
     },
   })
 
-  const doRevoke = () => Modal.confirm({
-    title: '反审核（撤回最近一次审批）',
-    okText: '确认反审核',
-    content: '将撤回本轮最近一次审批并回退一级重新审批，确认执行？',
-    onOk: async () => {
-      try {
-        const res: any = await qualityApi.revokeApproval(parseInt(id!))
-        message.success(res.message || '已撤回审批')
-        load()
-      } catch { /* 全局拦截器已提示 */ }
-    },
-  })
-
   return (
     <div className="sc-page">
       {/* 页头：单号 + 状态 + 按态操作 */}
@@ -141,7 +128,6 @@ export default function SupplierClaimDetail() {
             </Button>
           )}
           {status === 'pending' && isMine && <Button icon={<UndoOutlined />} onClick={doRecall}>撤回单据</Button>}
-          {['pending', 'approved'].includes(status) && <Button type="text" icon={<UndoOutlined />} onClick={doRevoke}>反审核</Button>}
         </div>
       </div>
 

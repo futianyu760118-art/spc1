@@ -4,10 +4,8 @@ import { Button, Card, Input, Spin, message } from 'antd'
 import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, FileImageOutlined, FilePdfOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { approvalApi, type ApprovalPreview } from '../../../services/approval'
-import { qualityApi } from '../../../services/quality'
-import { fileApi, materialApi } from '../../../services/api'
-import ClaimPaper, { opinionsFromClaim } from '../../../components/ClaimPaper'
-import PurchaseRequisitionPaper from '../../../components/PurchaseRequisitionPaper'
+import { fileApi } from '../../../services/api'
+import { approvalPaperRegistry } from '../paperRegistry'
 
 const STATE_TEXT: Record<string, string> = { done: '已处理', current: '当前节点', todo: '待处理' }
 const STATE_TAG: Record<string, string> = { done: 'sc-tag-done', current: 'sc-tag-prod', todo: 'sc-tag-wait' }
@@ -31,8 +29,7 @@ export default function ApprovalItemPage() {
   const itemId = Number(id)
   const navigate = useNavigate()
   const [data, setData] = useState<ApprovalPreview | null>(null)
-  const [claim, setClaim] = useState<any>(null)
-  const [requisition, setRequisition] = useState<any>(null)
+  const [paper, setPaper] = useState<JSX.Element | null>(null)
   const [loading, setLoading] = useState(true)
   const [comment, setComment] = useState('')
   const [acting, setActing] = useState(false)
@@ -44,19 +41,11 @@ export default function ApprovalItemPage() {
       const res: any = await approvalApi.preview(bizType, itemId)
       setData(res.data || null)
       // 内置业务复用业务侧完整视图；取数失败时降级为映射字段展示
-      setClaim(null)
-      setRequisition(null)
-      if (bizType === 'supplier_claim') {
-        try {
-          const cRes: any = await qualityApi.get(itemId)
-          setClaim(cRes.data || null)
-        } catch { setClaim(null) }
-      }
-      if (bizType === 'purchase_requisition') {
-        try {
-          const rRes: any = await materialApi.getPurchaseRequisition(itemId)
-          setRequisition(rRes.data || null)
-        } catch { setRequisition(null) }
+      setPaper(null)
+      const loader = approvalPaperRegistry[bizType]
+      if (loader) {
+        const result = await loader(itemId)
+        setPaper(result?.node ?? null)
       }
     } catch { /* 全局拦截器已提示 */ } finally { setLoading(false) }
   }, [bizType, itemId])
@@ -121,10 +110,8 @@ export default function ApprovalItemPage() {
               {data.biz_name} · {data.applicant || '-'} 提交于 {fmt(data.submitted_at)}
             </span>
           </div>
-          {claim ? (
-            <div className="clm-paper-wrap"><ClaimPaper claim={claim} opinions={opinionsFromClaim(claim)} /></div>
-          ) : requisition ? (
-            <div className="clm-paper-wrap"><PurchaseRequisitionPaper req={requisition} small /></div>
+          {paper ? (
+            <div className="clm-paper-wrap">{paper}</div>
           ) : (
             <div style={{ padding: 16 }}>
               <dl className="ac-kv">
@@ -198,9 +185,9 @@ export default function ApprovalItemPage() {
             )}
           </Card>
 
-          {claim && (claim.attachments || []).length > 0 ? (
-            <Card title={`附件（${claim.attachments.length}）`} size="small" styles={{ body: { paddingTop: 10 } }}>
-              {(claim.attachments || []).map((a: any, i: number) => (
+          {(data.attachments || []).length > 0 ? (
+            <Card title={`附件（${(data.attachments || []).length}）`} size="small" styles={{ body: { paddingTop: 10 } }}>
+              {(data.attachments || []).map((a, i) => (
                 <div key={i} className="ac-att-item">
                   <span className="sc-note">{attIcon(a.name)}</span>
                   <a href={fileApi.downloadUrl(a.key)} target="_blank" rel="noreferrer"

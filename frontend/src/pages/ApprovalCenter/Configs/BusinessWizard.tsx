@@ -6,21 +6,29 @@ import {
   type ApprovalNodeConfig, type ApprovalUserOption,
 } from '../../../services/approval'
 import ApprovalChainEditor from '../../../components/ApprovalChainEditor'
-import BusinessSqlStep, { MAPPING_FIELDS, type SqlStepValue } from './BusinessSqlStep'
+import BusinessSqlStep, { MAPPING_FIELDS, type MappingField, type SqlStepValue } from './BusinessSqlStep'
 
 type BasicValue = { bizType: string; bizName: string; description: string }
+
+type WritebackValue = { table: string; id_column: string; status_column: string; status_map: Record<string, string> }
 
 const STEP_ITEMS = [
   { title: '① 基本信息', hint: '名称 / 标识 / 说明' },
   { title: '② 取数配置', hint: 'SQL · 字段映射 · 条件字段' },
   { title: '③ 审批链与保存', hint: '节点配置 · 影响确认' },
+  { title: '④ 回写映射', hint: '可选 · 终态同步业务表' },
 ]
 
-const STEP_HINTS = ['填写基本信息', '配置取数与字段映射', '确认审批链并保存']
+const STEP_HINTS = ['填写基本信息', '配置取数与字段映射', '确认审批链并保存', '配置审批完成后回写业务状态（可选）']
 
 const emptySqlValue = (): SqlStepValue => ({ sqlText: '', mapping: {}, deepLink: '', conditionFields: [] })
 
 const emptyBasic = (): BasicValue => ({ bizType: '', bizName: '', description: '' })
+
+const emptyWriteback = (): WritebackValue => ({
+  table: '', id_column: '', status_column: '',
+  status_map: { pending: '', approved: '', rejected: '', recalled: '' },
+})
 
 export default function BusinessWizard({ mode, record, initialStep = 0, roleOptions, userOptions, onClose, onSaved }: {
   mode: 'create' | 'edit'
@@ -46,6 +54,27 @@ export default function BusinessWizard({ mode, record, initialStep = 0, roleOpti
   const [chainActive, setChainActive] = useState(true)
   const [loadingChain, setLoadingChain] = useState(isEdit)
   const [saving, setSaving] = useState(false)
+  const [mappingFields, setMappingFields] = useState<MappingField[]>(MAPPING_FIELDS)
+  const [writeback, setWriteback] = useState<WritebackValue>(() => {
+    const wb = isEdit ? record?.writeback : null
+    if (!wb) return emptyWriteback()
+    return {
+      table: wb.table || '', id_column: wb.id_column || '', status_column: wb.status_column || '',
+      status_map: { ...emptyWriteback().status_map, ...(wb.status_map || {}) },
+    }
+  })
+
+  // 映射字段清单由接口下发（业务标识演进时前端无需发版），失败回退本地缺省
+  useEffect(() => {
+    let cancelled = false
+    approvalApi.businesses()
+      .then((res: any) => {
+        if (cancelled) return
+        setMappingFields(res.data?.mapping_fields?.length ? res.data.mapping_fields : MAPPING_FIELDS)
+      })
+      .catch(() => { /* 全局拦截器已提示 */ })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     if (!isEdit || !record) return
@@ -72,7 +101,7 @@ export default function BusinessWizard({ mode, record, initialStep = 0, roleOpti
 
   const validateSql = () => {
     if (!sqlValue.sqlText.trim()) { message.warning('请填写取数 SQL'); return false }
-    const missing = MAPPING_FIELDS.filter(f => f.required && !(sqlValue.mapping[f.key] || '').trim())
+    const missing = mappingFields.filter(f => f.required && !(sqlValue.mapping[f.key] || '').trim())
     if (missing.length) {
       message.warning(`请先映射必需字段：${missing.map(f => f.label).join('、')}`)
       return false
@@ -103,6 +132,7 @@ export default function BusinessWizard({ mode, record, initialStep = 0, roleOpti
         condition_fields: sqlValue.conditionFields.filter(f => f.value.trim()),
         deep_link_template: sqlValue.deepLink.trim(),
         description: basic.description.trim(),
+        writeback: writeback.table.trim() ? writeback : undefined,
       }
       if (isEdit) {
         await approvalApi.updateBusiness(target, { ...payload, is_active: record?.is_active !== false })
@@ -134,11 +164,11 @@ export default function BusinessWizard({ mode, record, initialStep = 0, roleOpti
       footer={
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="ac-head-hint" style={{ marginRight: 'auto' }}>
-            第 {step + 1} / 3 步 · {STEP_HINTS[step]}
+            第 {step + 1} / 4 步 · {STEP_HINTS[step]}
           </span>
           <Button onClick={onClose}>取消</Button>
           {step > 0 ? <Button onClick={() => setStep(s => s - 1)}>上一步</Button> : null}
-          {step < 2
+          {step < 3
             ? <Button type="primary" onClick={goNext}>下一步</Button>
             : <Button type="primary" loading={saving} onClick={save}>保存并启用</Button>}
         </div>
@@ -163,11 +193,15 @@ export default function BusinessWizard({ mode, record, initialStep = 0, roleOpti
           <BasicStep value={basic} isEdit={isEdit} onChange={patch => setBasic(prev => ({ ...prev, ...patch }))} />
         </div>
         <div style={{ display: step === 1 ? 'block' : 'none' }}>
-          <BusinessSqlStep value={sqlValue} onChange={patch => setSqlValue(prev => ({ ...prev, ...patch }))} />
+          <BusinessSqlStep value={sqlValue} fields={mappingFields}
+            onChange={patch => setSqlValue(prev => ({ ...prev, ...patch }))} />
         </div>
         <div style={{ display: step === 2 ? 'block' : 'none' }}>
           <ChainStep nodes={nodes} onChange={setNodes} roleOptions={roleOptions} userOptions={userOptions}
             fieldOptions={fieldOptions} loading={loadingChain} />
+        </div>
+        <div style={{ display: step === 3 ? 'block' : 'none' }}>
+          <WritebackStep value={writeback} onChange={patch => setWriteback(prev => ({ ...prev, ...patch }))} />
         </div>
       </div>
     </Modal>
@@ -200,11 +234,11 @@ function BasicStep({ value, isEdit, onChange }: {
         <div style={{ display: 'flex', gap: 10 }}>
           <div className="ac-access-card on">
             <div className="t"><CodeOutlined /> SQL 配置接入</div>
-            <div className="d">管理员配置只读 SQL + 字段映射，保存即生效，无需开发。仅支持待办聚合与跳转。</div>
+            <div className="d">配置只读 SQL + 字段映射 + 可选回写，零开发即可获得完整审批能力（中心内审批/批量通过/审批记录）。</div>
           </div>
           <div className="ac-access-card" onClick={() => message.info('内置业务需开发接入')}>
-            <div className="t"><ApiOutlined /> 内置 Provider 接入</div>
-            <div className="d">需开发实现取数与审批动作，支持在中心内直接审批、批量通过。请联系开发排期。</div>
+            <div className="t"><ApiOutlined /> 内置 Adapter 接入</div>
+            <div className="d">开发实现 3 个方法，支持复用业务侧详情组件。</div>
           </div>
         </div>
       </Form.Item>
@@ -228,8 +262,7 @@ function ChainStep({ nodes, onChange, roleOptions, userOptions, fieldOptions, lo
       <div className="ac-rule-note">
         <InfoCircleOutlined />
         <div>
-          SQL 接入业务的审批链仅用于展示与超时提醒定位审批人，条件不参与流转判断；
-          节点名称需与「当前节点」映射列的取值一致。
+          审批链决定流转顺序与条件路由；节点在提交时冻结快照，配置变更只影响之后提交的单据。
         </div>
       </div>
       {loading ? <Spin style={{ display: 'block', margin: '40px auto' }} /> : (
@@ -237,5 +270,38 @@ function ChainStep({ nodes, onChange, roleOptions, userOptions, fieldOptions, lo
           userOptions={userOptions} fieldOptions={fieldOptions} />
       )}
     </>
+  )
+}
+
+function WritebackStep({ value, onChange }: {
+  value: WritebackValue
+  onChange: (patch: Partial<WritebackValue>) => void
+}) {
+  const items: [keyof WritebackValue['status_map'], string][] = [
+    ['pending', '审批中'], ['approved', '已通过'], ['rejected', '已驳回'], ['recalled', '已撤回'],
+  ]
+  return (
+    <Form layout="vertical">
+      <div className="ac-rule-note">
+        <InfoCircleOutlined />
+        <div>可选：审批流转时把状态回写到业务表（同事务，强一致）。全部留空则不同步业务表。</div>
+      </div>
+      <div style={{ display: 'flex', gap: 16 }}>
+        <Form.Item label="业务表名" style={{ flex: 1 }}><Input className="sc-mono" value={value.table}
+          placeholder="如 purchase_payment" onChange={e => onChange({ table: e.target.value })} /></Form.Item>
+        <Form.Item label="主键列" style={{ flex: 1 }}><Input className="sc-mono" value={value.id_column}
+          placeholder="如 id" onChange={e => onChange({ id_column: e.target.value })} /></Form.Item>
+        <Form.Item label="状态列" style={{ flex: 1 }}><Input className="sc-mono" value={value.status_column}
+          placeholder="如 status" onChange={e => onChange({ status_column: e.target.value })} /></Form.Item>
+      </div>
+      <div style={{ display: 'flex', gap: 16 }}>
+        {items.map(([k, label]) => (
+          <Form.Item key={k} label={`${label}（${k}）→`} style={{ flex: 1 }}>
+            <Input value={value.status_map[k] || ''} placeholder="业务表状态值"
+              onChange={e => onChange({ status_map: { ...value.status_map, [k]: e.target.value } })} />
+          </Form.Item>
+        ))}
+      </div>
+    </Form>
   )
 }

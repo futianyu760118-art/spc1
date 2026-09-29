@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Alert, Button, Input, Select, Table, message } from 'antd'
 import { CheckOutlined, CloseOutlined, PlusOutlined, PlayCircleOutlined } from '@ant-design/icons'
-import { approvalApi, type ApprovalConditionField, type ApprovalFieldMapping, type TestSqlResult } from '../../../services/approval'
+import { approvalApi, type ApprovalConditionField, type ApprovalFieldMapping, type ApprovalMappingField, type TestSqlResult } from '../../../services/approval'
 
 export type SqlStepValue = {
   sqlText: string
@@ -10,7 +10,7 @@ export type SqlStepValue = {
   conditionFields: ApprovalConditionField[]
 }
 
-type MappingField = { key: keyof ApprovalFieldMapping; label: string; required: boolean; hint?: string }
+export type MappingField = ApprovalMappingField & { key: keyof ApprovalFieldMapping; hint?: string }
 
 export const MAPPING_FIELDS: MappingField[] = [
   { key: 'id', label: '单据 ID', required: true, hint: '必须是数字主键' },
@@ -23,9 +23,10 @@ export const MAPPING_FIELDS: MappingField[] = [
   { key: 'amount', label: '金额', required: false },
 ]
 
-export default function BusinessSqlStep({ value, onChange }: {
+export default function BusinessSqlStep({ value, onChange, fields = MAPPING_FIELDS }: {
   value: SqlStepValue
   onChange: (patch: Partial<SqlStepValue>) => void
+  fields?: MappingField[]
 }) {
   const [testing, setTesting] = useState(false)
   const [preview, setPreview] = useState<TestSqlResult | null>(null)
@@ -83,7 +84,7 @@ export default function BusinessSqlStep({ value, onChange }: {
         字段映射
         <span className="sc-note" style={{ fontWeight: 400 }}>测试取数后可下拉选择返回列；带 * 为必填</span>
       </div>
-      <MappingTable mapping={value.mapping} options={columnOptions}
+      <MappingTable mapping={value.mapping} options={columnOptions} fields={fields}
         onChange={(key, column) => onChange({ mapping: { ...value.mapping, [key]: column } })} />
 
       <div className="ac-field-title">
@@ -105,9 +106,10 @@ export default function BusinessSqlStep({ value, onChange }: {
   )
 }
 
-function MappingTable({ mapping, options, onChange }: {
+function MappingTable({ mapping, options, fields, onChange }: {
   mapping: ApprovalFieldMapping
   options: { value: string; label: string }[]
+  fields: MappingField[]
   onChange: (key: keyof ApprovalFieldMapping, column?: string) => void
 }) {
   return (
@@ -118,7 +120,7 @@ function MappingTable({ mapping, options, onChange }: {
         <span>说明</span>
         <span />
       </div>
-      {MAPPING_FIELDS.map(f => (
+      {fields.map(f => (
         <div className="ac-map-row" key={f.key}>
           <span className="src">
             {f.key}{f.required ? <span style={{ color: '#dc2626', fontWeight: 600 }}> *</span> : null}
