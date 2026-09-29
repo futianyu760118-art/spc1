@@ -149,6 +149,24 @@ class SupplierClaimService:
             {"eid": claim_id},
         )
         logs = [dict(x._mapping) for x in logs_row]
+        # 中心化后新流水只写 approval_record：并入并映射回旧日志形状，业务页/打印不感知架构切换。
+        # 存量迁移（migrate_approval_center.py）曾把旧日志复制进中心表，按 (action, approver,
+        # operated_at) 去重防双计（与迁移脚本自身的幂等键一致）。
+        legacy_keys = {(lg.get("action"), lg.get("approver"), lg.get("operated_at")) for lg in logs}
+        records_row = await self.db.execute(text("""
+            SELECT r.id, r.node_seq AS approval_level, r.operator AS approver, r.action,
+                   r.comment, r.created_at AS operated_at
+            FROM approval_record r
+            JOIN approval_instance i ON i.id = r.instance_id
+            WHERE i.biz_type = 'supplier_claim' AND i.biz_id = :eid
+            ORDER BY r.id
+        """), {"eid": claim_id})
+        for x in records_row:
+            rec = dict(x._mapping)
+            if (rec.get("action"), rec.get("approver"), rec.get("operated_at")) in legacy_keys:
+                continue
+            logs.append(rec)
+        logs.sort(key=lambda lg: (lg.get("operated_at") or datetime.min, lg.get("id") or 0))
         current_round = 0
         for lg in logs:
             if lg.get("action") == "submit":

@@ -1,7 +1,8 @@
-"""审批中心 P2 - 业务接入（只读 SQL 注册 / 测试取数 / 聚合 / 提醒）集成测试。
+"""审批中心 P2 - 业务接入（只读 SQL 注册 / 测试取数 / 提交 / 审批 / 回写 / 提醒）集成测试。
 
 数据源直接用测试库自身的 supplier_claim 表（不新造业务表），SQL 业务的 id 即索赔单主键。
-SQL 业务只聚合与跳转：不支持中心内审批，但节点权限过滤与超时提醒照常。
+声明式业务经 POST /approvals/instances 提交（摘要由取数 SQL 生成），可在中心内审批并按
+配置回写业务表；待办查中心三表，与取数 SQL 天然隔离。
 """
 
 import json
@@ -46,13 +47,6 @@ def business_payload(**overrides) -> dict:
     return data
 
 
-def sql_with_node(label: str) -> str:
-    return (
-        "SELECT id, claim_no AS no, supplier_name AS title, applicant, "
-        f"submitted_at, '{label}' AS current_node FROM supplier_claim"
-    )
-
-
 async def register(client, headers, **overrides):
     return await client.post("/api/v1/approvals/businesses", json=business_payload(**overrides), headers=headers)
 
@@ -62,16 +56,19 @@ async def save_chain(client, headers, nodes, is_active=True):
                             json={"nodes": nodes, "is_active": is_active}, headers=headers)
 
 
+async def submit_instance(client, headers, biz_id):
+    """声明式业务经中心提交审批实例（摘要由取数 SQL 生成）。"""
+    return await client.post("/api/v1/approvals/instances",
+                             json={"biz_type": BIZ_TYPE, "biz_id": biz_id}, headers=headers)
+
+
 async def _reset_business_state():
-    """清空 SQL 业务注册表与用例写入的审批链配置，并同步进程内 provider 注册表。"""
-    from app.core.database import AsyncSessionLocal, engine
-    from app.services.common.approval_sql_provider import sync_sql_providers
+    """清空 SQL 业务注册表与本文件造数写入的审批链配置，避免污染其它用例。"""
+    from app.core.database import engine
 
     async with engine.begin() as conn:
         await conn.execute(text("TRUNCATE approval_business RESTART IDENTITY CASCADE"))
         await conn.execute(text("DELETE FROM approval_config WHERE biz_type = :bt"), {"bt": BIZ_TYPE})
-    async with AsyncSessionLocal() as session:
-        await sync_sql_providers(session)
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="session")
@@ -156,11 +153,15 @@ async def test_register_validation_rejects_bad_payload(client):
 
 
 async def test_sql_business_items_aggregate_for_admin(client):
-    """5) 聚合生效：admin 待办出现 SQL 业务条目，can_act=False 且深链按模板渲染。"""
+    """5) 聚合生效：声明式业务提交后 admin 待办出现条目（摘要取自取数 SQL），可审批且深链按模板渲染。"""
     h_admin, h_q = await login(client, ADMIN), await login(client, Q)
-    a = await create(client, h_q, 500, submit=True)
-    await create(client, h_q, 600, submit=True)
+    a = await create(client, h_q, 500)  # 草稿：不经 builtin 提交，专供声明式业务接管
+    b = await create(client, h_q, 600)
     assert (await register(client, h_admin)).json()["code"] == 0
+    assert (await save_chain(client, h_admin, CHAIN)).json()["code"] == 0
+    for cid in (a["id"], b["id"]):
+        r = await submit_instance(client, h_q, cid)
+        assert r.json()["code"] == 0, r.text
 
     data = (await client.get("/api/v1/approvals/pending",
                              params={"biz_type": BIZ_TYPE}, headers=h_admin)).json()["data"]
@@ -168,31 +169,35 @@ async def test_sql_business_items_aggregate_for_admin(client):
     item = next(x for x in data["items"] if x["id"] == a["id"])
     assert item["biz_name"] == BIZ_NAME
     assert item["no"] == a["claim_no"] and item["title"] == a["supplier_name"]
-    assert item["can_act"] is False and item["status"] == "pending"
+    assert item["can_act"] is True and item["status"] == "pending"
     assert item["deep_link"] == f"/quality/supplier-claims/{a['claim_no']}"
 
 
 async def test_pending_node_permission_filters_sql_business(client):
-    """6) 节点权限：非当前节点角色看不到该 SQL 业务条目（PM 看不到「财务结算」行）。"""
+    """6) 节点权限：任务只展开到链节点角色（PM 持节点1任务可见，财务在节点到达前不可见）。"""
     h_admin, h_q, h_pm, h_fin = (
         await login(client, ADMIN), await login(client, Q), await login(client, PM), await login(client, FIN))
-    await create(client, h_q, 500, submit=True)
-    assert (await register(client, h_admin, sql_text=sql_with_node("财务结算"))).json()["code"] == 0
+    a = await create(client, h_q, 500)
+    assert (await register(client, h_admin)).json()["code"] == 0
     assert (await save_chain(client, h_admin, CHAIN)).json()["code"] == 0
+    assert (await submit_instance(client, h_q, a["id"])).json()["code"] == 0
 
     pm_items = (await client.get("/api/v1/approvals/pending",
                                  params={"biz_type": BIZ_TYPE}, headers=h_pm)).json()["data"]["items"]
-    assert pm_items == []
+    assert len(pm_items) == 1 and pm_items[0]["current_node"] == "索赔部门意见"
     fin_items = (await client.get("/api/v1/approvals/pending",
                                   params={"biz_type": BIZ_TYPE}, headers=h_fin)).json()["data"]["items"]
-    assert len(fin_items) == 1 and fin_items[0]["current_node"] == "财务结算"
+    assert fin_items == []
 
 
 async def test_disable_and_reenable_sql_business(client):
-    """7) 停用后待办消失，重新启用后恢复。"""
+    """7) 停用后不再产生新待办（提交被拒），在途待办保留可见；重新启用后恢复可提交。"""
     h_admin, h_q = await login(client, ADMIN), await login(client, Q)
-    await create(client, h_q, 500, submit=True)
+    a = await create(client, h_q, 500)
+    b = await create(client, h_q, 600)
     assert (await register(client, h_admin)).json()["code"] == 0
+    assert (await save_chain(client, h_admin, CHAIN)).json()["code"] == 0
+    assert (await submit_instance(client, h_q, a["id"])).json()["code"] == 0
 
     async def pending_count():
         r = await client.get("/api/v1/approvals/pending", params={"biz_type": BIZ_TYPE}, headers=h_admin)
@@ -203,41 +208,62 @@ async def test_disable_and_reenable_sql_business(client):
     body = (await client.put(f"/api/v1/approvals/businesses/{BIZ_TYPE}",
                              json=business_payload(is_active=False), headers=h_admin)).json()
     assert body["code"] == 0 and body["data"]["is_active"] is False
-    assert await pending_count() == 0
+    assert await pending_count() == 1  # 在途单据按冻结快照继续，待办不消失
+    r = await submit_instance(client, h_q, b["id"])
+    assert r.json()["code"] == 1 and "停用" in r.json()["message"]
 
     body = (await client.put(f"/api/v1/approvals/businesses/{BIZ_TYPE}",
                              json=business_payload(is_active=True), headers=h_admin)).json()
     assert body["code"] == 0 and body["data"]["is_active"] is True
-    assert await pending_count() == 1
+    assert (await submit_instance(client, h_q, b["id"])).json()["code"] == 0
+    assert await pending_count() == 2
 
 
 async def test_sql_business_preview_shape(client):
-    """8) 抽屉预览：映射字段（中文 label）+ 按链节点推算进度（当前节点 state=current）。"""
+    """8) 详情页：映射字段（中文 label）+ 按链快照推算进度（当前节点 state=current），可审批。"""
+    from app.core.database import engine
+
     h_admin, h_q = await login(client, ADMIN), await login(client, Q)
-    a = await create(client, h_q, 500, submit=True)
+    a = await create(client, h_q, 500)
+    async with engine.begin() as conn:  # 模拟源系统自带提交时间（草稿索赔单该列为空）
+        await conn.execute(text("UPDATE supplier_claim SET submitted_at = NOW() WHERE id = :i"),
+                           {"i": a["id"]})
     assert (await register(client, h_admin)).json()["code"] == 0
     assert (await save_chain(client, h_admin, CHAIN)).json()["code"] == 0
+    assert (await submit_instance(client, h_q, a["id"])).json()["code"] == 0
 
     body = (await client.get(f"/api/v1/approvals/items/{BIZ_TYPE}/{a['id']}", headers=h_admin)).json()
     assert body["code"] == 0, body
     data = body["data"]
     assert {"单号", "标题", "申请人", "提交时间", "当前节点"} <= {f["label"] for f in data["fields"]}
-    assert data["can_act"] is False
+    assert data["can_act"] is True
     assert data["deep_link"] == f"/quality/supplier-claims/{a['claim_no']}"
     assert data["progress"][0]["state"] == "current"
     assert data["progress"][1]["state"] == "todo"
-    assert "业务系统" in data["action_hint"]
 
 
-async def test_sql_business_actions_rejected_in_center(client):
-    """9) 动作被拒：SQL 业务不支持在审批中心内审批。"""
-    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
-    a = await create(client, h_q, 500, submit=True)
-    assert (await register(client, h_admin)).json()["code"] == 0
+async def test_sql_business_approve_and_writeback_in_center(client, db):
+    """9) 声明式业务可在中心内审批：单级链通过后归档，并按回写配置同步业务表状态列。"""
+    h_admin, h_q, h_pm = await login(client, ADMIN), await login(client, Q), await login(client, PM)
+    a = await create(client, h_q, 500)  # 草稿交由声明式业务接管，回写 approval_status 不干扰 builtin 实例
+    writeback = {"table": "supplier_claim", "id_column": "id", "status_column": "approval_status",
+                 "status_map": {"pending": "pending", "approved": "approved",
+                                "rejected": "rejected", "recalled": "draft"}}
+    assert (await register(client, h_admin, writeback=writeback)).json()["code"] == 0
+    assert (await save_chain(client, h_admin, [
+        {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager"},
+    ])).json()["code"] == 0
+    assert (await submit_instance(client, h_q, a["id"])).json()["code"] == 0
+    status = (await db.execute(text(
+        "SELECT approval_status FROM supplier_claim WHERE id = :i"), {"i": a["id"]})).scalar()
+    assert status == "pending"  # 提交即回写
 
     body = (await client.post(f"/api/v1/approvals/items/{BIZ_TYPE}/{a['id']}/approve",
-                              json={}, headers=h_admin)).json()
-    assert body["code"] == 1 and "不支持在审批中心内审批" in body["message"]
+                              json={}, headers=h_pm)).json()
+    assert body["code"] == 0 and body["data"]["finished"] is True, body
+    status = (await db.execute(text(
+        "SELECT approval_status FROM supplier_claim WHERE id = :i"), {"i": a["id"]})).scalar()
+    assert status == "approved"  # 回写映射生效
 
 
 async def test_businesses_endpoints_require_permission(client):
@@ -248,22 +274,24 @@ async def test_businesses_endpoints_require_permission(client):
                               json={"sql_text": SQL_TEXT}, headers=h_pm)).status_code == 403
 
 
-async def test_timeout_reminder_targets_sql_business_and_stops_when_disabled(client, db):
-    """11) 超时提醒：SQL 业务条目带链节点角色解析出的 approver_user_ids，停用后不再命中。"""
+async def test_timeout_reminder_targets_sql_business_and_stops_when_chain_disabled(client, db):
+    """11) 超时提醒：中心实例超时后命中当前节点审批人；停用审批链后不再提醒。"""
     from datetime import datetime, timedelta
 
     from app.core.database import engine
     from app.services.scheduler.approval_timeout_reminder import ApprovalTimeoutReminderScheduler
 
     h_admin, h_q = await login(client, ADMIN), await login(client, Q)
-    a = await create(client, h_q, 500, submit=True)
+    a = await create(client, h_q, 500)
     assert (await register(client, h_admin)).json()["code"] == 0
     assert (await save_chain(client, h_admin, [
         {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager", "timeout_hours": 1},
     ])).json()["code"] == 0
-    async with engine.begin() as conn:
-        await conn.execute(text("UPDATE supplier_claim SET submitted_at = :ts WHERE id = :eid"),
-                           {"ts": datetime.now() - timedelta(hours=3), "eid": a["id"]})
+    assert (await submit_instance(client, h_q, a["id"])).json()["code"] == 0
+    async with engine.begin() as conn:  # 提醒扫描数据源在中心实例表，直改业务表不再生效
+        await conn.execute(text(
+            "UPDATE approval_instance SET submitted_at = :ts WHERE biz_type = :bt AND biz_id = :eid"),
+            {"ts": datetime.now() - timedelta(hours=3), "bt": BIZ_TYPE, "eid": a["id"]})
 
     scheduler = ApprovalTimeoutReminderScheduler()
     targets = [t for t in await scheduler._collect_targets(db) if t["biz_type"] == BIZ_TYPE]
@@ -271,8 +299,9 @@ async def test_timeout_reminder_targets_sql_business_and_stops_when_disabled(cli
     assert targets[0]["approver_user_ids"]
     assert targets[0]["wait_level"] == "overdue" and targets[0]["timeout_hours"] == 1
 
-    assert (await client.put(f"/api/v1/approvals/businesses/{BIZ_TYPE}",
-                             json=business_payload(is_active=False), headers=h_admin)).json()["code"] == 0
+    assert (await save_chain(client, h_admin, [
+        {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager", "timeout_hours": 1},
+    ], is_active=False)).json()["code"] == 0
     assert [t for t in await scheduler._collect_targets(db) if t["biz_type"] == BIZ_TYPE] == []
 
 
@@ -328,50 +357,34 @@ BROKEN_SQL = "SELECT 1 FROM table_that_does_not_exist"
 
 async def _insert_broken_business():
     """直插一条坏 SQL 业务（模拟历史坏配置：曾经健康、源表后来失效，绕过保存校验）。"""
-    from app.core.database import AsyncSessionLocal, engine
-    from app.services.common.approval_sql_provider import sync_sql_providers
+    from app.core.database import engine
 
     async with engine.begin() as conn:
         await conn.execute(text("""
             INSERT INTO approval_business
-                (biz_type, biz_name, mode, sql_text, field_mapping_json, condition_fields_json, is_active)
-            VALUES (:bt, '坏业务', 'sql', :sql, :fm, '[]', TRUE)
+                (biz_type, biz_name, mode, sql_text, field_mapping_json, condition_fields_json,
+                 writeback_json, is_active)
+            VALUES (:bt, '坏业务', 'sql', :sql, :fm, '[]', '{}', TRUE)
         """), {"bt": BROKEN_BIZ, "sql": BROKEN_SQL, "fm": json.dumps(FIELD_MAPPING)})
-    async with AsyncSessionLocal() as session:
-        await sync_sql_providers(session)
 
 
-async def test_broken_sql_before_healthy_business_does_not_hide_it(client, db):
-    """坏 SQL 注册顺序靠前时，也不能让后面的健康业务从待办 / 在途数 / 提醒扫描里静默消失（SAVEPOINT 隔离）。"""
-    from datetime import datetime, timedelta
-
-    from app.core.database import engine
-
+async def test_broken_sql_before_healthy_business_does_not_hide_it(client):
+    """坏 SQL 业务注册在前也不影响他人：待办查中心实例表、在途数查实例计数，均不执行取数 SQL。"""
     h_admin, h_q, h_pm = await login(client, ADMIN), await login(client, Q), await login(client, PM)
-    claim = await create(client, h_q, 500, submit=True)
-    await _insert_broken_business()  # id 更小 → provider 注册在前，先被执行
+    a = await create(client, h_q, 500)
+    await _insert_broken_business()  # id 更小 → 业务清单排在健康业务前
     assert (await register(client, h_admin)).json()["code"] == 0
-    assert (await save_chain(client, h_admin, [
-        {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager", "timeout_hours": 1},
-    ])).json()["code"] == 0
-    async with engine.begin() as conn:  # 造一条超时待办，让提醒扫描有目标
-        await conn.execute(text("UPDATE supplier_claim SET submitted_at = :ts WHERE id = :eid"),
-                           {"ts": datetime.now() - timedelta(hours=3), "eid": claim["id"]})
+    assert (await save_chain(client, h_admin, CHAIN)).json()["code"] == 0
+    assert (await submit_instance(client, h_q, a["id"])).json()["code"] == 0
 
     r = await client.get("/api/v1/approvals/pending", headers=h_pm)
     assert r.status_code == 200 and r.json()["code"] == 0
     assert BIZ_TYPE in {x["biz_type"] for x in r.json()["data"]["items"]}, "坏业务在前时健康业务不得被跳过"
 
     r = await client.get("/api/v1/approvals/businesses", headers=h_admin)
+    assert r.json()["code"] == 0, r.text
     healthy = next(x for x in r.json()["data"]["items"] if x["biz_type"] == BIZ_TYPE)
     assert healthy["pending_count"] == 1
-
-    # 超时提醒扫描同样不能被坏业务阻断（调度器侧也有 SAVEPOINT 隔离）
-    from app.services.scheduler.approval_timeout_reminder import ApprovalTimeoutReminderScheduler
-
-    scheduler = ApprovalTimeoutReminderScheduler()
-    collected = await scheduler._collect_targets(db)
-    assert BIZ_TYPE in {t["biz_type"] for t in collected}
 
 
 async def test_broken_business_can_be_disabled(client):
@@ -388,10 +401,13 @@ async def test_broken_business_can_be_disabled(client):
 
 
 async def test_pending_provider_mode_filter(client):
-    """provider_mode 筛选：builtin 只留代码 Provider 业务，sql 只留 SQL 接入业务；stats 仍为全量口径。"""
+    """provider_mode 筛选：builtin 只留代码 Adapter 业务，sql 只留声明式业务；stats 仍为全量口径。"""
     h_admin, h_q = await login(client, ADMIN), await login(client, Q)
-    await create(client, h_q, 500, submit=True)
+    await create(client, h_q, 500, submit=True)  # builtin：索赔单经业务端提交
+    a = await create(client, h_q, 600)           # 声明式：草稿经中心提交
     assert (await register(client, h_admin)).json()["code"] == 0
+    assert (await save_chain(client, h_admin, CHAIN)).json()["code"] == 0
+    assert (await submit_instance(client, h_q, a["id"])).json()["code"] == 0
 
     r = await client.get("/api/v1/approvals/pending", params={"provider_mode": "builtin"}, headers=h_admin)
     data = r.json()["data"]
@@ -406,11 +422,18 @@ async def test_pending_provider_mode_filter(client):
     assert {x["biz_type"] for x in r.json()["data"]["items"]} == {"supplier_claim", BIZ_TYPE}
 
 
-async def test_sql_business_recall_rejected_in_center(client):
-    """SQL 接入业务无撤回能力：统一撤回端点返回业务错误。"""
+async def test_sql_business_recall_by_applicant(client):
+    """声明式业务支持撤回：发起人页内撤回 → 实例 recalled，「我发起的」可见且不可再撤。"""
     h_admin, h_q = await login(client, ADMIN), await login(client, Q)
-    a = await create(client, h_q, 500, submit=True)
+    a = await create(client, h_q, 500)
     assert (await register(client, h_admin)).json()["code"] == 0
+    assert (await save_chain(client, h_admin, CHAIN)).json()["code"] == 0
+    assert (await submit_instance(client, h_q, a["id"])).json()["code"] == 0
+
     body = (await client.post(f"/api/v1/approvals/items/{BIZ_TYPE}/{a['id']}/recall",
-                              json={}, headers=h_admin)).json()
-    assert body["code"] == 1 and "不支持在审批中心内" in body["message"]
+                              json={}, headers=h_q)).json()
+    assert body["code"] == 0 and "撤回" in body["message"], body
+
+    r = await client.get("/api/v1/approvals/submitted", params={"biz_type": BIZ_TYPE}, headers=h_q)
+    mine = next(x for x in r.json()["data"]["items"] if x["id"] == a["id"])
+    assert mine["status"] == "recalled" and mine["can_recall"] is False

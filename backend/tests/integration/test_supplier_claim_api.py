@@ -249,21 +249,21 @@ async def test_recall_pending_then_resubmit(client):
     assert r.json()["code"] == 0
 
 
-async def test_revoke_rolls_back_one_level(client):
+async def test_revoke_returns_not_supported_and_keeps_state(client):
+    """中心化后暂不提供反审核：接口保留优雅降级（code=1），在途单据状态与级别不受影响。"""
     h_q, h_pm, h_mgr = await login(client, Q), await login(client, PM), await login(client, MGR)
     a = await create(client, h_q, 2000, submit=True)
     assert (await act(client, h_pm, a["id"], "approve")).json()["code"] == 0
     a = await get_claim(client, h_q, a["id"])
     assert a["approval_level"] == 2
-    # 第2级（供应链经理）先审批推进到第3级，再撤回自己这次审批 → 回退到第2级
+    # 第2级（供应链经理）审批推进到第3级财务结算（2000 < 5000，总经理节点被条件过滤）
     assert (await act(client, h_mgr, a["id"], "approve", "属实")).json()["code"] == 0
     a = await get_claim(client, h_q, a["id"])
     assert a["approval_level"] == 3
     r = await act(client, h_mgr, a["id"], "revoke-approval")
-    assert r.json()["code"] == 0
+    assert r.json()["code"] == 1 and "暂不支持" in r.json()["message"]
     a = await get_claim(client, h_q, a["id"])
-    assert a["approval_level"] == 2
-    assert any(l["action"] == "revoked" for l in a["approval_logs"])
+    assert a["approval_status"] == "pending" and a["approval_level"] == 3
 
 
 async def test_revoke_at_level1_denied(client):
@@ -274,11 +274,12 @@ async def test_revoke_at_level1_denied(client):
 
 
 async def test_revoke_by_other_approver_denied(client):
+    """反审核统一优雅降级：非当前节点审批人调用同样返回 code=1「暂不支持」。"""
     h_q, h_pm, h_fin = await login(client, Q), await login(client, PM), await login(client, FIN)
     a = await create(client, h_q, 2000, submit=True)
     assert (await act(client, h_pm, a["id"], "approve")).json()["code"] == 0
     r = await act(client, h_fin, a["id"], "revoke-approval")
-    assert r.json()["code"] == 1 and "只能撤回自己" in r.json()["message"]
+    assert r.json()["code"] == 1 and "暂不支持" in r.json()["message"]
 
 
 async def test_same_person_auto_skip_across_levels(client):

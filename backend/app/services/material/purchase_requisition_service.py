@@ -9,7 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
@@ -171,6 +171,28 @@ class PurchaseRequisitionService:
             .where(PurchaseRequisitionApprovalLog.req_id == req_id)
             .order_by(PurchaseRequisitionApprovalLog.id)
         )).scalars().all()
+        # 中心化后新流水只写 approval_record：并入并映射回旧日志形状，业务详情页不感知架构切换。
+        # 存量迁移（migrate_approval_center.py）曾把旧日志复制进中心表，按 (action, approver,
+        # operated_at) 去重防双计（与迁移脚本自身的幂等键一致）。
+        legacy_keys = {(log.action, log.approver, log.operated_at) for log in logs}
+        center_records = []
+        for r in (await db.execute(text("""
+            SELECT r.id, r.node_seq AS approval_level, r.operator AS approver, r.action,
+                   r.comment, r.created_at AS operated_at
+            FROM approval_record r
+            JOIN approval_instance i ON i.id = r.instance_id
+            WHERE i.biz_type = 'purchase_requisition' AND i.biz_id = :rid
+            ORDER BY r.id
+        """), {"rid": req_id})).mappings():
+            rec = dict(r)
+            if (rec["action"], rec["approver"], rec["operated_at"]) in legacy_keys:
+                continue
+            center_records.append(rec)
+        entries = [{
+            "id": log.id, "approval_level": log.approval_level, "approver": log.approver,
+            "action": log.action, "comment": log.comment, "operated_at": log.operated_at,
+        } for log in logs] + center_records
+        entries.sort(key=lambda e: (e["operated_at"] or datetime.min, e["id"] or 0))
         data = self._serialize_req(req)
         data["lines"] = [self._serialize_line(l) for l in lines]
         data["line_count"] = len(lines)
@@ -179,13 +201,14 @@ class PurchaseRequisitionService:
             ((l.req_qty or _ZERO) * (l.unit_price or _ZERO) for l in lines), _ZERO))
         approval_round = 0
         log_items = []
-        for log in logs:
-            if log.action == "submit":
+        for entry in entries:
+            if entry["action"] == "submit":
                 approval_round += 1
             log_items.append({
-                "id": log.id, "approval_level": log.approval_level, "approver": log.approver,
-                "action": log.action, "comment": log.comment,
-                "operated_at": _iso(log.operated_at), "round": approval_round,
+                "id": entry["id"], "approval_level": entry["approval_level"],
+                "approver": entry["approver"], "action": entry["action"],
+                "comment": entry["comment"],
+                "operated_at": _iso(entry["operated_at"]), "round": approval_round,
             })
         data["approval_logs"] = log_items
         data["approval_round"] = approval_round

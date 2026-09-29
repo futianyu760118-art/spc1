@@ -141,9 +141,10 @@ async def test_pending_overdue_only_filter(client):
     h_q, h_pm = await login(client, Q), await login(client, PM)
     old = await create(client, h_q, 500, submit=True, supplier="超时供应商")
     fresh = await create(client, h_q, 500, submit=True, supplier="正常供应商")
-    async with engine.begin() as conn:
+    async with engine.begin() as conn:  # 待办时效数据源在中心实例表，直改业务表不再生效
         await conn.execute(
-            text("UPDATE supplier_claim SET submitted_at = :ts WHERE id = :eid"),
+            text("UPDATE approval_instance SET submitted_at = :ts"
+                 " WHERE biz_type = 'supplier_claim' AND biz_id = :eid"),
             {"ts": datetime.now() - timedelta(hours=50), "eid": old["id"]},
         )
     r = await client.get("/api/v1/approvals/pending", params={"overdue_only": True}, headers=h_pm)
@@ -471,8 +472,9 @@ async def test_timeout_reminder_skips_disabled_business(client, db):
     assert (await client.put("/api/v1/approvals/configs/supplier_claim",
                              json={"nodes": nodes}, headers=h_admin)).json()["code"] == 0
     a = await create(client, h_q, 500, submit=True)
-    async with engine.begin() as conn:
-        await conn.execute(sql_text("UPDATE supplier_claim SET submitted_at = :ts WHERE id = :eid"),
+    async with engine.begin() as conn:  # 提醒扫描数据源在中心实例表，直改业务表不再生效
+        await conn.execute(sql_text("UPDATE approval_instance SET submitted_at = :ts"
+                                    " WHERE biz_type = 'supplier_claim' AND biz_id = :eid"),
                            {"ts": datetime.now() - timedelta(hours=3), "eid": a["id"]})
 
     scheduler = ApprovalTimeoutReminderScheduler()
