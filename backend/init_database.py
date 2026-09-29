@@ -424,6 +424,13 @@ class DatabaseInitializer:
                 "channel_sessions": "JSONB",
                 "scm_employee_id": "BIGINT",
             },
+            "feedback": {
+                "ai_status": "VARCHAR(16) NOT NULL DEFAULT 'none'",
+                "ai_branch": "VARCHAR(128)",
+                "ai_note": "TEXT",
+                "ai_requested_by": "VARCHAR(64)",
+                "ai_requested_at": "TIMESTAMP",
+            },
             "notification": {
                 "sender_id": "INTEGER",
                 "sender_name": "VARCHAR(64)",

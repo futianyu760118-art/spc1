@@ -30,5 +30,13 @@ class Feedback(Base):
     submitter_id = Column(Integer, nullable=False, index=True)
     submitter_name = Column(String(64), nullable=False)
 
+    # AI 自动实现
+    ai_status = Column(String(16), nullable=False, default="none", index=True,
+                       comment="none/queued/running/done/failed")
+    ai_branch = Column(String(128), nullable=True, comment="runner 产出的本地分支名")
+    ai_note = Column(Text, nullable=True, comment="runner 结果摘要/失败原因")
+    ai_requested_by = Column(String(64), nullable=True, comment="派单人 username")
+    ai_requested_at = Column(DateTime, nullable=True, comment="派单时间")
+
     created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
