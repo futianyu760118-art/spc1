@@ -15,6 +15,7 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -69,16 +70,22 @@ def load_config(path: Path) -> dict:
         str(REPO_DIR_DEFAULT.parent / f"{REPO_DIR_DEFAULT.name}-ai-worktrees"),
     )
     cfg.setdefault("backend_python", "python")
-    cfg.setdefault("gates", {})
+    if not isinstance(cfg.get("gates"), dict):
+        cfg["gates"] = {}
+    if not isinstance(cfg.get("claude"), dict):
+        cfg["claude"] = {}
+    try:
+        cfg["poll_interval_seconds"] = max(1, int(cfg["poll_interval_seconds"]))
+    except (TypeError, ValueError):
+        raise SystemExit("poll_interval_seconds 必须是整数")
     cfg["gates"].setdefault("backend_command", "{python} -m pytest -q")
     cfg["gates"].setdefault("frontend_command", "npm run build")
     cfg["gates"].setdefault("timeout_minutes", 30)
-    cfg.setdefault("claude", {})
     cfg["claude"].setdefault("command", "claude")
     cfg["claude"].setdefault("timeout_minutes", 60)
     cfg["claude"].setdefault("allowed_tools", [
         "Read", "Edit", "Write", "Glob", "Grep",
-        "Bash(python:*)", "Bash(npm:*)", "Bash(npx:*)",
+        "Bash(python:*)", "Bash(npm run build:*)", "Bash(npx tsc:*)",
         "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
     ])
     cfg.setdefault("blocked_globs", [
@@ -193,7 +200,10 @@ def resolve_base_branch(cfg: dict) -> str:
 
 
 def changed_files(worktree: Path) -> list[str]:
-    result = run_command(["git", "status", "--porcelain"], cwd=worktree, check=True)
+    result = run_command(
+        ["git", "-c", "core.quotepath=false", "status", "--porcelain"],
+        cwd=worktree, check=True,
+    )
     files: list[str] = []
     for line in (result.stdout or "").splitlines():
         if len(line) < 4:
@@ -203,6 +213,61 @@ def changed_files(worktree: Path) -> list[str]:
             path = path.split(" -> ", 1)[1]
         files.append(path.strip('"').replace("\\", "/"))
     return files
+
+
+def committed_changes(worktree: Path, base_sha: str) -> list[str]:
+    """代理自行 commit 时，取其相对基线提交的文件清单。"""
+    result = run_command(["git", "diff", "--name-only", base_sha, "HEAD"], cwd=worktree, check=True)
+    return [line.strip().replace("\\", "/") for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+def load_env_values(repo_dir: Path) -> dict[str, str]:
+    """从主仓库 .env 系列文件解析键值（不落日志），供门禁子进程注入环境变量。"""
+    env: dict[str, str] = {}
+    for relative in ("backend/.env.local", ".env.local", "backend/.env", ".env"):
+        path = repo_dir / relative
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            env.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    return env
+
+
+def ensure_node_modules(worktree: Path, repo_dir: Path) -> None:
+    """为 worktree 前端门禁创建指向主仓库 node_modules 的链接（不复制、不提交）。"""
+    link = worktree / "frontend" / "node_modules"
+    if link.exists():
+        return
+    source = repo_dir / "frontend" / "node_modules"
+    if not source.exists():
+        raise RunFailure(f"主仓库缺少 {source}，请先在主仓库执行 npm install 再跑前端门禁")
+    if os.name == "nt":
+        result = run_command(["cmd", "/c", "mklink", "/J", str(link), str(source)])
+    else:
+        result = run_command(["ln", "-s", str(source), str(link)])
+    if result.returncode != 0:
+        raise RunFailure(f"node_modules 链接失败: {(result.stderr or '').strip()}")
+
+
+def remove_node_modules_link(worktree: Path) -> None:
+    link = worktree / "frontend" / "node_modules"
+    if not link.exists():
+        return
+    if os.name == "nt":
+        run_command(["cmd", "/c", "rmdir", str(link)], check=False)
+    else:
+        run_command(["rm", str(link)], check=False)
+
+
+def wait_for(seconds: float) -> None:
+    """可被 Ctrl+C 打断的等待。"""
+    deadline = time.monotonic() + seconds
+    while not STOP["requested"] and time.monotonic() < deadline:
+        time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
 
 
 def sensitive_hits(cfg: dict, files: list[str]) -> list[str]:
@@ -215,7 +280,7 @@ def sensitive_hits(cfg: dict, files: list[str]) -> list[str]:
     return hits
 
 
-def prepare_worktree(cfg: dict, feedback: dict) -> tuple[Path, str]:
+def prepare_worktree(cfg: dict, feedback: dict) -> tuple[Path, str, str]:
     feedback_id = feedback["id"]
     worktrees_dir = Path(cfg["worktrees_dir"])
     worktrees_dir.mkdir(parents=True, exist_ok=True)
@@ -223,11 +288,14 @@ def prepare_worktree(cfg: dict, feedback: dict) -> tuple[Path, str]:
     branch = f"ai-feedback/{feedback_id}"
     if worktree.exists():
         git(cfg, "worktree", "remove", "--force", str(worktree), check=False)
+        if worktree.exists():
+            shutil.rmtree(worktree, ignore_errors=True)
     git(cfg, "worktree", "prune", check=False)
     git(cfg, "branch", "-D", branch, check=False)
     git(cfg, "worktree", "add", "-b", branch, str(worktree), cfg["base_branch"], check=True)
-    log(f"worktree 就绪: {worktree}（分支 {branch}）")
-    return worktree, branch
+    base_sha = git(cfg, "rev-parse", "HEAD", cwd=worktree, check=True).stdout.strip()
+    log(f"worktree 就绪: {worktree}（分支 {branch}，基线 {base_sha[:8]}）")
+    return worktree, branch, base_sha
 
 
 def download_attachments(api: ApiClient, feedback: dict, run_dir: Path) -> list[Path]:
@@ -300,15 +368,17 @@ def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path) -> dict
     ]
     if claude_cfg["allowed_tools"]:
         parts += ["--allowedTools", ",".join(claude_cfg["allowed_tools"])]
-    command_line = " ".join(parts)
-    log(f"调用代理: {command_line}（超时 {claude_cfg['timeout_minutes']} 分钟）")
+    log(f"调用代理: {' '.join(parts)}（超时 {claude_cfg['timeout_minutes']} 分钟）")
     try:
         result = run_command(
-            command_line, cwd=worktree, shell=True, input_text=prompt,
+            parts, cwd=worktree, input_text=prompt,
             timeout=claude_cfg["timeout_minutes"] * 60,
         )
-    except subprocess.TimeoutExpired:
-        raise RunFailure(f"代理执行超时（>{claude_cfg['timeout_minutes']} 分钟）")
+    except subprocess.TimeoutExpired as exc:
+        (run_dir / "claude-output.txt").write_text(exc.stdout or "", encoding="utf-8")
+        if exc.stderr:
+            (run_dir / "claude-stderr.txt").write_text(exc.stderr, encoding="utf-8")
+        raise RunFailure(f"代理执行超时（>{claude_cfg['timeout_minutes']} 分钟），日志: {run_dir}")
     (run_dir / "claude-output.txt").write_text(result.stdout or "", encoding="utf-8")
     if result.stderr:
         (run_dir / "claude-stderr.txt").write_text(result.stderr, encoding="utf-8")
@@ -321,6 +391,7 @@ def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path) -> dict
 
 
 def run_gates(cfg: dict, worktree: Path, files: list[str], run_dir: Path) -> str:
+    repo_dir = Path(cfg["repo_dir"])
     checks: list[tuple[str, str, Path]] = []
     backend_command = cfg["gates"]["backend_command"].format(python=cfg["backend_python"])
     if any(path.startswith("backend/") for path in files):
@@ -331,29 +402,41 @@ def run_gates(cfg: dict, worktree: Path, files: list[str], run_dir: Path) -> str
         raise RunFailure(f"改动不属于 backend/ 或 frontend/，无法执行门禁: {', '.join(files)}")
 
     timeout = cfg["gates"]["timeout_minutes"] * 60
+    backend_env = {**os.environ, **load_env_values(repo_dir)}
     gate_lines: list[str] = []
-    for name, command, cwd in checks:
-        log(f"门禁执行 [{name}]: {command}")
-        try:
-            result = run_command(command, cwd=cwd, shell=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            gate_lines.append(f"[{name}] 超时（>{cfg['gates']['timeout_minutes']} 分钟）")
-            (run_dir / "gates.log").write_text("\n".join(gate_lines), encoding="utf-8")
-            raise RunFailure(f"门禁超时 [{name}]，日志: {run_dir}")
-        gate_lines.append(f"[{name}] exit={result.returncode}")
-        gate_lines.append((result.stdout or "")[-3000:])
-        gate_lines.append((result.stderr or "")[-2000:])
-        if result.returncode != 0:
-            (run_dir / "gates.log").write_text("\n".join(gate_lines), encoding="utf-8")
-            raise RunFailure(f"门禁失败 [{name}] exit={result.returncode}，日志: {run_dir}")
+    try:
+        for name, command, cwd in checks:
+            if name == "frontend":
+                ensure_node_modules(worktree, repo_dir)
+            log(f"门禁执行 [{name}]: {command}")
+            try:
+                result = run_command(
+                    command, cwd=cwd, shell=True, timeout=timeout,
+                    env=backend_env if name == "backend" else None,
+                )
+            except subprocess.TimeoutExpired:
+                gate_lines.append(f"[{name}] 超时（>{cfg['gates']['timeout_minutes']} 分钟）")
+                raise RunFailure(f"门禁超时 [{name}]，日志: {run_dir}")
+            gate_lines.append(f"[{name}] exit={result.returncode}")
+            gate_lines.append((result.stdout or "")[-3000:])
+            gate_lines.append((result.stderr or "")[-2000:])
+            if result.returncode != 0:
+                raise RunFailure(f"门禁失败 [{name}] exit={result.returncode}，日志: {run_dir}")
+    finally:
+        (run_dir / "gates.log").write_text("\n".join(gate_lines), encoding="utf-8")
+        remove_node_modules_link(worktree)
     return "\n".join(gate_lines)
 
 
-def commit_changes(worktree: Path, feedback: dict) -> str:
-    run_command(["git", "add", "-A"], cwd=worktree, check=True)
-    message = f"fix(feedback#{feedback['id']}): {feedback.get('title') or ''}".strip()
-    run_command(["git", "commit", "-m", message], cwd=worktree, check=True)
-    result = run_command(["git", "show", "--stat", "--oneline", "HEAD"], cwd=worktree, check=True)
+def commit_changes(worktree: Path, feedback: dict, base_sha: str) -> str:
+    if changed_files(worktree):
+        run_command(["git", "add", "-A"], cwd=worktree, check=True)
+        message = f"fix(feedback#{feedback['id']}): {feedback.get('title') or ''}".strip()
+        run_command(["git", "commit", "-m", message], cwd=worktree, check=True)
+    result = run_command(
+        ["git", "log", "--stat", "--oneline", f"{base_sha}..HEAD"],
+        cwd=worktree, check=True,
+    )
     return result.stdout
 
 
@@ -376,7 +459,7 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     log(f"开始处理反馈 #{feedback_id}: {feedback.get('title')}")
     try:
-        worktree, branch = prepare_worktree(cfg, feedback)
+        worktree, branch, base_sha = prepare_worktree(cfg, feedback)
         attachments = download_attachments(api, feedback, run_dir)
         prompt = build_prompt(feedback, attachments)
         (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
@@ -385,7 +468,7 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
         if parsed["is_error"]:
             raise RunFailure(f"代理执行报错: {parsed['result'][:500] or '未知错误'}")
 
-        files = changed_files(worktree)
+        files = sorted(set(changed_files(worktree)) | set(committed_changes(worktree, base_sha)))
         if not files:
             raise RunFailure("代理未产生任何文件改动")
         blocked = sensitive_hits(cfg, files)
@@ -393,9 +476,8 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
             raise RunFailure(f"改动触碰敏感文件，已阻断: {', '.join(blocked)}")
 
         gate_summary = run_gates(cfg, worktree, files, run_dir)
-        (run_dir / "gates.log").write_text(gate_summary, encoding="utf-8")
 
-        commit_stat = commit_changes(worktree, feedback)
+        commit_stat = commit_changes(worktree, feedback, base_sha)
         (run_dir / "diff-stat.txt").write_text(commit_stat, encoding="utf-8")
 
         summary = compose_summary(parsed, branch, commit_stat, gate_summary, run_dir)
@@ -416,20 +498,30 @@ def cleanup_merged(cfg: dict) -> None:
         return
     base = resolve_base_branch(cfg)
     merged_output = git(cfg, "branch", "--merged", base, check=False).stdout or ""
+    merged_branches = {
+        line.strip().lstrip("* ").strip()
+        for line in merged_output.splitlines()
+        if line.strip()
+    }
     for worktree in sorted(worktrees_dir.glob("fb-*")):
         match = re.fullmatch(r"fb-(\d+)", worktree.name)
         if not match:
             continue
         branch = f"ai-feedback/{match.group(1)}"
-        if branch not in merged_output:
+        if branch not in merged_branches:
             log(f"保留未合入分支 {branch}")
             continue
+        remove_node_modules_link(worktree)
         git(cfg, "worktree", "remove", "--force", str(worktree), check=False)
         git(cfg, "branch", "-d", branch, check=False)
         log(f"已清理 {branch}")
 
 
 def handle_sigint(signum, frame) -> None:
+    if STOP["requested"]:
+        log("强制退出")
+        release_lock()
+        os._exit(130)
     STOP["requested"] = True
     log("收到中断，完成当前任务后退出（再按一次 Ctrl+C 强制退出）")
 
@@ -455,13 +547,13 @@ def main() -> None:
                 items = api.list_queued(page_size=10)
             except Exception as exc:
                 log(f"拉取队列失败: {exc}")
-                time.sleep(cfg["poll_interval_seconds"])
+                wait_for(cfg["poll_interval_seconds"])
                 continue
             if not items:
                 if args.once:
                     log("队列为空，退出（--once）")
                     return
-                time.sleep(cfg["poll_interval_seconds"])
+                wait_for(cfg["poll_interval_seconds"])
                 continue
             for item in items:
                 if STOP["requested"]:
