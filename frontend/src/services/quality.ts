@@ -59,7 +59,6 @@ export const qualityApi = {
   reject: (id: number, comment: string, expectedVersion?: number) =>
     api.post(`/quality/supplier-claims/${id}/reject`, { comment, expected_version: expectedVersion }),
   recall: (id: number) => api.post(`/quality/supplier-claims/${id}/recall`),
-  revokeApproval: (id: number) => api.post(`/quality/supplier-claims/${id}/revoke-approval`),
   searchSuppliers: (keyword: string) =>
     api.get('/quality/supplier-claims/suppliers/search', { params: { keyword } }),
 }

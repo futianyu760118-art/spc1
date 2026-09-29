@@ -329,21 +329,18 @@ async def test_register_rejects_unexecutable_sql_and_bad_id_mapping(client):
 
 
 async def test_broken_sql_in_table_does_not_break_pending(client):
-    """历史坏配置（直接入库绕过校验）也不能拖垮全员待办：该业务降级为空，其它业务照常。"""
+    """历史坏配置（直接入库绕过校验）也不能拖垮全员待办：待办查中心实例表，不执行取数 SQL。"""
     h_admin, h_q, h_pm = await login(client, ADMIN), await login(client, Q), await login(client, PM)
     await create(client, h_q, 500, submit=True)
     assert (await register(client, h_admin)).json()["code"] == 0
     assert (await save_chain(client, h_admin, CHAIN)).json()["code"] == 0
 
-    from app.core.database import AsyncSessionLocal, engine
-    from app.services.common.approval_sql_provider import sync_sql_providers
+    from app.core.database import engine
 
     async with engine.begin() as conn:
         await conn.execute(text(
             "UPDATE approval_business SET sql_text = 'SELECT 1 FROM table_that_does_not_exist' WHERE biz_type = :bt"
         ), {"bt": BIZ_TYPE})
-    async with AsyncSessionLocal() as session:
-        await sync_sql_providers(session)
 
     r = await client.get("/api/v1/approvals/pending", headers=h_pm)
     assert r.status_code == 200 and r.json()["code"] == 0

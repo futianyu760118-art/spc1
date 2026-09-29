@@ -23,6 +23,10 @@ CLAIM_ITEM_LABELS = {
     "man_hour_fee": "人工费用", "additional_fee": "额外费用", "punishment": "处罚",
     "downgrade_use": "降级使用", "direct_loss": "直接损失",
 }
+CLAIM_REASON_LABELS = {
+    "field_customer_claim": "现场/客户投诉",
+    "supply_performance": "供应业绩",
+}
 RETURN_REQUIREMENTS = {"no_return", "return_supplier_fee"}
 
 
@@ -383,25 +387,4 @@ class SupplierClaimService:
             return False
         ok, _ = check_node_permission(node, approver, approver_role)
         return ok
-
-    async def approved_by_me(self, approver: str) -> list[dict]:
-        """我已审批：我最近一次 approve/reject 的单据（被反审核的审批已置 revoked，不计入）。"""
-        rows = await self.db.execute(text("""
-            SELECT c.*, l.action AS my_action, l.comment AS my_comment, l.operated_at AS acted_at
-            FROM supplier_claim c
-            JOIN LATERAL (
-                SELECT action, comment, operated_at
-                FROM supplier_claim_approval_log
-                WHERE claim_id = c.id AND approver = :ap AND action IN ('approve', 'reject')
-                ORDER BY id DESC LIMIT 1
-            ) l ON TRUE
-            ORDER BY l.operated_at DESC NULLS LAST
-        """), {"ap": approver})
-        return [self._serialize(dict(r._mapping)) for r in rows]
-
-    async def submitted_by_me(self, applicant: str) -> list[dict]:
-        rows = await self.db.execute(text("""
-            SELECT * FROM supplier_claim WHERE applicant = :ap ORDER BY submitted_at DESC NULLS LAST
-        """), {"ap": applicant})
-        return [self._serialize(dict(r._mapping)) for r in rows]
 

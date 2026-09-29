@@ -10,8 +10,7 @@ from app.core.security import PermissionChecker, oauth2_scheme, decode_access_to
 from app.schemas.common import ResponseModel
 from app.services.common.export_service import GenericExportService, ExportColumn
 from app.services.common.approval_center_service import ApprovalConflictError
-from app.services.common.approval_providers import CLAIM_REASON_LABELS
-from app.services.quality.supplier_claim_service import SupplierClaimService, CLAIM_ITEM_LABELS
+from app.services.quality.supplier_claim_service import SupplierClaimService, CLAIM_ITEM_LABELS, CLAIM_REASON_LABELS
 
 CLAIM_EXPORT_COLUMNS = [
     ExportColumn("claim_no", "索赔单号", 18),

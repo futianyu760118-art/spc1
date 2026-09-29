@@ -23,8 +23,6 @@ from app.models.material.purchase_requisition import (
 )
 from app.models.mrp.suggestion import MrpSuggestion
 from app.services.common.approval_center_service import ApprovalCenterService
-from app.services.common.approval_engine import check_node_permission
-from app.services.common.approval_registry import ApprovalActionRequest
 
 logger = logging.getLogger(__name__)
 
@@ -492,101 +490,6 @@ class PurchaseRequisitionService:
         await self._load_req(db, req_id)
         await db.flush()
         return await self.get_detail(db, req_id)
-
-    async def approve(self, db: AsyncSession, request: ApprovalActionRequest) -> dict:
-        return await ApprovalCenterService(db).approve(
-            "purchase_requisition", request.entity_id, request.approver, request.comment,
-            operator_role=request.approver_role, expected_version=request.expected_version)
-
-    async def reject(self, db: AsyncSession, request: ApprovalActionRequest) -> dict:
-        return await ApprovalCenterService(db).reject(
-            "purchase_requisition", request.entity_id, request.approver, request.comment,
-            operator_role=request.approver_role, expected_version=request.expected_version)
-
-    async def recall(self, db: AsyncSession, request: ApprovalActionRequest) -> dict:
-        if request.approver_role != "admin":
-            try:
-                req = await self._load_req(db, request.entity_id)
-            except RequisitionNotFoundError:
-                return {"success": False, "message": "采购申请单不存在"}
-            if req.applicant != request.approver:
-                return {"success": False, "message": "仅发起人可撤回该采购申请单"}
-        result = await ApprovalCenterService(db).recall(
-            "purchase_requisition", request.entity_id, request.approver, operator_role=request.approver_role)
-        if not result.get("success"):
-            return result
-        return {"success": True, "message": "已撤回"}
-
-    # ---------- 审批中心取数 ----------
-
-    async def pending_approvals(self, db: AsyncSession, approver_username: str = "",
-                                approver_role: str = "") -> list[dict]:
-        rows = (await db.execute(
-            select(PurchaseRequisition)
-            .where(PurchaseRequisition.approval_status == "pending")
-            .order_by(PurchaseRequisition.submitted_at.desc().nulls_last())
-        )).scalars().all()
-        stats = await self._line_stats(db, [r.id for r in rows])
-        items = []
-        for req in rows:
-            count, amount = stats.get(req.id, (0, _ZERO))
-            data = self._serialize_req(req, line_count=count, total_amount=amount)
-            if approver_role != "admin" and not self._is_current_node_approver(data, approver_username, approver_role):
-                continue
-            items.append(data)
-        return items
-
-    @staticmethod
-    def _current_node(d: dict) -> Optional[dict]:
-        snap = d.get("approval_snapshot") or []
-        return next((n for n in snap if n.get("seq") == d.get("approval_level")), None)
-
-    def _is_current_node_approver(self, d: dict, approver: str, approver_role: str) -> bool:
-        node = self._current_node(d)
-        if not node:
-            return False
-        ok, _ = check_node_permission(node, approver, approver_role)
-        return ok
-
-    async def approved_requisitions(self, db: AsyncSession, approver: str) -> list[dict]:
-        """我已审批：我最近一次 approve/reject 的单据（被反审核的审批已置 revoked，不计入）。"""
-        latest_log_id = (
-            select(func.max(PurchaseRequisitionApprovalLog.id))
-            .where(
-                PurchaseRequisitionApprovalLog.req_id == PurchaseRequisition.id,
-                PurchaseRequisitionApprovalLog.approver == approver,
-                PurchaseRequisitionApprovalLog.action.in_(("approve", "reject")),
-            )
-            .correlate(PurchaseRequisition)
-            .scalar_subquery()
-        )
-        rows = (await db.execute(
-            select(PurchaseRequisition, PurchaseRequisitionApprovalLog.action,
-                   PurchaseRequisitionApprovalLog.comment, PurchaseRequisitionApprovalLog.operated_at)
-            .join(PurchaseRequisitionApprovalLog, PurchaseRequisitionApprovalLog.id == latest_log_id)
-            .order_by(PurchaseRequisitionApprovalLog.operated_at.desc().nulls_last())
-        )).all()
-        stats = await self._line_stats(db, [r[0].id for r in rows])
-        items = []
-        for req, action, comment, operated_at in rows:
-            count, amount = stats.get(req.id, (0, _ZERO))
-            data = self._serialize_req(req, line_count=count, total_amount=amount)
-            data.update({"my_action": action, "my_comment": comment, "acted_at": _iso(operated_at)})
-            items.append(data)
-        return items
-
-    async def submitted_requisitions(self, db: AsyncSession, applicant: str) -> list[dict]:
-        rows = (await db.execute(
-            select(PurchaseRequisition)
-            .where(PurchaseRequisition.applicant == applicant)
-            .order_by(PurchaseRequisition.submitted_at.desc().nulls_last())
-        )).scalars().all()
-        stats = await self._line_stats(db, [r.id for r in rows])
-        items = []
-        for req in rows:
-            count, amount = stats.get(req.id, (0, _ZERO))
-            items.append(self._serialize_req(req, line_count=count, total_amount=amount))
-        return items
 
     # ---------- 转采购订单 ----------
 
