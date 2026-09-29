@@ -293,6 +293,17 @@ class SupplierClaimService:
         except Exception as e:
             logger.warning("索赔单附件引用计数解绑失败(claim_id=%s): %s", claim_id, e)
         await self.db.execute(text("DELETE FROM supplier_claim_approval_log WHERE claim_id = :eid"), {"eid": claim_id})
+        # 中心三表随单据硬删一并清理，避免留孤儿实例/流水（与旧日志行同生命周期）
+        await self.db.execute(text("""
+            DELETE FROM approval_record WHERE instance_id IN (
+                SELECT id FROM approval_instance WHERE biz_type = 'supplier_claim' AND biz_id = :eid)
+        """), {"eid": claim_id})
+        await self.db.execute(text("""
+            DELETE FROM approval_task WHERE instance_id IN (
+                SELECT id FROM approval_instance WHERE biz_type = 'supplier_claim' AND biz_id = :eid)
+        """), {"eid": claim_id})
+        await self.db.execute(text(
+            "DELETE FROM approval_instance WHERE biz_type = 'supplier_claim' AND biz_id = :eid"), {"eid": claim_id})
         await self.db.execute(text("DELETE FROM supplier_claim WHERE id = :eid"), {"eid": claim_id})
         return {"success": True, "message": "已删除"}
 
