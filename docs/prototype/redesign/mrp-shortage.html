@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>缺口与建议 · SPC 中台重设计原型</title>
+<link rel="stylesheet" href="styles.css">
+<!--
+  PROTOTYPE — 一次性原型，非生产代码；含少量原型 JS（状态/类型 chips 叠加筛选 / 行展开三段依据 / 审核与转单演示）。
+  MRP 计划 · 缺口与建议（2026-09-28）：每一行就是一条缺口建议。
+    → 怎么看说明条 → 工具栏（搜索 / 批次下拉 / 状态 chips × 类型 chips / 批量审核 / 转采购申请单 / 导出）
+    → 主表（物料 / 类型 / 缺口数量 / 需求日 due-pill / 下单日 紧急红 / 供应商 / 来源 / 状态 / 操作）
+    → 行展开三段面板：① 为什么缺（需求来源）② 有什么可用（供给明细，替代行紫 tag）③ 怎么补（建议卡 + 取整 + 提前期倒推）
+      样本 ① E2835 / ② JFS05 / ④ DTB19V(替代抵扣 300) / ⑤ 0805.50V104K(安全库存补货) 给完整三段，其余简化。
+  批次 MRPRUN-20260928-035 · 建议 1,001 条 · 演示样本 12 条，与 mrp-plan / mrp-requisition 数据呼应。
+-->
+<style>
+  .ov{position:fixed;inset:0;display:flex;z-index:9998;opacity:0;transition:opacity .15s;pointer-events:none}
+  .ov.show{opacity:1}
+  .info-strip{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;background:var(--info-bg);border:1px solid var(--info-bd);border-radius:var(--r-md);padding:9px 14px;font-size:var(--fs-12);color:#075985;line-height:1.7}
+  .info-strip b{color:#075985}
+  .info-strip svg{flex-shrink:0;margin-top:2px;color:var(--brand-500)}
+  .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .toolbar .chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .toolbar .right{margin-left:auto;display:flex;gap:6px;align-items:center}
+  .chip-sep{width:1px;height:18px;background:var(--gray-200);margin:0 3px}
+  .tbl th{white-space:nowrap;background:var(--gray-50)}
+  .tbl td{white-space:nowrap;height:42px}
+  .open-tr{width:30px;text-align:center;cursor:pointer;color:var(--text-3)}
+  .open-tr svg{transition:transform .15s;vertical-align:-2px}
+  tr.openx .open-tr svg{transform:rotate(180deg);color:var(--brand-500)}
+  .link{color:var(--brand-600);text-decoration:none;font-weight:600;cursor:pointer}
+  a.link:hover{text-decoration:underline}
+  .row-links a{margin-right:10px;cursor:pointer}
+  .zero2{color:var(--text-3)}
+  .mc{font-size:12.5px;font-weight:600;color:var(--text-1);font-variant-numeric:tabular-nums}
+  .sp{font-size:10.5px;color:var(--text-3);margin-top:1px;font-weight:400}
+  .gap-num{color:var(--danger);font-weight:700}
+  .od-red{color:var(--danger);font-weight:700}
+  .od-hurry{color:var(--warning);font-weight:700}
+  .od-past{color:var(--text-3)}
+  .od-note{font-size:10.5px;color:var(--text-3);margin-left:3px}
+  .subrow td{background:transparent;padding:0!important;white-space:normal}
+  .subrow .sub-pad{border-top:1px dashed var(--gray-200);background:#fbfcfe;padding:14px 18px 16px 20px}
+  .drill3{display:grid;grid-template-columns:1.05fr 1.25fr 1.1fr;gap:12px;align-items:start}
+  @media(max-width:1320px){.drill3{grid-template-columns:1fr}}
+  .drill-sec{border:1px solid var(--gray-200);border-radius:9px;background:#fff;padding:10px 12px;min-width:0}
+  .ds-h{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--text-1);margin-bottom:8px}
+  .ds-n{width:16px;height:16px;border-radius:50%;background:var(--brand-50);color:var(--brand-600);font-size:10.5px;display:inline-flex;align-items:center;justify-content:center;font-weight:700}
+  .mini-tbl{width:100%;border-collapse:collapse;font-size:11.5px}
+  .mini-tbl th,.mini-tbl td{padding:5px 7px;border-bottom:1px solid var(--gray-100);text-align:left;white-space:normal;line-height:1.5}
+  .mini-tbl th{color:var(--text-3);font-size:10.5px;font-weight:500;background:var(--gray-50)}
+  .mini-tbl td.num,.mini-tbl th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .sup-no{font-size:11px;color:var(--text-2);font-variant-numeric:tabular-nums}
+  .ds-note{font-size:11.5px;color:var(--text-2);line-height:1.7;margin-top:8px;background:var(--gray-50);border-radius:6px;padding:6px 9px}
+  .plan-card{border:1px solid var(--brand-100);border-radius:8px;background:#fcfcff;padding:10px 12px}
+  .pc-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+  .pc-qty{font-size:12.5px;color:var(--text-1)}
+  .pc-qty b{font-size:16px;color:var(--danger);font-variant-numeric:tabular-nums}
+  .pc-sub{font-size:11px;color:var(--text-3)}
+  .pc-line{font-size:11.5px;color:var(--text-2);line-height:1.8}
+  .pc-line b{color:var(--text-1);margin-right:6px}
+  .pc-foot{font-size:11px;color:var(--text-3);margin-top:6px;border-top:1px dashed var(--gray-200);padding-top:6px}
+  .drill-mini{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:1000px}
+  @media(max-width:1000px){.drill-mini{grid-template-columns:1fr}}
+  .dm-item{border:1px solid var(--gray-200);border-radius:9px;background:#fff;padding:9px 12px;font-size:12px;color:var(--text-2);line-height:1.7}
+  .dm-k{display:block;font-size:11px;font-weight:700;color:var(--text-1);margin-bottom:3px}
+  .dm-note{grid-column:1/-1;font-size:11px;color:var(--text-3)}
+  .empty-note{display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:12px;height:120px}
+</style>
+</head>
+<body>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.2-5.5"/><path d="M4 4v4.5h4.5"/><path d="M10.5 9.2v5.6l4.8-2.8z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17.2v.1"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3.5 8 12 4l8.5 4v8L12 20l-8.5-4z"/><path d="M3.5 8 12 12l8.5-4M12 12v8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m4 13.5 8 4.2 8-4.2"/></symbol>
+  <symbol id="i-bld" viewBox="0 0 24 24"><rect x="5" y="3.5" width="14" height="17" rx="1.5"/><path d="M9 8h2M13 8h2M9 12h2M13 12h2M9 16h2M13 16h2"/></symbol>
+  <symbol id="i-cart" viewBox="0 0 24 24"><path d="M3 4.5h2.5L8 15h10.5L21 7.5H6"/><circle cx="9.5" cy="19" r="1.6"/><circle cx="17" cy="19" r="1.6"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.2 2.8-4.8 5.5-4.8s4.9 1.6 5.5 4.8"/><circle cx="16.8" cy="9.5" r="2.6"/><path d="M16.4 14.8c2.3.2 3.7 1.6 4.1 3.7"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M9 19c-1.5.5-3.5.4-5-.6.6-1.4 1.6-2.3 3-2.8"/><path d="M13.5 21c-.3-1.8-.1-3.5.5-5"/><path d="M14 4.5C17 3 20.5 3.5 20.5 3.5S21 7 19.5 10c-1 2-3 4.5-5.5 6L9 12.5S11 8 14 4.5z"/><circle cx="15.5" cy="8.5" r="1.3"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13"/><path d="M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10.3 19a2 2 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+  <symbol id="i-rows" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></symbol>
+  <symbol id="i-cols" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M9.5 4.5v15M14.5 4.5v15"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 3.5V8h-4.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M8.5 10h7M8.5 13.5h4.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8M17.5 7H20M4 17h2.5M11.5 17H20"/><circle cx="14.5" cy="7" r="2"/><circle cx="8.5" cy="17" r="2"/></symbol>
+</svg>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">SPC</div>
+      <div class="logo-text">SPC 供应链中台<small>SUPPLY CHAIN CENTER</small></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>供应链驾驶舱</a>
+
+      <div class="nav-group-title">订单交付中心</div>
+      <a class="nav-item" href="orders.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>订单总控台<span class="count">126</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-run"/></svg>跑单管理</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>订单风险池<span class="count hot">4</span></a>
+
+      <div class="nav-group-title">物料齐套中心</div>
+      <a class="nav-item" href="purchase-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cal"/></svg>采购到料计划<span class="count">16</span></a>
+      <a class="nav-item" href="kit-analysis.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-layers"/></svg>齐套分析</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-box"/></svg>问题物料池<span class="count hot">7</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clock"/></svg>长交期物料池</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bld"/></svg>供应商风险分析</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cart"/></svg>委外订单</a>
+      <a class="nav-item active" href="mrp-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rows"/></svg>MRP 计划</a>
+      <a class="nav-item" href="mrp-requisition.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>采购申请单</a>
+
+      <div class="nav-group-title">生产协同中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>生产驾驶舱</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>待排工作台<span class="count">12</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>工序异常池</a>
+
+      <div class="nav-group-title">异常与质量中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>异常总池<span class="count hot">5</span></a>
+
+      <div class="nav-group-title">协同与项目</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>会议与任务中心<span class="ph">开发中</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rocket"/></svg>新品 / NPI 项目中心<span class="ph">开发中</span></a>
+
+      <div class="nav-group-title">规则与数据</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sliders"/></svg>规则配置中心</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-db"/></svg>基础数据与集成</a>
+    </nav>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-crumb">物料齐套中心<b>缺口与建议</b></div>
+      <div class="topbar-actions">
+        <div class="global-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>搜索订单、物料、客户…<kbd>Ctrl K</kbd></div>
+        <div class="icon-btn" title="消息反馈"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bell"/></svg><span class="dot"></span></div>
+        <div class="avatar-user"><div class="avatar">华</div><span class="name">王华 · 计划员</span></div>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- 二级 Tabs：MRP 计划 -->
+      <div class="card mb12">
+        <div class="tabs" style="padding:0 8px">
+          <a class="tab" href="mrp-plan.html">总览</a>
+          <a class="tab active" href="mrp-shortage.html">缺口与建议<span class="n hot">1001</span></a>
+          <a class="tab" href="mrp-order.html">订单覆盖</a>
+          <a class="tab" href="mrp-exceptions.html">例外</a>
+          <a class="tab" href="mrp-runs.html">批次与对比</a>
+          <a class="tab" href="mrp-params.html">参数与替代</a>
+        </div>
+      </div>
+
+      <!-- 怎么看 -->
+      <div class="info-strip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="15" height="15"><use href="#i-rows"/></svg>
+        <span><b>怎么看：</b>每一行就是一条缺口：点开看『为什么缺 / 有什么可用 / 怎么补』三段依据。建议需先审核通过，外购可转采购申请单。</span>
+      </div>
+
+      <!-- 工具栏 -->
+      <div class="toolbar" style="margin-bottom:10px">
+        <div class="input input-search" style="width:220px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>
+          <input id="kw" placeholder="搜索物料 / 供应商" oninput="render()" style="border:none;outline:none;background:transparent;width:100%">
+        </div>
+        <select class="ps-sel" style="height:32px" onchange="batchSwitch(this)">
+          <option selected>MRPRUN-20260928-035 · 09-28 常规运算</option>
+          <option>MRPRUN-20260927-031 · 09-27 常规运算</option>
+          <option>MRPRUN-20260926-028 · 09-26 常规运算</option>
+        </select>
+        <div class="right">
+          <button class="btn btn-primary btn-sm" onclick="batchApprove()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>批量审核</button>
+          <button class="btn btn-secondary btn-sm" onclick="batchConvert()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cart"/></svg>转采购申请单</button>
+          <button class="btn btn-secondary btn-sm" onclick="toast('已导出 Excel：MRP建议清单-MRPRUN-20260928-035.xlsx')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cols"/></svg>导出</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="chips">
+          <span class="chip active" id="f-all" onclick="setStatus('all')">全部 <span class="n" id="nAll">12</span></span>
+          <span class="chip" id="f-pending" onclick="setStatus('pending')">待审核 <span class="n hot" id="nPending">6</span></span>
+          <span class="chip" id="f-approved" onclick="setStatus('approved')">已通过 <span class="n" id="nApproved">3</span></span>
+          <span class="chip" id="f-converted" onclick="setStatus('converted')">已转单 <span class="n" id="nConverted">3</span></span>
+        </div>
+        <span class="chip-sep"></span>
+        <div class="chips">
+          <span class="chip" id="t-buy" onclick="setType('buy')">外购 <span class="n" id="nBuy">6</span></span>
+          <span class="chip" id="t-make" onclick="setType('make')">自制 <span class="n" id="nMake">3</span></span>
+          <span class="chip" id="t-out" onclick="setType('out')">委外 <span class="n" id="nOut">2</span></span>
+          <span class="chip" id="t-sub" onclick="setType('sub')">替代 <span class="n" id="nSub">1</span></span>
+        </div>
+        <span style="font-size:11.5px;color:var(--text-3);margin-left:auto">状态 × 类型可叠加，支持搜索</span>
+      </div>
+      <!-- 主表 -->
+      <div class="card">
+        <div class="card-head" style="padding:10px 16px">
+          <h3 style="font-size:14px">缺口与建议清单</h3>
+          <span class="hint" id="listHint"></span>
+          <span class="more" id="headMore"></span>
+        </div>
+        <div class="card-body p0 tbl-wrap">
+          <table class="tbl" style="min-width:1280px">
+            <thead><tr>
+              <th style="width:30px"></th>
+              <th style="width:280px">物料</th>
+              <th style="width:76px">类型</th>
+              <th class="num" style="width:96px">缺口数量</th>
+              <th style="width:118px">需求日</th>
+              <th style="width:118px">下单日</th>
+              <th style="width:150px">供应商</th>
+              <th style="width:118px">来源</th>
+              <th style="width:88px">状态</th>
+              <th style="width:170px">操作</th>
+            </tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <span class="total" id="pgTotal"></span>
+          <span class="pg">‹</span><span class="pg cur">1</span><span class="pg">›</span>
+          <span style="margin-left:8px">20 条/页</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="ov" id="ovToast" style="align-items:flex-end;justify-content:center;padding:0 0 46px;background:transparent;pointer-events:none">
+  <div style="background:#111318;color:#fff;font-size:13px;padding:9px 16px;border-radius:999px;box-shadow:var(--shadow-lg)">✓ <span id="toastTxt"></span></div>
+</div>
+
+<!-- 原型切换条（非设计内容） -->
+<div class="protobar">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html">总览</a>
+  <a href="design-system.html">设计系统</a>
+  <a href="mrp-plan.html">MRP 计划</a>
+  <a href="mrp-shortage.html" class="cur">缺口与建议</a>
+  <a href="mrp-order.html">订单覆盖</a>
+  <a href="mrp-exceptions.html">例外</a>
+  <a href="mrp-runs.html">批次与对比</a>
+  <a href="mrp-params.html">参数与替代</a>
+  <a href="mrp-requisition.html">采购申请单</a>
+</div>
+
+<script>
+var TODAY=new Date('2026-09-28');
+function fmt(n){return n.toLocaleString()}
+function md(s){var d=new Date(s+'T00:00:00');return String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function duePill(s){
+  var days=Math.round((new Date(s+'T00:00:00')-TODAY)/864e5);
+  var c=days<0?'urgent':days<=7?'soon':'ok';
+  var t=days<0?('逾期'+(-days)+'天'):days===0?'今天':days+'天';
+  return '<span class="due-pill '+c+'" title="需求日 '+s+'（距运算日 '+days+' 天）">'+md(s)+' · '+t+'</span>';
+}
+
+var TYPE={
+  buy:{label:'外购',c:'var(--info)',b:'var(--info-bg)'},
+  make:{label:'自制',c:'#2563eb',b:'#eff6ff'},
+  out:{label:'委外',c:'var(--chart-5)',b:'#f5f3ff'},
+  sub:{label:'替代',c:'#c026d3',b:'#fdf4ff'}
+};
+var ST={
+  pending:{label:'待审核',c:'var(--warning)',b:'var(--warning-bg)'},
+  approved:{label:'已通过',c:'var(--success)',b:'var(--success-bg)'},
+  converted:{label:'已转单',c:'var(--brand-600)',b:'var(--brand-50)'}
+};
+function typeTag(t){var d=TYPE[t];return '<span class="tag" style="color:'+d.c+';background:'+d.b+'">'+d.label+'</span>'}
+function stTag(s){var d=ST[s];return '<span class="tag" style="color:'+d.c+';background:'+d.b+'"><span class="dot"></span>'+d.label+'</span>'}
+function srcCell(r){
+  if(r.src==='替代抵扣 300')return '<span class="tag tag-purple">替代抵扣 300</span>';
+  if(r.src==='安全库存补货')return '<span class="tag" style="color:#d97706;background:#fffbeb">安全库存补货</span>';
+  return '<span style="color:var(--text-2)">'+r.src+'</span>';
+}
+function orderCell(r){
+  if(r.status==='converted')return '<span class="od-past mono">'+md(r.order)+'</span><span class="od-note">已转单</span>';
+  if(r.orderUrgent)return '<b class="od-red mono">'+md(r.order)+' · 紧急</b>';
+  if(r.orderSoon)return '<b class="od-hurry mono">'+md(r.order)+'</b>';
+  return '<span class="mono">'+md(r.order)+'</span>'+(r.orderNote?'<span class="od-note">'+r.orderNote+'</span>':'');
+}
+/* ============ 缺口建议演示数据（12 条样本，与 mrp-plan 同批） ============ */
+var ROWS=[
+{id:1,code:'1.6.3.E2835-18V-4000K-1W',name:'LED 灯珠 2835 18V 4000K 1W',type:'buy',gap:32000,suggest:32000,
+ due:'2026-10-30',order:'2026-09-30',orderUrgent:true,supplier:'深圳明辉光电',src:'订单需求',status:'pending',
+ detail:{
+  demandHead:['订单','行','数量','交期'],
+  demands:[['HJ202609-0031-0233','行 1','20,000','2026-10-30'],['HJ202609-0042-0248','行 3','12,000','2026-10-30']],
+  why:'2 张订单合计 32,000 件、同一交期 10-30；库存 / 在途 / 未结任务均为 0，全额形成缺口。',
+  supplies:[{t:'即时库存',no:'原料仓 A2',qty:0,date:'—'},{t:'未结采购',no:'—',qty:0,date:'—'},{t:'未结任务',no:'—',qty:0,date:'—'}],
+  supNote:'可用供给合计 0：无库存、无在途、无任务 → 32,000 件全额缺口。',
+  plan:{tags:[['买','var(--info)','var(--info-bg)']],qty:32000,qtySub:'（全额外购）',
+   round:'包装 2,000 件/卷 × 16 卷 = 32,000，无余量',
+   lead:'需求 10-30 − 采购提前期 30 天 = 下单 09-30（仅剩 2 天，紧急）',
+   foot:'审核通过后可转采购申请单（供应商：深圳明辉光电）'}}},
+{id:2,code:'1.6.4.C.1.0805.50V104K',name:'LED 灯珠 0805 50V 104K',type:'buy',gap:15000,suggest:15000,
+ due:'',order:'2026-10-02',orderSoon:true,supplier:'深圳市鸿海电子',src:'安全库存补货',status:'pending',
+ detail:{
+  demandHead:['检查对象','指标','数量','日期'],
+  demands:[['物料主数据','安全库存水位','18,000','—'],['原料仓','当前可用','3,000','—'],['差额','净缺口','15,000','—']],
+  why:'无订单需求：可用库存 3,000 件低于安全库存水位 18,000 件，例外 #96 同步生成补货建议。',
+  supplies:[{t:'即时库存',no:'原料仓',qty:3000,date:'可用'},{t:'未结采购',no:'—',qty:0,date:'—'},{t:'未结任务',no:'—',qty:0,date:'—'}],
+  supNote:'水位 18,000 − 可用 3,000 = 补货差额 15,000 件。',
+  plan:{tags:[['买','var(--info)','var(--info-bg)']],qty:15000,qtySub:'（水位补货）',
+   round:'包装 5,000 件/卷 × 3 卷 = 15,000，无余量',
+   lead:'无需求日：按「审核缓冲 4 天」建议 10-02 前下单（采购提前期 15 天）',
+   foot:'审核通过后可转采购申请单（供应商：深圳市鸿海电子）'}}},
+{id:3,code:'1.6.1.SMD-2835-0.2W',name:'LED 灯珠 2835 0.2W',type:'buy',gap:12000,suggest:12000,
+ due:'2026-10-03',order:'2026-09-24',supplier:'东莞凯诚光电',src:'订单需求',status:'converted',doc:'PR-20260926-005',
+ mini:{why:'HJ202609-0042-0248 · 行 2 需求 12,000 件，库存 / 在途为 0。',plan:'外购 12,000 件 · 已转采购申请单 PR-20260926-005（待审批）'}},
+{id:4,code:'1.6.1.SMD-5730-0.5W',name:'LED 灯珠 5730 0.5W',type:'buy',gap:9600,suggest:9600,
+ due:'2026-10-05',order:'2026-09-30',orderUrgent:true,supplier:'东莞凯诚光电',src:'订单需求',status:'pending',
+ mini:{why:'HJ202609-0017-0207 · 行 3 需求 9,600 件，库存 / 在途为 0。',plan:'外购 9,600 件 · 需求 10-05 − 采购提前期 5 天 = 下单 09-30（紧急，仅剩 2 天）'}},
+{id:5,code:'1.8.2.DR-IND-47UH',name:'环形电感 47μH',type:'out',gap:6000,suggest:6000,
+ due:'2026-10-12',order:'2026-10-05',supplier:'中山精工',src:'订单需求',status:'approved',
+ mini:{why:'2 张订单合计 6,000 件（10-12 / 10-15 两批交期），委外在制为 0。',plan:'委外 6,000 件 · 需求 10-12 − 委外提前期 7 天 = 下单 10-05 · 待转委外订单'}},
+{id:6,code:'1.8.3.RSG-圆4-10',name:'LED 灯珠透镜 圆4-10',type:'out',gap:4320,suggest:4320,
+ due:'2026-11-04',order:'2026-10-28',supplier:'中山精工',src:'订单需求',status:'pending',
+ mini:{why:'2 张订单合计 4,320 件（含 HJ202609-0025-0215）；外协厂在制 0、无可借库存。',plan:'委外 4,320 件（整批接单）· 需求 11-04 − 委外提前期 7 天 = 下单 10-28'}},
+{id:7,code:'2.1.PCB-JGW02-V3',name:'PCB 电路板 JGW02 V3',type:'buy',gap:4240,suggest:4240,
+ due:'2026-11-02',order:'2026-09-22',supplier:'苏州维嘉电路',src:'订单需求',status:'converted',doc:'PR-20260927-004',
+ mini:{why:'HJ202609-0031-0233 · 行 4 需求 4,240 件；供应商产能紧张，已提前锁单。',plan:'外购 4,240 件 · 已转采购申请单 PR-20260927-004（审批中）'}},
+{id:8,code:'XH254-4P',name:'连接器 XH2.54 4P',type:'buy',gap:1800,suggest:1800,
+ due:'2026-10-20',order:'2026-10-09',supplier:'东莞联升五金',src:'订单需求',status:'approved',
+ mini:{why:'HJ202609-0025-0215 · 行 5 需求 1,800 件；即时库存 0。',plan:'外购 1,800 件 · 需求 10-20 − 采购提前期 11 天 = 下单 10-09 · 待转采购申请'}},
+{id:9,code:'3.1.JFS05-B1WA10-001',name:'LED 泛光灯 JFS05 100W（半成品）',type:'make',gap:500,suggest:500,
+ due:'2026-11-04',order:'2026-10-25',orderNote:'开工',supplier:'自制 · 惠州三厂',src:'订单需求',status:'pending',
+ detail:{
+  demandHead:['订单','行','数量','交期'],
+  demands:[['HJ202609-0025-0215','行 1','500','2026-11-04']],
+  why:'1 张订单 500 件；半成品即时库存 0，无可净额的在制 / 委外供给，需新开生产任务。',
+  supplies:[{t:'即时库存',no:'半成品仓',qty:0,date:'—'},{t:'在制任务',no:'—',qty:0,date:'—'},{t:'委外在制',no:'—',qty:0,date:'—'}],
+  supNote:'无库存、无未结任务 → 500 件差额需自制补足。',
+  plan:{tags:[['做','#2563eb','#eff6ff']],qty:500,qtySub:'（自制）',
+   round:'工单批量 250 件 × 2 张 = 500，无余量',
+   lead:'需求 11-04 − 生产提前期 10 天 = 开工 10-25',
+   foot:'审核通过后转生产任务（惠州三厂 · 装配二线）'}}},
+{id:10,code:'1.8.1.DTB19V310B5C038Y083J',name:'高频变压器 DTB19V310',type:'sub',gap:500,suggest:200,
+ due:'2026-11-06',order:'2026-10-16',supplier:'东莞铭普电子',src:'替代抵扣 300',status:'pending',
+ detail:{
+  demandHead:['订单','行','数量','交期'],
+  demands:[['HJ202609-0031-0233','行 5','500','2026-11-06']],
+  why:'1 张订单 500 件；原规格库存 / 在途为 0，但同系列替代料 J-B 有可借库存。',
+  supplies:[
+   {t:'即时库存',no:'原料仓',qty:0,date:'—'},
+   {t:'替代可用',no:'1.8.1.DTB19V310B5C038Y083J-B · 深圳崧盛电子',qty:300,date:'10-20 可用',sub:true},
+   {t:'未结采购',no:'—',qty:0,date:'—'}],
+  supNote:'替代料抵扣 300 件（同规格、绝缘等级高一级），净缺口 500 − 300 = 200 件。',
+  plan:{tags:[['买','var(--info)','var(--info-bg)'],['替代','#c026d3','#fdf4ff']],qty:200,qtySub:'（原缺口 500 − 替代抵扣 300）',
+   round:'外购取整至包装 100 件 × 2 = 200；替代 300 件直接领用不取整',
+   lead:'需求 11-06 − 采购提前期 21 天 = 下单 10-16（替代料 10-20 到线，早于投产）',
+   foot:'替代领用需技术确认单；剩余 200 件审核通过后转采购申请单'}}},
+{id:11,code:'3.1.JFM03-B3WL300-001',name:'LED 面板灯 JFM03 300W（半成品）',type:'make',gap:240,suggest:240,
+ due:'2026-11-08',order:'2026-09-26',supplier:'自制 · 惠州三厂',src:'订单需求',status:'converted',doc:'WORK110826',
+ mini:{why:'HJ202609-0031-0233 · 行 6 需求 240 件；半成品库存 0。',plan:'自制 240 件 · 已转生产任务 WORK110826（开工 09-26，完工 10-19）'}},
+{id:12,code:'3.1.JGW06-B1WP100-001',name:'LED 工矿灯 JGW06 100W（半成品）',type:'make',gap:200,suggest:200,
+ due:'2026-10-28',order:'2026-10-16',supplier:'自制 · 惠州三厂',src:'订单需求',status:'approved',
+ mini:{why:'HJ202609-0042-0248 · 行 7 需求 200 件；半成品库存 0。',plan:'自制 200 件 · 需求 10-28 − 生产提前期 12 天 = 开工 10-16 · 待转生产任务'}}
+];
+var fStatus='all', fType='all', expanded=null;
+var CHIPS={all:'f-all',pending:'f-pending',approved:'f-approved',converted:'f-converted'};
+var TCHIPS={buy:'t-buy',make:'t-make',out:'t-out',sub:'t-sub'};
+var CONV_LBL={buy:'转申请',sub:'转申请',make:'转生产',out:'转委外'};
+
+function rowOf(id){return ROWS.filter(function(r){return r.id===id})[0]}
+function curRows(){
+  var kw=document.getElementById('kw').value.trim().toUpperCase();
+  return ROWS.filter(function(r){
+    if(fStatus!=='all'&&r.status!==fStatus)return false;
+    if(fType!=='all'&&r.type!==fType)return false;
+    if(kw&&r.code.toUpperCase().indexOf(kw)<0&&r.name.indexOf(kw)<0&&r.supplier.indexOf(kw)<0)return false;
+    return true;
+  });
+}
+
+/* ============ 三段依据渲染 ============ */
+function miniTbl(head,rows){
+  var th=head.map(function(h,i){return '<th'+(i===2?' class="num"':'')+'>'+h+'</th>'}).join('');
+  var tr=rows.map(function(r){
+    return '<tr>'+r.map(function(x,i){return '<td'+(i===2?' class="num"':'')+'>'+(x==='0'?'<span class="zero2">0</span>':x)+'</td>'}).join('')+'</tr>';
+  }).join('');
+  return '<table class="mini-tbl"><thead><tr>'+th+'</tr></thead><tbody>'+tr+'</tbody></table>';
+}
+function supTbl(sups){
+  var tr=sups.map(function(s){
+    var tag=s.sub?'<span class="tag tag-purple">'+s.t+'</span>':'<span class="tag" style="color:var(--text-2);background:var(--gray-100)">'+s.t+'</span>';
+    return '<tr><td>'+tag+'</td><td class="sup-no">'+s.no+'</td><td class="num">'+(s.qty?'<b>'+fmt(s.qty)+'</b>':'<span class="zero2">0</span>')+'</td><td>'+s.date+'</td></tr>';
+  }).join('');
+  return '<table class="mini-tbl"><thead><tr><th>供给类型</th><th>来源 / 单号</th><th class="num">数量</th><th>可用日</th></tr></thead><tbody>'+tr+'</tbody></table>';
+}
+function drillFull(r){
+  var d=r.detail,p=d.plan;
+  var tags=p.tags.map(function(t){return '<span class="tag" style="color:'+t[1]+';background:'+t[2]+'">'+t[0]+'</span>'}).join('');
+  return '<div class="drill3">'
+   +'<div class="drill-sec"><div class="ds-h"><span class="ds-n">1</span>为什么缺</div>'+miniTbl(d.demandHead,d.demands)+'<div class="ds-note">'+d.why+'</div></div>'
+   +'<div class="drill-sec"><div class="ds-h"><span class="ds-n">2</span>有什么可用</div>'+supTbl(d.supplies)+'<div class="ds-note">'+d.supNote+'</div></div>'
+   +'<div class="drill-sec"><div class="ds-h"><span class="ds-n">3</span>怎么补</div><div class="plan-card">'
+     +'<div class="pc-head">'+tags+'<span class="pc-qty">建议 <b>'+fmt(p.qty)+'</b> 件</span><span class="pc-sub">'+p.qtySub+'</span></div>'
+     +'<div class="pc-line"><b>取整</b>'+p.round+'</div>'
+     +'<div class="pc-line"><b>提前期倒推</b>'+p.lead+'</div>'
+     +'<div class="pc-foot">'+p.foot+'</div>'
+   +'</div></div></div>';
+}
+function drillMini(r){
+  return '<div class="drill-mini">'
+   +'<div class="dm-item"><span class="dm-k">① 为什么缺</span>'+r.mini.why+'</div>'
+   +'<div class="dm-item"><span class="dm-k">③ 怎么补</span>'+r.mini.plan+'</div>'
+   +'<div class="dm-note">本行简化展示；完整三段依据（需求来源 / 供给明细 / 建议卡）演示见 ① ② ④ ⑤ 行</div>'
+   +'</div>';
+}
+function drillHTML(r){return r.detail?drillFull(r):drillMini(r)}
+
+/* ============ 主表渲染 ============ */
+function dueCell(r){
+  if(r.due)return duePill(r.due);
+  return '<span class="zero2" title="无订单需求：按安全库存水位补货">—</span>';
+}
+function gapCell(r){
+  var sub=r.suggest<r.gap?'<div class="sp">建议 '+fmt(r.suggest)+'（替代抵扣 '+fmt(r.gap-r.suggest)+'）</div>':'';
+  return '<b class="gap-num">'+fmt(r.gap)+'</b>'+sub;
+}
+function actionsOf(r){
+  var links=[];
+  if(r.status==='pending'){
+    links.push('<a onclick="approveRow('+r.id+')">通过</a>');
+    links.push('<a onclick="rejectRow('+r.id+')">驳回</a>');
+  }else if(r.status==='approved'){
+    links.push('<a onclick="convertRow('+r.id+')">'+CONV_LBL[r.type]+'</a>');
+  }else{
+    links.push('<a onclick="viewDoc('+r.id+')">查看单据</a>');
+  }
+  links.push('<a onclick="toggleDrill('+r.id+')">展开</a>');
+  return '<span class="row-links">'+links.join('')+'</span>';
+}
+function rowHTML(r){
+  return '<tr data-id="'+r.id+'"'+(expanded===r.id?' class="openx"':'')+'>'
+   +'<td class="open-tr" onclick="toggleDrill('+r.id+')" title="展开三段依据"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><use href="#i-chev"/></svg></td>'
+   +'<td><div class="mc">'+r.code+'</div><div class="sp">'+r.name+'</div></td>'
+   +'<td>'+typeTag(r.type)+'</td>'
+   +'<td class="num">'+gapCell(r)+'</td>'
+   +'<td>'+dueCell(r)+'</td>'
+   +'<td>'+orderCell(r)+'</td>'
+   +'<td>'+r.supplier+'</td>'
+   +'<td>'+srcCell(r)+'</td>'
+   +'<td>'+stTag(r.status)+'</td>'
+   +'<td>'+actionsOf(r)+'</td></tr>';
+}
+function updateCounts(){
+  var s={pending:0,approved:0,converted:0},t={buy:0,make:0,out:0,sub:0};
+  ROWS.forEach(function(r){s[r.status]++;t[r.type]++});
+  document.getElementById('nAll').textContent=ROWS.length;
+  document.getElementById('nPending').textContent=s.pending;
+  document.getElementById('nApproved').textContent=s.approved;
+  document.getElementById('nConverted').textContent=s.converted;
+  document.getElementById('nBuy').textContent=t.buy;
+  document.getElementById('nMake').textContent=t.make;
+  document.getElementById('nOut').textContent=t.out;
+  document.getElementById('nSub').textContent=t.sub;
+  document.getElementById('headMore').innerHTML='待审核 <b style="color:var(--warning)">'+s.pending+'</b> · 已通过 <b style="color:var(--success)">'+s.approved+'</b> · 已转单 <b style="color:var(--brand-600)">'+s.converted+'</b>';
+}
+function render(){
+  var arr=curRows();
+  expanded=null;
+  document.getElementById('tbody').innerHTML=arr.length?arr.map(rowHTML).join(''):'<tr><td colspan="10"><div class="empty-note">没有符合条件的缺口建议（演示样本 12 条）</div></td></tr>';
+  document.getElementById('listHint').textContent='演示样本 '+arr.length+' 条 / 全量 1,001 条 · 批次 MRPRUN-20260928-035';
+  document.getElementById('pgTotal').textContent='共 '+arr.length+' 条（演示样本）';
+  Object.keys(CHIPS).forEach(function(k){document.getElementById(CHIPS[k]).className='chip'+(fStatus===k?' active':'')});
+  Object.keys(TCHIPS).forEach(function(k){document.getElementById(TCHIPS[k]).className='chip'+(fType===k?' active':'')});
+  updateCounts();
+}
+function setStatus(s){fStatus=s;render()}
+function setType(t){fType=(fType===t?'all':t);render()}
+function batchSwitch(sel){toast('演示：已切换到批次 '+sel.options[sel.selectedIndex].text)}
+
+/* ============ 行展开三段面板 ============ */
+function toggleDrill(id){
+  var tr=document.querySelector('tr[data-id="'+id+'"]');
+  var sub=document.getElementById('subdrill');
+  if(expanded===id){if(sub)sub.remove();tr.classList.remove('openx');expanded=null;return}
+  if(sub)sub.remove();
+  document.querySelectorAll('tr.openx').forEach(function(x){x.classList.remove('openx')});
+  var r=rowOf(id);
+  expanded=id;
+  tr.classList.add('openx');
+  tr.insertAdjacentHTML('afterend','<tr class="subrow" id="subdrill"><td colspan="10"><div class="sub-pad">'+drillHTML(r)+'</div></td></tr>');
+}
+
+/* ============ 动作 ============ */
+function approveRow(id){
+  var r=rowOf(id);if(!r)return;
+  r.status='approved';render();
+  toast('演示：已审核通过 — '+r.code+'（演示数据已更新为「已通过」）');
+}
+function rejectRow(id){
+  var r=rowOf(id);if(!r)return;
+  toast('演示：已驳回 '+r.code+'（下次运算按最新供给重算）');
+}
+function convertRow(id){
+  var r=rowOf(id);if(!r)return;
+  r.status='converted';render();
+  if(r.type==='make')toast('演示：已转生产任务 — '+r.code);
+  else if(r.type==='out')toast('演示：已转委外订单 — '+r.code);
+  else toast('演示：已生成采购申请单 — '+r.code);
+}
+function viewDoc(id){
+  var r=rowOf(id);if(!r)return;
+  toast('演示：打开单据 '+(r.doc||r.code));
+}
+function batchApprove(){
+  var arr=curRows().filter(function(r){return r.status==='pending'});
+  if(!arr.length){toast('当前筛选下没有待审核建议');return}
+  arr.forEach(function(r){r.status='approved'});
+  render();
+  toast('演示：已批量审核通过 '+arr.length+' 条建议（演示数据已更新）');
+}
+function batchConvert(){
+  var arr=curRows().filter(function(r){return r.status==='approved'&&(r.type==='buy'||r.type==='sub')});
+  if(!arr.length){toast('当前筛选下没有可转采购申请的「已通过」外购 / 替代建议');return}
+  arr.forEach(function(r){r.status='converted'});
+  render();
+  toast('演示：已生成 '+arr.length+' 张采购申请单（演示数据已更新）');
+}
+function toast(t){var o=document.getElementById('ovToast');document.getElementById('toastTxt').textContent=t;o.classList.add('show');clearTimeout(window.__tt);window.__tt=setTimeout(function(){o.classList.remove('show')},1800)}
+
+render();
+</script>
+</body>
+</html>

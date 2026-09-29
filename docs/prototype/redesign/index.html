@@ -419,6 +419,53 @@
     </a>
   </div>
 
+  <!-- ============ 物料齐套 · MRP 计划（2026-09-28） ============ -->
+  <div class="grp-title" id="M12"><span class="no">M12</span>物料齐套 · MRP 计划 · 7 页（2026-09-28）<span class="hint">把「缺口」讲清楚：总览（今日待办）→ 缺口与建议（三段依据可下钻：为什么缺/有什么可用/怎么补）→ 订单覆盖（这单为什么 0 建议）→ 例外处理 → 批次与 K3 对比 → 参数与替代规则 → 采购申请单（建议→申请→订单闭环）</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="mrp-plan.html">
+      <span class="no">01</span>
+      <h3>计划总览 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>回答「今天该处理什么」：5 统计卡（待审建议/缺口物料/待处理例外/覆盖订单/上次运算）+ 今日四件事任务卡（直达缺口/例外/申请单/对比）+ 缺口 TOP10（倒计时与紧急下单日）+ 最近批次条与「立即运算」。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-shortage.html">
+      <span class="no">02</span>
+      <h3>缺口与建议（核心） <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>每一行＝一条缺口，行展开给<b>三段依据</b>：① 为什么缺（需求来源订单/行/交期）② 有什么可用（库存/PO/任务/委外/调拨/替代抵扣）③ 怎么补（买/做/替代＋取整说明＋提前期倒推下单日）；状态×类型 chips、批量审核与转采购申请单。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-order.html">
+      <span class="no">03</span>
+      <h3>订单覆盖视图 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>直击「这单为什么 0 建议」：输入订单号 → 逐行看需求被哪些库存/任务/采购在途覆盖、还缺多少；覆盖构成条 + 行展开（任务单号与日期 + 一句话结论）；内置三个案例（两单已覆盖 + 一单缺口）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-exceptions.html">
+      <span class="no">04</span>
+      <h3>例外处理 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>不看未来缺口，专挑现有单据毛病：拖期供给/拖期需求/建议提前/延后/取消减量/低于安全库存/无 BOM；一句话建议（含金蝶码）+ 行展开判定依据；批量改期/忽略/催货与导出变更清单。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-runs.html">
+      <span class="no">05</span>
+      <h3>批次与 K3 对比 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>批次＝每次运算记录（自动/手动、状态/耗时/建议数/例外数），行展开＝数据体检（参数回退/无BOM等）＋K3 对比摘要；下半 K3 影子校验差异清单（match/diff_qty/diff_date/spc_only/k3_only 五态 + 排查入口）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-params.html">
+      <span class="no">06</span>
+      <h3>参数与替代规则 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>三块：物料参数（提前期/安全库存/MOQ/批量策略，未配置按默认 7 天）＋ 计划方案（展望期/供给开关/宽限期/对比阈值，变更下次生效）＋ 替代规则（优先级/比例、offset 抵扣与 replace 替换）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-requisition.html">
+      <span class="no">07</span>
+      <h3>采购申请单 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>MRP 建议 → 采购申请 → 采购订单闭环：列表（来源 MRP/手工、状态、当前节点）+ 详情（明细、审批时间线）+ 转采购订单弹窗（按行默认剩余量）+ 审批纸张视图；转单生成 SPC 侧采购订单。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
   <div class="ov-notes">
     <div class="card ov-note">
       <b>设计决策</b>
@@ -435,7 +482,7 @@
   </div>
 
   <div style="text-align:center; margin-top:36px; font-size:11px; color:var(--text-3);">
-    设计文档：docs/superpowers/specs/2026-08-26-supply-chain-redesign-design.md · 盘点页：2026-08-27-stock-check-redesign-design.md · 物料主数据页：2026-08-31-materials-masterdata-redesign-design.md · 基础数据模块：2026-09-02-basicdata-module-redesign-design.md · 集成与系统模块：2026-09-03-system-integration-modules-redesign-design.md · 任务盘点页：2026-09-03-task-stock-coverage-redesign-design.md · 部署版本页：2026-09-04-deploy-versions-page-design.md · K3 回写交互：2026-09-09-k3-writeback-ux-design.md · 库存看板（驾驶舱大屏）：2026-09-17-inventory-board-cockpit-redesign-design.md · 品质管理模块：2026-09-23-quality-center-prototype-design.md
+    设计文档：docs/superpowers/specs/2026-08-26-supply-chain-redesign-design.md · 盘点页：2026-08-27-stock-check-redesign-design.md · 物料主数据页：2026-08-31-materials-masterdata-redesign-design.md · 基础数据模块：2026-09-02-basicdata-module-redesign-design.md · 集成与系统模块：2026-09-03-system-integration-modules-redesign-design.md · 任务盘点页：2026-09-03-task-stock-coverage-redesign-design.md · 部署版本页：2026-09-04-deploy-versions-page-design.md · K3 回写交互：2026-09-09-k3-writeback-ux-design.md · 库存看板（驾驶舱大屏）：2026-09-17-inventory-board-cockpit-redesign-design.md · 品质管理模块：2026-09-23-quality-center-prototype-design.md · MRP 计划（原型 M12）：引擎口径见 2026-09-24-mrp-engine-market-upgrade-design.md
   </div>
 </div>
 
@@ -449,6 +496,8 @@
   <a href="order-detail.html">订单详情</a>
   <a href="purchase-plan.html">采购到料计划</a>
   <a href="kit-analysis.html">齐套分析</a>
+  <a href="mrp-plan.html">MRP 计划</a>
+  <a href="mrp-requisition.html">采购申请单</a>
   <a href="material-occupancy.html">物料占用分析</a>
   <a href="inventory-board.html">库存看板</a>
   <a href="materials.html">物料主数据</a>

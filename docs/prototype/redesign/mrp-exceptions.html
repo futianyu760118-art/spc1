@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>例外处理 · SPC 中台重设计原型</title>
+<link rel="stylesheet" href="styles.css">
+<!--
+  PROTOTYPE — 一次性原型，非生产代码；含少量原型 JS（KPI 状态筛选 / 类型 chips / 搜索 / 批量处理 / 行展开）。
+  MRP 计划 · 例外处理（2026-09-28）：不看你未来缺口，挑现有单据的毛病（来早 / 来晚 / 过期 / 多余）
+    → 4 KPI（待处理 / 今日新增 / 已处理 / 已忽略，点击筛状态）→ 类型 chips（金蝶例外码）→ 工具栏（搜索 / 批次 / 导出变更清单）
+    → 主表（物料 / 类型+金蝶码 / 源单据 / 需求日 / 单据日期 / 建议日期 / 调整天数 / 一句话建议 / 状态 / 操作）
+    → 行展开：判定依据 + 源单据摘要 + 相关订单 pegging → 底部批量操作条（改期 / 忽略 / 催货）。
+  演示：与 mrp-order 案例 B 衔接 —— WORK049639 / WORK107406 即「历史任务单已过期」明细。
+-->
+<style>
+  .ov{position:fixed;inset:0;display:flex;z-index:9998;opacity:0;transition:opacity .15s;pointer-events:none}
+  .ov.show{opacity:1}
+  .info-strip{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;background:var(--info-bg);border:1px solid var(--info-bd);border-radius:var(--r-md);padding:9px 14px;font-size:var(--fs-12);color:#075985;line-height:1.7}
+  .info-strip b{color:#075985}
+  .info-strip svg{flex-shrink:0;margin-top:2px;color:var(--brand-500)}
+  .stat-click{cursor:pointer}
+  .stat-click:hover{border-color:var(--brand-300);box-shadow:var(--shadow-md)}
+  .stat-click.sel{border-color:var(--brand-300);box-shadow:var(--shadow-md);background:#fcfcff}
+  .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .toolbar .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .toolbar .right{margin-left:auto;display:flex;gap:6px;align-items:center}
+  .tbl th{white-space:nowrap;background:var(--gray-50)}
+  .tbl td{white-space:nowrap;height:42px}
+  input.rowcb,input.selall{width:14px;height:14px;margin:0;display:block;accent-color:var(--brand-500);cursor:pointer}
+  tr:has(input.rowcb:checked) > td{background:#eef0fe}
+  .open-tr{width:30px;text-align:center;cursor:pointer;color:var(--text-3)}
+  .open-tr svg{transition:transform .15s;vertical-align:-2px}
+  tr.openx .open-tr svg{transform:rotate(180deg);color:var(--brand-500)}
+  .link{color:var(--brand-600);text-decoration:none;font-weight:600}
+  a.link:hover{text-decoration:underline}
+  .row-actions a{cursor:pointer}
+  .zero2{color:var(--text-3)}
+  .mc{font-size:12.5px;font-weight:600;color:var(--text-1);font-variant-numeric:tabular-nums}
+  .sp{font-size:10.5px;color:var(--text-3);margin-top:1px;font-weight:400}
+  .exc-code{font-size:10.5px;color:var(--text-3);margin-left:5px;font-variant-numeric:tabular-nums}
+  .adj-pos{color:var(--info);font-weight:700}
+  .adj-neg{color:var(--danger);font-weight:700}
+  .subrow td{background:transparent;padding:0!important;white-space:normal}
+  .subrow .sub-pad{border-top:1px dashed var(--gray-200);background:#fbfcfe;padding:14px 18px 16px 20px}
+  .exc-why{font-size:12px;color:var(--text-2);line-height:1.7;margin-bottom:10px;max-width:980px}
+  .exc-why b{color:var(--text-1);margin-right:6px}
+  .exc-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:980px}
+  @media(max-width:900px){.exc-grid{grid-template-columns:1fr}}
+  .exc-box{border:1px solid var(--gray-200);border-radius:8px;background:#fff;padding:9px 12px}
+  .exc-box-h{font-size:11px;font-weight:700;color:var(--text-2);margin-bottom:6px}
+  table.mini{width:100%;border-collapse:collapse;font-size:11.5px}
+  table.mini td{padding:4px 2px;border-bottom:1px dashed var(--gray-100);color:var(--text-2);vertical-align:top;white-space:normal;line-height:1.6}
+  table.mini td:first-child{width:96px;color:var(--text-3)}
+  table.mini tr:last-child td{border-bottom:none}
+  .peg{font-size:11.5px;color:var(--text-2);line-height:1.8}
+  .peg-row{padding:4px 0;border-bottom:1px dashed var(--gray-100)}
+  .peg-row:last-child{border-bottom:none}
+  .batchbar{position:fixed;bottom:64px;left:50%;transform:translateX(-50%) translateY(10px);display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:var(--r-lg);box-shadow:var(--shadow-lg);z-index:80;opacity:0;pointer-events:none;transition:.18s}
+  .batchbar.show{opacity:1;pointer-events:auto;transform:translateX(-50%)}
+  .batchbar .bb-n{font-size:var(--fs-13);color:var(--text-1)}
+  .batchbar .bb-n b{color:var(--brand-600);font-variant-numeric:tabular-nums}
+  .batchbar .bb-sep{width:1px;height:18px;background:var(--gray-200);margin:0 4px}
+  .batchbar .bb-clear{font-size:var(--fs-12);color:var(--text-3);cursor:pointer;padding:2px 6px;border-radius:5px}
+  .batchbar .bb-clear:hover{background:var(--gray-100);color:var(--text-1)}
+  .empty-note{display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:12px;height:120px;border:1px dashed var(--gray-200);border-radius:10px;background:#fff}
+</style>
+</head>
+<body>
+
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.2-5.5"/><path d="M4 4v4.5h4.5"/><path d="M10.5 9.2v5.6l4.8-2.8z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17.2v.1"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3.5 8 12 4l8.5 4v8L12 20l-8.5-4z"/><path d="M3.5 8 12 12l8.5-4M12 12v8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m4 13.5 8 4.2 8-4.2"/></symbol>
+  <symbol id="i-bld" viewBox="0 0 24 24"><rect x="5" y="3.5" width="14" height="17" rx="1.5"/><path d="M9 8h2M13 8h2M9 12h2M13 12h2M9 16h2M13 16h2"/></symbol>
+  <symbol id="i-cart" viewBox="0 0 24 24"><path d="M3 4.5h2.5L8 15h10.5L21 7.5H6"/><circle cx="9.5" cy="19" r="1.6"/><circle cx="17" cy="19" r="1.6"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.2 2.8-4.8 5.5-4.8s4.9 1.6 5.5 4.8"/><circle cx="16.8" cy="9.5" r="2.6"/><path d="M16.4 14.8c2.3.2 3.7 1.6 4.1 3.7"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M9 19c-1.5.5-3.5.4-5-.6.6-1.4 1.6-2.3 3-2.8"/><path d="M13.5 21c-.3-1.8-.1-3.5.5-5"/><path d="M14 4.5C17 3 20.5 3.5 20.5 3.5S21 7 19.5 10c-1 2-3 4.5-5.5 6L9 12.5S11 8 14 4.5z"/><circle cx="15.5" cy="8.5" r="1.3"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13"/><path d="M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10.3 19a2 2 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+  <symbol id="i-rows" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></symbol>
+  <symbol id="i-cols" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M9.5 4.5v15M14.5 4.5v15"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 3.5V8h-4.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M8.5 10h7M8.5 13.5h4.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8M17.5 7H20M4 17h2.5M11.5 17H20"/><circle cx="14.5" cy="7" r="2"/><circle cx="8.5" cy="17" r="2"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">SPC</div>
+      <div class="logo-text">SPC 供应链中台<small>SUPPLY CHAIN CENTER</small></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>供应链驾驶舱</a>
+
+      <div class="nav-group-title">订单交付中心</div>
+      <a class="nav-item" href="orders.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>订单总控台<span class="count">126</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-run"/></svg>跑单管理</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>订单风险池<span class="count hot">4</span></a>
+
+      <div class="nav-group-title">物料齐套中心</div>
+      <a class="nav-item" href="purchase-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cal"/></svg>采购到料计划<span class="count">16</span></a>
+      <a class="nav-item" href="kit-analysis.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-layers"/></svg>齐套分析</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-box"/></svg>问题物料池<span class="count hot">7</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clock"/></svg>长交期物料池</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bld"/></svg>供应商风险分析</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cart"/></svg>委外订单</a>
+      <a class="nav-item active" href="mrp-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rows"/></svg>MRP 计划</a>
+      <a class="nav-item" href="mrp-requisition.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>采购申请单</a>
+
+      <div class="nav-group-title">生产协同中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>生产驾驶舱</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>待排工作台<span class="count">12</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>工序异常池</a>
+
+      <div class="nav-group-title">异常与质量中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>异常总池<span class="count hot">5</span></a>
+
+      <div class="nav-group-title">协同与项目</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>会议与任务中心<span class="ph">开发中</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rocket"/></svg>新品 / NPI 项目中心<span class="ph">开发中</span></a>
+
+      <div class="nav-group-title">规则与数据</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sliders"/></svg>规则配置中心</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-db"/></svg>基础数据与集成</a>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-crumb">物料齐套中心<b>例外处理</b></div>
+      <div class="topbar-actions">
+        <div class="global-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>搜索订单、物料、客户…<kbd>Ctrl K</kbd></div>
+        <div class="icon-btn" title="消息反馈"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bell"/></svg><span class="dot"></span></div>
+        <div class="avatar-user"><div class="avatar">华</div><span class="name">王华 · 计划员</span></div>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- 二级 Tabs：MRP 计划 -->
+      <div class="card mb12">
+        <div class="tabs" style="padding:0 8px">
+          <a class="tab" href="mrp-plan.html">总览</a>
+          <a class="tab" href="mrp-shortage.html">缺口与建议</a>
+          <a class="tab" href="mrp-order.html">订单覆盖</a>
+          <a class="tab active" href="mrp-exceptions.html">例外</a>
+          <a class="tab" href="mrp-runs.html">批次与对比</a>
+          <a class="tab" href="mrp-params.html">参数与替代</a>
+        </div>
+      </div>
+
+      <!-- 怎么看 -->
+      <div class="info-strip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="15" height="15"><use href="#i-alert"/></svg>
+        <span><b>怎么看：</b>例外不看未来缺口，而是挑现有单据的毛病：来早了、来晚了、过期了、多了。可直接处理或忽略（<b>忽略后下次运算会再提示</b>）。</span>
+      </div>
+
+      <!-- 4 KPI：点击按状态筛表 -->
+      <div class="grid g4" style="margin-bottom:14px">
+        <div class="card stat-card stat-click" id="k-open" onclick="setKpi('open')" style="--accent:var(--danger);--accent-bg:var(--danger-bg)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg></div>
+          <div class="stat-main"><div class="label">待处理</div><div class="value">320<small>条</small></div></div>
+        </div>
+        <div class="card stat-card stat-click" id="k-new" onclick="setKpi('new')" style="--accent:var(--brand-500);--accent-bg:var(--brand-50)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg></div>
+          <div class="stat-main"><div class="label">今日新增</div><div class="value">57<small>条</small></div></div>
+        </div>
+        <div class="card stat-card stat-click" id="k-resolved" onclick="setKpi('resolved')" style="--accent:var(--success);--accent-bg:var(--success-bg)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg></div>
+          <div class="stat-main"><div class="label">已处理</div><div class="value">92<small>条</small></div></div>
+        </div>
+        <div class="card stat-card stat-click" id="k-ignored" onclick="setKpi('ignored')" style="--accent:var(--gray-500);--accent-bg:var(--gray-100)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-x"/></svg></div>
+          <div class="stat-main"><div class="label">已忽略</div><div class="value">41<small>条</small></div></div>
+        </div>
+      </div>
+
+      <!-- 工具栏 -->
+      <div class="toolbar">
+        <div class="input input-search" style="width:200px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>
+          <input id="kw" placeholder="搜索物料 / 单号" style="border:none;outline:none;background:transparent;width:100%" oninput="render()">
+        </div>
+        <select class="ps-sel" style="height:32px" onchange="toast('已切换到批次 '+this.options[this.selectedIndex].text)">
+          <option>MRP20261026-01 · 10-26 常规运算</option>
+          <option>MRP20261019-02 · 10-19 常规运算</option>
+          <option>MRP20261012-03 · 10-12 常规运算</option>
+        </select>
+        <div class="chips">
+          <span class="chip active" id="c-all" onclick="setType('all')">全部 <span class="n">320</span></span>
+          <span class="chip" id="c-pds" onclick="setType('past_due_supply')">拖期供给 <span class="n">53</span></span>
+          <span class="chip" id="c-pdd" onclick="setType('past_due_demand')">拖期需求 <span class="n">12</span></span>
+          <span class="chip" id="c-late" onclick="setType('supply_late')">建议提前 <span class="n">28</span></span>
+          <span class="chip" id="c-early" onclick="setType('supply_early')">建议延后 <span class="n">9</span></span>
+          <span class="chip" id="c-exc" onclick="setType('supply_excess')">取消减量 <span class="n">63</span></span>
+          <span class="chip" id="c-safety" onclick="setType('below_safety_stock')">低于安全库存 <span class="n">4</span></span>
+          <span class="chip" id="c-nobom" onclick="setType('no_bom')">无有效BOM <span class="n">2</span></span>
+        </div>
+        <div class="right">
+          <button class="btn btn-secondary btn-sm" onclick="toast('已导出变更清单：MRP例外变更清单-20261026.xlsx')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cols"/></svg>导出变更清单</button>
+        </div>
+      </div>
+
+      <!-- 主表 -->
+      <div class="card">
+        <div class="card-head" style="padding:10px 16px">
+          <h3 style="font-size:14px">例外清单</h3>
+          <span class="hint" id="listHint"></span>
+          <span class="more">MRP20261026-01 · 运算日 2026-10-26</span>
+        </div>
+        <div class="card-body p0 tbl-wrap">
+          <table class="tbl" style="min-width:1440px">
+            <thead><tr>
+              <th style="width:36px"><input type="checkbox" class="selall" id="selAll"></th>
+              <th style="width:30px"></th>
+              <th style="width:230px">物料</th>
+              <th style="width:132px">例外类型</th>
+              <th style="width:220px">源单据</th>
+              <th style="width:96px">需求日</th>
+              <th style="width:96px">单据日期</th>
+              <th style="width:96px">建议日期</th>
+              <th class="num" style="width:84px">调整天数</th>
+              <th style="width:200px">一句话建议</th>
+              <th style="width:80px">状态</th>
+              <th style="width:140px">操作</th>
+            </tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <span class="total" id="pgTotal"></span>
+          <span class="pg">‹</span><span class="pg cur">1</span><span class="pg">›</span>
+          <span style="margin-left:8px">20 条/页</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- 批量操作条（选中后出现） -->
+<div class="batchbar card" id="batchbar">
+  <span class="bb-n">已选 <b id="selCnt">0</b> 条</span>
+  <span class="bb-sep"></span>
+  <button class="btn btn-secondary btn-sm" onclick="batchAct('改期')">批量改期</button>
+  <button class="btn btn-secondary btn-sm" onclick="batchAct('忽略')">批量忽略</button>
+  <button class="btn btn-secondary btn-sm" onclick="batchAct('催货')">批量催货</button>
+  <span class="bb-sep"></span>
+  <span class="bb-clear" onclick="clearSel()">清除选择</span>
+</div>
+
+<div class="ov" id="ovToast" style="align-items:flex-end;justify-content:center;padding:0 0 46px;background:transparent;pointer-events:none">
+  <div style="background:#111318;color:#fff;font-size:13px;padding:9px 16px;border-radius:999px;box-shadow:var(--shadow-lg)">✓ <span id="toastTxt"></span></div>
+</div>
+
+<!-- 原型切换条（非设计内容） -->
+<div class="protobar">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html">总览</a>
+  <a href="design-system.html">设计系统</a>
+  <a href="mrp-plan.html">MRP 计划</a>
+  <a href="mrp-shortage.html">缺口与建议</a>
+  <a href="mrp-order.html">订单覆盖</a>
+  <a href="mrp-exceptions.html" class="cur">例外处理</a>
+  <a href="mrp-runs.html">批次与对比</a>
+  <a href="mrp-params.html">参数与替代</a>
+  <a href="mrp-requisition.html">采购申请单</a>
+  <a href="purchase-plan.html">采购到料计划</a>
+  <a href="kit-analysis.html">齐套分析</a>
+</div>
+
+<script>
+function fmt(n){return n.toLocaleString()}
+
+var TYPE={
+  past_due_demand:{label:'拖期需求',color:'var(--danger)',bg:'var(--danger-bg)'},
+  past_due_supply:{label:'拖期供给',color:'#ea580c',bg:'#fff7ed'},
+  supply_late:{label:'建议提前',color:'#d97706',bg:'#fffbeb'},
+  supply_early:{label:'建议延后',color:'#2563eb',bg:'#eff6ff'},
+  supply_excess:{label:'取消或减量',color:'#b45309',bg:'#fef3c7'},
+  below_safety_stock:{label:'低于安全库存',color:'#c026d3',bg:'#fdf4ff'},
+  no_bom:{label:'无有效BOM',color:'var(--text-2)',bg:'var(--gray-100)'}
+};
+var STATUS={
+  open:{label:'待处理',color:'var(--info)',bg:'var(--info-bg)'},
+  resolved:{label:'已处理',color:'var(--success)',bg:'var(--success-bg)'},
+  ignored:{label:'已忽略',color:'var(--gray-500)',bg:'var(--gray-100)'}
+};
+var ACTIONS={
+  past_due_supply:[['改期','done'],['催货','notify'],['忽略','ignore']],
+  past_due_demand:[['改期','done'],['忽略','ignore']],
+  supply_late:[['改期','done'],['催货','notify'],['忽略','ignore']],
+  supply_early:[['改期','done'],['忽略','ignore']],
+  supply_excess:[['取消','done'],['忽略','ignore']],
+  below_safety_stock:[['查看建议','gap'],['忽略','ignore']],
+  no_bom:[['维护 BOM','toast'],['忽略','ignore']]
+};
+var CHIP_IDS={all:'c-all',past_due_supply:'c-pds',past_due_demand:'c-pdd',supply_late:'c-late',supply_early:'c-early',supply_excess:'c-exc',below_safety_stock:'c-safety',no_bom:'c-nobom'};
+var KPI_LBL={all:'全部状态',open:'待处理',new:'今日新增',resolved:'已处理',ignored:'已忽略'};
+
+/* ============ 演示例外数据（金蝶例外码：6 过去需求 / 7 过去到货 / 11 整单提前 / 15 整单延后 / 20 整单取消 / 50 无BOM / 96 低于安全库存） ============ */
+var ROWS=[
+ {id:1,mat:'3.1.JWA02-B1WA10C-001',matName:'LED 洗墙灯 JWA02 10W',type:'past_due_supply',code:7,
+  srcType:'生产任务',srcNo:'WORK049639',srcSub:'剩余 200 件',
+  need:'2026-10-26',doc:'2022-03-30',suggest:'',adjust:null,
+  advice:'改期或关闭该任务单',adviceNote:'已过 1,671 天',status:'open',isNew:false,
+  why:'供给日期 2022-03-30 已过去 1,671 天，任务单仍未完工入库，剩余 200 件（规则：单据日期 < 运算日且未到货 / 完工）。',
+  srcDetail:[['单据类型','生产任务'],['单号','WORK049639'],['物料','3.1.JWA02-B1WA10C-001 × 200 件（剩余）'],['单据日期','2022-03-30'],['状态','逾期未完工']],
+  pegging:['HJ202609-0017-0207 · 3.1.JWA02-B1WA10C-001 × 2,000 件 · 需求 2026-10-26（FIFO：最早供给匹配最早需求）']},
+ {id:2,mat:'3.1.JWA02-B1WA10C-001',matName:'LED 洗墙灯 JWA02 10W',type:'past_due_supply',code:7,
+  srcType:'生产任务',srcNo:'WORK107406',srcSub:'剩余 1,000 件',
+  need:'2026-10-26',doc:'2026-08-12',suggest:'',adjust:null,
+  advice:'改期或关闭该任务单',adviceNote:'已过 75 天',status:'open',isNew:true,
+  why:'供给日期 2026-08-12 已过去 75 天，任务单未完工入库，剩余 1,000 件（规则：单据日期 < 运算日且未到货 / 完工）。',
+  srcDetail:[['单据类型','生产任务'],['单号','WORK107406'],['物料','3.1.JWA02-B1WA10C-001 × 1,000 件（剩余）'],['单据日期','2026-08-12'],['状态','逾期未完工']],
+  pegging:['HJ202609-0017-0207 · 3.1.JWA02-B1WA10C-001 × 2,000 件 · 需求 2026-10-26']},
+ {id:3,mat:'1.6.4.C.1.0805.50V104K',matName:'LED 灯珠 0805 50V 104K',type:'past_due_demand',code:6,
+  srcType:'销售订单行',srcNo:'HJ202602-0009-0121',srcSub:'12,000 件未交付',
+  need:'2025-02-28',doc:'2025-02-28',suggest:'',adjust:null,
+  advice:'请确认订单排期或关闭',adviceNote:'',status:'open',isNew:false,
+  why:'需求日期 2025-02-28 已过去，销售订单行仍挂着 12,000 件未交付需求（规则：需求日期 < 运算日）。',
+  srcDetail:[['单据类型','销售订单行'],['单号','HJ202602-0009-0121'],['数量','12,000 件（未交付）'],['需求日期','2025-02-28'],['状态','未交付']],
+  pegging:['HJ202602-0009-0121 · 1.6.4.C.1.0805.50V104K × 12,000 件 · 需求 2025-02-28（自身即需求来源）']},
+ {id:4,mat:'1.6.4.C.1.0805.50V104K',matName:'LED 灯珠 0805 50V 104K',type:'supply_late',code:11,
+  srcType:'采购订单',srcNo:'PO-20260912-076',srcSub:'14,000 件 · 在途',
+  need:'2026-10-30',doc:'2027-01-15',suggest:'2026-10-30',adjust:-77,
+  advice:'建议提前 77 天',adviceNote:'',status:'open',isNew:true,
+  why:'供给日期 2027-01-15 晚于最早需求日 2026-10-30 达 77 天，超出宽限期（5 天），建议提前至需求日。',
+  srcDetail:[['单据类型','采购订单'],['单号','PO-20260912-076'],['数量','14,000 件'],['预计到货','2027-01-15'],['状态','在途']],
+  pegging:['HJ202609-0042-0248 · 1.6.4.C.1.0805.50V104K × 14,000 件 · 需求 2026-10-30']},
+ {id:5,mat:'3.1.JWA02-B1WA10C-001',matName:'LED 洗墙灯 JWA02 10W',type:'supply_early',code:15,
+  srcType:'生产任务',srcNo:'WORK049639',srcSub:'200 件（剩余）',
+  need:'2026-10-26',doc:'2022-03-30',suggest:'2026-10-26',adjust:1671,
+  advice:'建议延后 1,671 天',adviceNote:'',status:'resolved',isNew:false,
+  why:'供给日期 2022-03-30 早于最晚需求日 2026-10-26 达 1,671 天，超出宽限期，建议延后至需求日。',
+  srcDetail:[['单据类型','生产任务'],['单号','WORK049639'],['物料','3.1.JWA02-B1WA10C-001 × 200 件（剩余）'],['单据日期','2022-03-30'],['状态','逾期未完工']],
+  pegging:['HJ202609-0017-0207 · 3.1.JWA02-B1WA10C-001 × 2,000 件 · 需求 2026-10-26']},
+ {id:6,mat:'3.1.JGW05-B1WP300-001',matName:'LED 工矿灯 JGW05 300W',type:'supply_excess',code:20,
+  srcType:'生产任务',srcNo:'WORK110291',srcSub:'剩余 2,400 件',
+  need:'',doc:'2026-09-20',suggest:'',adjust:null,
+  advice:'建议取消，无对应需求',adviceNote:'',status:'open',isNew:false,
+  why:'FIFO pegging 后该供给未覆盖任何需求行，2,400 件全部富余（规则：无对应需求）。',
+  srcDetail:[['单据类型','生产任务'],['单号','WORK110291'],['物料','3.1.JGW05-B1WP300-001 × 2,400 件（剩余）'],['单据日期','2026-09-20'],['状态','未完工']],
+  pegging:[]},
+ {id:7,mat:'1.6.4.C.1.0805.50V104K',matName:'LED 灯珠 0805 50V 104K',type:'below_safety_stock',code:96,
+  srcType:'物料',srcNo:'1.6.4.C.1.0805.50V104K',srcSub:'可用 2,000 / 水位 15,000',
+  need:'',doc:'',suggest:'',adjust:null,
+  advice:'已生成补货建议',adviceNote:'净缺口 13,000 件',status:'ignored',isNew:false,
+  why:'当前可用库存 2,000 件低于安全库存水位 15,000 件，净缺口 13,000 件（规则：可用库存 < 安全库存）。',
+  srcDetail:[['检查对象','物料主数据'],['物料','1.6.4.C.1.0805.50V104K'],['物料属性','外购'],['当前可用','2,000 件'],['安全库存水位','15,000 件']],
+  pegging:['无未结需求订单行（库存水位型例外）']},
+ {id:8,mat:'3.1.XXXX',matName:'LED 灯具新品（自制）',type:'no_bom',code:50,
+  srcType:'物料',srcNo:'3.1.XXXX',srcSub:'自制 · 无有效 BOM',
+  need:'',doc:'',suggest:'',adjust:null,
+  advice:'请维护 BOM',adviceNote:'需求不展开，未参与覆盖计算',status:'open',isNew:false,
+  why:'物料属性为自制，但 BOM 主数据无有效版本（已停用 / 已过期），需求无法展开（规则：自制物料无有效 BOM）。',
+  srcDetail:[['检查对象','物料主数据'],['物料','3.1.XXXX'],['物料属性','自制'],['BOM 版本','无有效版本'],['展开结果','需求不展开']],
+  pegging:['待排产需求：暂无有效 BOM，不参与 pegging']}
+];
+
+var type='all', kpi='all', expanded=null;
+
+/* ============ 筛选与渲染 ============ */
+function applyFilters(){
+  var kw=document.getElementById('kw').value.trim().toUpperCase();
+  return ROWS.filter(function(r){
+    if(type!=='all'&&r.type!==type)return false;
+    if(kpi==='open'&&r.status!=='open')return false;
+    if(kpi==='resolved'&&r.status!=='resolved')return false;
+    if(kpi==='ignored'&&r.status!=='ignored')return false;
+    if(kpi==='new'&&!r.isNew)return false;
+    if(kw&&r.mat.toUpperCase().indexOf(kw)<0&&r.matName.indexOf(kw)<0&&r.srcNo.toUpperCase().indexOf(kw)<0)return false;
+    return true;
+  });
+}
+function actionHTML(r){
+  var acts=ACTIONS[r.type]||[['忽略','ignore']];
+  var links=acts.map(function(a){
+    if(a[1]==='gap')return '<a href="mrp-shortage.html">'+a[0]+'</a>';
+    if(a[1]==='toast')return '<a onclick="fixBom(\''+r.mat+'\')">'+a[0]+'</a>';
+    return '<a onclick="act('+r.id+',\''+a[0]+'\',\''+a[1]+'\')">'+a[0]+'</a>';
+  }).join('');
+  return '<span class="row-actions">'+links+'</span>';
+}
+function rowHTML(r){
+  var t=TYPE[r.type],st=STATUS[r.status];
+  var adjust=r.adjust==null?'<span class="zero2">—</span>':'<b class="'+(r.adjust>0?'adj-pos':'adj-neg')+'">'+(r.adjust>0?'+':'')+fmt(r.adjust)+'</b>';
+  return '<tr data-id="'+r.id+'"'+(expanded===r.id?' class="openx"':'')+'>'
+   +'<td><input type="checkbox" class="rowcb" data-id="'+r.id+'"></td>'
+   +'<td class="open-tr" onclick="toggleDrill('+r.id+')" title="展开判定依据"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><use href="#i-chev"/></svg></td>'
+   +'<td><div class="mc">'+r.mat+'</div><div class="sp">'+r.matName+'</div></td>'
+   +'<td><span class="tag" style="color:'+t.color+';background:'+t.bg+'">'+t.label+'</span><span class="exc-code">'+r.code+'</span></td>'
+   +'<td><a class="link" href="javascript:void 0" onclick="openDoc(\''+r.srcNo+'\')">'+r.srcType+' · '+r.srcNo+'</a><div class="sp">'+r.srcSub+'</div></td>'
+   +'<td class="mono">'+(r.need||'<span class="zero2">—</span>')+'</td>'
+   +'<td class="mono">'+(r.doc||'<span class="zero2">—</span>')+'</td>'
+   +'<td class="mono">'+(r.suggest||'<span class="zero2">—</span>')+'</td>'
+   +'<td class="num">'+adjust+'</td>'
+   +'<td>'+r.advice+(r.adviceNote?'<div class="sp">'+r.adviceNote+'</div>':'')+'</td>'
+   +'<td><span class="tag" style="color:'+st.color+';background:'+st.bg+'">'+st.label+'</span></td>'
+   +'<td>'+actionHTML(r)+'</td></tr>';
+}
+function drillHTML(r){
+  var mini=r.srcDetail.map(function(x){return '<tr><td>'+x[0]+'</td><td>'+x[1]+'</td></tr>'}).join('');
+  var peg=r.pegging.length?r.pegging.map(function(p){return '<div class="peg-row">'+p+'</div>'}).join(''):'<span class="zero2">无关联需求（FIFO 未匹配到订单行）</span>';
+  return '<div class="exc-why"><b>判定依据</b>'+r.why+'</div>'
+   +'<div class="exc-grid">'
+   +'<div class="exc-box"><div class="exc-box-h">源单据摘要</div><table class="mini"><tbody>'+mini+'</tbody></table></div>'
+   +'<div class="exc-box"><div class="exc-box-h">相关订单 pegging（FIFO）</div><div class="peg">'+peg+'</div></div>'
+   +'</div>';
+}
+function render(){
+  var arr=applyFilters();
+  var t=document.getElementById('tbody');
+  t.innerHTML=arr.length?arr.map(rowHTML).join(''):'<tr><td colspan="12"><div class="empty-note">没有符合条件的例外（演示样本仅 8 条）</div></td></tr>';
+  document.getElementById('listHint').textContent=(type==='all'?'全部类型':TYPE[type].label)+' · '+KPI_LBL[kpi]+' · 演示样本 '+arr.length+' / 8 条（全量 320 条）';
+  document.getElementById('pgTotal').textContent='共 '+arr.length+' 条（演示样本）';
+  Object.keys(CHIP_IDS).forEach(function(k){
+    var el=document.getElementById(CHIP_IDS[k]);
+    if(el)el.className='chip'+(type===k?' active':'');
+  });
+  Object.keys(KPI_LBL).forEach(function(k){
+    var el=document.getElementById('k-'+k);
+    if(el)el.className='card stat-card stat-click'+(kpi===k?' sel':'');
+  });
+  document.getElementById('selAll').checked=false;
+  updateSel();
+}
+function setType(t){type=t;render()}
+function setKpi(k){kpi=(kpi===k?'all':k);render()}
+function toggleDrill(id){
+  var tr=document.querySelector('tr[data-id="'+id+'"]');
+  var sub=document.getElementById('subdrill');
+  if(expanded===id){if(sub)sub.remove();tr.classList.remove('openx');expanded=null;return}
+  if(sub)sub.remove();
+  document.querySelectorAll('tr.openx').forEach(function(x){x.classList.remove('openx')});
+  var r=ROWS.filter(function(x){return x.id===id})[0];
+  expanded=id;
+  tr.classList.add('openx');
+  tr.insertAdjacentHTML('afterend','<tr class="subrow" id="subdrill"><td colspan="12"><div class="sub-pad">'+drillHTML(r)+'</div></td></tr>');
+}
+
+/* ============ 处理动作 ============ */
+function act(id,label,kind){
+  var r=ROWS.filter(function(x){return x.id===id})[0];
+  if(!r)return;
+  if(kind==='ignore'){r.status='ignored';render();toast('已忽略：'+r.mat+' · '+TYPE[r.type].label);}
+  else if(kind==='notify'){toast('已发送催货通知：'+r.srcNo+'（'+r.mat+'）');}
+  else{r.status='resolved';render();toast('已'+label+'：'+r.mat+' · '+TYPE[r.type].label);}
+}
+function batchAct(label){
+  var ids=selectedIds();
+  if(!ids.length)return;
+  if(label==='催货'){toast('已发送 '+ids.length+' 条催货通知');clearSel();return}
+  var n=0;
+  ROWS.forEach(function(r){
+    if(ids.indexOf(r.id)<0)return;
+    if(label==='改期'){r.status='resolved';n++}
+    if(label==='忽略'){r.status='ignored';n++}
+  });
+  render();
+  toast('已批量'+label+' '+n+' 条');
+}
+function selectedIds(){
+  return Array.prototype.map.call(document.querySelectorAll('#tbody .rowcb:checked'),function(cb){return +cb.getAttribute('data-id')});
+}
+function updateSel(){
+  var n=document.querySelectorAll('#tbody .rowcb:checked').length;
+  document.getElementById('selCnt').textContent=n;
+  document.getElementById('batchbar').classList.toggle('show',n>0);
+}
+function clearSel(){
+  document.querySelectorAll('#tbody .rowcb').forEach(function(cb){cb.checked=false});
+  document.getElementById('selAll').checked=false;
+  updateSel();
+}
+function openDoc(no){toast('演示：打开单据 '+no)}
+function fixBom(code){toast('演示：跳转 BOM 维护（'+code+'）')}
+function toast(t){var o=document.getElementById('ovToast');document.getElementById('toastTxt').textContent=t;o.classList.add('show');clearTimeout(window.__tt);window.__tt=setTimeout(function(){o.classList.remove('show')},1800)}
+
+document.getElementById('tbody').addEventListener('change',function(e){
+  if(e.target.classList.contains('rowcb'))updateSel();
+});
+document.getElementById('selAll').addEventListener('change',function(){
+  var on=this.checked;
+  document.querySelectorAll('#tbody .rowcb').forEach(function(cb){cb.checked=on});
+  updateSel();
+});
+render();
+</script>
+</body>
+</html>
