@@ -6,6 +6,9 @@
 订单状态为**派生值**（非原始 status 列）：基于 erp_status（0 未审核 / 1 审核 /
 2 部分关闭 / 3 已关闭）判断；erp_status=3（已关闭）时结合 delivery_completed_date
 区分：有发货完成日期 → completed（已完成），无 → cancelled（已取消）。
+
+risk_probability 为风险引擎评分 risk_score（0-100）除以 100 的归一化参考值（0-1，
+越高越危险），非统计校准概率；未评估订单 risk_score 为空 → null，不按 risk_level 反推。
 """
 
 from datetime import date, datetime
@@ -96,6 +99,10 @@ class OrderOut(BaseModel):
     erp_status: Optional[int] = Field(None, description="ERP 订单状态原始值（0 未审核 / 1 审核 / 2 部分关闭 / 3 已关闭）")
     delivery_completed_date: Optional[date] = Field(None, description="发货完成日期（erp_status=3 时用于区分已完成/已取消）")
     risk_level: Optional[str] = Field(None, description="风险等级")
+    risk_probability: Optional[float] = Field(
+        None,
+        description="风险概率参考值（risk_score/100 归一化，0-1，越高越危险；未评估为 null；非统计校准概率）",
+    )
     promised_date: Optional[date] = Field(None, description="合同交期")
     planned_start_date: Optional[date] = Field(None, description="计划开工日期")
     owner: Optional[str] = Field(None, description="负责人")
@@ -189,6 +196,7 @@ async def orders_list(
             "erp_status": r.erp_status,
             "delivery_completed_date": r.delivery_completed_date.isoformat() if r.delivery_completed_date else None,
             "risk_level": r.risk_level,
+            "risk_probability": round(float(r.risk_score) / 100, 4) if r.risk_score is not None else None,
             "promised_date": r.promised_date.isoformat() if r.promised_date else None,
             "planned_start_date": r.planned_start_date.isoformat() if r.planned_start_date else None,
             "owner": r.owner,
