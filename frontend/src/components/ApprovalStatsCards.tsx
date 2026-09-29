@@ -9,7 +9,7 @@ export type StatCard = {
   hint?: string
   // 较上期变化：count 为差值（正负皆可），goodWhenDown 表示「该方向是改善」（如处理时长下降为好）
   delta?: { count: number; unit?: string; goodWhenDown?: boolean }
-  tone?: 'default' | 'info' | 'warning' | 'danger' | 'success'
+  tone?: 'default' | 'info' | 'warning' | 'danger' | 'success' | 'muted'
   onClick?: () => void
   active?: boolean
 }
@@ -20,6 +20,7 @@ const TONE: Record<string, { color: string; bg: string }> = {
   warning: { color: '#d97706', bg: '#fffbeb' },
   danger: { color: '#dc2626', bg: '#fef2f2' },
   success: { color: '#16a34a', bg: '#f0fdf4' },
+  muted: { color: '#64748b', bg: '#f1f5f9' },
 }
 
 function DeltaText({ delta }: { delta: NonNullable<StatCard['delta']> }) {

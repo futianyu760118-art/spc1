@@ -89,6 +89,19 @@ def _clamp_run_date(d: Optional[date], run_date: date, horizon_end: date) -> Opt
     return d
 
 
+def _dedupe_pegging(entries: list[dict]) -> list[dict]:
+    """按 (sale_order_no, line_no) 去重，保持首次出现顺序。"""
+    seen: set[tuple] = set()
+    result: list[dict] = []
+    for item in entries or []:
+        key = (item.get("sale_order_no"), item.get("line_no"))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
 class MrpEngine:
     def __init__(self) -> None:
         self._background_tasks: set[asyncio.Task] = set()
@@ -274,9 +287,8 @@ class MrpEngine:
                     clamped = _clamp_run_date(req.need_date, run_date, horizon_end)
                     if clamped is None:
                         continue
-                    demand_events.append(
-                        DemandEvent(clamped, req.qty, pegging_by_key.get((material_id, req.need_date), []))
-                    )
+                    pegging = _dedupe_pegging(pegging_by_key.get((material_id, req.need_date), []))
+                    demand_events.append(DemandEvent(clamped, req.qty, pegging))
                 supply_events: list[SupplyEvent] = []
                 for record in supplies_by_material.get(material_id, []):
                     if not supply_enabled.get(record.source_type, True):
@@ -332,7 +344,7 @@ class MrpEngine:
                         "safety_stock_qty": row.safety_stock_qty,
                         "closing_qty": row.closing_qty,
                         "net_demand_qty": row.net_demand_qty,
-                        "pegging": row.pegging or None,
+                        "pegging": _dedupe_pegging(row.pegging) or None,
                     }
                     for source_type, qty in row.supply_by_type.items():
                         field = _SUPPLY_FIELD_BY_TYPE.get(source_type)
@@ -357,7 +369,7 @@ class MrpEngine:
                             "suggested_supplier_id": param.default_supplier_id,
                             "source": plan.source,
                             "status": "pending",
-                            "pegging": plan.pegging or None,
+                            "pegging": _dedupe_pegging(plan.pegging) or None,
                         }
                     )
                     if bill_type in (11011, 11012):

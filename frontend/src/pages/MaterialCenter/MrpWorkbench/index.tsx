@@ -1,36 +1,48 @@
 import { useState } from 'react'
 import { PageContainer } from '@ant-design/pro-components'
 import { Tabs } from 'antd'
+import OverviewTab from './OverviewTab'
+import type { MrpTabKey } from './OverviewTab'
+import OrderCoverageTab from './OrderCoverageTab'
 import RunsTab from './RunsTab'
 import SuggestionsTab from './SuggestionsTab'
-import MaterialBalanceTab from './MaterialBalanceTab'
 import ExceptionsTab from './ExceptionsTab'
-import ComparisonTab from './ComparisonTab'
 import ParametersTab from './ParametersTab'
 
 export default function MrpWorkbench() {
   const [activeRunId, setActiveRunId] = useState<number | null>(null)
-  const [activeTab, setActiveTab] = useState('runs')
+  const [activeTab, setActiveTab] = useState('overview')
 
   const handleOpenRun = (runId: number) => {
     setActiveRunId(runId)
-    setActiveTab('balance')
+    setActiveTab('shortage')
   }
 
+  const handleNavigate = (key: MrpTabKey) => setActiveTab(key)
+
   return (
-    <PageContainer title="MRP 运算">
-      <Tabs
-        activeKey={activeTab}
-        onChange={setActiveTab}
-        items={[
-          { key: 'runs', label: '运算批次', children: <RunsTab onOpenRun={handleOpenRun} /> },
-          { key: 'suggestions', label: '计划建议', children: <SuggestionsTab runId={activeRunId} /> },
-          { key: 'balance', label: '物料平衡', children: <MaterialBalanceTab runId={activeRunId} /> },
-          { key: 'exceptions', label: '例外', children: <ExceptionsTab runId={activeRunId} /> },
-          { key: 'comparison', label: 'K3 对比', children: <ComparisonTab runId={activeRunId} /> },
-          { key: 'parameters', label: '参数维护', children: <ParametersTab /> },
-        ]}
-      />
+    <PageContainer
+      title="MRP 计划"
+      content={'把销售订单翻译成"要不要做/买、做多少、何时动手"的清单：有缺口才有建议，无缺口属正常。'}
+    >
+      <div className="sc-page">
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            { key: 'overview', label: '总览', children: <OverviewTab onNavigate={handleNavigate} /> },
+            { key: 'shortage', label: '缺口与建议', children: <SuggestionsTab runId={activeRunId} /> },
+            { key: 'order', label: '订单覆盖', children: <OrderCoverageTab /> },
+            { key: 'exceptions', label: '例外', children: <ExceptionsTab runId={activeRunId} /> },
+            {
+              key: 'runs',
+              label: '批次与对比',
+              children: <RunsTab onOpenRun={handleOpenRun} />,
+            },
+            { key: 'parameters', label: '参数与替代', children: <ParametersTab /> },
+          ]}
+        />
+      </div>
     </PageContainer>
   )
 }

@@ -147,10 +147,30 @@ async def list_exceptions(
             .limit(page_size)
         )
     ).scalars().all()
+    # stats 为同批次全量口径（不受状态/类型/来源/关键词筛选影响），供前端 chips 计数
+    stats_conditions = _list_conditions(run_id=resolved_run_id)
+    by_status_rows = (
+        await db.execute(
+            select(MrpException.status, func.count())
+            .where(*stats_conditions)
+            .group_by(MrpException.status)
+        )
+    ).all()
+    by_type_rows = (
+        await db.execute(
+            select(MrpException.exception_type, func.count())
+            .where(*stats_conditions)
+            .group_by(MrpException.exception_type)
+        )
+    ).all()
     return ResponseModel(
         data=PageResult(
             total=int(total), page=page, page_size=page_size,
             items=[MrpExceptionOut.model_validate(r) for r in rows],
+            stats={
+                "by_status": {key: int(count) for key, count in by_status_rows},
+                "by_type": {key: int(count) for key, count in by_type_rows},
+            },
         )
     )
 

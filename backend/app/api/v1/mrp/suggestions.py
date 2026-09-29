@@ -33,6 +33,7 @@ async def list_suggestions(
     run_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
     bill_type: Optional[int] = Query(None),
+    is_substitute: Optional[bool] = Query(None),
     keyword: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -48,6 +49,9 @@ async def list_suggestions(
     if bill_type:
         query = query.where(MrpSuggestion.bill_type == bill_type)
         count_query = count_query.where(MrpSuggestion.bill_type == bill_type)
+    if is_substitute is not None:
+        query = query.where(MrpSuggestion.is_substitute.is_(is_substitute))
+        count_query = count_query.where(MrpSuggestion.is_substitute.is_(is_substitute))
     if keyword:
         like = f"%{keyword}%"
         condition = MrpSuggestion.material_code.ilike(like) | MrpSuggestion.material_name.ilike(like)
@@ -61,10 +65,37 @@ async def list_suggestions(
             .limit(page_size)
         )
     ).scalars().all()
+    # stats 为同批次全量口径（不受状态/类型/关键词筛选影响），供前端 chips 计数
+    by_status_rows = (
+        await db.execute(
+            select(MrpSuggestion.status, func.count())
+            .where(MrpSuggestion.run_id == resolved_run_id)
+            .group_by(MrpSuggestion.status)
+        )
+    ).all()
+    by_type_rows = (
+        await db.execute(
+            select(MrpSuggestion.bill_type, func.count())
+            .where(MrpSuggestion.run_id == resolved_run_id)
+            .group_by(MrpSuggestion.bill_type)
+        )
+    ).all()
+    substitute_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(MrpSuggestion)
+            .where(MrpSuggestion.run_id == resolved_run_id, MrpSuggestion.is_substitute.is_(True))
+        )
+    ).scalar() or 0
     return ResponseModel(
         data=PageResult(
             total=int(total), page=page, page_size=page_size,
             items=[SuggestionOut.model_validate(r) for r in rows],
+            stats={
+                "by_status": {key: int(count) for key, count in by_status_rows},
+                "by_type": {str(key): int(count) for key, count in by_type_rows},
+                "substitute_count": int(substitute_count),
+            },
         )
     )
 

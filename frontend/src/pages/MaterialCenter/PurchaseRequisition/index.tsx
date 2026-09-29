@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, DatePicker, Input, InputNumber, Modal, Select, Table, Tooltip, message } from 'antd'
-import { DeleteOutlined, ExportOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Alert, Button, Col, DatePicker, Input, InputNumber, Modal, Row, Table, Tooltip, message } from 'antd'
+import {
+  CheckCircleOutlined, ClockCircleOutlined, DeleteOutlined, ExportOutlined, FileTextOutlined,
+  PlusOutlined, ReloadOutlined, ShoppingCartOutlined,
+} from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import type { ColumnsType } from 'antd/es/table'
 import { materialApi } from '../../../services/api'
@@ -19,6 +23,23 @@ type EditorLine = {
   req_qty: number | null
   need_date: Dayjs | null
   remark: string
+}
+
+const STATUS_CHIPS: Array<{ key: string; label: string }> = [
+  { key: '', label: '全部' },
+  { key: 'draft', label: '草稿' },
+  { key: 'approving', label: '审批中' },
+  { key: 'approved', label: '已批准' },
+  { key: 'closed', label: '已关闭' },
+]
+
+interface KpiCard {
+  key: string
+  label: string
+  value: number
+  icon: ReactNode
+  accent: string
+  accentBg: string
 }
 
 /** 新建 / 编辑申请单共用弹窗（编辑时整单明细替换）——列表与详情共用。 */
@@ -175,6 +196,25 @@ export default function PurchaseRequisitionList() {
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
+  const [stats, setStats] = useState({ wait: 0, approved: 0, converted: 0, total: 0 })
+
+  const loadStats = useCallback(async () => {
+    try {
+      const [waitRes, approvedRes, convertedRes, allRes]: any[] = await Promise.all([
+        materialApi.listPurchaseRequisitions({ page: 1, page_size: 1, status: 'approving' }),
+        materialApi.listPurchaseRequisitions({ page: 1, page_size: 1, status: 'approved' }),
+        materialApi.listPurchaseRequisitions({ page: 1, page_size: 1, status: 'closed' }),
+        materialApi.listPurchaseRequisitions({ page: 1, page_size: 1 }),
+      ])
+      setStats({
+        wait: waitRes?.data?.total ?? 0,
+        approved: approvedRes?.data?.total ?? 0,
+        converted: convertedRes?.data?.total ?? 0,
+        total: allRes?.data?.total ?? 0,
+      })
+    } catch { /* 全局拦截器已提示 */ }
+  }, [])
+  useEffect(() => { loadStats() }, [loadStats])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -254,15 +294,48 @@ export default function PurchaseRequisitionList() {
     },
   ]
 
+  const kpiCards: KpiCard[] = [
+    { key: 'approving', label: '待审批', value: stats.wait, icon: <ClockCircleOutlined />, accent: '#d97706', accentBg: '#fffbeb' },
+    { key: 'approved', label: '已批准', value: stats.approved, icon: <CheckCircleOutlined />, accent: '#16a34a', accentBg: '#f0fdf4' },
+    { key: 'closed', label: '已转单', value: stats.converted, icon: <ShoppingCartOutlined />, accent: '#5b5bd6', accentBg: '#eef0fe' },
+    { key: '', label: '总数', value: stats.total, icon: <FileTextOutlined />, accent: '#0284c7', accentBg: '#f0f9ff' },
+  ]
+
   return (
     <div className="sc-page">
+      <Alert
+        type="info"
+        showIcon
+        message={<b>MRP 建议审核通过后可一键转采购申请单，走审批后转采购订单；也可手工新建。</b>}
+        style={{ marginBottom: 12 }}
+      />
+
+      <Row gutter={[12, 12]} style={{ marginBottom: 14 }}>
+        {kpiCards.map(c => (
+          <Col key={c.key || 'all'} flex="1 1 190px">
+            <div
+              className={`sc-stat-card ac-stat-card clickable${status === c.key ? ' on' : ''}`}
+              style={{ '--accent': c.accent, '--accent-bg': c.accentBg, height: '100%' } as CSSProperties}
+              onClick={() => { setPage(1); setStatus(prev => (prev === c.key ? '' : c.key)) }}
+            >
+              <div className="sc-stat-icon">{c.icon}</div>
+              <div className="sc-stat-main" style={{ minWidth: 0 }}>
+                <div className="sc-stat-label">{c.label}</div>
+                <div className="sc-stat-value">{c.value.toLocaleString('zh-CN')}<small>单</small></div>
+              </div>
+            </div>
+          </Col>
+        ))}
+      </Row>
+
       <div className="card-modern" style={{ padding: '14px 18px', marginBottom: 12 }}>
         <div className="sc-toolbar" style={{ marginBottom: 0 }}>
           <Input.Search allowClear style={{ width: 230 }} placeholder="申请单号 / 申请人"
             onSearch={v => { setPage(1); setKeyword(v) }} />
-          <Select allowClear placeholder="单据状态" style={{ width: 116 }} value={status || undefined}
-            onChange={v => { setPage(1); setStatus(v || '') }}
-            options={Object.entries(REQUISITION_STATUS_MAP).map(([value, s]) => ({ value, label: s.text }))} />
+          {STATUS_CHIPS.map(c => (
+            <span key={c.key || 'all'} className={`sc-chip${status === c.key ? ' on' : ''}`}
+              onClick={() => { setPage(1); setStatus(c.key) }}>{c.label}</span>
+          ))}
           <Input allowClear placeholder="申请人" style={{ width: 120 }} value={applicant}
             onChange={e => setApplicant(e.target.value)}
             onPressEnter={() => setPage(1)}

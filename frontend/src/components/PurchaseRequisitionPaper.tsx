@@ -5,7 +5,7 @@ import { opinionsFromClaim } from './ClaimPaper'
 export const REQUISITION_STATUS_MAP: Record<string, { text: string; cls: string }> = {
   draft: { text: '草稿', cls: 'sc-tag-wait' },
   approving: { text: '审批中', cls: 'sc-tag-kit' },
-  approved: { text: '已通过', cls: 'sc-tag-done' },
+  approved: { text: '已批准', cls: 'sc-tag-done' },
   rejected: { text: '已驳回', cls: 'sc-tag-danger' },
   closed: { text: '已关闭', cls: 'sc-tag-plain' },
 }

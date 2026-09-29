@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, InputNumber, Modal, Spin, Table, message } from 'antd'
-import { ArrowLeftOutlined, EditOutlined, ExportOutlined, SendOutlined, SwapOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, EditOutlined, ExportOutlined, FileTextOutlined, SendOutlined, SwapOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { materialApi } from '../../../services/api'
 import { useAuthStore } from '../../../store/auth'
 import { useExport } from '../../../hooks/useExport'
 import { formatDateTime } from '../../../utils'
-import {
+import PurchaseRequisitionPaper, {
   REQUISITION_LINE_STATUS_MAP, REQUISITION_SOURCE_MAP, REQUISITION_STATUS_MAP,
   fmtAmount, fmtQty, type Requisition, type RequisitionLine,
 } from '../../../components/PurchaseRequisitionPaper'
@@ -35,6 +35,7 @@ export default function PurchaseRequisitionDetail() {
   const [r, setR] = useState<Requisition | null>(null)
   const [editorOpen, setEditorOpen] = useState(false)
   const [convertOpen, setConvertOpen] = useState(false)
+  const [paperOpen, setPaperOpen] = useState(false)
   const [convertLines, setConvertLines] = useState<ConvertRow[]>([])
   const [converting, setConverting] = useState(false)
 
@@ -58,6 +59,11 @@ export default function PurchaseRequisitionDetail() {
   const nodeLabel = (level?: number | null) =>
     (r.approval_snapshot || []).find((n: any) => n.seq === level)?.label || (level ? `L${level}` : '')
   const currentNode: any = (r.approval_snapshot || []).find((n: any) => n.seq === r.approval_level)
+  const currentNodeApprovers = currentNode
+    ? (Array.isArray(currentNode.approvers)
+      ? currentNode.approvers.map((a: any) => a.username || String(a.user_id || '')).filter(Boolean).join('、')
+      : currentNode.role || '')
+    : ''
   const remaining = (l: RequisitionLine) => Math.max(0, Number(l.req_qty || 0) - Number(l.converted_qty || 0))
 
   const doExport = () =>
@@ -179,6 +185,7 @@ export default function PurchaseRequisitionDetail() {
         <span className={`sc-tag ${statusTag.cls}`}><span className="dot" />{statusTag.text}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button icon={<ExportOutlined />} loading={exporting} onClick={doExport}>导出</Button>
+          <Button icon={<FileTextOutlined />} onClick={() => setPaperOpen(true)}>纸张视图</Button>
           {canEdit && <Button icon={<EditOutlined />} onClick={() => setEditorOpen(true)}>编辑</Button>}
           {canEdit && (
             <Button type="primary" icon={<SendOutlined />} onClick={doSubmit}>
@@ -238,6 +245,15 @@ export default function PurchaseRequisitionDetail() {
                       </div>
                     )
                   })}
+                  {status === 'approving' && rn === rounds[rounds.length - 1] && currentNode ? (
+                    <div className="ac-tl-item">
+                      <div className="t sc-mono">待处理</div>
+                      <div className="what">
+                        {currentNode.label || `L${currentNode.seq}`}
+                        {currentNodeApprovers ? <span className="sc-note"> · {currentNodeApprovers} · 待审</span> : null}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -278,6 +294,11 @@ export default function PurchaseRequisitionDetail() {
           rowKey="id" dataSource={convertLines} columns={convertColumns} pagination={false} size="small"
           scroll={{ x: 720 }} locale={{ emptyText: '没有可转单的明细行' }}
         />
+      </Modal>
+
+      <Modal title="采购申请单纸张视图" open={paperOpen} width={720} footer={null}
+        onCancel={() => setPaperOpen(false)}>
+        <PurchaseRequisitionPaper req={r} />
       </Modal>
     </div>
   )

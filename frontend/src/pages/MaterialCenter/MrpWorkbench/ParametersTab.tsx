@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Card, Col, DatePicker, Drawer, Empty, Form, Input, InputNumber, Row, Select, Space, Switch,
+  Alert, Button, Card, Col, DatePicker, Drawer, Empty, Form, Input, InputNumber, Row, Select, Space, Switch,
   Table, Tabs, Tag, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -142,10 +142,10 @@ interface SubstituteFormValues {
   remark?: string | null
 }
 
-const BATCH_POLICY_MAP: Record<string, { label: string; color: string }> = {
-  lot_for_lot: { label: '按需', color: 'blue' },
-  multiple: { label: '固定倍数', color: 'purple' },
-  fixed: { label: '固定批量', color: 'orange' },
+const BATCH_POLICY_MAP: Record<string, { label: string; cls: string }> = {
+  lot_for_lot: { label: '按需', cls: 'sc-tag-wait' },
+  multiple: { label: '倍数', cls: 'sc-tag-prod' },
+  fixed: { label: '固定', cls: 'sc-tag-purple' },
 }
 
 const DATA_SOURCE_MAP: Record<string, { label: string; color: string }> = {
@@ -154,24 +154,24 @@ const DATA_SOURCE_MAP: Record<string, { label: string; color: string }> = {
   erp: { label: 'ERP', color: 'geekblue' },
 }
 
-const SUBSTITUTE_POLICY_MAP: Record<string, { label: string; color: string }> = {
-  priority: { label: '优先', color: 'blue' },
-  ratio: { label: '比例', color: 'purple' },
+const SUBSTITUTE_POLICY_MAP: Record<string, { label: string; cls: string }> = {
+  priority: { label: '按优先级', cls: 'sc-tag-kit' },
+  ratio: { label: '按比例', cls: 'sc-tag-purple' },
 }
 
-const SUBSTITUTE_MODE_MAP: Record<string, { label: string; color: string }> = {
-  offset: { label: '抵扣', color: 'geekblue' },
-  replace: { label: '替换', color: 'orange' },
+const SUBSTITUTE_MODE_MAP: Record<string, { label: string; cls: string }> = {
+  offset: { label: '抵扣', cls: 'sc-tag-kit' },
+  replace: { label: '替换', cls: 'sc-tag-purple' },
 }
 
-const SCHEME_SWITCH_FIELDS: Array<{ name: SchemeSwitchField; label: string }> = [
+const SCHEME_SWITCH_FIELDS: Array<{ name: SchemeSwitchField; label: string; tooltip?: string }> = [
   { name: 'consider_inventory', label: '库存参与供给' },
   { name: 'consider_po', label: '采购订单参与供给' },
   { name: 'consider_task', label: '生产任务单参与供给' },
   { name: 'consider_subcontract', label: '委外订单参与供给' },
   { name: 'consider_transfer', label: '调拨在途参与供给' },
   { name: 'consider_requisition', label: '采购申请参与供给（P2 生效）' },
-  { name: 'consider_safety_stock', label: '安全库存参与净算' },
+  { name: 'consider_safety_stock', label: '安全库存参与净算', tooltip: '关闭后仅为订单需求净算，不生成安全库存补货建议。' },
 ]
 
 function fmtQty(v: number | null | undefined): string {
@@ -180,7 +180,9 @@ function fmtQty(v: number | null | undefined): string {
 }
 
 function renderLeadTime(v: number | null): ReactNode {
-  return v != null ? fmtQty(v) : <span style={{ color: '#cbd5e1' }}>默认</span>
+  return v != null
+    ? fmtQty(v)
+    : <span style={{ color: '#cbd5e1' }} title="未单独配置：按默认 7 天提前期参与运算">默认</span>
 }
 
 function renderOptionalNumber(v: number | null): ReactNode {
@@ -193,10 +195,10 @@ function fmtMaterialLabel(code: string | null, name: string | null, id: number):
 
 function fmtValidity(row: SubstituteRow): ReactNode {
   const { valid_from: from, valid_to: to } = row
-  if (!from && !to) return <span style={{ color: '#cbd5e1' }}>长期</span>
-  if (from && to) return `${from} ~ ${to}`
-  if (from) return `${from} 起`
-  return `至 ${to}`
+  if (!from && !to) return <span className="sc-tag sc-tag-wait">长期</span>
+  if (from && to) return <span className="sc-mono">{from} ~ {to}</span>
+  if (from) return <span className="sc-mono">{from} 起</span>
+  return <span className="sc-mono">至 {to}</span>
 }
 
 function MaterialParameterPane({ canParam }: { canParam: boolean }) {
@@ -293,15 +295,15 @@ function MaterialParameterPane({ canParam }: { canParam: boolean }) {
     { title: '委外提前期(天)', dataIndex: 'subcontract_lead_time_days', width: 120, align: 'right', render: renderLeadTime },
     {
       title: '安全库存', dataIndex: 'safety_stock', width: 100, align: 'right',
-      render: (v: number) => fmtQty(v),
+      render: (v: number) => (v === 0 ? <span style={{ color: '#cbd5e1' }}>0</span> : fmtQty(v)),
     },
     { title: '最高存量', dataIndex: 'max_stock', width: 100, align: 'right', render: renderOptionalNumber },
     { title: 'MOQ', dataIndex: 'moq', width: 90, align: 'right', render: renderOptionalNumber },
     {
       title: '批量策略', dataIndex: 'batch_policy', width: 100,
       render: (v: string) => {
-        const m = BATCH_POLICY_MAP[v] || { label: v, color: 'default' }
-        return <Tag color={m.color}>{m.label}</Tag>
+        const m = BATCH_POLICY_MAP[v] || { label: v, cls: 'sc-tag-plain' }
+        return <span className={`sc-tag ${m.cls}`}>{m.label}</span>
       },
     },
     { title: '批量值', dataIndex: 'batch_qty', width: 100, align: 'right', render: renderOptionalNumber },
@@ -544,6 +546,7 @@ function SchemePane({ canParam }: { canParam: boolean }) {
       title={scheme ? `${scheme.scheme_name}（${scheme.scheme_code}）` : '计划方案'}
       extra={(
         <Space>
+          <span className="sc-note">变更下次运算生效；每次运行会保存参数快照。</span>
           {!canParam && <Typography.Text type="secondary">无参数维护权限，只读</Typography.Text>}
           <Button icon={<ReloadOutlined />} onClick={() => load()} loading={loading}>刷新</Button>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} disabled={!canParam || !scheme} onClick={submit}>
@@ -560,12 +563,22 @@ function SchemePane({ canParam }: { canParam: boolean }) {
             </Form.Item>
           </Col>
           <Col span={8}>
-            <Form.Item name="horizon_days" label="计划展望期(天)" rules={[{ required: true, message: '请输入展望期' }]}>
+            <Form.Item
+              name="horizon_days"
+              label="计划展望期(天)"
+              tooltip="只净算展望期内的需求；期外订单留待后续批次。"
+              rules={[{ required: true, message: '请输入展望期' }]}
+            >
               <InputNumber style={{ width: '100%' }} min={1} max={365} />
             </Form.Item>
           </Col>
           <Col span={8}>
-            <Form.Item name="supply_priority" label="供给优先顺序" rules={[{ required: true }]}>
+            <Form.Item
+              name="supply_priority"
+              label="供给优先顺序"
+              tooltip="「按日期」＝可用日早的先抵扣；「按单据类型」＝库存 → 在途 → 任务。"
+              rules={[{ required: true }]}
+            >
               <Select
                 options={[
                   { value: 'by_date', label: '按日期（by_date）' },
@@ -578,25 +591,26 @@ function SchemePane({ canParam }: { canParam: boolean }) {
         <Row gutter={16}>
           {SCHEME_SWITCH_FIELDS.map((field) => (
             <Col span={8} key={field.name}>
-              <Form.Item name={field.name} label={field.label} valuePropName="checked">
+              <Form.Item name={field.name} label={field.label} tooltip={field.tooltip} valuePropName="checked">
                 <Switch />
               </Form.Item>
             </Col>
           ))}
         </Row>
+        <div className="sc-note" style={{ marginBottom: 16 }}>关闭的来源不参与净算（如关闭「调拨」＝调拨单不充抵缺口）。</div>
         <Row gutter={16}>
           <Col span={8}>
-            <Form.Item name="exception_grace_days" label="例外宽限期(天)" tooltip="0 = 不产生例外提醒（P2 生效）">
+            <Form.Item name="exception_grace_days" label="例外宽限期(天)" tooltip="拖期在宽限期内不生成例外提醒（0 = 不提醒，P2 生效）">
               <InputNumber style={{ width: '100%' }} min={0} max={90} />
             </Form.Item>
           </Col>
           <Col span={8}>
-            <Form.Item name="compare_window_days" label="K3 对比日期窗口(天)">
+            <Form.Item name="compare_window_days" label="K3 对比日期窗口(天)" tooltip="与 K3 对比时，需求日 ±N 天视为同一项。">
               <InputNumber style={{ width: '100%' }} min={0} max={30} />
             </Form.Item>
           </Col>
           <Col span={8}>
-            <Form.Item name="compare_qty_threshold_pct" label="K3 对比量差阈值(%)">
+            <Form.Item name="compare_qty_threshold_pct" label="K3 对比量差阈值(%)" tooltip="数量差 ≤N% 记为 match（批次与对比同口径）。">
               <InputNumber style={{ width: '100%' }} min={0} max={100} precision={2} />
             </Form.Item>
           </Col>
@@ -721,10 +735,15 @@ function SubstitutePane({ canParam }: { canParam: boolean }) {
     },
     { title: '优先级', dataIndex: 'priority', width: 80, align: 'right' },
     {
-      title: '策略', dataIndex: 'policy', width: 80,
+      title: '策略', dataIndex: 'policy', width: 96,
       render: (v: string) => {
-        const m = SUBSTITUTE_POLICY_MAP[v] || { label: v, color: 'default' }
-        return <Tag color={m.color}>{m.label}</Tag>
+        const m = SUBSTITUTE_POLICY_MAP[v] || { label: v, cls: 'sc-tag-plain' }
+        return (
+          <div>
+            <span className={`sc-tag ${m.cls}`}>{v}</span>
+            <div className="sc-sub">{m.label}</div>
+          </div>
+        )
       },
     },
     {
@@ -732,16 +751,21 @@ function SubstitutePane({ canParam }: { canParam: boolean }) {
       render: (v: number | null, row) => (row.policy === 'ratio' && v != null ? `${fmtQty(v)}%` : '-'),
     },
     {
-      title: '模式', dataIndex: 'substitute_mode', width: 80,
+      title: '模式', dataIndex: 'substitute_mode', width: 96,
       render: (v: string) => {
-        const m = SUBSTITUTE_MODE_MAP[v] || { label: v, color: 'default' }
-        return <Tag color={m.color}>{m.label}</Tag>
+        const m = SUBSTITUTE_MODE_MAP[v] || { label: v, cls: 'sc-tag-plain' }
+        return (
+          <div>
+            <span className={`sc-tag ${m.cls}`}>{m.label}</span>
+            <div className="sc-sub">{v}</div>
+          </div>
+        )
       },
     },
     { title: '生效期', width: 200, render: (_: unknown, row) => fmtValidity(row) },
     {
       title: '启用', dataIndex: 'enabled', width: 70,
-      render: (v: boolean) => (v ? <Tag color="green">启用</Tag> : <Tag>停用</Tag>),
+      render: (v: boolean) => <span className={`sc-tag ${v ? 'sc-tag-done' : 'sc-tag-wait'}`}>{v ? '启用' : '停用'}</span>,
     },
     {
       title: '备注', dataIndex: 'remark', width: 160, ellipsis: true,
@@ -794,6 +818,10 @@ function SubstitutePane({ canParam }: { canParam: boolean }) {
             setPageSize(pagination.pageSize || 20)
           }}
         />
+      </div>
+
+      <div className="sc-note" style={{ marginTop: 12, padding: '9px 13px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 9, lineHeight: 1.75 }}>
+        注：替代抵扣后，替代料自身后续需求由常规净算补货（已声明简化）；<code>replace</code> 模式仅对外购替代料生效。
       </div>
 
       <Drawer
@@ -923,12 +951,20 @@ export default function ParametersTab() {
   const canParam = hasPermission('materials.mrp', 'param')
 
   return (
-    <Tabs
-      items={[
-        { key: 'parameters', label: '物料参数', children: <MaterialParameterPane canParam={canParam} /> },
-        { key: 'scheme', label: '计划方案', children: <SchemePane canParam={canParam} /> },
-        { key: 'substitutes', label: '替代规则', children: <SubstitutePane canParam={canParam} /> },
-      ]}
-    />
+    <div>
+      <Alert
+        type="info"
+        showIcon
+        message={<><b>怎么看：</b>给引擎喂参数：提前期、安全库存、起订量、批量策略（未配置按默认 7 天）。替代规则＝主料缺口时先消耗替代料余额。</>}
+        style={{ marginBottom: 16 }}
+      />
+      <Tabs
+        items={[
+          { key: 'parameters', label: '物料参数', children: <MaterialParameterPane canParam={canParam} /> },
+          { key: 'scheme', label: '计划方案', children: <SchemePane canParam={canParam} /> },
+          { key: 'substitutes', label: '替代规则', children: <SubstitutePane canParam={canParam} /> },
+        ]}
+      />
+    </div>
   )
 }

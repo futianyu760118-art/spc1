@@ -84,6 +84,8 @@ class SuggestionOut(BaseModel):
     k3_need_date: Optional[date] = None
     converted_target_type: Optional[str] = None
     converted_target_id: Optional[int] = None
+    is_substitute: bool = False
+    substitute_for_material_id: Optional[int] = None
 
 
 class BatchReviewRequest(BaseModel):
