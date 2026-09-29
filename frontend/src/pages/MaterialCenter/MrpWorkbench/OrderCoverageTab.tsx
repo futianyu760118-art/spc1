@@ -42,9 +42,14 @@ interface CoverageOrder {
   status: string
 }
 
+interface ExcludedOverdue {
+  [sourceType: string]: { count: number; qty: number }
+}
+
 interface CoverageResult {
   order: CoverageOrder | null
   lines: CoverageLine[]
+  excluded_overdue: ExcludedOverdue | null
   note: string
 }
 
@@ -320,7 +325,17 @@ export default function OrderCoverageTab() {
   const order = result?.order ?? null
   const lines = result?.lines ?? []
   const note = result?.note ?? ''
+  const excludedOverdue = result?.excluded_overdue ?? null
   const summary = useMemo(() => (result ? buildSummary(result) : null), [result])
+
+  const excludedText = useMemo(() => {
+    if (!excludedOverdue) return null
+    const parts = Object.entries(excludedOverdue).map(
+      ([type, v]) => `${SUPPLY_SHORT_LABEL[type] || type} ${v.count} 张 ${fmtQty(v.qty)} 件`
+    )
+    if (!parts.length) return null
+    return parts.join('、')
+  }, [excludedOverdue])
 
   const search = async (no?: string) => {
     const target = (no ?? orderNo).trim()
@@ -408,6 +423,14 @@ export default function OrderCoverageTab() {
 
       {order && summary && (
         <>
+          {excludedText && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 14 }}
+              message={<>另有 <b>{excludedText}</b> 在途，但已超出预计量有效期（历史拖期未关单），<b>不计入本次覆盖</b>；请到「例外」处理（改期或关闭）。</>}
+            />
+          )}
           <div className="sc-card" style={{ padding: '14px 16px', marginBottom: 14 }}>
             <Row gutter={[24, 8]} align="middle">
               <Col>

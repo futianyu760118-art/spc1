@@ -4,9 +4,8 @@
 GET 总览走 read_comparison（纯查询不落库）；两者共用纯函数 classify_comparison。
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,9 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.mrp.scheme import MrpScheme
 from app.models.mrp.suggestion import MrpSuggestion
-
-# K3 存在选单/局部运算，单看最新批次会失真：取近 N 天批次并集，按物料+需求日去重（保留最新批次行）
-K3_LOOKBACK_DAYS = 7
+from app.models.order.sale_order import SaleOrder
 
 
 def _qty_diff_within(sug_qty: Decimal, k3_qty: Decimal, threshold_pct: Decimal) -> bool:
@@ -27,8 +24,10 @@ def _qty_diff_within(sug_qty: Decimal, k3_qty: Decimal, threshold_pct: Decimal) 
 
 
 async def _load_k3_materials(db: AsyncSession) -> dict[int, dict]:
-    """K3 行先按（销售订单+物料）去重取最新批次，再按物料聚合：数量求和、需求日取最早。"""
-    since = datetime.now() - timedelta(days=K3_LOOKBACK_DAYS)
+    """K3 对比基线：仅取未关单/未删单销售订单下的结果行（与 SPC 需求口径对齐；
+    已交付订单的 K3 历史行会滞留在同步表中，混入会把 k3_only 放大数倍），
+    按（销售订单+物料）取最新运算行（表本身按该键 upsert），再按物料聚合：
+    数量求和、需求日取最早。"""
     rows = (
         await db.execute(
             select(
@@ -38,8 +37,10 @@ async def _load_k3_materials(db: AsyncSession) -> dict[int, dict]:
                 MrpPlanOrder.base_plan_qty,
                 MrpPlanOrder.mrp_run_time,
             )
+            .join(SaleOrder, SaleOrder.erp_id == MrpPlanOrder.sale_order_id)
             .where(
-                MrpPlanOrder.mrp_run_time >= since,
+                SaleOrder.is_closed == 0,
+                SaleOrder.is_deleted == 0,
                 MrpPlanOrder.material_id.op("~")("^[0-9]+$"),
                 MrpPlanOrder.need_date.isnot(None),
             )

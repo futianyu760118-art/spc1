@@ -1,8 +1,9 @@
-"""订单覆盖视图：给定销售订单号，逐行看需求被哪些供给覆盖。只读。
+﻿"""订单覆盖视图：给定销售订单号，逐行看需求被哪些供给覆盖。只读。
 
-需求行过滤口径同 snapshot._load_demands（未关单/未删单/行未关闭），
-供给装载逐段镜像 snapshot._load_supplies（库存/未结 PO/未结任务/委外/调拨/已批准申请单），
-仅按本单涉及物料收窄 SQL，保证与 MRP 运算同源。
+需求行过滤口径同 snapshot._load_demands（未关单/未删单/行未关闭），表头完成数按行占比分摊
+（snapshot.allocate_order_remaining）；供给装载逐段镜像 snapshot._load_supplies
+（库存/未结 PO/未结任务/委外/调拨/已批准申请单），仅按本单涉及物料收窄 SQL，保证与 MRP 运算同源；
+预计量有效期窗口外（历史拖期未关单）的供给不计入覆盖，单独汇总为 excluded_overdue。
 """
 
 from collections import defaultdict
@@ -21,10 +22,18 @@ from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.material.transfer_order import TransferOrder
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.production.production_task_order import ProductionTaskOrder
-from app.services.mrp.snapshot import Snapshot, _load_materials
+from app.services.mrp.parameter_service import ensure_default_scheme
+from app.services.mrp.snapshot import (
+    DEFAULT_SUPPLY_VALID_MONTHS,
+    Snapshot,
+    _load_materials,
+    allocate_order_remaining,
+    is_stale_supply,
+    stale_supply_cutoff,
+)
 
 _ZERO = Decimal("0")
-_NOTE = "供给=库存+未结采购+未结任务+委外+调拨+已批准申请单；拖期单据按今天计入"
+_NOTE = "供给=库存+未结采购+未结任务+委外+调拨+已批准申请单；窗口内拖期单据按今天计入；超有效期的历史单据不计入（见提示）"
 
 
 def _decimal(value) -> Decimal:
@@ -116,10 +125,14 @@ async def _load_bom_parents(db: AsyncSession) -> dict[str, int]:
 def _build_lines(rows, bom_parent, code_by_material, name_by_material):
     lines: list[dict] = []
     total_qty = _ZERO
-    for line_no, product_code, product_name, order_qty, completed_qty, line_promised, ship_plan, header_promised, bom_id in rows:
-        qty = _decimal(order_qty) - _decimal(completed_qty)
+    allocated = allocate_order_remaining(
+        [Decimal(str(r.order_qty)) if r.order_qty is not None else _ZERO for r in rows],
+        Decimal(str(rows[0].completed_qty)) if rows[0].completed_qty is not None else _ZERO,
+    )
+    for qty, row in zip(allocated, rows):
         if qty <= 0:
             continue
+        line_no, product_code, product_name, _, _, line_promised, ship_plan, header_promised, bom_id = row
         total_qty += qty
         material_id = bom_parent.get(str(bom_id)) if bom_id is not None else None
         need_date = line_promised or ship_plan or header_promised
@@ -153,7 +166,7 @@ async def _load_inventory_supplies(db: AsyncSession, supplies, material_ids: set
             supplies[int(material_id)].append(_supply("inventory", "库存", None, _decimal(qty), None))
 
 
-async def _load_purchase_order_supplies(db: AsyncSession, supplies, mid_by_code: dict[str, int]) -> None:
+async def _load_purchase_order_supplies(db: AsyncSession, supplies, mid_by_code: dict[str, int], cutoff, excluded) -> None:
     rows = (
         await db.execute(
             select(
@@ -169,10 +182,13 @@ async def _load_purchase_order_supplies(db: AsyncSession, supplies, mid_by_code:
         qty = _decimal(po_qty) - _decimal(received_qty)
         if qty <= 0:
             continue
-        supplies[mid].append(_supply("po", po_no or "", str(detail_id or ""), qty, eta or po_date))
+        supply_date = eta or po_date
+        if _record_excluded(excluded, "po", supply_date, qty, cutoff):
+            continue
+        supplies[mid].append(_supply("po", po_no or "", str(detail_id or ""), qty, supply_date))
 
 
-async def _load_task_supplies(db: AsyncSession, supplies, mid_by_code: dict[str, int]) -> None:
+async def _load_task_supplies(db: AsyncSession, supplies, mid_by_code: dict[str, int], cutoff, excluded) -> None:
     rows = (
         await db.execute(
             select(
@@ -192,10 +208,13 @@ async def _load_task_supplies(db: AsyncSession, supplies, mid_by_code: dict[str,
         qty = _decimal(task_qty) - _decimal(actual_qty)
         if qty <= 0:
             continue
-        supplies[mid].append(_supply("task", task_no or "", None, qty, end_date or start_date))
+        supply_date = end_date or start_date
+        if _record_excluded(excluded, "task", supply_date, qty, cutoff):
+            continue
+        supplies[mid].append(_supply("task", task_no or "", None, qty, supply_date))
 
 
-async def _load_subcontract_supplies(db: AsyncSession, supplies, material_ids: set[int]) -> None:
+async def _load_subcontract_supplies(db: AsyncSession, supplies, material_ids: set[int], cutoff, excluded) -> None:
     rows = (
         await db.execute(
             select(
@@ -216,12 +235,12 @@ async def _load_subcontract_supplies(db: AsyncSession, supplies, material_ids: s
         outstanding = _decimal(qty) - _decimal(received_qty) - _decimal(returned_qty)
         if outstanding <= 0:
             continue
-        supplies[int(material_id)].append(
-            _supply("subcontract", bill_no or "", str(detail_id or ""), outstanding, bill_date)
-        )
+        if _record_excluded(excluded, "subcontract", bill_date, outstanding, cutoff):
+            continue
+        supplies[int(material_id)].append(_supply("subcontract", bill_no or "", str(detail_id or ""), outstanding, bill_date))
 
 
-async def _load_transfer_supplies(db: AsyncSession, supplies, mid_by_code: dict[str, int]) -> None:
+async def _load_transfer_supplies(db: AsyncSession, supplies, mid_by_code: dict[str, int], cutoff, excluded) -> None:
     rows = (
         await db.execute(
             select(
@@ -238,12 +257,13 @@ async def _load_transfer_supplies(db: AsyncSession, supplies, mid_by_code: dict[
         mid = mid_by_code.get(material_code)
         if mid is None or qty is None or _decimal(qty) <= 0:
             continue
-        supplies[mid].append(
-            _supply("transfer", transfer_no or "", str(entry_id or ""), _decimal(qty), expected_arrival or transfer_date)
-        )
+        supply_date = expected_arrival or transfer_date
+        if _record_excluded(excluded, "transfer", supply_date, _decimal(qty), cutoff):
+            continue
+        supplies[mid].append(_supply("transfer", transfer_no or "", str(entry_id or ""), _decimal(qty), supply_date))
 
 
-async def _load_requisition_supplies(db: AsyncSession, supplies, mid_by_code: dict[str, int]) -> None:
+async def _load_requisition_supplies(db: AsyncSession, supplies, mid_by_code: dict[str, int], cutoff, excluded) -> None:
     rows = (
         await db.execute(
             select(
@@ -266,22 +286,35 @@ async def _load_requisition_supplies(db: AsyncSession, supplies, mid_by_code: di
         outstanding = _decimal(req_qty) - _decimal(converted_qty)
         if outstanding <= 0:
             continue
+        if _record_excluded(excluded, "requisition", need_date, outstanding, cutoff):
+            continue
         supplies[mid].append(_supply("requisition", req_no or "", str(line_no or ""), outstanding, need_date))
 
 
-async def _load_supplies(db: AsyncSession, lines: list[dict], code_to_id: dict[str, int]):
+def _record_excluded(excluded: dict, source_type: str, supply_date, qty: Decimal, cutoff) -> bool:
+    """超有效期窗口的供给不计入覆盖，登记到 excluded 汇总；返回是否被排除。"""
+    if not is_stale_supply(supply_date, cutoff):
+        return False
+    bucket = excluded.setdefault(source_type, {"count": 0, "qty": _ZERO})
+    bucket["count"] += 1
+    bucket["qty"] += qty
+    return True
+
+
+async def _load_supplies(db: AsyncSession, lines: list[dict], code_to_id: dict[str, int], cutoff):
     material_ids = {ln["material_id"] for ln in lines if ln["material_id"] is not None}
     supplies: dict[int, list[dict]] = defaultdict(list)
+    excluded: dict[str, dict] = {}
     if not material_ids:
-        return supplies
+        return supplies, excluded
     mid_by_code = {code: mid for code, mid in code_to_id.items() if mid in material_ids}
     await _load_inventory_supplies(db, supplies, material_ids)
-    await _load_purchase_order_supplies(db, supplies, mid_by_code)
-    await _load_task_supplies(db, supplies, mid_by_code)
-    await _load_subcontract_supplies(db, supplies, material_ids)
-    await _load_transfer_supplies(db, supplies, mid_by_code)
-    await _load_requisition_supplies(db, supplies, mid_by_code)
-    return supplies
+    await _load_purchase_order_supplies(db, supplies, mid_by_code, cutoff, excluded)
+    await _load_task_supplies(db, supplies, mid_by_code, cutoff, excluded)
+    await _load_subcontract_supplies(db, supplies, material_ids, cutoff, excluded)
+    await _load_transfer_supplies(db, supplies, mid_by_code, cutoff, excluded)
+    await _load_requisition_supplies(db, supplies, mid_by_code, cutoff, excluded)
+    return supplies, excluded
 
 
 def _allocate_lines(lines: list[dict], supplies: dict[int, list[dict]]) -> None:
@@ -300,10 +333,10 @@ def _allocate_lines(lines: list[dict], supplies: dict[int, list[dict]]) -> None:
 
 
 def _empty_result() -> dict:
-    return {"order": None, "lines": [], "note": _NOTE}
+    return {"order": None, "lines": [], "excluded_overdue": None, "note": _NOTE}
 
 
-def _build_result(order_no: str, lines: list[dict], total_qty: Decimal) -> dict:
+def _build_result(order_no: str, lines: list[dict], total_qty: Decimal, excluded: dict) -> dict:
     overall = "covered" if all(ln["status"] == "covered" for ln in lines) else (
         "partial" if any(ln["covered_qty"] > 0 for ln in lines) else "short"
     )
@@ -316,6 +349,9 @@ def _build_result(order_no: str, lines: list[dict], total_qty: Decimal) -> dict:
             "status": overall,
         },
         "lines": lines,
+        "excluded_overdue": (
+            {k: {"count": v["count"], "qty": float(v["qty"])} for k, v in excluded.items()} or None
+        ),
         "note": _NOTE,
     }
 
@@ -326,6 +362,10 @@ async def build_order_coverage(db: AsyncSession, order_no: str) -> dict:
     if not rows:
         return _empty_result()
 
+    scheme = await ensure_default_scheme(db)
+    cutoff = stale_supply_cutoff(
+        date.today(), int(scheme.supply_valid_months or DEFAULT_SUPPLY_VALID_MONTHS)
+    )
     snapshot = Snapshot()
     code_to_id = await _load_materials(db, snapshot)
     bom_parent = await _load_bom_parents(db)
@@ -333,6 +373,6 @@ async def build_order_coverage(db: AsyncSession, order_no: str) -> dict:
     if not lines:
         return _empty_result()
 
-    supplies = await _load_supplies(db, lines, code_to_id)
+    supplies, excluded = await _load_supplies(db, lines, code_to_id, cutoff)
     _allocate_lines(lines, supplies)
-    return _build_result(order_no, lines, total_qty)
+    return _build_result(order_no, lines, total_qty, excluded)

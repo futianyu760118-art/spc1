@@ -115,6 +115,7 @@ class SchemeOut(BaseModel):
     supply_priority: str
     exception_enabled: bool
     exception_grace_days: int
+    supply_valid_months: int
     compare_window_days: int
     compare_qty_threshold_pct: float
     is_default: bool
@@ -135,6 +136,7 @@ class SchemeUpdateRequest(BaseModel):
     supply_priority: Optional[Literal["by_date", "by_type"]] = None
     exception_enabled: Optional[bool] = None
     exception_grace_days: Optional[int] = Field(default=None, ge=0, le=90)
+    supply_valid_months: Optional[int] = Field(default=None, ge=1, le=60)
     compare_window_days: Optional[int] = Field(default=None, ge=0, le=30)
     compare_qty_threshold_pct: Optional[float] = Field(default=None, ge=0, le=100)
     remark: Optional[str] = None

@@ -134,6 +134,9 @@ class DatabaseInitializer:
             "kitting_run": {
                 "blocked_count": "INTEGER NOT NULL DEFAULT 0",
             },
+            "mrp_scheme": {
+                "supply_valid_months": "INTEGER NOT NULL DEFAULT 6",
+            },
             "sale_order": {
                 "line_no": "VARCHAR(32) NOT NULL DEFAULT ''",
                 "customer": "VARCHAR(128)",

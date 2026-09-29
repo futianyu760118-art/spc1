@@ -174,7 +174,11 @@ class MrpEngine:
             horizon_end = run_date + timedelta(days=int(scheme.horizon_days))
 
             async with AsyncSessionLocal() as db:
-                snapshot = await snapshot_service.collect(db, scope or {})
+                snapshot = await snapshot_service.collect(
+                    db,
+                    scope or {},
+                    supply_valid_months=int(scheme.supply_valid_months or snapshot_service.DEFAULT_SUPPLY_VALID_MONTHS),
+                )
                 substitute_rule_rows = (
                     await db.execute(
                         select(MrpSubstitute).where(MrpSubstitute.enabled.is_(True))
@@ -591,6 +595,9 @@ class MrpEngine:
                         key: len(value) for key, value in snapshot.data_issues.items()
                     },
                 }
+                stale_excluded = (snapshot.data_issues.get("stale_supply_excluded") or [None])[0]
+                if stale_excluded:
+                    stats["data_issues"]["stale_supply_excluded"] = stale_excluded
                 if no_bom_materials:
                     stats["data_issues"]["no_bom"] = len(no_bom_materials)
                 if unknown_property:

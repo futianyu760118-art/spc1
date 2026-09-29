@@ -192,6 +192,15 @@ const DATA_ISSUE_LABELS: Record<string, string> = {
   bom_cycle: 'BOM环路',
   subcontract_date_approx: '委外日期近似',
   param_fallback: '参数回退统计',
+  stale_supply_excluded: '历史供给未计入',
+}
+
+const SUPPLY_TYPE_LABELS: Record<string, string> = {
+  task: '任务',
+  po: '采购',
+  subcontract: '委外',
+  transfer: '调拨',
+  requisition: '申请',
 }
 
 function issueLabel(key: string): string {
@@ -210,6 +219,13 @@ function fmtDataIssue(key: string, value: unknown): string {
   if (key === 'param_fallback' && value != null && typeof value === 'object' && !Array.isArray(value)) {
     const stat = value as Record<string, unknown>
     return `参数回退：共 ${stat.total ?? '-'} / 已配置 ${stat.configured ?? '-'} / 历史推导 ${stat.derived ?? '-'} / 默认 ${stat.default ?? '-'}`
+  }
+  if (key === 'stale_supply_excluded' && value != null && typeof value === 'object' && !Array.isArray(value)) {
+    const payload = value as { cutoff?: string; by_type?: Record<string, { count?: number; qty?: number }> }
+    const parts = Object.entries(payload.by_type ?? {}).map(
+      ([type, v]) => `${SUPPLY_TYPE_LABELS[type] || type} ${v.count ?? 0} 张/${v.qty ?? 0} 件`
+    )
+    return `历史供给未计入（早于 ${payload.cutoff ?? '-'}）：${parts.join('、') || '-'}`
   }
   return `${issueLabel(key)}：${fmtIssueValue(value)}`
 }

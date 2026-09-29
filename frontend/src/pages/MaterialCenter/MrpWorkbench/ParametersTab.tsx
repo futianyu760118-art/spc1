@@ -78,6 +78,7 @@ interface SchemeRow {
   supply_priority: string
   exception_enabled: boolean
   exception_grace_days: number
+  supply_valid_months: number
   compare_window_days: number
   compare_qty_threshold_pct: number
   is_default: boolean
@@ -106,6 +107,7 @@ interface SchemeFormValues {
   consider_safety_stock: boolean
   supply_priority: 'by_date' | 'by_type'
   exception_grace_days: number
+  supply_valid_months: number
   compare_window_days: number
   compare_qty_threshold_pct: number
   remark?: string | null
@@ -503,6 +505,7 @@ function SchemePane({ canParam }: { canParam: boolean }) {
           consider_safety_stock: current.consider_safety_stock,
           supply_priority: current.supply_priority === 'by_type' ? 'by_type' : 'by_date',
           exception_grace_days: current.exception_grace_days,
+          supply_valid_months: current.supply_valid_months,
           compare_window_days: current.compare_window_days,
           compare_qty_threshold_pct: current.compare_qty_threshold_pct,
           remark: current.remark,
@@ -605,10 +608,17 @@ function SchemePane({ canParam }: { canParam: boolean }) {
             </Form.Item>
           </Col>
           <Col span={8}>
+            <Form.Item name="supply_valid_months" label="预计量有效期(月)" tooltip="供给单据日期早于该窗口的历史未关单不参与净算与覆盖（对齐 K3 预计量计算有效期；窗口内拖期单据按今天计入）。">
+              <InputNumber style={{ width: '100%' }} min={1} max={60} />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
             <Form.Item name="compare_window_days" label="K3 对比日期窗口(天)" tooltip="与 K3 对比时，需求日 ±N 天视为同一项。">
               <InputNumber style={{ width: '100%' }} min={0} max={30} />
             </Form.Item>
           </Col>
+        </Row>
+        <Row gutter={16}>
           <Col span={8}>
             <Form.Item name="compare_qty_threshold_pct" label="K3 对比量差阈值(%)" tooltip="数量差 ≤N% 记为 match（批次与对比同口径）。">
               <InputNumber style={{ width: '100%' }} min={0} max={100} precision={2} />
