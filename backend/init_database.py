@@ -739,6 +739,14 @@ class DatabaseInitializer:
                 print("  scm_inventory_check_item.appeal_status index ensured")
             except Exception as e:
                 print(f"  scm_inventory_check_item.appeal_status index skipped: {e}")
+            try:
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_feedback_ai_status "
+                    "ON feedback (ai_status)"
+                ))
+                print("  feedback.ai_status index ensured")
+            except Exception as e:
+                print(f"  feedback.ai_status index skipped: {e}")
 
     async def migrate_production_daily_report_index(self):
         """将 production_daily_report 的唯一索引由 (oa_id) 改为 (oa_id, oa_detail_id)，
