@@ -2,6 +2,7 @@
 # SPC 数据库每日备份（cron 3:30 调用）：pg_dump 导出到 backups/，保留 7 天
 # 恢复方法：
 #   docker exec -i hj-spc-postgres pg_restore -U root -d spc_db --clean --if-exists --no-owner < /home/ubuntu/apps/hj-spc/backups/<文件>.dump
+# 备注：系统内已有「备份管理」功能（/backups），本脚本仅作应急手工备份使用
 set -euo pipefail
 
 BASE_DIR="/home/ubuntu/apps/hj-spc"

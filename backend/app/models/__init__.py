@@ -64,6 +64,7 @@ from app.models.basicdata.announcement import Announcement, Notification  # noqa
 from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog  # noqa: F401
 from app.models.basicdata.share_link import ShareLink  # noqa: F401
 from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa: F401
+from app.models.basicdata.backup import BackupConfig, BackupRecord  # noqa: F401
 
 __all__ = [
     # 订单交付中心
@@ -114,4 +115,6 @@ __all__ = [
     # 品质管理
     "SupplierClaim",
     "SupplierClaimApprovalLog",
+    "BackupConfig",
+    "BackupRecord",
 ]

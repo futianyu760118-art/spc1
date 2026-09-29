@@ -3,7 +3,7 @@
 中台只读能力适配器，接入 AEOS Hub。遵循 **AEOS MCP Integration Specification v0.1.0**。
 
 - **名称**：company-control
-- **版本**：1.2.0
+- **版本**：1.2.1
 - **传输**：stdio（默认，由 AEOS Hub 作为 MCP client 拉起）/ streamable-http（远程客户端，静态 Bearer Token）
 - **技术栈**：Python 3.12+ / 官方 mcp SDK 2.x（`MCPServer`）/ httpx / pydantic
 - **权限等级**：全部 Tool 为 `READ_ONLY`（MCP annotations `readOnlyHint=true` + `server.json` 声明）
@@ -118,12 +118,14 @@ args = ["-m", "mcp_server"]
 | `production_work_orders_list` | 生产工单列表（SPC 生产协同交接文档 §6.1） | endpoint_code `production.work_orders.list`；OA 生产任务单快照；状态映射 planned/released/in_progress/completed/unknown（cancelled 无来源），status_raw 保留源语义；uom/入库/预测完工/owner/blocking 无来源恒 null |
 | `production_operations_list` | 工序进度列表（§6.2） | endpoint_code `production.operations.list`；`order_no` 必填（SPC 无工单级工序）；工单/工作中心/前置工序恒 null，不假设线性工艺 |
 | `production_order_links_list` | 工单与销售订单关系（§6.3） | endpoint_code `production.order_links.list`；`work_order_no`/`order_no` 至少一个；双源：production_task（订单级，line_no 恒 null）+ schedule_snapshot（行级，无工单号）；禁止按产品编码推断 |
-| `production_reports_list` | 生产报工列表（§6.4 P1） | endpoint_code `production.reports.list`；`work_order_no` 必填；ERP 生产日报累计口径；撤销/更正无来源恒 null（is_reversed/reversal_of/revision） |
+| `production_reports_list` | 生产报工列表（§6.4 P1） | endpoint_code `production.reports.list`；`work_order_no` 必填；ERP 生产日报逐日明细行口径（累计需按 report_date/工序行汇总）；撤销/更正无来源恒 null（is_reversed/reversal_of/revision） |
 | `production_capacity_list` | 产能占用与可用分钟（§6.4 P1） | endpoint_code `production.capacity.list`；date_start/date_end 必填；按（部门, 排产段, 日期）聚合；可用分钟缺基础条件为 null、周日不排产为 0；不做除零负荷率 |
 
 - 全部 Tool 拒绝未定义字段（严格 Schema，`additionalProperties: false`），带 `readOnlyHint` 标注
 - 数据类 Tool 支持可选 `request_id`（≤64 字符）透传上游并在返回包回显，便于审计与链路追踪
-- 上游返回 `stale: true` 时统一返回 `STALE_DATA`（retryable），`data_confidence=low` 透传
+- 上游返回 `stale: true` 时统一返回 `STALE_DATA`（retryable），`data_confidence=low` 透传；
+  生产类 5 工具额外按 `data_as_of` 自行判定 24h 有效期（上游 `stale` 漏置/错置为 false 也不放行过期数据），
+  上游 `warnings`（数据过期/字段缺失/部分结果）原样透出供 Hub 写入 Evidence
 
 ### 0.1.0 兼容说明
 
@@ -184,18 +186,18 @@ args = ["-m", "mcp_server"]
 python scripts/test_company_control.py
 ```
 
-内置 mock 中台端点，覆盖：stdio 37 项（握手 / tools/list / 结构化返回 / 非法输入 /
+内置 mock 中台端点，覆盖：stdio 39 项（握手 / tools/list / 结构化返回 / 非法输入 /
 未授权 / 超时 / 不可用不崩溃 / evidence / 脱敏 / 无写工具 / 幂等 / 健康检查 / 数据过期 /
 0.1.0 兼容工具与旧 Schema / 能力未开放错误 / 92 天跨度校验 / 物料与供应商功能兼容 /
 订单参数与字段映射 / 健康检查 evidence 与置信度 / 齐套 5 工具 / 质量列表与追溯 /
 质量追溯缺锚点校验 / 质量数据过期映射 / 生产 5 工具链路 / 生产锚点与日期窗口校验 /
-生产缺时效返回「数据置信度不足」/ 生产数据过期映射）
+生产缺时效返回「数据置信度不足」/ 生产数据过期映射 / 生产 24h 年龄兜底判定 / 生产 warnings 透出）
 + HTTP 4 项（无 token 401 / 错误 token 401 / 正确 token 握手 / 未配 token 拒绝启动）。
 
 ## 元数据与权限声明
 
 - `server.json`：Server 元数据（name / version / owner / transport / read_only / required_permissions / 依赖 / 维护团队 / 每 Tool 权限等级），提交 AEOS Registry 使用
-- MCP 协议层：`serverInfo.version=1.2.0`；每个 Tool 带 `annotations.readOnlyHint=true`
+- MCP 协议层：`serverInfo.version=1.2.1`；每个 Tool 带 `annotations.readOnlyHint=true`
 
 ## 上游系统依赖
 
@@ -246,14 +248,16 @@ SPC 后端（`CONTROL_PLATFORM_BASE_URL`），通过「数据供给」HMAC API K
     `work_center_code` / `predecessor_operation_ids` 恒 `null`
   - 工单-订单关联为订单级（任务单存 ERP 订单 ID，接口经 `sale_order.erp_id` 解析订单号），
     `line_no` / `order_line_id` 恒 `null`；`schedule_snapshot` 源为订单行级排产快照（无工单号）
-  - 报工为 ERP 生产日报累计口径；`is_reversed` / `reversal_of` / `revision` 恒 `null`
+  - 报工为 ERP 生产日报逐日明细行（累计需按 `report_date`/工序行汇总）；`is_reversed` / `reversal_of` / `revision` 恒 `null`
   - 产能按（部门, 排产段, 日期）聚合：`available_minutes` 缺基础条件为 `null`，周日不排产为 `0`；
     `shift_id` / `calendar_version` / `downtime_minutes` 恒 `null`
   - 时效强制校验：调用公共 helper 前校验真实 `data_as_of` / 置信度；`stale=true` → `STALE_DATA`；
     缺失或非法 → `UPSTREAM_UNAVAILABLE`「数据置信度不足」（不落入默认兜底：缺失时间→当前时间 / 未知置信度→high）
-  - 上游时效口径（2026-09-24 确认）：工序/报工/产能为历史快照基线，有 `data_as_of` 即 `stale=false`、
-    置信度 high（≤6h）/ medium，不按 24h 判过期；工单/工单-订单关系仍按 6h/24h 实时口径。
-    工序表空且无导入记录时回退生产任务单同步时间（生产协同数据域基线），空结果照常返回真实时效
+  - 上游时效口径（2026-09-29 AEOS 生产协同时效交接，覆盖 2026-09-24 历史快照豁免）：
+    五域一视同仁按 6h/24h 阈值；`data_as_of` 超 24h 一律 `low` + `stale=true`。
+    上游 `stale` 字段漏置/错置时，适配层按 `data_as_of` 自行判定 24h 过期并返回 `STALE_DATA`
+  - 各接口 `data_as_of` 只取本域数据源（工单/关联=任务单，工序=CSV 导入，报工=日报同步，
+    产能=排产槽），不得跨域借用其它表同步时间；空表回退本域导入/同步时间，全空返回 `UPSTREAM_UNAVAILABLE`
 
 ## 目录结构
 

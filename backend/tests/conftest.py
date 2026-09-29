@@ -8,7 +8,7 @@
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse, urlunparse
 
 from app.core.config import get_settings  # config 模块无副作用，不建引擎
@@ -190,6 +190,8 @@ async def _test_db():
             ON CONFLICT (sync_type) DO UPDATE SET last_sync_time = EXCLUDED.last_sync_time
         """), {"t": datetime(2026, 8, 6, 15, 44, 3)})
         # 工序表全空时回退的 CSV 导入时间（audit_log，先删旧种子保证幂等）
+        # 取相对当前时间 3 小时前：新时效口径下仍为 high 且 stale=false，断言不随运行日期漂移
+        process_import_at = (datetime.now() - timedelta(hours=3)).replace(microsecond=0)
         await conn.execute(text(
             "DELETE FROM audit_log WHERE table_name = 'process_progress' AND operator = 'pytest'"
         ))
@@ -197,7 +199,7 @@ async def _test_db():
             INSERT INTO audit_log
                 (table_name, record_id, action, field_name, new_value, operator, operated_at)
             VALUES ('process_progress', 0, 'import', 'assembly_csv', 'pytest.csv', 'pytest', :t)
-        """), {"t": datetime(2026, 9, 20, 10, 0, 0)})
+        """), {"t": process_import_at})
     yield
     await engine.dispose()
 

@@ -63,6 +63,7 @@ services:
       WRITEBACK_CLAIM_TIMEOUT: ${WRITEBACK_CLAIM_TIMEOUT:-}
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
+      - ./data/backups:/app/backups
     depends_on:
       - postgres
       - redis

@@ -33,11 +33,13 @@ def ok(
     *,
     data_as_of: str,
     data_confidence: str = "high",
+    warnings: Optional[List[str]] = None,
     evidence_refs: Optional[List[str]] = None,
     page: Optional[Dict[str, Any]] = None,
     request_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """标准成功返回包（规范 §8；request_id 回显用于审计与链路追踪，规范 §14）"""
+    """标准成功返回包（规范 §8；request_id 回显用于审计与链路追踪，规范 §14；
+    warnings 非空时透出上游时效/缺失/部分结果告警，供 Hub 写入 Evidence）"""
     payload: Dict[str, Any] = {
         "source": SOURCE,
         "capability": capability,
@@ -48,6 +50,8 @@ def ok(
         "evidence_refs": evidence_refs or [],
         "data": data,
     }
+    if warnings:
+        payload["warnings"] = warnings
     if page is not None:
         payload["page"] = page
     if request_id:

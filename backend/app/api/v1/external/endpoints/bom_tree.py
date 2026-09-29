@@ -62,9 +62,11 @@ class BomTreeData(BaseModel):
     message: Optional[str] = Field(None, description="提示信息（如未找到 BOM 时）")
     tree: Optional[List[BomDetailItemOut]] = Field(None, description="嵌套树（flatten=false 时返回）")
     items: Optional[List[BomDetailItemOut]] = Field(None, description="扁平列表（flatten=true 时返回，含 bom_id/level/parent_material_id 供还原关系）")
-    data_as_of: str = Field(..., description="数据业务时点（源表最近修改与最近成功同步时间的较晚者，ISO 8601）")
+    data_as_of: str = Field(..., description="数据实际快照时间（源表最近修改与最近成功同步时间的较晚者，带时区 ISO 8601）")
     data_confidence: Literal["high", "medium", "low"] = Field(..., description="数据置信度")
     stale: bool = Field(..., description="数据是否超过新鲜度阈值（24h）")
+    generated_at: str = Field(..., description="本次响应生成时间（带时区 ISO 8601，与 data_as_of 分开）")
+    warnings: List[str] = Field(default_factory=list, description="数据过期/字段缺失/部分结果等结构化告警")
     request_id: Optional[str] = Field(None, description="调用方请求 ID（回显）")
 
 

@@ -51,6 +51,7 @@ import {
     ShareManagement
 } from './pages/BasicDataCenter'
 import WritebackConfig from './pages/BasicDataCenter/WritebackConfig'
+import Backup from './pages/SystemCenter/Backup'
 import WritebackMonitor from './pages/WritebackMonitor/index'
 import Notifications from './pages/Notifications'
 import Customers from './pages/BasicDataCenter/Customers'
@@ -87,7 +88,6 @@ import ProductionReports from './pages/ProductionCenter/ProductionReports/index'
 import Login from './pages/Login'
 import Profile from './pages/Profile'
 import ShareAccess from './pages/ShareAccess'
-import DeployVersions from './pages/SystemCenter/DeployVersions'
 import PriceChangeList from './pages/Purchase/PriceChange/list'
 import PriceChangeNew from './pages/Purchase/PriceChange/new'
 import PriceChangeDetail from './pages/Purchase/PriceChange/detail'
@@ -254,6 +254,7 @@ export default function App() {
                             <Route path="roles" element={<RoleManagement/>}/>
                             <Route path="permissions" element={<PermissionManagement/>}/>
                             <Route path="audit" element={<AuditLog/>}/>
+                            <Route path="backups" element={<Backup/>} key="backups"/>
                             <Route path="share-management" element={<ShareManagement/>}/>
                             <Route path="sync-config" element={<SyncSqlConfig/>}/>
                             <Route path="writeback-config" element={<WritebackConfig/>}/>
@@ -278,9 +279,6 @@ export default function App() {
                             <Route path="basicdata/data-supply" element={<DataSupply/>} key="data-supply"/>
                             <Route path="announcements" element={<AnnouncementManagement/>} key="announcements"/>
                             <Route path="notifications" element={<Notifications/>} key="notifications"/>
-                            {/* 兼容旧权限 route_path：/sys/deploy-versions → /deploy-versions */}
-                            <Route path="sys/deploy-versions" element={<Navigate to="/deploy-versions" replace/>}/>
-                            <Route path="deploy-versions" element={<DeployVersions/>} key="deploy-versions"/>
                             <Route path="purchase/price-change" element={<PriceChangeList/>}/>
                             <Route path="purchase/price-change/new" element={<PriceChangeNew/>}/>
                             <Route path="purchase/price-change/pending" element={<PriceChangePending/>}/>

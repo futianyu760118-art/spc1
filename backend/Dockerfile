@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
+        postgresql-client-15 \
         gnupg2 \
         apt-transport-https \
         unixodbc \

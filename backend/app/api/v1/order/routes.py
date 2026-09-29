@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func, asc, desc, case, or_
+from sqlalchemy import select, func, asc, desc, case, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from sqlalchemy.orm import selectinload
@@ -12,7 +12,7 @@ import traceback
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
-from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.order.sale_order import SaleOrder, SaleOrderLine, order_not_closed_condition
 from app.models.material.material_demand import MaterialDemand
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.material.purchase_order import PurchaseOrder
@@ -1151,11 +1151,14 @@ async def list_risk_pool(
     current_user: dict = Depends(PermissionChecker("orders.risk_pool", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """订单风险池 — 延期 + 高/中风险订单"""
+    """订单风险池 — 未关闭订单中的延期 + 高/中风险订单"""
     today = date.today()
-    risk_filter = or_(
-        SaleOrder.risk_level.in_(['red', 'yellow']),
-        (SaleOrder.promised_date < today) & (SaleOrder.status != 'closed'),
+    risk_filter = and_(
+        order_not_closed_condition(),
+        or_(
+            SaleOrder.risk_level.in_(['red', 'yellow']),
+            SaleOrder.promised_date < today,
+        ),
     )
     query = select(SaleOrder).where(risk_filter)
     count_query = select(func.count(SaleOrder.id)).where(risk_filter)
@@ -1184,7 +1187,7 @@ async def list_risk_pool(
         func.sum(case((SaleOrder.risk_level == 'yellow', 1), else_=0)).label('yellow_count'),
         func.sum(case((SaleOrder.risk_level == 'blue', 1), else_=0)).label('blue_count'),
         func.sum(case((SaleOrder.risk_level == 'green', 1), else_=0)).label('green_count'),
-        func.sum(case(((SaleOrder.promised_date < today) & (SaleOrder.status != 'closed'), 1), else_=0)).label('overdue_count'),
+        func.sum(case((SaleOrder.promised_date < today, 1), else_=0)).label('overdue_count'),
     ).where(risk_filter)
 
     # 全局统计不受 keyword 和 risk_level 筛选影响

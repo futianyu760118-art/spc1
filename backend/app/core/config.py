@@ -57,12 +57,6 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours
 
-    # Deploy Agent（同机服务，默认 127.0.0.1:8901）
-    DEPLOY_AGENT_URL: str = "http://127.0.0.1:8901"
-    DEPLOY_AGENT_TIMEOUT_CONNECT: float = 5.0
-    # action 调用长时间（如 build 30 分钟），不限制 read 超时
-    DEPLOY_AGENT_TIMEOUT_ACTION: float = 600.0
-
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
@@ -72,6 +66,7 @@ class Settings(BaseSettings):
     # File storage
     STORAGE_BACKEND: str = "local"  # local / s3
     STORAGE_LOCAL_ROOT: str = "/app/uploads"
+    BACKUP_DIR: str = "/app/backups"
     STORAGE_LOCAL_URL_PREFIX: str = "/uploads"
     STORAGE_MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
     STORAGE_ALLOWED_MIMES: list[str] = [

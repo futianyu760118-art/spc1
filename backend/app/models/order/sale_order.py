@@ -1,6 +1,6 @@
 """订单交付中心 — 销售订单模型（对齐1.点检CSV 38列）"""
 
-from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, Text, UniqueConstraint, Index, ForeignKey, text
+from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, Text, UniqueConstraint, Index, ForeignKey, text, or_
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
@@ -70,6 +70,16 @@ class SaleOrder(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     lines = relationship('SaleOrderLine', backref=backref('order', lazy='raise'), lazy='raise', order_by='SaleOrderLine.id')
+
+
+def order_closed_condition():
+    """已关闭订单条件：ERP 订单状态 erp_status=3（已关闭）"""
+    return SaleOrder.erp_status == 3
+
+
+def order_not_closed_condition():
+    """未关闭订单条件：erp_status 非 3；NULL 视为未关闭"""
+    return or_(SaleOrder.erp_status.is_(None), SaleOrder.erp_status != 3)
 
 
 class SaleOrderLine(Base):

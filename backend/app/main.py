@@ -15,6 +15,7 @@ from app.services.scheduler.capacity_sync_scheduler import capacity_sync_schedul
 from app.services.scheduler.data_supply_alert import data_supply_alert_scheduler  # noqa: F401
 from app.services.scheduler.approval_timeout_reminder import approval_timeout_reminder  # noqa: F401
 from app.services.scheduler.mrp_scheduler import mrp_scheduler  # noqa: F401
+from app.services.scheduler.backup_scheduler import backup_scheduler  # noqa: F401
 
 
 class SafeJSONEncoder(json.JSONEncoder):
@@ -146,6 +147,14 @@ async def lifespan(app: FastAPI):
         logger.info(f"[Exposable] 已注册 {len(list_exposable_endpoints())} 个内部可暴露接口")
     except Exception as e:
         logger.warning(f"[Exposable] 构建内部可暴露接口索引失败: {e}")
+    # 启动时：清理上次运行中断的备份记录（孤儿 running → failed，并删除半成品文件）
+    try:
+        from app.services.backup.backup_service import backup_service as _backup_service
+        stale_backups = await _backup_service.cleanup_stale_running_records()
+        if stale_backups:
+            logger.info(f"[启动] 已标记 {stale_backups} 条中断备份记录为失败")
+    except Exception as e:
+        logger.warning(f"[启动] 清理中断备份记录失败: {e}")
     # 启动时：开启 ERP 定时同步
     scheduler.start()
     # 启动时：开启风险评估定时调度
@@ -158,6 +167,8 @@ async def lifespan(app: FastAPI):
     # 启动时：开启 OA 工序产能定时同步（白天每小时增量 + 凌晨3点全量兜底）
     capacity_sync_scheduler.start()
     mrp_scheduler.start()
+    # 启动时：开启定时备份调度
+    backup_scheduler.start()
     # 启动时：开启写回 Worker
     from app.services.basicdata.writeback_worker import writeback_worker
     writeback_worker.start()
@@ -179,6 +190,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     await writeback_worker.stop()
+    backup_scheduler.stop()
     capacity_sync_scheduler.stop()
     await mrp_scheduler.stop()
     overdue_checker.stop()
@@ -205,6 +217,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def backup_maintenance_middleware(request, call_next):
+    """备份恢复期间挡业务流量（白名单外 503），见 docs/备份管理设计-2026-09.md"""
+    from app.services.backup.backup_service import backup_service
+
+    if backup_service.is_maintenance() and not backup_service.is_path_allowed(request.url.path):
+        return JSONResponse(
+            status_code=503,
+            content={"code": 503, "message": "系统维护中（备份恢复），请稍候", "data": None},
+        )
+    return await call_next(request)
 
 app.include_router(api_router, prefix=settings.API_PREFIX)
 

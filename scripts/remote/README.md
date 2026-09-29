@@ -33,6 +33,10 @@ chmod +x /home/ubuntu/apps/hj-spc/backup-db.sh
 ( crontab -l 2>/dev/null | grep -v backup-db.sh; echo '30 3 * * * /home/ubuntu/apps/hj-spc/backup-db.sh >> /home/ubuntu/apps/hj-spc/backups/backup.log 2>&1' ) | crontab -
 ```
 
+> 2026-09 起「备份管理」已内置到系统（基础数据与集成中心 → 备份管理）：手动/定时备份、下载、一键恢复。
+> 上线备份管理并配置定时后，应移除本机 crontab 中的 backup-db.sh 行，避免双份备份。
+> backup-db.sh 保留为应急手册（backend 不可用时手工备份/恢复）。
+
 ## 迁移新服务器 checklist
 
 1. 新服务器装 Docker（含 compose 插件），配置 SSH 密钥，开放 18084/18085 端口

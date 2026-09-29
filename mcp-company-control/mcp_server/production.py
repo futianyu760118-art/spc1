@@ -8,14 +8,16 @@
 - 报工为 ERP 生产日报累计口径：is_reversed/reversal_of/revision 恒 null
 - 产能按（部门, 排产段, 日期）聚合：available 来自排产基础条件，周日不排产为 0
 
-时效（交接文档 §7）：调用公共 list_result 前强制校验真实 data_as_of/置信度，
-缺失或非法返回结构化 UPSTREAM_UNAVAILABLE「数据置信度不足」，不落入 helper 默认兜底
-（缺失时间→当前时间 / 未知置信度→high）。
+时效（2026-09-29 AEOS 生产协同时效交接 §2.2/§7）：调用公共 list_result 前强制校验真实
+data_as_of/置信度：stale=true 或快照超过 24h → STALE_DATA；缺失/非法时效 →
+UPSTREAM_UNAVAILABLE「数据置信度不足」。不落入 helper 默认兜底（缺失时间→当前时间 /
+未知置信度→high），也不因为上游 stale 字段缺失/置 false 就把过期数据当可用数据。
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Dict
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Any, Dict, Optional
 
 from pydantic import Field
 
@@ -34,19 +36,46 @@ from .tool_helpers import (
 from .upstream_client import call as upstream
 
 _VALID_CONFIDENCE = ("high", "medium", "low")
+_STALE_HOURS = 24
+# 上游 data_as_of 无时区时按中台部署时区（TZ=Asia/Shanghai）解释
+_DEFAULT_TZ = timezone(timedelta(hours=8))
+
+
+def _parse_as_of(value: Any) -> Optional[datetime]:
+    """解析上游 data_as_of；无时区按 +08:00 解释，非法返回 None。"""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_DEFAULT_TZ)
+    return parsed
 
 
 def _require_freshness(payload: Dict[str, Any]) -> None:
-    """交接文档 §7：stale → STALE_DATA；缺失/非法时效 → 数据置信度不足，
+    """stale=true 或快照超 24h → STALE_DATA；缺失/非法时效 → 数据置信度不足，
     不落入公共 helper 默认兜底（缺失时间→当前时间 / 未知置信度→high）。"""
     if payload.get("stale") is True:
         raise BizError("STALE_DATA", "上游数据已过期，超出新鲜度阈值")
-    as_of = payload.get("data_as_of")
+    as_of_raw = payload.get("data_as_of")
     confidence = str(payload.get("data_confidence") or "").lower()
-    if not as_of or confidence not in _VALID_CONFIDENCE:
+    if not as_of_raw or confidence not in _VALID_CONFIDENCE:
         raise BizError(
             "UPSTREAM_UNAVAILABLE",
             "上游缺少有效 data_as_of / data_confidence，数据置信度不足，停止生产风险判断",
+        )
+    # 防御上游 stale 未被正确置位：按 data_as_of 自行判定 24h 有效期
+    as_of = _parse_as_of(as_of_raw)
+    if as_of is None:
+        raise BizError(
+            "UPSTREAM_UNAVAILABLE",
+            "上游 data_as_of 非法，数据置信度不足，停止生产风险判断",
+        )
+    age = datetime.now(timezone.utc) - as_of.astimezone(timezone.utc)
+    if age > timedelta(hours=_STALE_HOURS):
+        raise BizError(
+            "STALE_DATA",
+            f"上游数据快照 {as_of_raw} 已超过 {_STALE_HOURS} 小时有效期，数据置信度不足",
         )
 
 

@@ -75,9 +75,6 @@ api_router.include_router(basicdata.wecom_share_router, prefix="/share", tags=["
 # 权限定义
 api_router.include_router(basicdata.permissions_router, prefix="/permissions", tags=["权限定义"])
 
-# 部署版本管理（部署运维 · 部署版本）
-api_router.include_router(system.deploy_versions_router, prefix="/system/deploy", tags=["部署运维·部署版本"])
-
 # 数据供给
 api_router.include_router(basicdata.data_supply_router, prefix="/basicdata/data-supply", tags=["数据供给"])
 
@@ -103,3 +100,6 @@ api_router.include_router(quality.supplier_claims_router, prefix="/quality/suppl
 
 # Approval center（审批中心：统一待我审批 + 审批链配置）
 api_router.include_router(approval.approvals_router, prefix="/approvals", tags=["审批中心"])
+
+# System（系统管理 · 备份管理）
+api_router.include_router(system.backups_router, prefix="/system/backups", tags=["系统管理-备份管理"])

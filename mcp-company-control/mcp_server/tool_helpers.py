@@ -92,8 +92,12 @@ def list_result(
     row_transform: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
     allow_stale: bool = False,
 ) -> Dict[str, Any]:
-    """列表类 Tool 公共返回：解包 items/total、脱敏、（可选）字段别名、分页信息、Evidence"""
+    """列表类 Tool 公共返回：解包 items/total、脱敏、（可选）字段别名、分页信息、Evidence。
+
+    上游 warnings（数据过期/字段缺失/部分结果）原样透出，供 Hub 写入 Evidence。
+    """
     as_of, confidence = as_of_confidence(payload, allow_stale=allow_stale)
+    warnings = [str(w) for w in (payload.get("warnings") or [])]
     rows = contracts.redact(payload.get("items") or [])
     if row_transform is not None:
         rows = [row_transform(row) for row in rows]
@@ -108,6 +112,7 @@ def list_result(
         rows,
         data_as_of=as_of,
         data_confidence=confidence,
+        warnings=warnings,
         evidence_refs=refs[:MAX_EVIDENCE_PER_CALL],
         page=contracts.page_envelope(page, page_size, total, total > page * page_size),
         request_id=request_id or None,

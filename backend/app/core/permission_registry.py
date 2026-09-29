@@ -114,11 +114,13 @@ async def sync_permissions_to_db(db: AsyncSession) -> int:
 # 运行期代码（API PermissionChecker / 前端菜单）不再引用，需在每次启动时清理。
 # quality.supplier_claim.pending / .config：审批中心上线前的旧权限，已被 approval.pending / approval.config 取代。
 # 仅存在于历史库中（代码从未声明），不清理会继续作为菜单项渲染在「品质管理」下。
+# deploy_versions：部署版本管理功能已整体移除（2026-09-29），代理路由与 deploy_agent 一并删除。
 DEPRECATED_PERMISSION_CODES = (
     "orders.stock_check",
     "orders.inventory_check",
     "quality.supplier_claim.pending",
     "quality.supplier_claim.config",
+    "deploy_versions",
 )
 
 # 一次性动作迁移:盘点抽检曾声明为 read/manage,现回归标准增删改查。
@@ -339,6 +341,14 @@ declare_permission("writeback", "数据回写", module="basicdata", sort_order=1
 declare_permission("writeback.config", "回写SQL配置", module="basicdata", parent_code="writeback", route_path="/writeback-config", sort_order=1)
 declare_permission("writeback.monitor", "回写监控", module="basicdata", parent_code="writeback", route_path="/writeback-monitor", sort_order=2)
 
+# 备份管理（2026-09-29）— 数据库 + uploads 备份/恢复
+declare_permission(
+    "backup", "备份管理",
+    module="basicdata", parent_code="basicdata",
+    actions=["read", "manage"],
+    route_path="/backups", sort_order=12,
+)
+
 # 采购中心
 declare_permission("purchase", "采购中心", module="purchase", sort_order=11)
 declare_permission("purchase.price_change", "调价单管理", module="purchase", parent_code="purchase", route_path="/purchase/price-change", sort_order=1)
@@ -363,14 +373,6 @@ declare_permission("approval.config", "审批配置", module="approval", parent_
 # 业务接入管理不单独挂菜单路由，避免与「审批配置」菜单重复（在审批配置页内以 Tab 呈现）
 declare_permission("approval.business", "业务接入管理", module="approval", parent_code="approval",
                    actions=["read", "update"], sort_order=3)
-
-# 部署运维（2026-09-04）— 生产环境部署 / 回退 / 切换任意版本为当前
-declare_permission(
-    "deploy_versions", "部署版本管理",
-    module="basicdata", parent_code="basicdata",
-    actions=["read", "manage"],
-    route_path="/deploy-versions", sort_order=12,
-)
 
 # MRP 运算（2026-09-24）— 计划方案/引擎/建议/对比
 # 动作: read 查看 / run 触发运算 / review 建议审核 / convert 转化(P2) / param 参数维护

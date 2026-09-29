@@ -11,20 +11,21 @@
 任务单不冗余订单号（production_task_order.sale_order_no 生产库全空），work-orders / order-links
 的 order_no 输出与 order_no 过滤一律经 sale_order.erp_id = production_task_order.sale_order_id
 解析（同 stock_check / front_process 口径）。
-data_as_of = 源表全表 max(updated_at)（非过滤集），空过滤结果仍携带真实刷新时间；源表无任何行时
-回退该表同步类型的最近成功同步时间（sync_sql_config.last_sync_time）或 CSV 导入时间（audit_log），
-皆无则返回 code=503 结构化错误。data_confidence 仅 high/medium/low，不使用请求时间兜底。
-工序表（process_progress）无行时以生产任务单同步时间（production_task_orders，生产协同数据域基线）
-兜底：数据源已成功同步，空结果照常返回真实时效且不判过期。
+data_as_of = 该接口自己数据源的源表全表 max(updated_at)（非过滤集），空过滤结果仍携带真实刷新时间；
+源表无任何行时回退该数据源自己的最近成功同步时间（sync_sql_config.last_sync_time）或 CSV 导入时间
+（audit_log），皆无则返回 code=503 结构化错误。data_confidence 仅 high/medium/low，不使用请求时间兜底，
+不得跨数据域借用其它表的同步时间冒充本域快照时间（工序无行时不再回退生产任务单同步时间）。
+generated_at 为本次响应生成时间，与 data_as_of 分开返回；所有 ISO 时间带时区（DB 无时区按进程本地时区）。
 
-时效口径（2026-09-24 AEOS 确认）：
-- 工序/报工/产能为历史快照基线（计划/累计报工/已排产能），有 data_as_of 即 stale=false，
-  置信度仅 high（≤6h）/ medium，不按 24h 判过期；无任何数据源返回 code=503 结构化错误。
-- 工单/工单-订单关系仍按 6h/24h 实时口径如实返回 stale。
+时效口径（2026-09-29 AEOS 生产协同时效交接，覆盖 2026-09-24 的历史快照豁免）：
+- 五域一视同仁按 6h/24h 阈值：≤6h high，≤24h medium，>24h low + stale=true；
+  data_as_of 只表示数据实际快照时间，旧快照不得再标 high + stale=false 冒充实时数据。
+- warnings 描述数据过期、字段缺失、部分结果（空工序结果、双源部分查询、缺排产基础条件）等，
+  stale=true 时自动附过期告警，供 MCP/Hub 写入 Evidence。
 """
 
 from datetime import date, datetime
-from typing import Annotated, Optional
+from typing import Annotated, Iterable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -46,7 +47,7 @@ from app.services.material.kitting_calc_service import load_source_as_of, min_as
 
 from ..common import ExternalDataPage, PageParamsMixin
 from ..deps import external_auth
-from ..freshness import freshness_meta, table_max_as_of
+from ..freshness import freshness_meta, iso_aware, table_max_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -56,7 +57,12 @@ WO_TASK_STATUS_DOC = "标准状态 planned/released/in_progress/completed/unknow
 
 
 def _d(value) -> Optional[str]:
-    return value.isoformat() if value is not None else None
+    """date → YYYY-MM-DD；datetime → 带时区 ISO 8601（禁止无时区字符串）。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return iso_aware(value)
+    return value.isoformat()
 
 
 def _n(value) -> Optional[float]:
@@ -87,19 +93,19 @@ async def _latest_import_at(db: AsyncSession, *table_names: str) -> Optional[dat
 
 async def _freshness(
     db: AsyncSession, *columns, sync_types: tuple[str, ...] = (),
-    import_tables: tuple[str, ...] = (), baseline: bool = False,
+    import_tables: tuple[str, ...] = (), source_label: str = "生产协同",
+    warnings: Iterable[str] = (),
 ) -> dict:
-    """生产协同时效元信息：源表全表 max → 同步时间 → 导入时间回退；全空 → code=503 结构化错误。
+    """生产协同时效元信息：本域源表全表 max → 本域同步时间 → 本域导入时间回退；全空 → code=503。
 
-    baseline=True（工序/报工/产能：历史快照即有效基线，24h 过期口径不适用）：
-    有数据时置信度仅 high（≤6h）/ medium，stale 恒 false；全空同样返回结构化错误。
+    只允许使用该接口自己数据源的时间，不得跨域借用；24h 过期口径对五域一致适用。
     """
     as_of = await table_max_as_of(db, *columns)
     if as_of is None and sync_types:
         as_of = min_as_of(await load_source_as_of(db, sync_types))
     if as_of is None and import_tables:
         as_of = await _latest_import_at(db, *import_tables)
-    return freshness_meta(as_of, "生产协同", baseline=baseline)
+    return freshness_meta(as_of, source_label, warnings=warnings)
 
 
 # ---------------------------------------------------------------- work-orders
@@ -305,7 +311,8 @@ async def production_work_orders_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **await _freshness(db, ProductionTaskOrder.updated_at, sync_types=("production_task_orders",)),
+        **await _freshness(db, ProductionTaskOrder.updated_at,
+                           sync_types=("production_task_orders",), source_label="生产工单"),
         "request_id": q.request_id,
     }
 
@@ -453,14 +460,21 @@ async def production_operations_list(
         )
     ).scalars().all()
 
+    warnings = []
+    if total == 0:
+        warnings.append(
+            "按订单锚点未查询到工序记录：SPC 工序进度无工单外键、仅支持 order_no 锚点，"
+            "空结果不表示该订单无生产活动，也不能据此推断某工单无工序"
+        )
+
     return {
         "items": [_serialize_progress(r) for r in rows],
         "total": total,
         "page": page,
         "page_size": page_size,
         **await _freshness(db, ProcessProgress.updated_at,
-                           sync_types=("production_task_orders",),
-                           import_tables=("process_progress",), baseline=True),
+                           import_tables=("process_progress",), source_label="工序进度",
+                           warnings=warnings),
         "request_id": q.request_id,
     }
 
@@ -551,6 +565,10 @@ async def production_order_links_list(
         raise HTTPException(status_code=422, detail="work_order_no / order_no 至少提供一个")
     page, page_size = _page(q)
     link_types = {s.strip() for s in (q.link_type or "").split(",") if s.strip()} or {"production_task", "schedule_snapshot"}
+    warnings: list[str] = []
+    if "schedule_snapshot" in link_types and not q.order_no:
+        warnings.append("schedule_snapshot 为订单行级排产快照、按 order_no 查询；"
+                        "未提供 order_no 时本次仅返回 production_task 关联")
 
     links: list[dict] = []
     if "production_task" in link_types:
@@ -579,6 +597,10 @@ async def production_order_links_list(
         ]
 
     links.sort(key=lambda ln: (_parse_iso(ln["updated_at"]) or datetime.min, ln["link_id"]), reverse=True)
+    unresolved = sum(1 for ln in links
+                     if ln["link_type"] == "production_task" and not ln["order_no"])
+    if unresolved:
+        warnings.append(f"{unresolved} 条任务单未解析到销售订单号（sale_order_id 无匹配），order_no 为 null")
     total = len(links)
     start = (page - 1) * page_size
     return {
@@ -588,7 +610,8 @@ async def production_order_links_list(
         "page_size": page_size,
         **await _freshness(
             db, ProductionTaskOrder.updated_at, ProductionOrderScheduleSnapshot.updated_at,
-            sync_types=("production_task_orders",)),
+            sync_types=("production_task_orders",), source_label="工单与销售订单关系",
+            warnings=warnings),
         "request_id": q.request_id,
     }
 
@@ -666,7 +689,7 @@ class ReportsListQuery(PageParamsMixin):
             summary="生产报工列表", description="endpoint_code: production.reports.list")
 @register_external(
     "production.reports.list", "生产报工列表", method="GET", path="/production/reports/list",
-    description="ERP 生产日报（累计口径）；work_order_no 必填；撤销/更正无来源恒 null（is_reversed/reversal_of/revision）",
+    description="ERP 生产日报（逐日明细行口径，累计需按 report_date/工序行汇总）；work_order_no 必填；撤销/更正无来源恒 null（is_reversed/reversal_of/revision）",
     tags=["生产协同"],
 )
 @log_external_call("production.reports.list")
@@ -700,13 +723,21 @@ async def production_reports_list(
         )
     ).scalars().all()
 
+    warnings = []
+    if total > 0:
+        warnings.append(
+            "报工为 ERP 生产日报逐日明细行：累计口径需按 report_date/工序行自行汇总，避免重复计数；"
+            "源表无撤销/更正/版本字段，is_reversed/reversal_of/revision 恒为 null"
+        )
+
     return {
         "items": [_serialize_daily_report(r) for r in rows],
         "total": total,
         "page": page,
         "page_size": page_size,
         **await _freshness(db, ProductionDailyReport.updated_at,
-                           sync_types=("production_daily_reports",), baseline=True),
+                           sync_types=("production_daily_reports",), source_label="生产报工",
+                           warnings=warnings),
         "request_id": q.request_id,
     }
 
@@ -821,6 +852,13 @@ async def production_capacity_list(
             "updated_at": _d(max_updated_at),
         })
 
+    warnings = []
+    missing_base = sum(1 for it in items if it["available_minutes"] is None)
+    if missing_base:
+        warnings.append(f"{missing_base} 条记录缺少排产基础条件，可用分钟不可计算（available_minutes 为 null）")
+    if items:
+        warnings.append("排产版本/工作日历版本无数据源，schedule_version/calendar_version 恒为 null")
+
     total = len(items)
     start = (page - 1) * page_size
     return {
@@ -828,6 +866,6 @@ async def production_capacity_list(
         "total": total,
         "page": page,
         "page_size": page_size,
-        **await _freshness(db, CapacitySlot.updated_at, baseline=True),
+        **await _freshness(db, CapacitySlot.updated_at, source_label="产能占用", warnings=warnings),
         "request_id": q.request_id,
     }

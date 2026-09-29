@@ -1,4 +1,4 @@
-"""独立测试脚本 — 41 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
+"""独立测试脚本 — 43 项，按「旧版回归 / 新版链路 / HTTP 传输」分组输出
 
 运行（在 mcp-company-control/ 目录下）：
     python scripts/test_company_control.py
@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -60,7 +61,11 @@ EXPECTED_TOOLS = {
     "production_capacity_list",
 }
 
-DATA_AS_OF = "2026-09-19T18:00:00Z"
+# 1 小时前：满足生产工具 24h 年龄校验（相对当前时间，避免测试随运行日期老化）
+DATA_AS_OF = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+# 30 小时前：用于「stale 字段缺失/置 false 但快照已过期」的年龄兜底用例
+OLD_DATA_AS_OF = (datetime.now(timezone.utc) - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+PRODUCTION_WARNINGS = ["mock 上游提示：排产版本/工作日历版本无数据源"]
 
 ORDERS = [
     {
@@ -448,8 +453,8 @@ class MockHandler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             pass  # 客户端超时主动断开属预期（timeout 模式）
 
-    def _list_envelope(self, rows, q, stale=False):
-        """列表类端点统一信封：items + 分页 + 新鲜度元信息"""
+    def _list_envelope(self, rows, q, stale=False, warnings=None):
+        """列表类端点统一信封：items + 分页 + 新鲜度/告警元信息"""
         return {
             "code": 0,
             "message": "ok",
@@ -461,6 +466,8 @@ class MockHandler(BaseHTTPRequestHandler):
                 "data_as_of": DATA_AS_OF,
                 "data_confidence": "low" if stale else "high",
                 "stale": stale,
+                "generated_at": DATA_AS_OF,
+                "warnings": list(warnings or []),
             },
         }
 
@@ -538,6 +545,23 @@ class MockHandler(BaseHTTPRequestHandler):
                         "page_size": 20,
                         "data_as_of": None,
                         "data_confidence": "unknown",
+                        "stale": False,
+                    },
+                }
+            )
+        if mode == "old_freshness" and parsed.path in PRODUCTION_MOCK_PATHS:
+            # 上游 stale 漏置为 false、置信度仍报 high：适配层必须按 data_as_of 自行判过期
+            return self._json(
+                {
+                    "code": 0,
+                    "message": "ok",
+                    "data": {
+                        "items": [],
+                        "total": 0,
+                        "page": 1,
+                        "page_size": 20,
+                        "data_as_of": OLD_DATA_AS_OF,
+                        "data_confidence": "high",
                         "stale": False,
                     },
                 }
@@ -708,7 +732,7 @@ class MockHandler(BaseHTTPRequestHandler):
             if q.get("status"):
                 wanted = {s.strip() for s in q["status"].split(",") if s.strip()}
                 rows = [r for r in rows if r["status"] in wanted]
-            return self._json(self._list_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q, warnings=PRODUCTION_WARNINGS))
         if route == "/external/production/operations/list":
             if not q.get("order_no"):
                 return self._json({"code": 422, "message": "order_no 必填（SPC 工序进度以订单号为锚点，无工单外键）"})
@@ -716,7 +740,7 @@ class MockHandler(BaseHTTPRequestHandler):
             if q.get("process_type"):
                 wanted = {s.strip() for s in q["process_type"].split(",") if s.strip()}
                 rows = [r for r in rows if r["operation_code"] in wanted]
-            return self._json(self._list_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q, warnings=PRODUCTION_WARNINGS))
         if route == "/external/production/order-links/list":
             if not (q.get("work_order_no") or q.get("order_no")):
                 return self._json({"code": 422, "message": "work_order_no / order_no 至少提供一个"})
@@ -728,7 +752,7 @@ class MockHandler(BaseHTTPRequestHandler):
             if q.get("link_type"):
                 wanted = {s.strip() for s in q["link_type"].split(",") if s.strip()}
                 rows = [r for r in rows if r["link_type"] in wanted]
-            return self._json(self._list_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q, warnings=PRODUCTION_WARNINGS))
         if route == "/external/production/reports/list":
             if not q.get("work_order_no"):
                 return self._json({"code": 422, "message": "work_order_no 必填（按生产订单号查询 ERP 生产日报）"})
@@ -739,7 +763,7 @@ class MockHandler(BaseHTTPRequestHandler):
                 rows = [r for r in rows if r["reported_at"] >= q["report_date_start"]]
             if q.get("report_date_end"):
                 rows = [r for r in rows if r["reported_at"] <= q["report_date_end"]]
-            return self._json(self._list_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q, warnings=PRODUCTION_WARNINGS))
         if route == "/external/production/capacity/list":
             if not (q.get("date_start") and q.get("date_end")):
                 return self._json({"code": 422, "message": "date_start / date_end 必填（产能按日期窗口聚合）"})
@@ -751,7 +775,7 @@ class MockHandler(BaseHTTPRequestHandler):
                 rows = [r for r in rows if r["work_center_code"].split(":")[0] == q["department"]]
             if q.get("schedule_bucket"):
                 rows = [r for r in rows if r["work_center_code"].split(":")[1] == q["schedule_bucket"]]
-            return self._json(self._list_envelope(rows, q))
+            return self._json(self._list_envelope(rows, q, warnings=PRODUCTION_WARNINGS))
         return self._json({"error": "not found"}, 404)
 
 
@@ -792,7 +816,7 @@ async def call_tool(session, name, args):
 
 async def check_01_initialize(session, init_result):
     assert init_result.server_info.name == "company-control", f"server_info.name={init_result.server_info.name}"
-    assert init_result.server_info.version == "1.2.0", f"server_info.version={init_result.server_info.version!r}"
+    assert init_result.server_info.version == "1.2.1", f"server_info.version={init_result.server_info.version!r}"
 
 
 async def check_02_tools_list(session):
@@ -919,10 +943,10 @@ async def check_12_health(session):
     _, body = await call_tool(session, "get_system_health", {})
     data = body.get("data", {})
     assert data.get("status") == "ok", f"{data}"
-    assert data.get("read_only") is True and data.get("version") == "1.2.0"
+    assert data.get("read_only") is True and data.get("version") == "1.2.1"
     assert set(data.get("capabilities", [])) == EXPECTED_TOOLS
     # §16 顶层字段超集
-    assert body.get("status") == "ok" and body.get("version") == "1.2.0"
+    assert body.get("status") == "ok" and body.get("version") == "1.2.1"
     assert body.get("checked_at") and set(body.get("capabilities", [])) == EXPECTED_TOOLS
 
 
@@ -1320,6 +1344,27 @@ async def check_41_production_stale(session):
     assert err.get("code") == "STALE_DATA" and err.get("retryable") is True, f"{body}"
 
 
+async def check_42_production_warnings(session):
+    """上游 warnings 原样透出到标准返回包（供 Hub 写入 Evidence）"""
+    _, body = await call_tool(session, "production_work_orders_list", {"workshop": "车间A"})
+    assert body.get("warnings") == PRODUCTION_WARNINGS, f"warnings 未透出: {body.get('warnings')}"
+
+
+async def check_43_production_stale_age(session):
+    """上游 stale 漏置（false）且置信度报 high，但 data_as_of 超 24h →
+    适配层按年龄兜底返回 STALE_DATA，不放行过期数据（交接文档 §2.2）。"""
+    MOCK_STATE["mode"] = "old_freshness"
+    try:
+        _, body = await call_tool(
+            session, "production_work_orders_list", {"workshop": "车间A"}
+        )
+    finally:
+        MOCK_STATE["mode"] = "normal"
+    err = body.get("error", {})
+    assert err.get("code") == "STALE_DATA" and err.get("retryable") is True, f"{body}"
+    assert "有效期" in err.get("message", ""), f"{body}"
+
+
 # ---------------- HTTP 检查（双传输补充） ----------------
 
 INIT_BODY = {
@@ -1498,6 +1543,8 @@ CHECKS = [
     ("new", "39 产能日期窗口校验与 evidence", check_39_production_capacity),
     ("new", "40 生产缺时效返回数据置信度不足", check_40_production_missing_freshness),
     ("new", "41 生产数据过期返回 STALE_DATA", check_41_production_stale),
+    ("new", "42 生产 warnings 原样透出", check_42_production_warnings),
+    ("new", "43 生产超 24h 年龄兜底返回 STALE_DATA", check_43_production_stale_age),
 ]
 
 

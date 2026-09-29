@@ -10,7 +10,6 @@
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000        # 入口：app/main.py
 python init_database.py                          # 幂等建表/迁移，改 schema 前必读「数据库与迁移」
-python check_deploy_agent.py                     # deploy_agent 冒烟（见「部署运维」）
 ```
 
 ### 前端（在 `frontend/` 下运行，Node 20）
@@ -21,16 +20,9 @@ npm run dev        # Vite dev server :3000，代理 /api 与 /uploads 到 :8000
 npm run build      # = tsc -b && vite build，唯一 typecheck，交付前必跑
 ```
 
-### Deploy Agent（独立进程，跑在生产主机上，供后端驱动部署；详见 `backend/deploy_agent/README.md`）
-
-```bash
-cd backend && pip install -r deploy_agent/requirements.txt
-python -m deploy_agent                            # 默认 127.0.0.1:8901；生产用 systemd unit（deploy_agent/scripts/deploy-agent.service）
-```
-
 ### Docker
 
-- 本地开发（仓库根）：`docker-compose up -d` —— backend :8000、frontend :3000；另含独立 `deploy-agent` 服务（专用轻量镜像 `deploy_agent/Dockerfile`，挂 /var/run/docker.sock 与 ./data/deploy 工作目录，backend 经 `DEPLOY_AGENT_URL=http://deploy-agent:8901` 访问；健康检查走 compose 服务名 `http://backend:8000/api/v1/common/ping`、`http://frontend:80/`）。dev 首次版本列表为空属正常（工作目录无 versions/）。
+- 本地开发（仓库根）：`docker-compose up -d` —— backend :8000、frontend :3000。
 - 生产部署（部署脚本使用）：`docker compose -f docker-compose-prod.yml up -d` —— 自带 postgres/redis，backend :18085、frontend :18084。
 - backend 容器启动命令：生产为 `python init_database.py && uvicorn ...`（每次启动自动迁移）；本地 dev compose 只跑 uvicorn，需手动执行 `python init_database.py`。
 
@@ -121,14 +113,6 @@ python -m deploy_agent                            # 默认 127.0.0.1:8901；生�
 ### ERP 集成
 
 ERP 集成是 SQL 驱动的：同步 SQL 与字段映射存在 `sync_sql_config` / `field_mapping` 表，可在运行时编辑；手动触发 `POST /api/v1/basicdata/sync/...`。**ERP 同步只覆盖 `data_source = 'erp'` 的行，永不碰 `manual` / `excel` 行；改 `app/services/basicdata/` 的同步代码时必须保留此守卫。**
-
-### 部署运维（deploy_versions）
-
-- **架构**：后端 `app/api/v1/system/deploy_versions.py` 是一层薄代理，转发到本机 `deploy_agent`（`backend/deploy_agent/`，独立进程，默认 `127.0.0.1:8901`，与后端共享 `SECRET_KEY`）。
-- **权限**：`deploy_versions.read` 可查看（list/status/detail/SSE 流），`deploy_versions.manage` 可执行动作（rollback/switch/deploy-new）；按角色在「角色管理」授予，**不限定 admin**（admin 自动通过）。
-- **认证**：GET/POST 走 header Bearer；SSE（`/jobs/{id}/stream`）因前端用 fetch+ReadableStream 也走 header Bearer（与 notifications 的 EventSource query-token 惯例不同，勿改回）。
-- **agent 事件约定**：agent 把 git pull / docker build / compose up / 健康检查封装为 job + SSE 事件（`step` / `phase` / `log` / `end`）；加新命令时保持 `_run_step` 的输出约定。
-- **冒烟**：`backend/check_deploy_agent.py`（mock docker/git/health）。
 
 ### 审批中心（approval）
 

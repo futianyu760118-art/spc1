@@ -1,6 +1,7 @@
 """对外接口数据时效契约集成回归测试（orders / order-details / boms / materials / suppliers）。
 
 覆盖：data_as_of = 源表全表 max 与最近成功同步时间的较晚者、过滤器命中为空仍返回真实时效、
+data_as_of/generated_at 带时区且分开返回、warnings 透出、
 源表空且从未同步 → code=503 结构化错误（含调用日志）、request_id 回显。
 """
 
@@ -10,6 +11,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import delete, select
 
+from app.api.v1.external.freshness import iso_aware
 from tests.integration.test_external_quality_api import signed_get
 
 ORDERS_LIST = "/api/v1/external/orders/list"
@@ -111,7 +113,7 @@ async def freshness_seeded(external_keys, db):
         Supplier(supplier_code="S-001", supplier_name="供应商A", status=1, update_time=ts),
     ])
     await db.commit()
-    return {"data_as_of": ts.isoformat()}
+    return {"data_as_of": iso_aware(ts)}
 
 
 @pytest.mark.parametrize("path,endpoint_code,extra,sync_type,label", FRESHNESS_ENDPOINTS)
@@ -127,6 +129,11 @@ async def test_freshness_fields_and_request_id(
     assert data["data_as_of"] == freshness_seeded["data_as_of"]
     assert data["data_confidence"] == "high"
     assert data["stale"] is False
+    assert data["warnings"] == []
+    # generated_at 与 data_as_of 分开返回，且两者均为带时区 ISO 8601
+    assert datetime.fromisoformat(data["data_as_of"]).tzinfo is not None
+    assert datetime.fromisoformat(data["generated_at"]).tzinfo is not None
+    assert data["generated_at"] != data["data_as_of"]
     assert data["request_id"] == "fr-001"
 
 
@@ -178,7 +185,7 @@ async def test_sync_time_wins_over_older_table(
     try:
         r = await signed_get(ext_client, path, endpoint_code, external_keys["orders"], extra)
         data = r.json()["data"]
-        assert data["data_as_of"] == sync_ts.isoformat()
+        assert data["data_as_of"] == iso_aware(sync_ts)
         assert data["data_confidence"] == "high"
     finally:
         await _clear_sync_configs(db)
@@ -197,7 +204,7 @@ async def test_table_time_wins_over_older_sync(
     try:
         r = await signed_get(ext_client, path, endpoint_code, external_keys["orders"], extra)
         data = r.json()["data"]
-        assert data["data_as_of"] == table_ts.isoformat()
+        assert data["data_as_of"] == iso_aware(table_ts)
         assert data["data_confidence"] == "high"
     finally:
         await _clear_sync_configs(db)
@@ -219,7 +226,7 @@ async def test_boms_tree_uses_latest_of_bom_and_detail(ext_client, external_keys
     r = await signed_get(ext_client, BOMS_TREE, "boms.tree", external_keys["orders"],
                          {"bom_id": "103"})
     data = r.json()["data"]
-    assert data["data_as_of"] == detail_ts.isoformat()
+    assert data["data_as_of"] == iso_aware(detail_ts)
 
 
 async def test_boms_multi_sync_uses_oldest_source(ext_client, external_keys, db):
@@ -235,7 +242,7 @@ async def test_boms_multi_sync_uses_oldest_source(ext_client, external_keys, db)
         r = await signed_get(ext_client, BOMS_TREE, "boms.tree", external_keys["orders"],
                              {"bom_id": "101"})
         data = r.json()["data"]
-        assert data["data_as_of"] == bom_details_ts.isoformat()
+        assert data["data_as_of"] == iso_aware(bom_details_ts)
         assert data["data_confidence"] == "high"
     finally:
         await _clear_sync_configs(db)
@@ -248,6 +255,8 @@ async def test_confidence_low_and_stale_after_validity(ext_client, external_keys
     await _seed_source_rows(db, "orders.list", ts)
     r = await signed_get(ext_client, ORDERS_LIST, "orders.list", external_keys["orders"])
     data = r.json()["data"]
-    assert data["data_as_of"] == ts.isoformat()
+    assert data["data_as_of"] == iso_aware(ts)
     assert data["data_confidence"] == "low"
     assert data["stale"] is True
+    # 过期数据自动附警告，供 MCP/Hub 写入 Evidence
+    assert any("有效期" in w for w in data["warnings"])
