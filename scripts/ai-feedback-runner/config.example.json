@@ -1,0 +1,28 @@
+{
+  "base_url": "http://生产主机:18085",
+  "username": "admin",
+  "password": "请填写处理人账号密码",
+  "poll_interval_seconds": 10,
+  "repo_dir": "D:/wanghuazheng/project/SPC-v2",
+  "base_branch": "whz",
+  "worktrees_dir": "D:/wanghuazheng/project/SPC-v2-ai-worktrees",
+  "backend_python": "D:/software/miniconda3/python.exe",
+  "gates": {
+    "backend_command": "{python} -m pytest -q",
+    "frontend_command": "npm run build",
+    "timeout_minutes": 30
+  },
+  "claude": {
+    "command": "claude",
+    "timeout_minutes": 60,
+    "allowed_tools": [
+      "Read", "Edit", "Write", "Glob", "Grep",
+      "Bash(python:*)", "Bash(npm:*)", "Bash(npx:*)",
+      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)"
+    ]
+  },
+  "blocked_globs": [
+    ".env", ".env.*", "**/.env", "**/.env.*",
+    "scripts/deploy-*", "docker-compose-prod.yml"
+  ]
+}
