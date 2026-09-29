@@ -152,10 +152,6 @@ export type TestSqlResult = { columns: string[]; rows: Record<string, any>[]; el
 
 export interface ApprovalMappingField { key: string; label: string; required: boolean }
 
-export async function submitInstance(bizType: string, bizId: number) {
-  return api.post('/approvals/instances', { biz_type: bizType, biz_id: bizId })
-}
-
 export const approvalApi = {
   pending: (params?: Record<string, any>) => api.get('/approvals/pending', { params }),
   approved: (params?: Record<string, any>) => api.get('/approvals/approved', { params }),
