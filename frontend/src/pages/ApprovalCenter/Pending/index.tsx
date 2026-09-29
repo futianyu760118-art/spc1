@@ -360,7 +360,7 @@ export default function ApprovalPending() {
       setCounts({
         pending: pRes.data?.stats?.total ?? 0,
         approved: aRes.data?.stats?.processed ?? 0,
-        submitted: (s.pending ?? 0) + (s.approved ?? 0) + (s.rejected ?? 0) + (s.recalled ?? 0),
+        submitted: (s.draft ?? 0) + (s.pending ?? 0) + (s.approved ?? 0) + (s.rejected ?? 0) + (s.recalled ?? 0),
       })
     } catch { /* 全局拦截器已提示 */ }
   }, [])

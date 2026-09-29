@@ -24,6 +24,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "quality.supplier_claim": FULL_ACTIONS,
         "quality.supplier_claim.archive_delete": ["delete"],
         "approval.pending": ["read"],
+        "approval.initiate": ["read"],
         "approval.config": ["read", "update"],
         "approval.business": ["read", "update"],
         "materials.mrp": ["read", "run", "review", "convert", "param"],
@@ -39,6 +40,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.occupancy": ["read"],
         "materials.mrp": ["read", "run", "review", "param"],
         "materials.purchase_requisition": ["read", "create", "update", "convert"],
+        "approval.initiate": ["read"],
     },
     "purchaser": {
         "materials.scrap_inventory": ["read"],
@@ -65,6 +67,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.occupancy": ["read"],
         "quality.supplier_claim": ["read"],
         "approval.pending": ["read"],
+        "approval.initiate": ["read"],
         "materials.mrp": ["read"],
         "materials.purchase_requisition": ["read"],
     },
@@ -75,6 +78,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.subcontract_orders": ["read"],
         "quality.supplier_claim": ["create", "read", "update"],
         "approval.pending": ["read"],
+        "approval.initiate": ["read"],
     },
     "org27_pos76": {
         "production.order_wage_lookup": ["read"],
@@ -85,6 +89,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.occupancy": ["read"],
         "quality.supplier_claim": ["read"],
         "approval.pending": ["read"],
+        "approval.initiate": ["read"],
     },
     "finance": {
         # 抽检工作台需要读取盘点单列表/详情
@@ -92,11 +97,13 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.stock_check_audit": ["read", "update"],
         "quality.supplier_claim": ["read"],
         "approval.pending": ["read"],
+        "approval.initiate": ["read"],
     },
     "general_manager": {
         # 审批详情页需读取索赔单完整单据（复用业务侧纸张视图），与其它审批节点角色一致
         "quality.supplier_claim": ["read"],
         "approval.pending": ["read"],
+        "approval.initiate": ["read"],
     },
 }
 

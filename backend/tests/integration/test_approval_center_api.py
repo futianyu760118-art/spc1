@@ -1,5 +1,7 @@
 """审批中心 API 回归测试（统一待我审批聚合 / 审批链配置 / 角色选项）。"""
 
+from datetime import date, timedelta
+
 from tests.conftest import DEFAULT_CHAIN, login
 from tests.integration._helpers import FIN, PM, Q, Q2, VIEWER, act, create, get_claim, payload, pending_items, snap_roles
 
@@ -179,6 +181,26 @@ async def test_my_approved_and_submitted_tabs(client):
 
     r = await client.get("/api/v1/approvals/approved", params={"action": "reject"}, headers=h_pm)
     assert r.json()["data"]["total"] == 0
+
+
+async def test_my_submitted_includes_draft_and_status_filter(client):
+    """草稿在「我发起的」可见：无 submitted_at 时用 created_at 入时间窗，status=draft 可筛选。"""
+    h_q = await login(client, Q)
+    draft = await create(client, h_q, 300, submit=False)
+    submitted = await create(client, h_q, 500, submit=True)
+    params = {"date_from": (date.today() - timedelta(days=90)).isoformat()}
+
+    r = await client.get("/api/v1/approvals/submitted", params=params, headers=h_q)
+    assert r.status_code == 200
+    data = r.json()["data"]
+    ids = [x["id"] for x in data["items"]]
+    assert draft["id"] in ids and submitted["id"] in ids
+    assert data["stats"]["draft"] == 1 and data["stats"]["pending"] == 1
+
+    r = await client.get("/api/v1/approvals/submitted", params={**params, "status": "draft"}, headers=h_q)
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert [x["id"] for x in data["items"]] == [draft["id"]]
 
 
 async def test_item_preview_shape_and_permission(client):

@@ -5,15 +5,18 @@ import { CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined, SearchOu
 import dayjs from 'dayjs'
 import { approvalApi, type ApprovalItem, type ApprovalStats } from '../../../services/approval'
 import { daysAgoISO } from '../../../utils'
+import { useAuthStore } from '../../../store/auth'
+import { getBusiness } from '../Create/businesses'
 import ApprovalStatsCards from '../../../components/ApprovalStatsCards'
 import type { WorkbenchTabProps } from './index'
 
-const STATUS_TEXT: Record<string, string> = { pending: '审批中', approved: '已通过', rejected: '已驳回', recalled: '已撤回' }
-const STATUS_TAG: Record<string, string> = { pending: 'sc-tag-kit', approved: 'sc-tag-done', rejected: 'sc-tag-danger', recalled: 'sc-tag-wait' }
-const STATUS_KEYS = ['pending', 'approved', 'rejected', 'recalled'] as const
+const STATUS_TEXT: Record<string, string> = { draft: '草稿', pending: '审批中', approved: '已通过', rejected: '已驳回', recalled: '已撤回' }
+const STATUS_TAG: Record<string, string> = { draft: 'sc-tag-plain', pending: 'sc-tag-kit', approved: 'sc-tag-done', rejected: 'sc-tag-danger', recalled: 'sc-tag-wait' }
+const STATUS_KEYS = ['draft', 'pending', 'approved', 'rejected', 'recalled'] as const
 
 export default function MySubmittedTab({ registerReload, onCount }: WorkbenchTabProps) {
   const navigate = useNavigate()
+  const hasPermission = useAuthStore((s) => s.hasPermission) as (resource: string, action: string) => boolean
   const [items, setItems] = useState<ApprovalItem[]>([])
   const [winStats, setWinStats] = useState<ApprovalStats>({})
   const [loading, setLoading] = useState(false)
@@ -123,17 +126,28 @@ export default function MySubmittedTab({ registerReload, onCount }: WorkbenchTab
           { title: '整体状态', width: 100, render: (_: any, r: ApprovalItem) => (
             <span className={`sc-tag ${STATUS_TAG[r.status || ''] || 'sc-tag-wait'}`}>{STATUS_TEXT[r.status || ''] || r.status}</span>
           ) },
-          { title: '操作', width: 150, fixed: 'right', render: (_: any, r: ApprovalItem) => (
-            <span className="sc-row-act">
-              <Button size="small" type="link" onClick={() => navigate(`/approvals/items/${r.biz_type}/${r.id}`)}>查看</Button>
-              {r.can_recall ? (
-                <Button size="small" type="link" danger onClick={() => setRecallTarget(r)}>撤回</Button>
-              ) : null}
-              {(r.status === 'rejected' || r.status === 'recalled') && r.deep_link ? (
-                <Button size="small" type="link" onClick={() => window.open(r.deep_link, '_self')}>重新提交</Button>
-              ) : null}
-            </span>
-          ) },
+          { title: '操作', width: 190, fixed: 'right', render: (_: any, r: ApprovalItem) => {
+            const biz = getBusiness(r.biz_type)
+            const canEdit = !!biz && hasPermission(biz.permission[0], 'update')
+            const canResubmit = r.status === 'rejected' || r.status === 'recalled'
+            const centerEditPath = `/approvals/create/${r.biz_type}/${r.id}`
+            return (
+              <span className="sc-row-act">
+                <Button size="small" type="link" onClick={() => navigate(`/approvals/items/${r.biz_type}/${r.id}`)}>查看</Button>
+                {r.can_recall ? (
+                  <Button size="small" type="link" danger onClick={() => setRecallTarget(r)}>撤回</Button>
+                ) : null}
+                {r.status === 'draft' && canEdit ? (
+                  <Button size="small" type="link" onClick={() => navigate(centerEditPath)}>编辑</Button>
+                ) : null}
+                {canResubmit && canEdit ? (
+                  <Button size="small" type="link" onClick={() => navigate(centerEditPath)}>重新提交</Button>
+                ) : canResubmit && r.deep_link ? (
+                  <Button size="small" type="link" onClick={() => window.open(r.deep_link, '_self')}>重新提交</Button>
+                ) : null}
+              </span>
+            )
+          } },
         ]} />
 
       <Modal title="撤回单据" open={!!recallTarget} confirmLoading={recalling}

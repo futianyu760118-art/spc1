@@ -93,5 +93,14 @@ class TestEnrichAndStats:
         assert stats["avg_hours"] == 3.0
 
     def test_submitted_stats(self):
-        items = [{"status": "pending"}, {"status": "approved"}, {"status": "approved"}, {"status": "unknown"}]
-        assert submitted_stats(items) == {"pending": 1, "approved": 2, "rejected": 0, "recalled": 0}
+        items = [
+            {"status": "pending"},
+            {"status": "approved"},
+            {"status": "approved"},
+            {"status": "draft"},
+            {"status": "recalled"},
+            {"status": "unknown"},
+        ]
+        assert submitted_stats(items) == {
+            "draft": 1, "pending": 1, "approved": 2, "rejected": 0, "recalled": 1,
+        }

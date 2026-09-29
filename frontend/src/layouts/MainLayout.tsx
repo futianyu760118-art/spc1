@@ -319,6 +319,7 @@ const allMenuItems: PermissionAwareItem[] = [
     permission: 'approval',
     children: [
       { key: '/approvals/pending', icon: <ClockCircleOutlined />, label: '待办工作台', permission: 'approval.pending' },
+      { key: '/approvals/create', icon: <FileTextOutlined />, label: '发起申请', permission: 'approval.initiate' },
       { key: '/approvals/configs', icon: <SettingOutlined />, label: '审批配置', permission: 'approval.config' },
     ],
   },
@@ -462,6 +463,7 @@ const pathToGroupKey: Record<string, string> = {
   '/purchase/price-change/pending': 'purchase-center',
   '/purchase/price-change/config': 'purchase-center',
   '/approvals/pending': 'approval-center',
+  '/approvals/create': 'approval-center',
   '/approvals/configs': 'approval-center',
   '/assembly': 'production-center',
   '/packaging': 'production-center',
@@ -578,6 +580,7 @@ const pathToPermission: Record<string, string> = {
   '/purchase/price-change/pending': 'purchase.price_change.pending',
   '/purchase/price-change/config': 'purchase.price_change.config',
   '/approvals/pending': 'approval.pending',
+  '/approvals/create': 'approval.initiate',
   '/approvals/configs': 'approval.config',
   '/quality/supplier-claims': 'quality.supplier_claim',
   '/quality/supplier-claims/new': 'quality.supplier_claim',
@@ -589,6 +592,7 @@ function getRequiredPermission(pathname: string, dynamicMap?: Record<string, str
   if (pathToPermission[pathname]) return pathToPermission[pathname]
   if (pathname.startsWith('/orders/')) return 'orders.list'
   if (pathname.startsWith('/stock-check/')) return 'materials.stock_check'
+  if (pathname.startsWith('/approvals/create')) return 'approval.initiate'
   return undefined
 }
 

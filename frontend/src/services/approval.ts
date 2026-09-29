@@ -36,6 +36,7 @@ export type ApprovalStats = {
   passed?: number
   rejected?: number
   avg_hours?: number | null
+  draft?: number
   pending?: number
   approved?: number
   recalled?: number

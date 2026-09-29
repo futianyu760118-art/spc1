@@ -241,7 +241,7 @@ async def list_my_submitted(
     keyword: Optional[str] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
-    status: Optional[str] = Query(None, pattern="^(pending|approved|rejected|recalled)$"),
+    status: Optional[str] = Query(None, pattern="^(draft|pending|approved|rejected|recalled)$"),
     current_user: dict = Depends(get_current_user),
     _: dict = Depends(PermissionChecker("approval.pending", "read")),
     db: AsyncSession = Depends(get_db),
@@ -261,10 +261,11 @@ async def list_my_submitted(
     items = [
         it for it in items
         if _match_keyword(it, keyword)
-        and _in_date_range(it.get("submitted_at"), win_from, win_to)
+        # 草稿无 submitted_at（未提交），入窗与排序回退创建时间，保证草稿可在「我发起的」编辑
+        and _in_date_range(it.get("submitted_at") or it.get("created_at"), win_from, win_to)
         and (not status or it.get("status") == status)
     ]
-    items.sort(key=lambda x: _sort_key(x.get("submitted_at")), reverse=True)
+    items.sort(key=lambda x: _sort_key(x.get("submitted_at") or x.get("created_at")), reverse=True)
     return ResponseModel(data={
         "items": _paginate(items, page, page_size),
         "total": len(items),

@@ -93,7 +93,7 @@ def approved_stats(items: list[dict]) -> dict:
 
 
 def submitted_stats(items: list[dict]) -> dict:
-    counts = {"pending": 0, "approved": 0, "rejected": 0, "recalled": 0}
+    counts = {"draft": 0, "pending": 0, "approved": 0, "rejected": 0, "recalled": 0}
     for it in items:
         status = it.get("status")
         if status in counts:

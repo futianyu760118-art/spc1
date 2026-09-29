@@ -358,6 +358,7 @@ declare_permission("quality.supplier_claim.archive_delete", "索赔单归档删�
 # 审批中心（2026-09-22）— 统一待我审批 + 审批链配置（新流程注册 provider 即接入）
 declare_permission("approval", "审批中心", module="approval", sort_order=14)
 declare_permission("approval.pending", "待办工作台", module="approval", parent_code="approval", route_path="/approvals/pending", sort_order=1)
+declare_permission("approval.initiate", "发起申请", module="approval", parent_code="approval", route_path="/approvals/create", sort_order=2)
 declare_permission("approval.config", "审批配置", module="approval", parent_code="approval", route_path="/approvals/configs", sort_order=2)
 # 业务接入管理不单独挂菜单路由，避免与「审批配置」菜单重复（在审批配置页内以 Tab 呈现）
 declare_permission("approval.business", "业务接入管理", module="approval", parent_code="approval",
