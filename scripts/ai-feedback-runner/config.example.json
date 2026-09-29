@@ -1,7 +1,7 @@
 {
   "base_url": "http://生产主机:18085",
-  "username": "admin",
-  "password": "请填写处理人账号密码",
+  "username": "专用处理人账号（勿用个人账号，runner 登录会使其已登录会话失效）",
+  "password": "该账号密码",
   "poll_interval_seconds": 10,
   "repo_dir": "D:/wanghuazheng/project/SPC-v2",
   "base_branch": "whz",
