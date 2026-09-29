@@ -209,10 +209,10 @@ class ApprovalCenterService:
     # ---------- 节点激活（任务展开到人 + 通知） ----------
 
     async def _activate_level(self, instance_id: int, level: int, node: dict, notify: bool = True):
-        usernames = await resolve_node_approver_usernames(self.db, node)
+        usernames = await self._normalize_approvers(await resolve_node_approver_usernames(self.db, node))
         if not usernames:
             logger.warning("[审批中心] 节点审批人解析为空 instance=%s level=%s", instance_id, level)
-        for u in sorted(usernames):
+        for u in usernames:
             await self.db.execute(text(
                 "INSERT INTO approval_task (instance_id, node_seq, node_label, role_code, approver, status)"
                 " VALUES (:iid, :lv, :lb, :rc, :ap, 'active')"),
@@ -220,6 +220,17 @@ class ApprovalCenterService:
                  "rc": node.get("role"), "ap": u})
         if notify:
             await self._notify_level(instance_id, node)
+
+    async def _normalize_approvers(self, names: set[str]) -> list[str]:
+        """解析结果会同时含 username 与 user_id 字符串（沿用旧引擎双口径）——统一折算成 username，
+        否则同一审批人会生成两条任务（user_id 那条对 username JOIN 不可见，纯冗余）。"""
+        if not names:
+            return []
+        rows = (await self.db.execute(text(
+            "SELECT username, id::text FROM sys_user WHERE username = ANY(:ns) OR id::text = ANY(:ns)"),
+            {"ns": list(names)})).fetchall()
+        uid_to_name = {uid: username for username, uid in rows}
+        return sorted({uid_to_name.get(n, n) for n in names})
 
     async def _notify_level(self, instance_id: int, node: dict):
         inst = await self._instance_row(instance_id)

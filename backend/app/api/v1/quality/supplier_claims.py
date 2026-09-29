@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.security import PermissionChecker, oauth2_scheme, decode_access_token
 from app.schemas.common import ResponseModel
 from app.services.common.export_service import GenericExportService, ExportColumn
+from app.services.common.approval_center_service import ApprovalConflictError
 from app.services.common.approval_providers import CLAIM_REASON_LABELS
 from app.services.quality.supplier_claim_service import SupplierClaimService, CLAIM_ITEM_LABELS
 
@@ -246,10 +247,15 @@ async def approve_claim(
     db: AsyncSession = Depends(get_db),
 ):
     service = SupplierClaimService(db)
-    result = await service.approve(
-        claim_id, user["username"], data.get("comment", ""),
-        approver_role=user["role"], expected_version=data.get("expected_version"),
-    )
+    try:
+        result = await service.approve(
+            claim_id, user["username"], data.get("comment", ""),
+            approver_role=user["role"], expected_version=data.get("expected_version"),
+        )
+    except ApprovalConflictError as e:
+        # 写后冲突：回滚防孤儿流水，按业务错误返回而不是 500
+        await db.rollback()
+        return ResponseModel(code=1, message=str(e))
     if not result["success"]:
         return ResponseModel(code=1, message=result["message"])
     await db.commit()
@@ -268,10 +274,14 @@ async def reject_claim(
     db: AsyncSession = Depends(get_db),
 ):
     service = SupplierClaimService(db)
-    result = await service.reject(
-        claim_id, user["username"], data.get("comment", ""),
-        approver_role=user["role"], expected_version=data.get("expected_version"),
-    )
+    try:
+        result = await service.reject(
+            claim_id, user["username"], data.get("comment", ""),
+            approver_role=user["role"], expected_version=data.get("expected_version"),
+        )
+    except ApprovalConflictError as e:
+        await db.rollback()
+        return ResponseModel(code=1, message=str(e))
     if not result["success"]:
         return ResponseModel(code=1, message=result["message"])
     await db.commit()
@@ -288,6 +298,9 @@ async def recall_claim(
     service = SupplierClaimService(db)
     try:
         ok = await service.recall(claim_id, user["username"], caller_role=user["role"])
+    except ApprovalConflictError as e:
+        await db.rollback()
+        return ResponseModel(code=1, message=str(e))
     except ValueError as e:
         return ResponseModel(code=1, message=str(e))
     if not ok:

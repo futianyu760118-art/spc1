@@ -151,3 +151,45 @@ async def test_declarative_business_full_cycle(client, db):
         assert st == "2"  # 回写映射生效
     finally:
         await _drop_pay_business(db)
+
+
+async def _center_counts(db, biz_type: str, biz_id: int) -> tuple[int, int, int]:
+    row = (await db.execute(text(
+        "SELECT (SELECT COUNT(*) FROM approval_instance WHERE biz_type=:bt AND biz_id=:bid),"
+        " (SELECT COUNT(*) FROM approval_task t JOIN approval_instance i ON i.id=t.instance_id"
+        "  WHERE i.biz_type=:bt AND i.biz_id=:bid),"
+        " (SELECT COUNT(*) FROM approval_record r JOIN approval_instance i ON i.id=r.instance_id"
+        "  WHERE i.biz_type=:bt AND i.biz_id=:bid)"),
+        {"bt": biz_type, "bid": biz_id})).fetchone()
+    return row[0], row[1], row[2]
+
+
+async def test_migrate_script_recovers_legacy_and_is_idempotent(client, db):
+    """存量迁移：业务表有审批列、中心无实例的旧数据 → 导入恢复在途可见性；重跑幂等。"""
+    from migrate_approval_center import main as migrate_main
+    h_q = await login(client, Q)
+    claim = await _submit_claim(client, h_q)
+    cid = claim["id"]
+    # 模拟存量状态：抹掉中心三表，回填一条旧引擎时代的 submit 日志
+    await db.execute(text("DELETE FROM approval_record"))
+    await db.execute(text("DELETE FROM approval_task"))
+    await db.execute(text("DELETE FROM approval_instance"))
+    await db.execute(text(
+        "INSERT INTO supplier_claim_approval_log (claim_id, approval_level, approver, action, comment, operated_at)"
+        " VALUES (:c, NULL, :ap, 'submit', '提交审批', NOW())"), {"c": cid, "ap": Q})
+    await db.commit()
+    pm = await login(client, PM)
+    r = await client.get("/api/v1/approvals/pending", headers=pm)
+    assert not any(it["id"] == cid for it in r.json()["data"]["items"])  # 中心无实例 → 待办消失
+
+    await migrate_main()
+    instances, tasks, records = await _center_counts(db, "supplier_claim", cid)
+    assert instances == 1 and tasks == 1 and records == 1  # 实例 + L1 任务（qa_pm）+ 旧日志导入
+
+    await migrate_main()
+    assert await _center_counts(db, "supplier_claim", cid) == (instances, tasks, records)  # 幂等
+
+    r = await client.get("/api/v1/approvals/pending", headers=pm)
+    assert any(it["id"] == cid and it["can_act"] for it in r.json()["data"]["items"])  # 在途恢复
+    r = await client.get(f"/api/v1/approvals/items/supplier_claim/{cid}", headers=pm)
+    assert any(lg["action"] == "submit" for lg in r.json()["data"]["logs"])  # 历史可查
