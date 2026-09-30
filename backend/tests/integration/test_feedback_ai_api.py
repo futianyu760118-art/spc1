@@ -1,5 +1,7 @@
 """问题反馈 AI 自动实现 API 状态机测试（ai-queue / ai-claim / ai-progress / ai-finish）。"""
 
+import asyncio
+
 from tests.conftest import login
 
 
@@ -339,3 +341,58 @@ async def test_requeue_clears_progress_and_finish_keeps_it(client):
     assert data["ai_stage_started_at"] is None
     assert len(data["ai_progress"]) == 1
     assert data["ai_progress"][0]["stage"] == "gate_backend"
+
+
+async def test_ai_queue_wait_returns_existing(client):
+    headers = await login(client, "admin")
+    fb = await _create_feedback(client, headers, title="等待-已有任务")
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+
+    r = await client.get(
+        "/api/v1/basicdata/feedback/ai-queue-wait",
+        params={"timeout_seconds": 5},
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0
+    assert body["data"]["ids"] == [fb["id"]]
+
+
+async def test_ai_queue_wait_wakes_on_dispatch(client):
+    headers = await login(client, "admin")
+    fb = await _create_feedback(client, headers, title="等待-派单唤醒")
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    wait_task = asyncio.create_task(client.get(
+        "/api/v1/basicdata/feedback/ai-queue-wait",
+        params={"timeout_seconds": 5},
+        headers=headers,
+    ))
+    await asyncio.sleep(0.2)
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    r = await wait_task
+    elapsed = loop.time() - started
+
+    assert r.json()["data"]["ids"] == [fb["id"]]
+    assert elapsed < 3  # 证明是唤醒返回而非 5s 超时兜底
+
+
+async def test_ai_queue_wait_timeout_returns_empty(client):
+    headers = await login(client, "admin")
+    r = await client.get(
+        "/api/v1/basicdata/feedback/ai-queue-wait",
+        params={"timeout_seconds": 1},
+        headers=headers,
+    )
+    assert r.json()["data"]["ids"] == []
+
+
+async def test_ai_queue_wait_requires_handle_permission(client):
+    viewer_headers = await login(client, "qa_viewer")
+    r = await client.get(
+        "/api/v1/basicdata/feedback/ai-queue-wait",
+        params={"timeout_seconds": 1},
+        headers=viewer_headers,
+    )
+    assert r.status_code == 403
