@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>供应商索赔单台账 · 品质管理原型</title>
+<link rel="stylesheet" href="../redesign/styles.css">
+<!-- PROTOTYPE — 一次性原型，非生产代码；交互由 CSS :has() + radio hack 实现，零 JS -->
+<!-- 品质管理 · 供应商索赔单 ①：KPI 带（点击即筛）+ 状态 chips 真实过滤 + 密集台账 + 聚合行
+     + 提交/删除二次确认弹窗 + 「更多筛选」空态演示 -->
+<style>
+  /* ---- 交互开关（隐藏 radio） ---- */
+  .hack { position: fixed; left: -100px; opacity: 0; pointer-events: none; }
+
+  /* ---- KPI 带（4 卡，点击即筛） ---- */
+  .kpi-band { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 12px; }
+  .kpi-band .stat-card { padding: 12px 14px; }
+  .kpi-band .stat-main { min-width: 0; }
+  .kpi-band .stat-main .value { font-size: var(--fs-20); }
+  .kpi-sub { font-size: 11px; color: var(--text-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpi-click { cursor: pointer; transition: border-color .12s, box-shadow .12s; }
+  .kpi-click:hover { border-color: var(--brand-300); box-shadow: var(--shadow-md); }
+  @media (max-width: 1180px) { .kpi-band { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+
+  /* ---- 工具栏 ---- */
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .toolbar .right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .toolbar .hint { font-size: 11.5px; color: var(--text-3); }
+
+  /* ---- 状态 chips（radio-hack 真实过滤） ---- */
+  .chip { user-select: none; }
+  body:has(#f-all:checked)      #c-all      { background: var(--brand-50); border-color: var(--brand-300); color: var(--brand-600); font-weight: 500; }
+  body:has(#f-draft:checked)    #c-draft    { background: var(--gray-100); border-color: var(--gray-300); color: var(--gray-600); font-weight: 500; }
+  body:has(#f-pending:checked)  #c-pending  { background: var(--info-bg); border-color: var(--info-bd); color: var(--info); font-weight: 500; }
+  body:has(#f-rejected:checked) #c-rejected { background: var(--danger-bg); border-color: var(--danger-bd); color: var(--danger); font-weight: 500; }
+  body:has(#f-recalled:checked) #c-recalled { background: var(--warning-bg); border-color: var(--warning-bd); color: var(--warning); font-weight: 500; }
+  body:has(#f-approved:checked) #c-approved { background: var(--success-bg); border-color: var(--success-bd); color: var(--success); font-weight: 500; }
+  body:has(#f-mine:checked)     #c-mine     { background: var(--danger-bg); border-color: var(--danger-bd); color: var(--danger); font-weight: 500; }
+  body:has(#f-draft:checked)    .tbl tbody tr:not(.r-draft)    { display: none; }
+  body:has(#f-pending:checked)  .tbl tbody tr:not(.r-pending)  { display: none; }
+  body:has(#f-rejected:checked) .tbl tbody tr:not(.r-rejected) { display: none; }
+  body:has(#f-recalled:checked) .tbl tbody tr:not(.r-recalled) { display: none; }
+  body:has(#f-approved:checked) .tbl tbody tr:not(.r-approved) { display: none; }
+  body:has(#f-mine:checked)     .tbl tbody tr:not(.r-mine)     { display: none; }
+  body:has(#f-none:checked)     .tbl tbody tr                   { display: none; }
+  body:has(#f-none:checked)     .tbl-empty                      { display: block; }
+
+  /* ---- 下拉筛选（更多筛选） ---- */
+  .dd { position: relative; }
+  .dd-menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 196px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-md); padding: 4px; display: none; z-index: 50; }
+  .dd:hover .dd-menu { display: block; }
+  .dd-menu a, .dd-menu label { display: flex; gap: 8px; align-items: center; padding: 7px 10px; border-radius: 6px; font-size: var(--fs-13); color: var(--text-2); white-space: nowrap; cursor: pointer; }
+  .dd-menu a:hover, .dd-menu label:hover { background: var(--gray-100); color: var(--text-1); }
+  .dd-menu svg { width: 14px; height: 14px; color: var(--text-3); }
+  .dd-menu .sep { height: 1px; background: var(--gray-100); margin: 4px 2px; }
+
+  /* ---- 状态 / 原因标签 ---- */
+  .tag-st-draft    { color: var(--gray-500); background: var(--gray-100); }
+  .tag-st-pending  { color: var(--info); background: var(--info-bg); }
+  .tag-st-approved { color: var(--success); background: var(--success-bg); }
+  .tag-st-rejected { color: var(--danger); background: var(--danger-bg); }
+  .tag-st-recalled { color: var(--warning); background: var(--warning-bg); }
+  .tag-reason-field   { color: var(--danger); background: var(--danger-bg); }
+  .tag-reason-supply  { color: var(--info); background: var(--info-bg); }
+
+  /* ---- 供应商组合列 ---- */
+  .ent { min-width: 200px; }
+  .ent-name { color: var(--text-1); font-weight: 500; }
+  .ent-code { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; letter-spacing: .01em; margin-top: 1px; }
+  .claim-no { font-weight: 600; }
+
+  /* ---- 索赔细项 mini 标签 ---- */
+  .itags { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .mini-tag { font-size: 10.5px; line-height: 17px; padding: 0 6px; border-radius: 4px; background: var(--gray-100); color: var(--gray-600); white-space: nowrap; }
+  .more-n { font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+  /* ---- 当前节点 / 等待 ---- */
+  .node-cell { color: var(--text-2); }
+  .node-cell.dim { color: var(--gray-400); }
+  .node-cell .rej-note { color: var(--danger); font-size: 11.5px; display: block; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---- 附件计数 ---- */
+  .att-n { display: inline-flex; align-items: center; gap: 4px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .att-n svg { width: 12px; height: 12px; }
+  .att-n.zero { color: var(--gray-300); }
+
+  /* ---- 行操作里的 label 触发器 ---- */
+  .row-actions a, .row-actions label { padding: 2px 7px; border-radius: 5px; font-size: var(--fs-12); color: var(--text-2); cursor: pointer; }
+  .row-actions a:hover, .row-actions label:hover { background: var(--gray-100); color: var(--brand-600); }
+  .row-actions .danger:hover { color: var(--danger); }
+
+  /* ---- 空态（默认隐藏，f-none 演示） ---- */
+  .tbl-empty { display: none; }
+
+  /* ---- 弹窗通用 ---- */
+  .mask-b { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 190; opacity: 0; pointer-events: none; transition: .2s; display: flex; align-items: flex-start; justify-content: center; padding-top: 9vh; }
+  body:has(#cb-submit:checked) .mask-b.m-submit,
+  body:has(#cb-del:checked)    .mask-b.m-del    { opacity: 1; pointer-events: auto; }
+  .modal { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); overflow: hidden; transform: translateY(-8px) scale(.985); transition: .2s; }
+  body:has(#cb-submit:checked) .m-submit .modal,
+  body:has(#cb-del:checked)    .m-del .modal    { transform: none; }
+  .m-submit .modal { width: 460px; max-width: 94vw; }
+  .m-del .modal { width: 420px; max-width: 94vw; }
+  .md-head { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--gray-100); }
+  .md-head h3 { font-size: var(--fs-16); font-weight: 600; }
+  .md-body { padding: 18px 20px; font-size: var(--fs-13); color: var(--text-2); line-height: 1.75; }
+  .md-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--gray-100); background: var(--gray-50); align-items: center; }
+  .chain-hint { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: var(--fs-12); color: var(--text-3); }
+  .chain-hint .nd { background: var(--gray-100); border-radius: 5px; padding: 2px 8px; color: var(--text-2); white-space: nowrap; }
+  .chain-hint svg { width: 12px; height: 12px; color: var(--gray-300); flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<!-- ============ 交互开关（勿删） ============ -->
+<input type="radio" name="flt" id="f-all" class="hack" checked>
+<input type="radio" name="flt" id="f-draft" class="hack">
+<input type="radio" name="flt" id="f-pending" class="hack">
+<input type="radio" name="flt" id="f-rejected" class="hack">
+<input type="radio" name="flt" id="f-recalled" class="hack">
+<input type="radio" name="flt" id="f-approved" class="hack">
+<input type="radio" name="flt" id="f-mine" class="hack">
+<input type="radio" name="flt" id="f-none" class="hack">
+<input type="checkbox" id="cb-submit" class="hack">
+<input type="checkbox" id="cb-del" class="hack">
+
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.2-5.5"/><path d="M4 4v4.5h4.5"/><path d="M10.5 9.2v5.6l4.8-2.8z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17.2v.1"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3.5 8 12 4l8.5 4v8L12 20l-8.5-4z"/><path d="M3.5 8 12 12l8.5-4M12 12v8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m4 13.5 8 4.2 8-4.2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+  <symbol id="i-checkc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8 12.3 2.8 2.8 5.2-5.8"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.2 2.8-4.8 5.5-4.8s4.9 1.6 5.5 4.8"/><circle cx="16.8" cy="9.5" r="2.6"/><path d="M16.4 14.8c2.3.2 3.7 1.6 4.1 3.7"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M9 19c-1.5.5-3.5.4-5-.6.6-1.4 1.6-2.3 3-2.8"/><path d="M13.5 21c-.3-1.8-.1-3.5.5-5"/><path d="M14 4.5C17 3 20.5 3.5 20.5 3.5S21 7 19.5 10c-1 2-3 4.5-5.5 6L9 12.5S11 8 14 4.5z"/><circle cx="15.5" cy="8.5" r="1.3"/></symbol>
+  <symbol id="i-cart" viewBox="0 0 24 24"><path d="M3 4.5h2.5L8 15h10.5L21 7.5H6"/><circle cx="9.5" cy="19" r="1.6"/><circle cx="17" cy="19" r="1.6"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13"/><path d="M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10.3 19a2 2 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-funnel" viewBox="0 0 24 24"><path d="M3.5 5h17l-6.5 7.5V19l-4 1.5v-8z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 3.5V8h-4.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M4.5 15v3.5A1.5 1.5 0 0 0 6 20h12a1.5 1.5 0 0 0 1.5-1.5V15"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L20 8a2.4 2.4 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6.5 7l1 13h9l1-13"/><path d="M10 11v5M14 11v5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M21.4 11.1 12.5 20a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.8-7.8"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 11.7 20.5 3.8 14 20.5l-2.6-6.6z"/><path d="M4 11.7l7.4.2M11.4 13.9l.4 6.6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.5 5 6v5c0 4.6 3 7.9 7 9.5 4-1.6 7-4.9 7-9.5V6z"/><path d="m9 11.6 2.2 2.2 4-4.4"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3.5 12.5 6 5a1.5 1.5 0 0 1 1.4-1h9.2A1.5 1.5 0 0 1 18 5l2.5 7.5V18a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/><path d="M3.5 12.5H9a3 3 0 0 0 6 0h5.5"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8M17.5 7H20M4 17h2.5M11.5 17H20"/><circle cx="14.5" cy="7" r="2"/><circle cx="8.5" cy="17" r="2"/></symbol>
+</svg>
+
+<div class="app">
+  <!-- ================= 侧栏 ================= -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">SPC</div>
+      <div class="logo-text">SPC 供应链中台<small>SUPPLY CHAIN CENTER</small></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="../redesign/dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>供应链驾驶舱</a>
+
+      <div class="nav-group-title">订单交付中心</div>
+      <a class="nav-item" href="../redesign/orders.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>订单总控台<span class="count">126</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-run"/></svg>跑单管理</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>订单风险池<span class="count hot">4</span></a>
+
+      <div class="nav-group-title">物料齐套中心</div>
+      <a class="nav-item" href="../redesign/purchase-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cal"/></svg>采购到料计划</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-box"/></svg>问题物料池<span class="count hot">7</span></a>
+      <a class="nav-item" href="../redesign/kit-analysis.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-layers"/></svg>齐套分析</a>
+
+      <div class="nav-group-title">异常与质量中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>异常总池<span class="count hot">5</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-checkc"/></svg>闭环跟踪</a>
+
+      <div class="nav-group-title">品质管理</div>
+      <a class="nav-item active" href="claims.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>供应商索赔单<span class="count hot">1</span></a>
+
+      <div class="nav-group-title">审批中心</div>
+      <a class="nav-item" href="../approval-center/workbench.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-inbox"/></svg>待办工作台<span class="count hot">12</span></a>
+      <a class="nav-item" href="../approval-center/config.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sliders"/></svg>审批配置</a>
+
+      <div class="nav-group-title">协同与项目</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>会议与任务中心<span class="ph">开发中</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rocket"/></svg>新品 / NPI 项目中心<span class="ph">开发中</span></a>
+
+      <div class="nav-group-title">规则与数据</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sliders"/></svg>规则配置中心</a>
+      <a class="nav-item" href="../redesign/basicdata.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-db"/></svg>基础数据与集成</a>
+    </nav>
+  </aside>
+
+  <!-- ================= 主区 ================= -->
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-crumb">品质管理<b>供应商索赔单</b></div>
+      <div class="topbar-actions">
+        <div class="global-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>搜索索赔单号、供应商…<kbd>Ctrl K</kbd></div>
+        <div class="icon-btn" title="消息反馈"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bell"/></svg><span class="dot"></span></div>
+        <div class="avatar-user"><div class="avatar">华</div><span class="name">王华 · 品质主管</span></div>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- KPI 带（点击即筛） -->
+      <div class="kpi-band">
+        <label class="card stat-card kpi-click" for="f-all" style="--accent:var(--brand-500); --accent-bg:var(--brand-50)">
+          <div class="stat-main">
+            <div class="label">本月索赔金额</div>
+            <div class="value">¥23,550<small>元</small></div>
+            <div class="kpi-sub">8 单 · 较上月 +12%</div>
+          </div>
+        </label>
+        <label class="card stat-card kpi-click" for="f-pending" style="--accent:var(--info); --accent-bg:var(--info-bg)">
+          <div class="stat-main">
+            <div class="label">审批中</div>
+            <div class="value">2</div>
+            <div class="kpi-sub">平均等待 1.2 天</div>
+          </div>
+        </label>
+        <label class="card stat-card kpi-click" for="f-mine" style="--accent:var(--danger); --accent-bg:var(--danger-bg)">
+          <div class="stat-main">
+            <div class="label">待我审批</div>
+            <div class="value">1</div>
+            <div class="kpi-sub">SC20260922-003 · 已超时</div>
+          </div>
+        </label>
+        <label class="card stat-card kpi-click" for="f-approved" style="--accent:var(--success); --accent-bg:var(--success-bg)">
+          <div class="stat-main">
+            <div class="label">已归档</div>
+            <div class="value">3</div>
+            <div class="kpi-sub">合计 ¥8,530</div>
+          </div>
+        </label>
+      </div>
+
+      <!-- 工具栏 -->
+      <div class="toolbar">
+        <div class="input input-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>索赔单号 / 供应商 / 申请人</div>
+        <div class="chips">
+          <label class="chip" id="c-all" for="f-all">全部 <span class="n">8</span></label>
+          <label class="chip" id="c-draft" for="f-draft">草稿 <span class="n">1</span></label>
+          <label class="chip" id="c-pending" for="f-pending">审批中 <span class="n">2</span></label>
+          <label class="chip" id="c-rejected" for="f-rejected">已驳回 <span class="n">1</span></label>
+          <label class="chip" id="c-recalled" for="f-recalled">已撤回 <span class="n">1</span></label>
+          <label class="chip" id="c-approved" for="f-approved">已归档 <span class="n">3</span></label>
+        </div>
+        <span class="hint">审批通过后按纸质单版式打印归档</span>
+        <div class="right">
+          <div class="dd">
+            <button class="btn btn-secondary btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-funnel"/></svg>更多筛选</button>
+            <div class="dd-menu">
+              <a><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cart"/></svg>供应商</a>
+              <a><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cal"/></svg>开单日期区间</a>
+              <a><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-shield"/></svg>索赔原因 / 细项</a>
+              <a><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>申请人</a>
+              <div class="sep"></div>
+              <label for="f-none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-funnel"/></svg>金额 ≥ ¥10,000（演示空态）</label>
+            </div>
+          </div>
+          <div class="icon-btn" title="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-refresh"/></svg></div>
+          <span style="width:1px; height:20px; background:var(--gray-200)"></span>
+          <button class="btn btn-secondary btn-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-export"/></svg>导出</button>
+          <a class="btn btn-primary btn-sm" href="claim-new.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><use href="#i-plus"/></svg>新建索赔单</a>
+        </div>
+      </div>
+
+      <!-- 索赔单台账 -->
+      <div class="card">
+        <div class="card-body p0 tbl-wrap">
+          <table class="tbl">
+            <thead><tr>
+              <th>索赔单号</th>
+              <th>状态</th>
+              <th>供应商</th>
+              <th>索赔原因</th>
+              <th>索赔细项</th>
+              <th class="num">索赔金额（元）</th>
+              <th>开单日期</th>
+              <th>申请人</th>
+              <th>当前节点 / 等待</th>
+              <th class="num">附件</th>
+              <th style="width:150px"></th>
+            </tr></thead>
+            <tbody>
+              <tr class="r-pending">
+                <td><a class="claim-no mono strong" href="claim-detail.html">SC20260923-004</a></td>
+                <td><span class="tag tag-st-pending"><span class="dot"></span>审批中</span></td>
+                <td class="ent"><div class="ent-name">宁波宏盛电子有限公司</div><div class="ent-code">SUP-00231</div></td>
+                <td><span class="tag tag-reason-field">现场/客户投诉</span></td>
+                <td><span class="itags"><span class="mini-tag">替代件</span><span class="mini-tag">运输</span><span class="mini-tag">人工</span></span></td>
+                <td class="num strong">3,260.00</td>
+                <td class="mono">2026-09-23</td>
+                <td>王华</td>
+                <td><span class="node-cell">上级部门意见</span> <span class="due-pill soon">6h</span></td>
+                <td class="num"><span class="att-n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>3</span></td>
+                <td><span class="row-actions"><a href="claim-detail.html">查看</a><a href="claim-detail.html">撤回</a></span></td>
+              </tr>
+              <tr class="r-pending r-mine">
+                <td><a class="claim-no mono strong" href="claim-detail.html">SC20260922-003</a></td>
+                <td><span class="tag tag-st-pending"><span class="dot"></span>审批中</span></td>
+                <td class="ent"><div class="ent-name">苏州联信精密五金有限公司</div><div class="ent-code">SUP-01087</div></td>
+                <td><span class="tag tag-reason-supply">供货业绩</span></td>
+                <td><span class="itags"><span class="mini-tag">处罚</span><span class="mini-tag">直接损失</span></span></td>
+                <td class="num strong">5,800.00</td>
+                <td class="mono">2026-09-22</td>
+                <td>陈静</td>
+                <td><span class="node-cell">索赔部门意见</span> <span class="due-pill urgent">超时 2d</span></td>
+                <td class="num"><span class="att-n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>1</span></td>
+                <td><span class="row-actions"><a href="claim-detail.html">查看</a><a href="claim-detail.html">审批</a></span></td>
+              </tr>
+              <tr class="r-draft">
+                <td><a class="claim-no mono strong" href="claim-detail.html">SC20260922-002</a></td>
+                <td><span class="tag tag-st-draft"><span class="dot"></span>草稿</span></td>
+                <td class="ent"><div class="ent-name">东莞凯博塑胶原料有限公司</div><div class="ent-code">SUP-01542</div></td>
+                <td><span class="tag tag-reason-field">现场/客户投诉</span></td>
+                <td><span class="itags"><span class="mini-tag">包装</span><span class="mini-tag">运输</span></span></td>
+                <td class="num strong">640.00</td>
+                <td class="mono">2026-09-22</td>
+                <td>王华</td>
+                <td><span class="node-cell dim">未提交</span></td>
+                <td class="num"><span class="att-n zero"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>0</span></td>
+                <td><span class="row-actions"><a href="claim-detail.html">查看</a><a href="claim-new.html">编辑</a><label for="cb-submit">提交</label><label class="danger" for="cb-del">删除</label></span></td>
+              </tr>
+              <tr class="r-approved">
+                <td><a class="claim-no mono strong" href="claim-detail.html">SC20260921-001</a></td>
+                <td><span class="tag tag-st-approved"><span class="dot"></span>已归档</span></td>
+                <td class="ent"><div class="ent-name">宁波宏盛电子有限公司</div><div class="ent-code">SUP-00231</div></td>
+                <td><span class="tag tag-reason-supply">供货业绩</span></td>
+                <td><span class="itags"><span class="mini-tag">替代件</span><span class="mini-tag">人工</span><span class="mini-tag">直接损失</span></span></td>
+                <td class="num strong">1,980.00</td>
+                <td class="mono">2026-09-19</td>
+                <td>陈静</td>
+                <td><span class="node-cell dim">归档于 09-21 14:30</span></td>
+                <td class="num"><span class="att-n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>2</span></td>
+                <td><span class="row-actions"><a href="claim-detail.html">查看</a><a href="claim-print.html">打印</a></span></td>
+              </tr>
+              <tr class="r-rejected">
+                <td><a class="claim-no mono strong" href="claim-detail.html">SC20260918-012</a></td>
+                <td><span class="tag tag-st-rejected"><span class="dot"></span>已驳回</span></td>
+                <td class="ent"><div class="ent-name">深圳华达线材有限公司</div><div class="ent-code">SUP-02288</div></td>
+                <td><span class="tag tag-reason-field">现场/客户投诉</span></td>
+                <td><span class="itags"><span class="mini-tag">处罚</span></span></td>
+                <td class="num strong">5,000.00</td>
+                <td class="mono">2026-09-18</td>
+                <td>王华</td>
+                <td><span class="node-cell"><span class="rej-note" title="金额计算依据不足，请补充工时与单价记录后重新提交">驳回：证据不足，补充后重提</span></span></td>
+                <td class="num"><span class="att-n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>4</span></td>
+                <td><span class="row-actions"><a href="claim-detail.html">查看</a><a href="claim-new.html">编辑</a><label class="danger" for="cb-del">删除</label></span></td>
+              </tr>
+              <tr class="r-approved">
+                <td><a class="claim-no mono strong" href="claim-detail.html">SC20260917-011</a></td>
+                <td><span class="tag tag-st-approved"><span class="dot"></span>已归档</span></td>
+                <td class="ent"><div class="ent-name">苏州联信精密五金有限公司</div><div class="ent-code">SUP-01087</div></td>
+                <td><span class="tag tag-reason-supply">供货业绩</span></td>
+                <td><span class="itags"><span class="mini-tag">降级使用</span><span class="mini-tag">直接损失</span></span></td>
+                <td class="num strong">2,400.00</td>
+                <td class="mono">2026-09-16</td>
+                <td>陈静</td>
+                <td><span class="node-cell dim">归档于 09-18 10:12</span></td>
+                <td class="num"><span class="att-n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>1</span></td>
+                <td><span class="row-actions"><a href="claim-detail.html">查看</a><a href="claim-print.html">打印</a></span></td>
+              </tr>
+              <tr class="r-recalled">
+                <td><a class="claim-no mono strong" href="claim-detail.html">SC20260916-010</a></td>
+                <td><span class="tag tag-st-recalled"><span class="dot"></span>已撤回</span></td>
+                <td class="ent"><div class="ent-name">东莞凯博塑胶原料有限公司</div><div class="ent-code">SUP-01542</div></td>
+                <td><span class="tag tag-reason-field">现场/客户投诉</span></td>
+                <td><span class="itags"><span class="mini-tag">额外费用</span></span></td>
+                <td class="num strong">320.00</td>
+                <td class="mono">2026-09-15</td>
+                <td>王华</td>
+                <td><span class="node-cell dim">发起人撤回 · 可重新提交</span></td>
+                <td class="num"><span class="att-n zero"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>0</span></td>
+                <td><span class="row-actions"><a href="claim-detail.html">查看</a><a href="claim-new.html">编辑</a><label class="danger" for="cb-del">删除</label></span></td>
+              </tr>
+              <tr class="r-approved">
+                <td><a class="claim-no mono strong" href="claim-detail.html">SC20260915-009</a></td>
+                <td><span class="tag tag-st-approved"><span class="dot"></span>已归档</span></td>
+                <td class="ent"><div class="ent-name">深圳华达线材有限公司</div><div class="ent-code">SUP-02288</div></td>
+                <td><span class="tag tag-reason-field">现场/客户投诉</span></td>
+                <td><span class="itags"><span class="mini-tag">替代件</span><span class="mini-tag">包装</span><span class="mini-tag">运输</span><span class="more-n">+2</span></span></td>
+                <td class="num strong">4,150.00</td>
+                <td class="mono">2026-09-14</td>
+                <td>陈静</td>
+                <td><span class="node-cell dim">归档于 09-16 16:40</span></td>
+                <td class="num"><span class="att-n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clip"/></svg>3</span></td>
+                <td><span class="row-actions"><a href="claim-detail.html">查看</a><a href="claim-print.html">打印</a></span></td>
+              </tr>
+              <tr class="aggregate">
+                <td class="lbl">本页 8 单</td>
+                <td class="lbl">审批中 2</td>
+                <td class="lbl">4 家供应商</td>
+                <td class="lbl">客诉 5 / 供货 3</td>
+                <td class="lbl"></td>
+                <td class="lbl num">合计 ¥23,550.00</td>
+                <td class="lbl"></td>
+                <td class="lbl">王华 4 / 陈静 4</td>
+                <td class="lbl">超时 1</td>
+                <td class="lbl num">14</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="tbl-empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3.5 8 12 4l8.5 4v8L12 20l-8.5-4z"/><path d="M3.5 8 12 12l8.5-4M12 12v8"/></svg>
+            <p>没有符合当前筛选条件的索赔单</p>
+            <label class="btn btn-secondary btn-sm" for="f-all" style="margin-top:10px">清除筛选</label>
+          </div>
+        </div>
+        <div class="pager">
+          <span class="total">共 8 条 · 第 1 / 1 页</span>
+          <span class="pg disabled">‹</span>
+          <span class="pg cur">1</span>
+          <span class="pg disabled">›</span>
+          <span style="margin-left:8px">20 条/页</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ============ 提交审批二次确认 ============ -->
+<div class="mask-b m-submit">
+  <label class="mask-b" for="cb-submit" style="position:absolute; inset:0; background:transparent; pointer-events:auto"></label>
+  <div class="modal">
+    <div class="md-head">
+      <h3>提交审批</h3>
+      <label class="icon-btn" for="cb-submit" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><use href="#i-x"/></svg></label>
+    </div>
+    <div class="md-body">
+      确认提交 <b class="mono" style="color:var(--text-1)">SC20260922-002</b>（东莞凯博塑胶原料 · ¥640.00）？<br>
+      提交后将冻结当前审批链快照，配置变更不再影响本单。
+      <div class="chain-hint">
+        <span class="nd">索赔部门意见</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-chev"/></svg>
+        <span class="nd" style="opacity:.55">金额 &lt; ¥1,000，跳过上级部门</span>
+      </div>
+    </div>
+    <div class="md-foot">
+      <label class="btn btn-secondary" for="cb-submit">取消</label>
+      <label class="btn btn-primary" for="cb-submit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-send"/></svg>确认提交</label>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 删除二次确认 ============ -->
+<div class="mask-b m-del">
+  <label class="mask-b" for="cb-del" style="position:absolute; inset:0; background:transparent; pointer-events:auto"></label>
+  <div class="modal">
+    <div class="md-head">
+      <h3 style="color:var(--danger)">删除索赔单</h3>
+      <label class="icon-btn" for="cb-del" style="margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><use href="#i-x"/></svg></label>
+    </div>
+    <div class="md-body">
+      确认删除 <b class="mono" style="color:var(--text-1)">SC20260922-002</b>（草稿）？<br>
+      仅本人草稿 / 已驳回 / 已撤回单可删除；已归档单删除需「归档删除」权限。
+    </div>
+    <div class="md-foot">
+      <label class="btn btn-secondary" for="cb-del">取消</label>
+      <label class="btn btn-danger" for="cb-del">确认删除</label>
+    </div>
+  </div>
+</div>
+
+<!-- 原型切换条（非设计内容） -->
+<div class="protobar">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html">品质管理总览</a>
+  <a href="claims.html" class="cur">索赔单台账</a>
+  <a href="claim-new.html">新建 / 编辑</a>
+  <a href="claim-detail.html">详情 · 审批</a>
+  <a href="claim-print.html">打印视图</a>
+  <a href="../redesign/index.html">全站原型总览</a>
+</div>
+
+</body>
+</html>

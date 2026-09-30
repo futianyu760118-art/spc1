@@ -118,22 +118,21 @@ export default function FeedbackButton() {
   return (
     <>
       <Tooltip title="问题反馈">
-        <Button
-          type="primary"
-          icon={<MessageOutlined />}
+        <div
+          className="tbv2-feedback-btn"
           onClick={openModal}
-          style={{
-            height: 36,
-            borderRadius: 10,
-            background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-            border: 'none',
-            fontWeight: 600,
-            boxShadow: '0 4px 12px rgba(99, 102, 241, 0.35)',
-            paddingInline: 14,
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              openModal()
+            }
           }}
         >
-          问题反馈
-        </Button>
+          <MessageOutlined />
+          <span>反馈</span>
+        </div>
       </Tooltip>
       <Modal
         title="提交问题反馈"

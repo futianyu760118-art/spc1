@@ -39,6 +39,18 @@ class FeedbackStatusUpdate(BaseModel):
     status: str  # pending/processing/resolved/closed
 
 
+class FeedbackAiFinish(BaseModel):
+    success: bool
+    branch: Optional[str] = None
+    summary: Optional[str] = None
+    error: Optional[str] = None
+
+
+class FeedbackAiProgress(BaseModel):
+    stage: Optional[str] = None          # 阶段 key，白名单校验
+    actions: Optional[List[str]] = None  # 动作批，单次最多 20 条
+
+
 class FeedbackOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -56,6 +68,14 @@ class FeedbackOut(BaseModel):
     submitter_id: int
     submitter_name: str
     created_at: Optional[datetime] = None
+    ai_status: Optional[str] = "none"
+    ai_branch: Optional[str] = None
+    ai_note: Optional[str] = None
+    ai_requested_by: Optional[str] = None
+    ai_requested_at: Optional[datetime] = None
+    ai_stage: Optional[str] = None
+    ai_stage_started_at: Optional[datetime] = None
+    ai_progress: Optional[List[Any]] = None
     updated_at: Optional[datetime] = None
 
 

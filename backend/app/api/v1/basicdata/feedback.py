@@ -4,7 +4,9 @@
 - 普通用户仅能查看/编辑自己的反馈
 - admin 可查看全部、回复、删除
 """
+import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -19,6 +21,8 @@ from app.models.basicdata.announcement import Notification
 from app.models.basicdata.feedback import Feedback
 from app.schemas.common import ResponseModel
 from app.schemas.basicdata.feedback import (
+    FeedbackAiFinish,
+    FeedbackAiProgress,
     FeedbackCreate,
     FeedbackListOut,
     FeedbackOut,
@@ -33,8 +37,18 @@ logger = logging.getLogger(__name__)
 
 _FEEDBACK_TYPE_LABELS = {"issue": "问题", "suggestion": "建议", "inquiry": "咨询"}
 _SEVERITY_LABELS = {"high": "高", "medium": "中", "low": "低"}
+_STATUS_LABELS = {"pending": "待处理", "processing": "处理中", "resolved": "已解决", "closed": "已关闭"}
+_NOTIFICATION_TITLE_MAX = 256
+_NOTIFICATION_CONTENT_MAX = 512
 
 router = APIRouter()
+
+
+def _clip_notification_text(text: str, limit: int) -> str:
+    """通知表 title/content 为 varchar(256/512)，超长写入会触发 500，统一截断。"""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 
 def _is_admin(user: dict) -> bool:
@@ -140,16 +154,67 @@ async def _insert_handler_notifications(db: AsyncSession, fb: Feedback) -> list[
         db.add(Notification(
             user_id=hid,
             type="feedback",
-            title=title,
-            content=content,
+            title=_clip_notification_text(title, _NOTIFICATION_TITLE_MAX),
+            content=_clip_notification_text(content, _NOTIFICATION_CONTENT_MAX),
             ref_type="feedback",
             ref_id=fb.id,
+            sender_id=fb.submitter_id,
+            sender_name=fb.submitter_name,
             priority=priority,
             is_read=False,
-            created_at=datetime.utcnow(),
         ))
     await db.flush()
     return handler_ids
+
+
+async def _insert_submitter_progress_notification(
+    db: AsyncSession, fb: Feedback, actor_user: dict, action_desc: str
+) -> Optional[int]:
+    """处理进度变化时通知提交人;提交人=操作人本人时跳过。返回提交人 user_id 或 None。"""
+    if not fb.submitter_id:
+        return None
+    if int(fb.submitter_id) == _get_user_id(actor_user):
+        return None
+    priority = "important" if fb.severity == "high" else "normal"
+    db.add(Notification(
+        user_id=fb.submitter_id,
+        type="feedback",
+        title=_clip_notification_text(
+            f"[问题反馈]您的反馈「{fb.title}」处理进度有更新", _NOTIFICATION_TITLE_MAX
+        ),
+        content=_clip_notification_text(action_desc, _NOTIFICATION_CONTENT_MAX),
+        ref_type="feedback",
+        ref_id=fb.id,
+        sender_id=_get_user_id(actor_user),
+        sender_name=actor_user.get("username"),
+        priority=priority,
+        is_read=False,
+    ))
+    await db.flush()
+    return fb.submitter_id
+
+
+# ---------- AI 派单等待（长轮询） ----------
+_AI_QUEUE_WAIT_DEFAULT_SECONDS = 20
+_AI_QUEUE_WAIT_MAX_IDS = 10
+_AI_QUEUE_WAIT_RECHECK_SECONDS = 1.0
+_queue_waiters: set[asyncio.Event] = set()
+
+
+def notify_queue_waiters() -> None:
+    """派单提交后唤醒所有等待中的长轮询请求（毫秒级送达 runner）。"""
+    for waiter in list(_queue_waiters):
+        waiter.set()
+
+
+async def _list_queued_ids(db: AsyncSession, limit: int) -> list[int]:
+    rows = (await db.execute(
+        select(Feedback.id)
+        .where(Feedback.ai_status == "queued")
+        .order_by(Feedback.created_at.asc())
+        .limit(limit)
+    )).scalars().all()
+    return [int(row) for row in rows]
 
 
 # ---------- 列表 ----------
@@ -160,6 +225,7 @@ async def list_feedback(
     type: Optional[str] = None,
     severity: Optional[str] = None,
     status: Optional[str] = None,
+    ai_status: Optional[str] = Query(None, description="AI 实现状态筛选，逗号分隔"),
     keyword: Optional[str] = None,
     sort_by: Optional[str] = Query(None, description="排序字段"),
     sort_order: Optional[str] = Query(None, description="排序方向 asc/desc"),
@@ -193,6 +259,10 @@ async def list_feedback(
         statuses = [s.strip() for s in status.split(",") if s.strip()]
         if statuses:
             conds.append(Feedback.status.in_(statuses))
+    if ai_status:
+        ai_statuses = [s.strip() for s in ai_status.split(",") if s.strip()]
+        if ai_statuses:
+            conds.append(Feedback.ai_status.in_(ai_statuses))
     if keyword:
         like = f"%{keyword}%"
         conds.append(or_(
@@ -248,6 +318,43 @@ async def list_feedback(
         "page_size": page_size,
         "stats": stats,
     })
+
+
+@router.get("/ai-queue-wait", response_model=ResponseModel[dict])
+async def ai_queue_wait(
+    timeout_seconds: float = Query(_AI_QUEUE_WAIT_DEFAULT_SECONDS, ge=1, le=30),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """长轮询等待待派反馈：有任务立即返回，无任务挂起至多 timeout_seconds。
+
+    注意：本路由必须声明在 `GET /{feedback_id}` 之前，否则会被 int 路径参数吞掉。
+    """
+    if not _can_handle(current_user):
+        raise HTTPException(status_code=403, detail="无权处理反馈")
+
+    waiter = asyncio.Event()
+    _queue_waiters.add(waiter)
+    try:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            ids = await _list_queued_ids(db, _AI_QUEUE_WAIT_MAX_IDS)
+            await db.rollback()  # 只读事务结束，长轮询不占用连接
+            if ids:
+                return ResponseModel(data={"ids": ids})
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return ResponseModel(data={"ids": []})
+            try:
+                await asyncio.wait_for(
+                    waiter.wait(),
+                    timeout=min(_AI_QUEUE_WAIT_RECHECK_SECONDS, remaining),
+                )
+            except asyncio.TimeoutError:
+                pass
+            waiter.clear()
+    finally:
+        _queue_waiters.discard(waiter)
 
 
 # ---------- 详情 ----------
@@ -394,8 +501,29 @@ async def reply_feedback(
     elif body.reply and fb.status == "pending":
         fb.status = "resolved"
 
+    # 通知提交人处理进度(失败只记日志,不影响回复)
+    notified_uid: Optional[int] = None
+    try:
+        parts = []
+        if body.reply:
+            parts.append(f"处理人 {current_user.get('username')} 回复:{body.reply}")
+        if body.status:
+            parts.append(f"状态更新为「{_STATUS_LABELS.get(body.status, body.status)}」")
+        if not parts:
+            parts.append("处理进度有更新")
+        notified_uid = await _insert_submitter_progress_notification(
+            db, fb, current_user, ";".join(parts)
+        )
+    except Exception as e:
+        logger.warning(f"[feedback] 插入提交人进度通知失败 feedback_id={fb.id}: {e}")
+
     await db.commit()
     await db.refresh(fb)
+    if notified_uid:
+        try:
+            await publish_unread_update(db, notified_uid)
+        except Exception as e:
+            logger.warning(f"[feedback] SSE 推送失败 feedback_id={fb.id}: {e}")
     return ResponseModel(data=FeedbackOut.model_validate(fb))
 
 
@@ -431,8 +559,231 @@ async def update_status(
             raise HTTPException(status_code=403, detail="无权变更为该状态")
         fb.status = body.status
 
+    # 通知提交人处理进度(仅处理人操作时;提交人自己 close/重开不通知)
+    notified_uid: Optional[int] = None
+    if _can_handle(current_user):
+        try:
+            notified_uid = await _insert_submitter_progress_notification(
+                db, fb, current_user,
+                f"处理人 {current_user.get('username')} 将状态更新为「{_STATUS_LABELS.get(body.status, body.status)}」",
+            )
+        except Exception as e:
+            logger.warning(f"[feedback] 插入提交人进度通知失败 feedback_id={fb.id}: {e}")
+
     await db.commit()
     await db.refresh(fb)
+    if notified_uid:
+        try:
+            await publish_unread_update(db, notified_uid)
+        except Exception as e:
+            logger.warning(f"[feedback] SSE 推送失败 feedback_id={fb.id}: {e}")
+    return ResponseModel(data=FeedbackOut.model_validate(fb))
+
+
+# ---------- AI 自动实现（派单 / 认领 / 回写） ----------
+_AI_TERMINAL_STATUSES = ("resolved", "closed")
+_AI_STAGE_LABELS = {
+    "preparing": "准备隔离环境",
+    "fetching": "下载附件",
+    "agent": "AI 修改代码",
+    "gate_backend": "后端测试",
+    "gate_frontend": "前端构建",
+    "committing": "提交代码",
+}
+_AI_PROGRESS_MAX_ENTRIES = 50
+_AI_PROGRESS_MAX_ACTIONS_PER_POST = 20
+_AI_PROGRESS_ACTION_MAX_LEN = 200
+
+
+@router.post("/{feedback_id}/ai-queue", response_model=ResponseModel[FeedbackOut])
+async def ai_queue_feedback(
+    feedback_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """处理人派单：none/failed/running → queued；已解决/已关闭不允许派单。"""
+    if not _can_handle(current_user):
+        raise HTTPException(status_code=403, detail="无权处理反馈")
+
+    fb = (await db.execute(
+        select(Feedback).where(Feedback.id == feedback_id).with_for_update()
+    )).scalar_one_or_none()
+    if not fb:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    if fb.status in _AI_TERMINAL_STATUSES:
+        raise HTTPException(status_code=400, detail="已解决/已关闭的反馈不能派单")
+    if fb.ai_status == "queued":
+        raise HTTPException(status_code=400, detail="该反馈已在 AI 排队中")
+    if fb.ai_status == "done":
+        raise HTTPException(status_code=400, detail="该反馈已由 AI 实现，如需重做请先清理分支")
+
+    fb.ai_status = "queued"
+    fb.ai_progress = None
+    fb.ai_stage = None
+    fb.ai_stage_started_at = None
+    fb.ai_requested_by = current_user.get("username")
+    fb.ai_requested_at = datetime.now()
+    if fb.status == "pending":
+        fb.status = "processing"
+
+    await db.commit()
+    await db.refresh(fb)
+    notify_queue_waiters()
+    return ResponseModel(data=FeedbackOut.model_validate(fb))
+
+
+@router.post("/{feedback_id}/ai-cancel", response_model=ResponseModel[FeedbackOut])
+async def ai_cancel_feedback(
+    feedback_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """处理人撤回排队：仅 queued → none。"""
+    if not _can_handle(current_user):
+        raise HTTPException(status_code=403, detail="无权处理反馈")
+
+    fb = (await db.execute(
+        select(Feedback).where(Feedback.id == feedback_id).with_for_update()
+    )).scalar_one_or_none()
+    if not fb:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    if fb.ai_status != "queued":
+        raise HTTPException(status_code=400, detail="仅排队中的反馈可取消")
+
+    fb.ai_status = "none"
+    await db.commit()
+    await db.refresh(fb)
+    return ResponseModel(data=FeedbackOut.model_validate(fb))
+
+
+@router.post("/{feedback_id}/ai-claim", response_model=ResponseModel[FeedbackOut])
+async def ai_claim_feedback(
+    feedback_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Runner 原子认领：仅 queued → running；已被认领返回 409。"""
+    if not _can_handle(current_user):
+        raise HTTPException(status_code=403, detail="无权处理反馈")
+
+    fb = (await db.execute(
+        select(Feedback).where(Feedback.id == feedback_id).with_for_update()
+    )).scalar_one_or_none()
+    if not fb:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    if fb.ai_status != "queued":
+        raise HTTPException(status_code=409, detail=f"反馈当前状态为 {fb.ai_status}，无法认领")
+
+    fb.ai_status = "running"
+    await db.commit()
+    await db.refresh(fb)
+    return ResponseModel(data=FeedbackOut.model_validate(fb))
+
+
+@router.post("/{feedback_id}/ai-progress", response_model=ResponseModel[dict])
+async def ai_progress_feedback(
+    feedback_id: int,
+    body: FeedbackAiProgress,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Runner 上报执行进度：仅 running 接受；stage 白名单；动作截断并裁剪历史。"""
+    if not _can_handle(current_user):
+        raise HTTPException(status_code=403, detail="无权处理反馈")
+
+    fb = (await db.execute(
+        select(Feedback).where(Feedback.id == feedback_id).with_for_update()
+    )).scalar_one_or_none()
+    if not fb:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    if fb.ai_status != "running":
+        raise HTTPException(status_code=409, detail=f"反馈当前状态为 {fb.ai_status}，拒绝上报进度")
+
+    actions: list[str] = []
+    for raw in body.actions or []:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        actions.append(text[:_AI_PROGRESS_ACTION_MAX_LEN])
+        if len(actions) >= _AI_PROGRESS_MAX_ACTIONS_PER_POST:
+            break
+    if not body.stage and not actions:
+        raise HTTPException(status_code=400, detail="stage 和 actions 至少填一项")
+    if body.stage and body.stage not in _AI_STAGE_LABELS:
+        raise HTTPException(status_code=400, detail=f"非法阶段: {body.stage}")
+
+    entries = list(fb.ai_progress or [])
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    if body.stage:
+        fb.ai_stage = body.stage
+        fb.ai_stage_started_at = datetime.now()
+        entries.append({
+            "at": now_iso,
+            "kind": "stage",
+            "stage": body.stage,
+            "text": _AI_STAGE_LABELS[body.stage],
+        })
+    for text in actions:
+        entries.append({"at": now_iso, "kind": "action", "stage": fb.ai_stage, "text": text})
+    fb.ai_progress = entries[-_AI_PROGRESS_MAX_ENTRIES:]
+
+    await db.commit()
+    await db.refresh(fb)
+    return ResponseModel(data={"ai_status": fb.ai_status, "ai_stage": fb.ai_stage})
+
+
+@router.post("/{feedback_id}/ai-finish", response_model=ResponseModel[FeedbackOut])
+async def ai_finish_feedback(
+    feedback_id: int,
+    body: FeedbackAiFinish,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Runner 回写实现结果：仅 running 可写入；自动回复并通知提交人。"""
+    if not _can_handle(current_user):
+        raise HTTPException(status_code=403, detail="无权处理反馈")
+
+    fb = (await db.execute(
+        select(Feedback).where(Feedback.id == feedback_id).with_for_update()
+    )).scalar_one_or_none()
+    if not fb:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    if fb.ai_status != "running":
+        raise HTTPException(status_code=409, detail=f"反馈当前状态为 {fb.ai_status}，拒绝回写")
+
+    if body.success:
+        fb.ai_status = "done"
+        fb.ai_branch = body.branch
+        fb.ai_note = body.summary
+        reply_text = (
+            f"【AI 自动实现待审核】分支：{body.branch or '—'}。\n"
+            f"验证说明：{body.summary or '已通过自动门禁'}。\n"
+            "请在开发机审核 diff 并合入后再更新本反馈状态。"
+        )
+    else:
+        fb.ai_status = "failed"
+        fb.ai_note = body.error
+        reply_text = f"【AI 自动实现失败】{body.error or '未知原因'}。修改反馈后可点击「重试」。"
+
+    fb.ai_stage = None
+    fb.ai_stage_started_at = None
+    fb.reply = reply_text
+    fb.replied_by = "AI Runner"
+    fb.replied_at = datetime.now()
+
+    notified_uid: Optional[int] = None
+    try:
+        notified_uid = await _insert_submitter_progress_notification(db, fb, current_user, reply_text)
+    except Exception as e:
+        logger.warning(f"[feedback] AI 结果通知提交人失败 feedback_id={fb.id}: {e}")
+
+    await db.commit()
+    await db.refresh(fb)
+    if notified_uid:
+        try:
+            await publish_unread_update(db, notified_uid)
+        except Exception as e:
+            logger.warning(f"[feedback] SSE 推送失败 feedback_id={fb.id}: {e}")
     return ResponseModel(data=FeedbackOut.model_validate(fb))
 
 

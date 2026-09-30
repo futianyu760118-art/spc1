@@ -18,3 +18,9 @@ from . import human_resources  # noqa: F401
 from . import inventory  # noqa: F401
 from . import warehouse  # noqa: F401
 from . import production_task_orders  # noqa: F401
+from . import production_coordination  # noqa: F401
+from . import process_data  # noqa: F401
+from . import material_kitting  # noqa: F401
+from . import inventory_availability  # noqa: F401
+from . import material_supplies  # noqa: F401
+
