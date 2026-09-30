@@ -13,6 +13,7 @@ import { useSearchParams } from 'react-router-dom'
 import KpiBand, { type KpiItem } from '../components/KpiBand'
 import ChipsFilter, { type ChipOption } from '../components/ChipsFilter'
 import BdDrawer, { DrawerSection, KvGrid } from '../components/BdDrawer'
+import Markdown from '../../../components/Markdown'
 
 const typeMeta: Record<string, { label: string; cls: string }> = {
   issue: { label: '问题', cls: 'sc-tag-danger' },
@@ -544,7 +545,9 @@ export default function FeedbackManagement() {
                   <Operator name={detail.replied_by} />
                   <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 12px', flex: 1, minWidth: 0 }}>
                     <div className="sys-op-sub">{detail.replied_at ? dayjs(detail.replied_at).format('YYYY-MM-DD HH:mm') : ''}</div>
-                    <div style={{ whiteSpace: 'pre-wrap', fontSize: 'calc(13.5px * var(--font-size-scale))', color: '#0f172a', marginTop: 4, lineHeight: 1.7 }}>{detail.reply}</div>
+                    <div style={{ whiteSpace: 'pre-wrap', fontSize: 'calc(13.5px * var(--font-size-scale))', color: '#0f172a', marginTop: 4, lineHeight: 1.7 }}>
+                      <Markdown>{detail.reply}</Markdown>
+                    </div>
                   </div>
                 </div>
               </DrawerSection>
@@ -553,7 +556,7 @@ export default function FeedbackManagement() {
             {canHandle && (
               <DrawerSection title="回复提交人（可同步状态）">
                 <Form form={replyForm} layout="vertical">
-                  <Form.Item name="reply" label="回复内容" extra="留空则仅更新状态">
+                  <Form.Item name="reply" label="回复内容" extra="支持 Markdown 格式（粗体 / 列表 / 代码等）；留空则仅更新状态">
                     <Input.TextArea rows={4} maxLength={2000} showCount placeholder="请填写处理结论或回复内容…" />
                   </Form.Item>
                   <Form.Item name="status" label="同步设置状态">
