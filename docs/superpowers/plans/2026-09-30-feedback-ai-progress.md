@@ -448,9 +448,9 @@ PROGRESS_FLUSH_SECONDS = 5.0
 PROGRESS_MAX_ACTIONS_PER_POST = 20
 ```
 
-- [ ] **Step 2: 清理 run_command 的 input_text 参数**
+- [ ] **Step 2: （input_text 清理已移至 B2）**
 
-`invoke_claude` 改造后将不再使用参数输入。把 `run_command` 签名中的 `input_text=None, ` 删除，并把函数体里的 `input=input_text,` 行删除。
+`run_command` 的 `input_text` 参数清理与 `invoke_claude` 重写强耦合（避免本提交运行期断裂），合并到 Task B2 Step 2 一起执行。
 
 - [ ] **Step 3: ApiClient 加 progress 方法**
 
@@ -609,9 +609,9 @@ def _parse_stream_line(line: str) -> dict | None:
     return None
 ```
 
-- [ ] **Step 2: 重写 invoke_claude**
+- [ ] **Step 2: 重写 invoke_claude（同时清理 run_command 的 input_text）**
 
-把现有 `invoke_claude` 函数整体替换为：
+把现有 `invoke_claude` 函数整体替换为下方代码；同时删除 `run_command` 签名中的 `input_text=None, ` 与函数体里的 `input=input_text,`（本步重写后已无调用点）。
 
 ```python
 def _kill_process_tree(proc: subprocess.Popen) -> None:
