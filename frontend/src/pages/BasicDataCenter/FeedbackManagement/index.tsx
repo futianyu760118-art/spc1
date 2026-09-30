@@ -39,6 +39,23 @@ const aiStatusMeta: Record<string, { label: string; cls: string }> = {
   failed: { label: '失败', cls: 'sc-tag-danger' },
 }
 
+const aiStageMeta: Record<string, { label: string }> = {
+  preparing: { label: '准备隔离环境' },
+  fetching: { label: '下载附件' },
+  agent: { label: 'AI 修改代码' },
+  gate_backend: { label: '后端测试' },
+  gate_frontend: { label: '前端构建' },
+  committing: { label: '提交代码' },
+}
+
+const stageEntries = (list?: any[]) => (list || []).filter((e: any) => e?.kind === 'stage')
+const actionEntries = (list?: any[]) => (list || []).filter((e: any) => e?.kind === 'action')
+const fmtClock = (t?: string | null) => (t ? dayjs(t).format('HH:mm:ss') : '')
+const elapsedMinutes = (from?: string | null) => {
+  if (!from) return 0
+  return Math.max(0, dayjs().diff(dayjs(from), 'minute'))
+}
+
 const STATUS_CLS = (k?: string) => (k ? statusMeta[k]?.cls || 'sc-tag-plain' : 'sc-tag-plain')
 const STATUS_LBL = (k?: string) => (k ? statusMeta[k]?.label || k : '—')
 
@@ -102,6 +119,8 @@ export default function FeedbackManagement() {
 
   // 页面高度约束在视口内（同 Inventory / ScrapInventory 模式），表格体内部滚动，窗口不出滚动条
   const tableWrapRef = useRef<HTMLDivElement | null>(null)
+  const actionBoxRef = useRef<HTMLDivElement | null>(null)
+  const [, setProgressTick] = useState(0)
   const scrollY = useTableScrollY(tableWrapRef, [data.length, pagination.total])
 
   const fetchData = async (
@@ -125,7 +144,9 @@ export default function FeedbackManagement() {
       if (sortInfo.sort_by) params.sort_by = sortInfo.sort_by
       if (sortInfo.sort_order) params.sort_order = sortInfo.sort_order
       const res: any = await feedbackApi.list(params)
-      setData(res.data?.items || [])
+      const items = res.data?.items || []
+      setData(items)
+      setDetail((prev: any) => (prev ? items.find((i: any) => i.id === prev.id) || prev : prev))
       setStats(res.data?.stats || stats)
       setPagination({ current: res.data?.page || 1, pageSize: res.data?.page_size || 20, total: res.data?.total || 0 })
     } catch {
@@ -174,6 +195,19 @@ export default function FeedbackManagement() {
     const timer = setInterval(() => { fetchData() }, 15000)
     return () => clearInterval(timer)
   }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // AI 执行中：当前阶段耗时每 30s 重算
+  useEffect(() => {
+    if (detail?.ai_status !== 'running') return
+    const timer = setInterval(() => setProgressTick(t => t + 1), 30000)
+    return () => clearInterval(timer)
+  }, [detail?.ai_status, detail?.ai_stage]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 动作列表更新时自动滚到底部
+  useEffect(() => {
+    const el = actionBoxRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [detail?.ai_progress?.length, detail?.ai_stage])
 
   const handleReply = async () => {
     try {
