@@ -18,6 +18,14 @@ async def _create_feedback(client, headers, **overrides):
     return body["data"]
 
 
+async def _queue_and_claim(client, headers, **overrides):
+    fb = await _create_feedback(client, headers, **overrides)
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    r = await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-claim", headers=headers)
+    assert r.json()["data"]["ai_status"] == "running"
+    return fb
+
+
 async def test_ai_queue_and_cancel(client):
     headers = await login(client, "admin")
     fb = await _create_feedback(client, headers, title="派单与取消")
@@ -207,3 +215,112 @@ async def test_reply_with_long_text_clips_notification(client):
     body = r.json()
     assert body["code"] == 0
     assert body["data"]["reply"].startswith("处理结论")
+
+
+async def test_ai_progress_requires_running(client):
+    headers = await login(client, "admin")
+    fb = await _create_feedback(client, headers, title="进度-未认领")
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={"stage": "agent"},
+        headers=headers,
+    )
+    assert r.status_code == 409
+
+
+async def test_ai_progress_stage_and_actions(client):
+    headers = await login(client, "admin")
+    fb = await _queue_and_claim(client, headers, title="进度-阶段与动作")
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={"stage": "agent", "actions": ["读取 a.tsx", "修改 a.tsx"]},
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0
+    assert body["data"]["ai_stage"] == "agent"
+
+    r = await client.get(f"/api/v1/basicdata/feedback/{fb['id']}", headers=headers)
+    data = r.json()["data"]
+    assert data["ai_stage"] == "agent"
+    assert data["ai_stage_started_at"] is not None
+    assert [e["kind"] for e in data["ai_progress"]] == ["stage", "action", "action"]
+    assert data["ai_progress"][0]["text"] == "AI 修改代码"
+    assert data["ai_progress"][2]["stage"] == "agent"
+
+
+async def test_ai_progress_validation_and_trim(client):
+    headers = await login(client, "admin")
+    fb = await _queue_and_claim(client, headers, title="进度-校验与裁剪")
+
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={"stage": "unknown"},
+        headers=headers,
+    )
+    assert r.status_code == 400
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={"actions": ["   "]},
+        headers=headers,
+    )
+    assert r.status_code == 400
+
+    long_text = "x" * 500
+    for _ in range(3):
+        r = await client.post(
+            f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+            json={"actions": [long_text] * 30},
+            headers=headers,
+        )
+        assert r.json()["code"] == 0
+    r = await client.get(f"/api/v1/basicdata/feedback/{fb['id']}", headers=headers)
+    entries = r.json()["data"]["ai_progress"]
+    assert len(entries) == 50
+    assert len(entries[-1]["text"]) == 200
+
+
+async def test_ai_progress_requires_handle_permission(client):
+    admin_headers = await login(client, "admin")
+    viewer_headers = await login(client, "qa_viewer")
+    fb = await _create_feedback(client, admin_headers, title="进度-权限")
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={"stage": "agent"},
+        headers=viewer_headers,
+    )
+    assert r.status_code == 403
+
+
+async def test_requeue_clears_progress_and_finish_keeps_it(client):
+    headers = await login(client, "admin")
+    fb = await _queue_and_claim(client, headers, title="进度-重排与完成")
+    await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={"stage": "agent", "actions": ["修改 a.tsx"]},
+        headers=headers,
+    )
+
+    r = await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    data = r.json()["data"]
+    assert data["ai_status"] == "queued"
+    assert data["ai_progress"] is None
+    assert data["ai_stage"] is None
+
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-claim", headers=headers)
+    await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={"stage": "gate_backend"},
+        headers=headers,
+    )
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={"success": True, "branch": f"ai-feedback/{fb['id']}", "summary": "ok"},
+        headers=headers,
+    )
+    data = r.json()["data"]
+    assert data["ai_status"] == "done"
+    assert data["ai_stage"] is None
+    assert data["ai_stage_started_at"] is None
+    assert len(data["ai_progress"]) == 1
+    assert data["ai_progress"][0]["stage"] == "gate_backend"
