@@ -516,8 +516,11 @@ def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path,
         watchdog.daemon = True
         watchdog.start()
         try:
-            proc.stdin.write(prompt)
-            proc.stdin.close()
+            try:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            except OSError:
+                pass  # stdin 提前断开（CLI 未读输入即退出），交由退出码/输出判定
             for line in proc.stdout:
                 output_file.write(line)
                 payload = _parse_stream_line(line)
