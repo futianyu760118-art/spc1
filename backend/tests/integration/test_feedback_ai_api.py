@@ -348,17 +348,24 @@ async def test_ai_queue_wait_returns_existing(client):
     fb = await _create_feedback(client, headers, title="等待-已有任务")
     await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
 
+    loop = asyncio.get_running_loop()
+    started = loop.time()
     r = await client.get(
         "/api/v1/basicdata/feedback/ai-queue-wait",
         params={"timeout_seconds": 5},
         headers=headers,
     )
+    elapsed = loop.time() - started
     body = r.json()
     assert body["code"] == 0
     assert body["data"]["ids"] == [fb["id"]]
+    assert elapsed < 2  # 已有排队任务时不挂起
 
 
-async def test_ai_queue_wait_wakes_on_dispatch(client):
+async def test_ai_queue_wait_wakes_on_dispatch(client, monkeypatch):
+    from app.api.v1.basicdata import feedback as feedback_api
+    monkeypatch.setattr(feedback_api, "_AI_QUEUE_WAIT_RECHECK_SECONDS", 30.0)
+
     headers = await login(client, "admin")
     fb = await _create_feedback(client, headers, title="等待-派单唤醒")
 
@@ -380,12 +387,18 @@ async def test_ai_queue_wait_wakes_on_dispatch(client):
 
 async def test_ai_queue_wait_timeout_returns_empty(client):
     headers = await login(client, "admin")
+    loop = asyncio.get_running_loop()
+    started = loop.time()
     r = await client.get(
         "/api/v1/basicdata/feedback/ai-queue-wait",
         params={"timeout_seconds": 1},
         headers=headers,
     )
-    assert r.json()["data"]["ids"] == []
+    elapsed = loop.time() - started
+    body = r.json()
+    assert body["code"] == 0
+    assert body["data"]["ids"] == []
+    assert elapsed >= 0.9  # 证明真的挂起了 1 秒而非立即返回
 
 
 async def test_ai_queue_wait_requires_handle_permission(client):
