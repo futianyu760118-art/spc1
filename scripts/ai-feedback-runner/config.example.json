@@ -14,12 +14,15 @@
   },
   "claude": {
     "command": "claude",
+    "dangerously_skip_permissions": false,
     "timeout_minutes": 60,
     "allowed_tools": [
       "Read", "Edit", "Write", "Glob", "Grep",
       "Bash(python -m pytest:*)", "Bash(py -m pytest:*)",
       "Bash(npm run build:*)", "Bash(npx tsc:*)",
-      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)"
+      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
+      "Bash(git show:*)", "Bash(git rev-parse:*)", "Bash(cd:*)", "Bash(ls:*)",
+      "Bash(head:*)", "Bash(tail:*)", "Bash(cat:*)"
     ]
   },
   "blocked_globs": [

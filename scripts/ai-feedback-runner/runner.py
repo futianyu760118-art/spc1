@@ -84,6 +84,8 @@ def load_config(path: Path) -> dict:
     cfg["gates"].setdefault("timeout_minutes", 30)
     cfg["claude"].setdefault("command", "claude")
     cfg["claude"].setdefault("timeout_minutes", 60)
+    cfg["claude"].setdefault("permission_mode", "acceptEdits")
+    cfg["claude"].setdefault("dangerously_skip_permissions", False)
     try:
         cfg["gates"]["timeout_minutes"] = max(1, int(cfg["gates"]["timeout_minutes"]))
         cfg["claude"]["timeout_minutes"] = max(1, int(cfg["claude"]["timeout_minutes"]))
@@ -94,6 +96,8 @@ def load_config(path: Path) -> dict:
         "Bash(python -m pytest:*)", "Bash(py -m pytest:*)",
         "Bash(npm run build:*)", "Bash(npx tsc:*)",
         "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
+        "Bash(git show:*)", "Bash(git rev-parse:*)", "Bash(cd:*)", "Bash(ls:*)",
+        "Bash(head:*)", "Bash(tail:*)", "Bash(cat:*)",
     ])
     cfg.setdefault("blocked_globs", [
         ".env", ".env.*", "*.env", "**/.env", "**/.env.*", "**/*.env",
@@ -111,12 +115,20 @@ class ApiClient:
         self._password = password
         self._token: str | None = None
 
+    def _json(self, response: httpx.Response) -> dict:
+        try:
+            return response.json()
+        except ValueError:
+            raise RuntimeError(
+                f"响应不是 JSON（HTTP {response.status_code}）: {(response.text or '')[:200]}"
+            )
+
     def _login(self) -> None:
         response = self._client.post(
             "/api/v1/basicdata/auth/login",
             data={"username": self._username, "password": self._password, "login_type": "employee"},
         )
-        body = response.json()
+        body = self._json(response)
         if body.get("code") != 0 or not body.get("data"):
             raise RuntimeError(f"登录失败: {body.get('message') or response.status_code}")
         self._token = body["data"]["access_token"]
@@ -141,7 +153,7 @@ class ApiClient:
             "sort_by": "created_at",
             "sort_order": "asc",
         })
-        body = response.json()
+        body = self._json(response)
         if body.get("code") != 0:
             raise RuntimeError(f"拉取队列失败: {body.get('message')}")
         return body["data"]["items"]
@@ -150,7 +162,7 @@ class ApiClient:
         response = self._request("POST", f"/api/v1/basicdata/feedback/{feedback_id}/ai-claim")
         if response.status_code == 409:
             return None
-        body = response.json()
+        body = self._json(response)
         if body.get("code") != 0:
             raise RuntimeError(f"认领失败: {body.get('message')}")
         return body["data"]
@@ -163,7 +175,7 @@ class ApiClient:
             "summary": summary,
             "error": error,
         })
-        body = response.json()
+        body = self._json(response)
         if body.get("code") != 0:
             raise RuntimeError(f"回写结果失败: {body.get('message')}")
 
@@ -367,14 +379,13 @@ def parse_claude_output(stdout: str) -> dict | None:
 
 def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path) -> dict:
     claude_cfg = cfg["claude"]
-    parts = [
-        claude_cfg["command"],
-        "-p",
-        "--output-format", "json",
-        "--permission-mode", "acceptEdits",
-    ]
-    if claude_cfg["allowed_tools"]:
-        parts += ["--allowedTools", ",".join(claude_cfg["allowed_tools"])]
+    parts = [claude_cfg["command"], "-p", "--output-format", "json"]
+    if claude_cfg["dangerously_skip_permissions"]:
+        parts.append("--dangerously-skip-permissions")
+    else:
+        parts += ["--permission-mode", claude_cfg["permission_mode"]]
+        if claude_cfg["allowed_tools"]:
+            parts += ["--allowedTools", ",".join(claude_cfg["allowed_tools"])]
     log(f"调用代理: {' '.join(parts)}（超时 {claude_cfg['timeout_minutes']} 分钟）")
     try:
         result = run_command(
@@ -490,7 +501,12 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
         (run_dir / "diff-stat.txt").write_text(commit_stat, encoding="utf-8")
 
         summary = compose_summary(parsed, branch, commit_stat, gate_summary, run_dir)
-        api.finish(feedback_id, True, branch=branch, summary=summary)
+        try:
+            api.finish(feedback_id, True, branch=branch, summary=summary)
+        except Exception as exc:
+            raise RunFailure(
+                f"实现已完成（分支 {branch} 已保留，请人工审核），但结果回写失败: {exc}"
+            )
         log(f"反馈 #{feedback_id} 实现完成: {branch}")
     except Exception as exc:
         log(f"反馈 #{feedback_id} 处理失败: {exc}")
