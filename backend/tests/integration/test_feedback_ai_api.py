@@ -170,3 +170,40 @@ async def test_ai_queue_rejected_for_done(client):
 
     r = await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
     assert r.status_code == 400
+
+
+async def test_ai_finish_with_long_summary_clips_notification(client):
+    """超长实现摘要只允许截断写入通知，不得触发 500（notification.content varchar(512)）。"""
+    headers = await login(client, "admin")
+    fb = await _create_feedback(client, headers, title="长摘要回写")
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-claim", headers=headers)
+
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={
+            "success": True,
+            "branch": f"ai-feedback/{fb['id']}",
+            "summary": "验证说明" * 400,
+        },
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0
+    assert body["data"]["ai_status"] == "done"
+    assert body["data"]["ai_branch"] == f"ai-feedback/{fb['id']}"
+
+
+async def test_reply_with_long_text_clips_notification(client):
+    """人工长回复同样只截断通知内容，不得 500。"""
+    headers = await login(client, "admin")
+    fb = await _create_feedback(client, headers, title="长回复")
+
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/reply",
+        json={"reply": "处理结论" * 300},
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0
+    assert body["data"]["reply"].startswith("处理结论")

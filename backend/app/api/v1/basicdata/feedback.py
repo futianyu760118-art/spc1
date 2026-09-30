@@ -35,8 +35,17 @@ logger = logging.getLogger(__name__)
 _FEEDBACK_TYPE_LABELS = {"issue": "问题", "suggestion": "建议", "inquiry": "咨询"}
 _SEVERITY_LABELS = {"high": "高", "medium": "中", "low": "低"}
 _STATUS_LABELS = {"pending": "待处理", "processing": "处理中", "resolved": "已解决", "closed": "已关闭"}
+_NOTIFICATION_TITLE_MAX = 256
+_NOTIFICATION_CONTENT_MAX = 512
 
 router = APIRouter()
+
+
+def _clip_notification_text(text: str, limit: int) -> str:
+    """通知表 title/content 为 varchar(256/512)，超长写入会触发 500，统一截断。"""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 
 def _is_admin(user: dict) -> bool:
@@ -142,8 +151,8 @@ async def _insert_handler_notifications(db: AsyncSession, fb: Feedback) -> list[
         db.add(Notification(
             user_id=hid,
             type="feedback",
-            title=title,
-            content=content,
+            title=_clip_notification_text(title, _NOTIFICATION_TITLE_MAX),
+            content=_clip_notification_text(content, _NOTIFICATION_CONTENT_MAX),
             ref_type="feedback",
             ref_id=fb.id,
             sender_id=fb.submitter_id,
@@ -167,8 +176,10 @@ async def _insert_submitter_progress_notification(
     db.add(Notification(
         user_id=fb.submitter_id,
         type="feedback",
-        title=f"[问题反馈]您的反馈「{fb.title}」处理进度有更新",
-        content=action_desc,
+        title=_clip_notification_text(
+            f"[问题反馈]您的反馈「{fb.title}」处理进度有更新", _NOTIFICATION_TITLE_MAX
+        ),
+        content=_clip_notification_text(action_desc, _NOTIFICATION_CONTENT_MAX),
         ref_type="feedback",
         ref_id=fb.id,
         sender_id=_get_user_id(actor_user),
