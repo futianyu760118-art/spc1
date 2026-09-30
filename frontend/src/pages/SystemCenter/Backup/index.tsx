@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography, message,
+  Alert, Button, Card, Collapse, Input, Modal, Popconfirm, Select, Space, Steps, Switch, Table, Tag, Tooltip, Typography, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   CloudDownloadOutlined, DatabaseOutlined, DeleteOutlined,
-  QuestionCircleOutlined, ReloadOutlined, SafetyOutlined, SettingOutlined,
+  LoadingOutlined, QuestionCircleOutlined, ReloadOutlined, SafetyOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import {
   backupApi, downloadBackup,
@@ -33,6 +33,52 @@ function fmtSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
   if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)}MB`
   return `${(bytes / 1024 ** 3).toFixed(2)}GB`
+}
+
+function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`
+}
+
+/** 进度弹窗各步骤的通俗说明（key 与 backup_service 的步骤名一致） */
+const STEP_DESC: Record<string, Record<string, string>> = {
+  backup: {
+    '空间预检查': '检查服务器磁盘剩余空间是否足够',
+    '数据库备份': '导出数据库中的全部业务数据',
+    '附件打包': '打包全部上传文件（图纸、文档等）',
+    '完整性校验': '计算校验和，确保备份文件完整、可用于恢复',
+    '保留策略清理': '按设置的保留份数自动清理最旧的备份',
+  },
+  restore: {
+    '恢复前预检': '核对备份文件存在且未损坏，此步骤不会改动任何数据',
+    '安全快照': '先把当前数据自动备份一份，万一恢复出问题可用于回退',
+    '进入维护模式': '暂停所有业务访问和后台任务',
+    '数据库恢复': '将数据库整体恢复到所选备份的时间点',
+    '附件恢复': '恢复全部上传文件（图纸、文档等）',
+    '退出维护模式': '恢复系统正常访问',
+  },
+}
+
+/** 技术性失败信息 → 管理者能看懂的说法；未命中的失败信息本身已是通俗描述，直接展示原文 */
+const FAIL_EXPLAIN: { prefix: string; text: string }[] = [
+  { prefix: 'pg_dump 失败', text: '数据库导出失败，常见原因是数据库连接异常或磁盘写入失败；本次未生成备份，现有数据不受影响' },
+  { prefix: 'uploads 目录不存在', text: '服务器上找不到附件目录，请联系系统管理员检查部署' },
+  { prefix: 'uploads 打包失败', text: '附件打包失败；本次未生成备份，现有数据不受影响' },
+  { prefix: '备份异常', text: '备份过程中出现未预期的错误' },
+  { prefix: '备份文件缺失', text: '所选备份的文件在服务器上找不到，可能已被移动或删除' },
+  { prefix: 'pg_restore 失败', text: '数据库恢复失败，请立即联系系统管理员，可用列表中「恢复前快照」来源的备份回退' },
+  { prefix: '附件恢复失败', text: '附件恢复失败，请立即联系系统管理员处理' },
+  { prefix: '恢复异常', text: '恢复过程中出现未预期的错误，请立即联系系统管理员' },
+  { prefix: '退出维护模式失败', text: '恢复已结束但系统未能自动恢复访问，需要系统管理员按技术日志提示人工处理' },
+]
+
+function explainFailure(raw: string): { summary: string; detail: string | null } {
+  const hit = FAIL_EXPLAIN.find((f) => raw.startsWith(f.prefix))
+  return hit ? { summary: hit.text, detail: raw } : { summary: raw, detail: null }
+}
+
+const STEP_STATUS_MAP: Record<string, 'wait' | 'process' | 'finish' | 'error'> = {
+  pending: 'wait', running: 'process', ok: 'finish', fail: 'error',
 }
 
 const EMPTY_JOB: BackupJobVo = { job_id: '', type: 'backup', status: 'running', steps: [], logs: [], result: null }
@@ -80,6 +126,11 @@ export default function BackupPage() {
   const [confirmText, setConfirmText] = useState('')
   const [restoring, setRestoring] = useState(false)
 
+  const jobStartRef = useRef<number>(Date.now())
+  const [, setJobTick] = useState(0) // 任务进行中每秒触发重渲染，刷新「已进行」时长
+  const [logOpenKeys, setLogOpenKeys] = useState<string[]>([])
+  const logBoxRef = useRef<HTMLDivElement | null>(null)
+
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
@@ -103,6 +154,19 @@ export default function BackupPage() {
   }
   useEffect(() => stopPolling, [])
 
+  // 任务进行中每秒重算「已进行」时长（同 FeedbackManagement 进度 ticker 模式）
+  useEffect(() => {
+    if (!jobOpen || job.status !== 'running') return
+    const t = window.setInterval(() => setJobTick((v) => v + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [jobOpen, job.status])
+
+  // 技术日志有新增或展开时滚到底部，便于看最新输出
+  useEffect(() => {
+    const el = logBoxRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [job.logs.length, logOpenKeys])
+
   const startJobPolling = useCallback((jobId: string) => {
     stopPolling()
     pollRef.current = window.setInterval(async () => {
@@ -122,6 +186,8 @@ export default function BackupPage() {
   }, [refresh])
 
   const openJobModal = useCallback(async (jobId: string, title: string) => {
+    jobStartRef.current = Date.now()
+    setLogOpenKeys([])
     setJob(EMPTY_JOB)
     setJobTitle(title)
     setJobOpen(true)
@@ -255,6 +321,16 @@ export default function BackupPage() {
     },
   ]
 
+  // 进度弹窗派生状态：当前第几步、失败原因的通俗解释
+  const typeLabel = job.type === 'restore' ? '恢复' : '备份'
+  const stepDesc = STEP_DESC[job.type] || {}
+  const activeIdx = job.steps.findIndex((s) => s.status === 'running' || s.status === 'fail')
+  const currentStep = activeIdx >= 0 ? activeIdx
+    : Math.min(job.steps.filter((s) => s.status === 'ok').length, Math.max(job.steps.length - 1, 0))
+  const failInfo = job.status === 'fail'
+    ? explainFailure([...job.logs].reverse().find((l) => l.level === 'ERR')?.msg || '未知原因，可展开下方技术日志查看')
+    : null
+
   return (
     <Card>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
@@ -306,27 +382,71 @@ export default function BackupPage() {
         footer={<Button onClick={closeJobModal}>关闭</Button>}
         onCancel={closeJobModal}
       >
-        <div style={{ marginBottom: 8 }}>
-          {job.steps.map((s, i) => (
-            <Tag key={i} color={
-              s.status === 'ok' ? 'success' : s.status === 'fail' ? 'error'
-                : s.status === 'running' ? 'processing' : 'default'
-            }>{s.name}</Tag>
-          ))}
-        </div>
-        <div style={{
-          maxHeight: 320, overflow: 'auto', background: '#0b1021', color: '#c9d1e3',
-          borderRadius: 6, padding: 8, fontSize: 12, fontFamily: 'Consolas, monospace',
-        }}>
-          {job.logs.length === 0 ? <div>等待日志…</div> : job.logs.map((l, i) => (
-            <div key={i}>
-              <span style={{ color: '#6e7a9a' }}>[{l.ts}]</span>{' '}
-              <span style={{ color: l.level === 'OK' ? '#52c41a' : l.level === 'ERR' ? '#ff4d4f' : undefined }}>
-                {l.msg}
-              </span>
-            </div>
-          ))}
-        </div>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {job.steps.length === 0 ? (
+            <Alert type="info" showIcon message="任务启动中…"
+              description="正在从服务器获取进度，请稍候。" />
+          ) : job.status === 'running' ? (
+            <Alert type="info" showIcon
+              message={`正在${typeLabel}：第 ${currentStep + 1} 步 / 共 ${job.steps.length} 步 · ${job.steps[currentStep]?.name || ''}`}
+              description={`已进行 ${fmtElapsed(Date.now() - jobStartRef.current)}。任务在服务器后台执行，关闭本窗口不会中断。`} />
+          ) : job.status === 'ok' ? (
+            <Alert type="success" showIcon message={`${typeLabel}成功`}
+              description={job.type === 'restore'
+                ? '系统已恢复正常访问，建议刷新页面重新加载数据。'
+                : `已生成备份${job.result?.record_name ? `（编号 ${job.result.record_name}）` : ''}，可在列表中查看、下载或用于恢复。`} />
+          ) : (
+            <Alert type="error" showIcon message={`${typeLabel}失败`}
+              description={
+                <div>
+                  <div>{failInfo?.summary}</div>
+                  {failInfo?.detail && (
+                    <Text type="secondary" style={{ fontSize: 12, wordBreak: 'break-all' }}>
+                      原始信息：{failInfo.detail}
+                    </Text>
+                  )}
+                </div>
+              } />
+          )}
+
+          <Steps
+            direction="vertical"
+            size="small"
+            current={currentStep}
+            items={job.steps.map((s) => ({
+              title: s.name,
+              description: stepDesc[s.name],
+              status: STEP_STATUS_MAP[s.status] || 'wait',
+              icon: s.status === 'running' ? <LoadingOutlined /> : undefined,
+            }))}
+          />
+
+          <Collapse
+            ghost
+            size="small"
+            activeKey={logOpenKeys}
+            onChange={(keys) => setLogOpenKeys(Array.isArray(keys) ? keys : [keys])}
+            items={[{
+              key: 'logs',
+              label: '技术日志（排查问题时展开，可提供给系统管理员）',
+              children: (
+                <div ref={logBoxRef} style={{
+                  maxHeight: 320, overflow: 'auto', background: '#0b1021', color: '#c9d1e3',
+                  borderRadius: 6, padding: 8, fontSize: 12, fontFamily: 'Consolas, monospace',
+                }}>
+                  {job.logs.length === 0 ? <div>等待日志…</div> : job.logs.map((l, i) => (
+                    <div key={i}>
+                      <span style={{ color: '#6e7a9a' }}>[{l.ts}]</span>{' '}
+                      <span style={{ color: l.level === 'OK' ? '#52c41a' : l.level === 'ERR' ? '#ff4d4f' : undefined }}>
+                        {l.msg}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ),
+            }]}
+          />
+        </Space>
       </Modal>
 
       <Modal
