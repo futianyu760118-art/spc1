@@ -4,7 +4,9 @@
 - 普通用户仅能查看/编辑自己的反馈
 - admin 可查看全部、回复、删除
 """
+import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -192,6 +194,29 @@ async def _insert_submitter_progress_notification(
     return fb.submitter_id
 
 
+# ---------- AI 派单等待（长轮询） ----------
+_AI_QUEUE_WAIT_DEFAULT_SECONDS = 20
+_AI_QUEUE_WAIT_MAX_IDS = 10
+_AI_QUEUE_WAIT_RECHECK_SECONDS = 1.0
+_queue_waiters: set[asyncio.Event] = set()
+
+
+def notify_queue_waiters() -> None:
+    """派单提交后唤醒所有等待中的长轮询请求（毫秒级送达 runner）。"""
+    for waiter in list(_queue_waiters):
+        waiter.set()
+
+
+async def _list_queued_ids(db: AsyncSession, limit: int) -> list[int]:
+    rows = (await db.execute(
+        select(Feedback.id)
+        .where(Feedback.ai_status == "queued")
+        .order_by(Feedback.created_at.asc())
+        .limit(limit)
+    )).scalars().all()
+    return [int(row) for row in rows]
+
+
 # ---------- 列表 ----------
 @router.get("", response_model=ResponseModel[dict])
 async def list_feedback(
@@ -293,6 +318,43 @@ async def list_feedback(
         "page_size": page_size,
         "stats": stats,
     })
+
+
+@router.get("/ai-queue-wait", response_model=ResponseModel[dict])
+async def ai_queue_wait(
+    timeout_seconds: float = Query(_AI_QUEUE_WAIT_DEFAULT_SECONDS, ge=1, le=30),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """长轮询等待待派反馈：有任务立即返回，无任务挂起至多 timeout_seconds。
+
+    注意：本路由必须声明在 `GET /{feedback_id}` 之前，否则会被 int 路径参数吞掉。
+    """
+    if not _can_handle(current_user):
+        raise HTTPException(status_code=403, detail="无权处理反馈")
+
+    waiter = asyncio.Event()
+    _queue_waiters.add(waiter)
+    try:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            ids = await _list_queued_ids(db, _AI_QUEUE_WAIT_MAX_IDS)
+            await db.rollback()  # 只读事务结束，长轮询不占用连接
+            if ids:
+                return ResponseModel(data={"ids": ids})
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return ResponseModel(data={"ids": []})
+            try:
+                await asyncio.wait_for(
+                    waiter.wait(),
+                    timeout=min(_AI_QUEUE_WAIT_RECHECK_SECONDS, remaining),
+                )
+            except asyncio.TimeoutError:
+                pass
+            waiter.clear()
+    finally:
+        _queue_waiters.discard(waiter)
 
 
 # ---------- 详情 ----------
@@ -566,6 +628,7 @@ async def ai_queue_feedback(
 
     await db.commit()
     await db.refresh(fb)
+    notify_queue_waiters()
     return ResponseModel(data=FeedbackOut.model_validate(fb))
 
 
