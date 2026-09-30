@@ -20,6 +20,7 @@ from app.models.basicdata.feedback import Feedback
 from app.schemas.common import ResponseModel
 from app.schemas.basicdata.feedback import (
     FeedbackAiFinish,
+    FeedbackAiProgress,
     FeedbackCreate,
     FeedbackListOut,
     FeedbackOut,
@@ -519,6 +520,17 @@ async def update_status(
 
 # ---------- AI 自动实现（派单 / 认领 / 回写） ----------
 _AI_TERMINAL_STATUSES = ("resolved", "closed")
+_AI_STAGE_LABELS = {
+    "preparing": "准备隔离环境",
+    "fetching": "下载附件",
+    "agent": "AI 修改代码",
+    "gate_backend": "后端测试",
+    "gate_frontend": "前端构建",
+    "committing": "提交代码",
+}
+_AI_PROGRESS_MAX_ENTRIES = 50
+_AI_PROGRESS_MAX_ACTIONS_PER_POST = 20
+_AI_PROGRESS_ACTION_MAX_LEN = 200
 
 
 @router.post("/{feedback_id}/ai-queue", response_model=ResponseModel[FeedbackOut])
@@ -544,6 +556,9 @@ async def ai_queue_feedback(
         raise HTTPException(status_code=400, detail="该反馈已由 AI 实现，如需重做请先清理分支")
 
     fb.ai_status = "queued"
+    fb.ai_progress = None
+    fb.ai_stage = None
+    fb.ai_stage_started_at = None
     fb.ai_requested_by = current_user.get("username")
     fb.ai_requested_at = datetime.now()
     if fb.status == "pending":
@@ -602,6 +617,58 @@ async def ai_claim_feedback(
     return ResponseModel(data=FeedbackOut.model_validate(fb))
 
 
+@router.post("/{feedback_id}/ai-progress", response_model=ResponseModel[dict])
+async def ai_progress_feedback(
+    feedback_id: int,
+    body: FeedbackAiProgress,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Runner 上报执行进度：仅 running 接受；stage 白名单；动作截断并裁剪历史。"""
+    if not _can_handle(current_user):
+        raise HTTPException(status_code=403, detail="无权处理反馈")
+
+    fb = (await db.execute(
+        select(Feedback).where(Feedback.id == feedback_id).with_for_update()
+    )).scalar_one_or_none()
+    if not fb:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    if fb.ai_status != "running":
+        raise HTTPException(status_code=409, detail=f"反馈当前状态为 {fb.ai_status}，拒绝上报进度")
+
+    actions: list[str] = []
+    for raw in body.actions or []:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        actions.append(text[:_AI_PROGRESS_ACTION_MAX_LEN])
+        if len(actions) >= _AI_PROGRESS_MAX_ACTIONS_PER_POST:
+            break
+    if not body.stage and not actions:
+        raise HTTPException(status_code=400, detail="stage 和 actions 至少填一项")
+    if body.stage and body.stage not in _AI_STAGE_LABELS:
+        raise HTTPException(status_code=400, detail=f"非法阶段: {body.stage}")
+
+    entries = list(fb.ai_progress or [])
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    if body.stage:
+        fb.ai_stage = body.stage
+        fb.ai_stage_started_at = datetime.now()
+        entries.append({
+            "at": now_iso,
+            "kind": "stage",
+            "stage": body.stage,
+            "text": _AI_STAGE_LABELS[body.stage],
+        })
+    for text in actions:
+        entries.append({"at": now_iso, "kind": "action", "stage": fb.ai_stage, "text": text})
+    fb.ai_progress = entries[-_AI_PROGRESS_MAX_ENTRIES:]
+
+    await db.commit()
+    await db.refresh(fb)
+    return ResponseModel(data={"ai_status": fb.ai_status, "ai_stage": fb.ai_stage})
+
+
 @router.post("/{feedback_id}/ai-finish", response_model=ResponseModel[FeedbackOut])
 async def ai_finish_feedback(
     feedback_id: int,
@@ -635,6 +702,8 @@ async def ai_finish_feedback(
         fb.ai_note = body.error
         reply_text = f"【AI 自动实现失败】{body.error or '未知原因'}。修改反馈后可点击「重试」。"
 
+    fb.ai_stage = None
+    fb.ai_stage_started_at = None
     fb.reply = reply_text
     fb.replied_by = "AI Runner"
     fb.replied_at = datetime.now()
