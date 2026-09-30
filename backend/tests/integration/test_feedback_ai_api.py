@@ -1,4 +1,4 @@
-"""问题反馈 AI 自动实现 API 状态机测试（ai-queue / ai-claim / ai-finish）。"""
+"""问题反馈 AI 自动实现 API 状态机测试（ai-queue / ai-claim / ai-progress / ai-finish）。"""
 
 from tests.conftest import login
 
@@ -227,6 +227,14 @@ async def test_ai_progress_requires_running(client):
     )
     assert r.status_code == 409
 
+    await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={"stage": "agent"},
+        headers=headers,
+    )
+    assert r.status_code == 409
+
 
 async def test_ai_progress_stage_and_actions(client):
     headers = await login(client, "admin")
@@ -265,18 +273,24 @@ async def test_ai_progress_validation_and_trim(client):
         headers=headers,
     )
     assert r.status_code == 400
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
+        json={},
+        headers=headers,
+    )
+    assert r.status_code == 400
 
     long_text = "x" * 500
-    for _ in range(3):
+    for expected_count in (20, 40, 50):
         r = await client.post(
             f"/api/v1/basicdata/feedback/{fb['id']}/ai-progress",
             json={"actions": [long_text] * 30},
             headers=headers,
         )
         assert r.json()["code"] == 0
-    r = await client.get(f"/api/v1/basicdata/feedback/{fb['id']}", headers=headers)
-    entries = r.json()["data"]["ai_progress"]
-    assert len(entries) == 50
+        r = await client.get(f"/api/v1/basicdata/feedback/{fb['id']}", headers=headers)
+        entries = r.json()["data"]["ai_progress"]
+        assert len(entries) == expected_count
     assert len(entries[-1]["text"]) == 200
 
 
@@ -306,6 +320,7 @@ async def test_requeue_clears_progress_and_finish_keeps_it(client):
     assert data["ai_status"] == "queued"
     assert data["ai_progress"] is None
     assert data["ai_stage"] is None
+    assert data["ai_stage_started_at"] is None
 
     await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-claim", headers=headers)
     await client.post(
