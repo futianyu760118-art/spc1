@@ -18,6 +18,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,8 @@ RUNNER_DIR = Path(__file__).resolve().parent
 REPO_DIR_DEFAULT = RUNNER_DIR.parents[1]
 LOCK_FILE = RUNNER_DIR / ".runner.lock"
 STOP = {"requested": False}
+PROGRESS_FLUSH_SECONDS = 5.0
+PROGRESS_MAX_ACTIONS_PER_POST = 20
 
 
 def log(message: str) -> None:
@@ -179,6 +182,22 @@ class ApiClient:
         if body.get("code") != 0:
             raise RuntimeError(f"回写结果失败: {body.get('message')}")
 
+    def progress(self, feedback_id: int, stage: str | None = None,
+                 actions: list[str] | None = None) -> None:
+        payload: dict = {}
+        if stage:
+            payload["stage"] = stage
+        if actions:
+            payload["actions"] = actions
+        response = self._request(
+            "POST",
+            f"/api/v1/basicdata/feedback/{feedback_id}/ai-progress",
+            json=payload,
+        )
+        body = self._json(response)
+        if body.get("code") != 0:
+            raise RuntimeError(f"进度上报失败: {body.get('message')}")
+
     def get_bytes(self, url: str) -> bytes:
         response = self._request("GET", url)
         if response.status_code != 200:
@@ -187,6 +206,40 @@ class ApiClient:
 
     def close(self) -> None:
         self._client.close()
+
+
+class ProgressReporter:
+    """AI 进度上报（尽力而为）：阶段即时上报，动作节流批量上报；失败只记日志。"""
+
+    def __init__(self, api: ApiClient, feedback_id: int):
+        self._api = api
+        self._feedback_id = feedback_id
+        self._buffer: list[str] = []
+        self._last_flush = time.monotonic()
+
+    def stage(self, name: str) -> None:
+        self.flush()
+        self._post(stage=name)
+
+    def action(self, text: str) -> None:
+        self._buffer.append(text)
+        if len(self._buffer) >= PROGRESS_MAX_ACTIONS_PER_POST:
+            self.flush()
+        elif time.monotonic() - self._last_flush >= PROGRESS_FLUSH_SECONDS:
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._buffer:
+            return
+        batch, self._buffer = self._buffer, []
+        self._last_flush = time.monotonic()
+        self._post(actions=batch)
+
+    def _post(self, stage: str | None = None, actions: list[str] | None = None) -> None:
+        try:
+            self._api.progress(self._feedback_id, stage=stage, actions=actions)
+        except Exception as exc:
+            log(f"进度上报失败（不影响任务）: {exc}")
 
 
 def acquire_lock() -> None:
