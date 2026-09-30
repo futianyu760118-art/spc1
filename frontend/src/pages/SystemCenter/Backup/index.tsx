@@ -13,7 +13,7 @@ import {
 } from '../../../services/backup'
 import { useAuthStore } from '../../../store/auth'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 const SOURCE_LABEL: Record<string, { text: string; color: string }> = {
   manual: { text: '手动', color: 'blue' },
@@ -334,16 +334,13 @@ export default function BackupPage() {
   return (
     <Card>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-        <div>
-          <Title level={4} style={{ margin: 0 }}>备份管理</Title>
-          <div style={{ color: 'var(--text-secondary, #888)', fontSize: 12, marginTop: 4 }}>
-            数据库 + 附件双文件备份；恢复将回滚到所选时间点（自动先打安全快照）。
-            <Tooltip title={BACKUP_SCOPE_TIP}>
-              <span style={{ marginLeft: 6, color: '#1677ff', cursor: 'help' }}>
-                <QuestionCircleOutlined /> 备份范围
-              </span>
-            </Tooltip>
-          </div>
+        <div style={{ color: 'var(--text-secondary, #888)', fontSize: 12 }}>
+          数据库 + 附件双文件备份；恢复将回滚到所选时间点（自动先打安全快照）。
+          <Tooltip title={BACKUP_SCOPE_TIP}>
+            <span style={{ marginLeft: 6, color: '#1677ff', cursor: 'help' }}>
+              <QuestionCircleOutlined /> 备份范围
+            </span>
+          </Tooltip>
         </div>
         <Space>
           {stats?.next_run && <Text type="secondary" style={{ fontSize: 12 }}>下次定时：{stats.next_run}</Text>}
