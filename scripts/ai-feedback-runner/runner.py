@@ -41,7 +41,7 @@ class RunFailure(Exception):
     """单条反馈处理失败（原因会回写到反馈单）。"""
 
 
-def run_command(cmd, cwd=None, timeout=None, check=False, shell=False, input_text=None, env=None):
+def run_command(cmd, cwd=None, timeout=None, check=False, shell=False, env=None):
     result = subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
@@ -51,7 +51,6 @@ def run_command(cmd, cwd=None, timeout=None, check=False, shell=False, input_tex
         encoding="utf-8",
         errors="replace",
         shell=shell,
-        input=input_text,
         env=env,
     )
     if check and result.returncode != 0:
@@ -408,31 +407,82 @@ def build_prompt(feedback: dict, attachments: list[Path]) -> str:
     return prompt
 
 
-def parse_claude_output(stdout: str) -> dict | None:
-    text = (stdout or "").strip()
+_TOOL_VERBS = {
+    "Read": "读取",
+    "Edit": "修改",
+    "Write": "新建",
+    "NotebookEdit": "修改",
+    "Grep": "搜索",
+    "Glob": "查找文件",
+    "Task": "启动子任务",
+    "Agent": "启动子任务",
+}
+
+
+def describe_tool_use(block: dict) -> str | None:
+    """把 claude stream-json 的 tool_use 块转写为一行中文动作。"""
+    name = block.get("name") or ""
+    tool_input = block.get("input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    if name == "Bash":
+        command = str(tool_input.get("command") or "").strip().replace("\n", " ")
+        return f"执行命令：{command[:120]}" if command else "执行命令"
+    if name in ("Read", "Edit", "Write"):
+        target = tool_input.get("file_path")
+    elif name == "NotebookEdit":
+        target = tool_input.get("notebook_path")
+    elif name in ("Grep", "Glob"):
+        target = tool_input.get("pattern")
+    else:
+        target = None
+    verb = _TOOL_VERBS.get(name)
+    if verb and target:
+        return f"{verb} {target}"
+    if verb:
+        return verb
+    return f"使用工具 {name}" if name else None
+
+
+def _parse_stream_line(line: str) -> dict | None:
+    """解析一行 stream-json 事件；不关心的事件返回 None。"""
+    text = (line or "").strip()
     if not text:
         return None
-    payload = None
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.S)
-        if match:
-            try:
-                payload = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                payload = None
+        return None
     if not isinstance(payload, dict):
         return None
-    return {
-        "is_error": bool(payload.get("is_error")),
-        "result": str(payload.get("result") or ""),
-    }
+    event_type = payload.get("type")
+    if event_type == "assistant":
+        content = (payload.get("message") or {}).get("content") or []
+        return {
+            "type": "assistant",
+            "content": [b for b in content if isinstance(b, dict)],
+        }
+    if event_type == "result":
+        return {
+            "type": "result",
+            "is_error": payload.get("is_error"),
+            "result": payload.get("result"),
+        }
+    return None
 
 
-def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path) -> dict:
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    if os.name == "nt":
+        result = run_command(["taskkill", "/F", "/T", "/PID", str(proc.pid)], check=False)
+        if result.returncode == 0:
+            return
+    proc.kill()
+
+
+def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path,
+                  on_action=None) -> dict:
     claude_cfg = cfg["claude"]
-    parts = [claude_cfg["command"], "-p", "--output-format", "json"]
+    parts = [claude_cfg["command"], "-p", "--output-format", "stream-json", "--verbose"]
     if claude_cfg["dangerously_skip_permissions"]:
         parts.append("--dangerously-skip-permissions")
     else:
@@ -440,23 +490,64 @@ def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path) -> dict
         if claude_cfg["allowed_tools"]:
             parts += ["--allowedTools", ",".join(claude_cfg["allowed_tools"])]
     log(f"调用代理: {' '.join(parts)}（超时 {claude_cfg['timeout_minutes']} 分钟）")
-    try:
-        result = run_command(
-            parts, cwd=worktree, input_text=prompt,
-            timeout=claude_cfg["timeout_minutes"] * 60,
+
+    timed_out = threading.Event()
+    parsed: dict | None = None
+    output_path = run_dir / "claude-output.txt"
+    stderr_path = run_dir / "claude-stderr.txt"
+
+    def kill_on_timeout() -> None:
+        timed_out.set()
+        _kill_process_tree(proc)
+
+    with output_path.open("w", encoding="utf-8") as output_file, \
+            stderr_path.open("w", encoding="utf-8") as stderr_file:
+        proc = subprocess.Popen(
+            parts,
+            cwd=str(worktree),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
-    except subprocess.TimeoutExpired as exc:
-        (run_dir / "claude-output.txt").write_text(exc.stdout or "", encoding="utf-8")
-        if exc.stderr:
-            (run_dir / "claude-stderr.txt").write_text(exc.stderr, encoding="utf-8")
-        raise RunFailure(f"代理执行超时（>{claude_cfg['timeout_minutes']} 分钟），日志: {run_dir}")
-    (run_dir / "claude-output.txt").write_text(result.stdout or "", encoding="utf-8")
-    if result.stderr:
-        (run_dir / "claude-stderr.txt").write_text(result.stderr, encoding="utf-8")
-    parsed = parse_claude_output(result.stdout or "")
+        watchdog = threading.Timer(claude_cfg["timeout_minutes"] * 60, kill_on_timeout)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+            for line in proc.stdout:
+                output_file.write(line)
+                payload = _parse_stream_line(line)
+                if payload is None:
+                    continue
+                if payload["type"] == "assistant":
+                    for block in payload["content"]:
+                        if block.get("type") == "tool_use":
+                            action_text = describe_tool_use(block)
+                            if action_text and on_action:
+                                on_action(action_text)
+                elif payload["type"] == "result":
+                    parsed = {
+                        "is_error": bool(payload.get("is_error")),
+                        "result": str(payload.get("result") or ""),
+                    }
+            proc.wait()
+        finally:
+            watchdog.cancel()
+            if proc.poll() is None:
+                _kill_process_tree(proc)
+                proc.wait()
+
+    if timed_out.is_set():
+        raise RunFailure(
+            f"代理执行超时（>{claude_cfg['timeout_minutes']} 分钟），日志: {run_dir}"
+        )
     if parsed is None:
         raise RunFailure(
-            f"代理输出无法解析（退出码 {result.returncode}），原始输出见 {run_dir / 'claude-output.txt'}"
+            f"代理输出无法解析（退出码 {proc.returncode}），原始输出见 {output_path}"
         )
     return parsed
 
