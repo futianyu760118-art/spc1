@@ -1,6 +1,6 @@
 """问题反馈 AI 自动实现 Runner。
 
-轮询后端问题反馈队列（ai_status=queued），认领后：
+长轮询等待后端问题反馈队列（ai_status=queued），认领后：
 1. 在独立 git worktree + ai-feedback/<id> 分支上运行 claude CLI 修改代码；
 2. 按改动范围执行门禁（backend pytest / frontend build / 敏感文件扫描）；
 3. 通过后本地提交并回写反馈结果（ai-finish），失败则回写失败原因。
@@ -34,6 +34,7 @@ STOP = {"requested": False}
 PROGRESS_FLUSH_SECONDS = 5.0
 PROGRESS_MAX_ACTIONS_PER_POST = 20
 PROGRESS_REQUEST_TIMEOUT_SECONDS = 5.0
+WAIT_TIMEOUT_SECONDS = 20
 
 
 def log(message: str) -> None:
@@ -150,19 +151,6 @@ class ApiClient:
             response = self._client.request(method, url, headers=headers, **kwargs)
         return response
 
-    def list_queued(self, page_size: int = 10) -> list[dict]:
-        response = self._request("GET", "/api/v1/basicdata/feedback", params={
-            "ai_status": "queued",
-            "page": 1,
-            "page_size": page_size,
-            "sort_by": "created_at",
-            "sort_order": "asc",
-        })
-        body = self._json(response)
-        if body.get("code") != 0:
-            raise RuntimeError(f"拉取队列失败: {body.get('message')}")
-        return body["data"]["items"]
-
     def claim(self, feedback_id: int) -> dict | None:
         response = self._request("POST", f"/api/v1/basicdata/feedback/{feedback_id}/ai-claim")
         if response.status_code == 409:
@@ -183,6 +171,18 @@ class ApiClient:
         body = self._json(response)
         if body.get("code") != 0:
             raise RuntimeError(f"回写结果失败: {body.get('message')}")
+
+    def wait_queued(self, timeout_seconds: int) -> list[int]:
+        response = self._request(
+            "GET",
+            "/api/v1/basicdata/feedback/ai-queue-wait",
+            params={"timeout_seconds": timeout_seconds},
+            timeout=timeout_seconds + 10,
+        )
+        body = self._json(response)
+        if body.get("code") != 0:
+            raise RuntimeError(f"等待队列失败: {body.get('message')}")
+        return list(body["data"].get("ids") or [])
 
     def progress(self, feedback_id: int, stage: str | None = None,
                  actions: list[str] | None = None) -> None:
@@ -728,27 +728,29 @@ def main() -> None:
         if args.cleanup:
             cleanup_merged(cfg)
             return
-        log(f"Runner 启动: {cfg['base_url']}，轮询间隔 {cfg['poll_interval_seconds']}s")
+        log(
+            f"Runner 启动: {cfg['base_url']}，长轮询等待（超时 {WAIT_TIMEOUT_SECONDS}s，"
+            f"出错退避 {cfg['poll_interval_seconds']}s）"
+        )
         while not STOP["requested"]:
             try:
-                items = api.list_queued(page_size=10)
+                ids = api.wait_queued(2 if args.once else WAIT_TIMEOUT_SECONDS)
             except Exception as exc:
-                log(f"拉取队列失败: {exc}")
+                log(f"等待队列失败: {exc}")
                 wait_for(cfg["poll_interval_seconds"])
                 continue
-            if not items:
+            if not ids:
                 if args.once:
                     log("队列为空，退出（--once）")
                     return
-                wait_for(cfg["poll_interval_seconds"])
                 continue
-            for item in items:
+            for feedback_id in ids:
                 if STOP["requested"]:
                     break
                 try:
-                    claimed = api.claim(item["id"])
+                    claimed = api.claim(feedback_id)
                 except Exception as exc:
-                    log(f"认领反馈 #{item['id']} 失败: {exc}")
+                    log(f"认领反馈 #{feedback_id} 失败: {exc}")
                     claimed = None
                 if not claimed:
                     continue
