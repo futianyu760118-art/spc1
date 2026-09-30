@@ -31,6 +31,7 @@ LOCK_FILE = RUNNER_DIR / ".runner.lock"
 STOP = {"requested": False}
 PROGRESS_FLUSH_SECONDS = 5.0
 PROGRESS_MAX_ACTIONS_PER_POST = 20
+PROGRESS_REQUEST_TIMEOUT_SECONDS = 5.0
 
 
 def log(message: str) -> None:
@@ -192,6 +193,7 @@ class ApiClient:
             "POST",
             f"/api/v1/basicdata/feedback/{feedback_id}/ai-progress",
             json=payload,
+            timeout=PROGRESS_REQUEST_TIMEOUT_SECONDS,
         )
         body = self._json(response)
         if body.get("code") != 0:
@@ -457,7 +459,10 @@ def _parse_stream_line(line: str) -> dict | None:
         return None
     event_type = payload.get("type")
     if event_type == "assistant":
-        content = (payload.get("message") or {}).get("content") or []
+        message = payload.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            return None
         return {
             "type": "assistant",
             "content": [b for b in content if isinstance(b, dict)],
