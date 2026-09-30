@@ -37,6 +37,10 @@ class Feedback(Base):
     ai_note = Column(Text, nullable=True, comment="runner 结果摘要/失败原因")
     ai_requested_by = Column(String(64), nullable=True, comment="派单人 username")
     ai_requested_at = Column(DateTime, nullable=True, comment="派单时间")
+    ai_stage = Column(String(32), nullable=True,
+                      comment="当前阶段（preparing/fetching/agent/gate_backend/gate_frontend/committing）")
+    ai_stage_started_at = Column(DateTime, nullable=True, comment="当前阶段开始时间")
+    ai_progress = Column(JSONB, nullable=True, comment="执行记录 [{at,kind,stage,text}]，保留最近 50 条")
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

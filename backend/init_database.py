@@ -430,6 +430,9 @@ class DatabaseInitializer:
                 "ai_note": "TEXT",
                 "ai_requested_by": "VARCHAR(64)",
                 "ai_requested_at": "TIMESTAMP",
+                "ai_stage": "VARCHAR(32)",
+                "ai_stage_started_at": "TIMESTAMP",
+                "ai_progress": "JSONB",
             },
             "notification": {
                 "sender_id": "INTEGER",
