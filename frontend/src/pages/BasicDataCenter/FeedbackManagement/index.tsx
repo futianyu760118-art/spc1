@@ -8,6 +8,7 @@ import {
 import dayjs from 'dayjs'
 import { feedbackApi } from '../../../services/api'
 import { useAuthStore } from '../../../store/auth'
+import { useTableScrollY } from '../../../hooks/useTableScrollY'
 import { useSearchParams } from 'react-router-dom'
 import KpiBand, { type KpiItem } from '../components/KpiBand'
 import ChipsFilter, { type ChipOption } from '../components/ChipsFilter'
@@ -97,6 +98,10 @@ export default function FeedbackManagement() {
   const [deleting, setDeleting] = useState(false)
   const [statusConfirm, setStatusConfirm] = useState<{ next: string } | null>(null)
   const [statusUpdating, setStatusUpdating] = useState(false)
+
+  // 页面高度约束在视口内（同 Inventory / ScrapInventory 模式），表格体内部滚动，窗口不出滚动条
+  const tableWrapRef = useRef<HTMLDivElement | null>(null)
+  const scrollY = useTableScrollY(tableWrapRef, [data.length, pagination.total])
 
   const fetchData = async (
     page = pagination.current,
@@ -357,10 +362,12 @@ export default function FeedbackManagement() {
   ]
 
   return (
-    <div className="sc-page">
-      <KpiBand items={kpiItems} />
+    <div className="sc-page" style={{ height: 'calc(100vh - 104px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flexShrink: 0 }}>
+        <KpiBand items={kpiItems} />
+      </div>
 
-      <div className="sc-toolbar">
+      <div className="sc-toolbar" style={{ flexShrink: 0 }}>
         <span className="sc-search">
           <Input
             allowClear
@@ -411,14 +418,14 @@ export default function FeedbackManagement() {
         </span>
       </div>
 
-      <div className="sc-card" style={{ padding: '0 0 4px' }}>
+      <div ref={tableWrapRef} className="sc-card" style={{ padding: '0 0 4px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <Table
           columns={columns}
           dataSource={data}
           rowKey="id"
           loading={loading}
           size="small"
-          scroll={{ x: 1450 }}
+          scroll={{ x: 1450, y: scrollY }}
           onChange={(_pag: any, tableFilters: any, sorter: any) => {
             const sortField = sorter.field
             const sortOrder = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : undefined

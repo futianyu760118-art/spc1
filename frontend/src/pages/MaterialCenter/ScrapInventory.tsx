@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Key, RefObject } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import type { Key } from 'react'
 import { Button, Drawer, Input, Segmented, Table, Upload, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { RcFile } from 'antd/es/upload'
@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { materialApi } from '../../services/api'
 import { useExport } from '../../hooks/useExport'
+import { useTableScrollY } from '../../hooks/useTableScrollY'
 
 /** 报废物料库存查询 — 按 docs/prototype/redesign/scrap-inventory.html 复刻，
  * 视觉/字体接入 .sc-page 统一体系（同物料盘点 / 物料主数据页），页面补充样式在 index.css si-* 段。 */
@@ -69,31 +70,6 @@ const parsePastedCodes = (text: string): { list: string[]; dup: number } => {
 }
 
 const numFmt = (v: number) => v.toLocaleString()
-
-/** 实测容器高度，扣除表头/分页实测高度，得出表格体 scroll.y，保证窗口不出现滚动条（同 Inventory 页模式） */
-function useTableScrollY(wrapRef: RefObject<HTMLDivElement | null>, deps: unknown[] = []) {
-  const [scrollY, setScrollY] = useState<number>(400)
-  useEffect(() => {
-    const el = wrapRef.current
-    if (!el) return
-    const update = () => {
-      const thead = el.querySelector('.ant-table-thead') as HTMLElement | null
-      const pag = el.querySelector('.ant-pagination') as HTMLElement | null
-      const theadH = thead ? thead.offsetHeight : 39
-      // 分页: 自身高度 + 上外距16; 卡片: 底部内边距4 + 边框2; 无分页时仅卡片部分
-      const extra = pag ? pag.offsetHeight + 16 + 4 + 2 : 4 + 2
-      const y = el.clientHeight - theadH - extra
-      setScrollY(Math.max(y, 120))
-    }
-    update()
-    const ro = new ResizeObserver(update)
-    ro.observe(el)
-    if (el.firstElementChild) ro.observe(el.firstElementChild as HTMLElement)
-    return () => ro.disconnect()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wrapRef, ...deps])
-  return scrollY
-}
 
 export default function ScrapInventory() {
   const [mode, setMode] = useState<Mode>('paste')
