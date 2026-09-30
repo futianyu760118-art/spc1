@@ -555,7 +555,8 @@ def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path,
     return parsed
 
 
-def run_gates(cfg: dict, worktree: Path, files: list[str], run_dir: Path) -> str:
+def run_gates(cfg: dict, worktree: Path, files: list[str], run_dir: Path,
+              progress: ProgressReporter) -> str:
     repo_dir = Path(cfg["repo_dir"])
     checks: list[tuple[str, str, Path]] = []
     backend_command = cfg["gates"]["backend_command"].format(python=cfg["backend_python"])
@@ -571,6 +572,7 @@ def run_gates(cfg: dict, worktree: Path, files: list[str], run_dir: Path) -> str
     gate_lines: list[str] = []
     try:
         for name, command, cwd in checks:
+            progress.stage(f"gate_{name}")
             if name == "frontend":
                 ensure_node_modules(worktree, repo_dir)
             log(f"门禁执行 [{name}]: {command}")
@@ -623,13 +625,18 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
     run_dir = RUNNER_DIR / "runs" / f"{feedback_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     run_dir.mkdir(parents=True, exist_ok=True)
     log(f"开始处理反馈 #{feedback_id}: {feedback.get('title')}")
+    progress = ProgressReporter(api, feedback_id)
     try:
+        progress.stage("preparing")
         worktree, branch, base_sha = prepare_worktree(cfg, feedback)
+        if feedback.get("attachments"):
+            progress.stage("fetching")
         attachments = download_attachments(api, feedback, run_dir)
         prompt = build_prompt(feedback, attachments)
         (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
 
-        parsed = invoke_claude(cfg, worktree, prompt, run_dir)
+        progress.stage("agent")
+        parsed = invoke_claude(cfg, worktree, prompt, run_dir, on_action=progress.action)
         if parsed["is_error"]:
             raise RunFailure(f"代理执行报错: {parsed['result'][:500] or '未知错误'}")
 
@@ -642,8 +649,9 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
             git(cfg, "branch", "-D", branch, check=False)
             raise RunFailure(f"改动触碰敏感文件，已阻断并删除分支: {', '.join(blocked)}")
 
-        gate_summary = run_gates(cfg, worktree, files, run_dir)
+        gate_summary = run_gates(cfg, worktree, files, run_dir, progress)
 
+        progress.stage("committing")
         commit_stat = commit_changes(worktree, feedback, base_sha)
         (run_dir / "diff-stat.txt").write_text(commit_stat, encoding="utf-8")
 
