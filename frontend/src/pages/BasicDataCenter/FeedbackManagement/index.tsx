@@ -561,6 +561,51 @@ export default function FeedbackManagement() {
                   )}
                   {canHandle && aiAction(detail)}
                 </div>
+                {detail.ai_progress?.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#94a3b8', fontWeight: 600, letterSpacing: '0.05em', marginBottom: 8 }}>
+                      执行进度
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {stageEntries(detail.ai_progress).map((e: any, i: number, arr: any[]) => {
+                        const isCurrent = detail.ai_status === 'running' && detail.ai_stage === e.stage
+                        const next = arr[i + 1]
+                        const duration = next ? dayjs(next.at).diff(dayjs(e.at), 'minute') : null
+                        return (
+                          <div key={`stage-${i}-${e.stage}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{
+                              width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                              background: isCurrent ? '#5b5bd6' : '#cbd5e1',
+                              boxShadow: isCurrent ? '0 0 0 3px rgba(91,91,214,.15)' : undefined,
+                            }} />
+                            <span style={{ fontSize: 'calc(12.5px * var(--font-size-scale))', color: isCurrent ? '#0f172a' : '#64748b', fontWeight: isCurrent ? 600 : 400 }}>
+                              {aiStageMeta[e.stage]?.label || e.text || e.stage}
+                            </span>
+                            <span className="sc-note">{fmtClock(e.at)}</span>
+                            {isCurrent
+                              ? <span className="sc-note">已运行 {elapsedMinutes(detail.ai_stage_started_at)} 分钟</span>
+                              : duration !== null && <span className="sc-note">耗时 {duration} 分钟</span>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {actionEntries(detail.ai_progress).length > 0 && (
+                      <>
+                        <div style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#94a3b8', fontWeight: 600, letterSpacing: '0.05em', margin: '10px 0 6px' }}>
+                          最近动作
+                        </div>
+                        <div ref={actionBoxRef} style={{ maxHeight: 160, overflow: 'auto', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 10px' }}>
+                          {actionEntries(detail.ai_progress).map((e: any, i: number) => (
+                            <div key={`action-${i}`} className="sc-note" style={{ lineHeight: 1.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              <span className="sc-mono" style={{ marginRight: 6 }}>{fmtClock(e.at)}</span>
+                              {e.text}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {detail.ai_note && (
                   <div style={{
                     marginTop: 8, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
