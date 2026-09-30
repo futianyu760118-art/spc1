@@ -1,16 +1,14 @@
 """用户权限 payload 缓存 — 减轻 PermissionChecker 每次请求查库的负担
 
 缓存内容：role_code / supplier_name / supplier_code / oa_user_id / org_scope_ids / login_version
-缓存粒度：按 user_id + login_version（重新登录会 bump login_version，自动失效旧缓存）
-TTL：5 分钟（兜底，即使 login_version 失效机制出问题也不会缓存太久）
+缓存粒度：按 user_id + channel + login_version（login_version 为 token 携带的渠道版本；
+   同渠道重新登录版本递增，登录时主动 invalidate 该渠道缓存，立即失效旧缓存）
+TTL：5 分钟（兜底，即使失效机制出问题也不会缓存太久）
 """
 import json
 import time
 import threading
-import redis.asyncio as redis
-from app.core.config import get_settings
-
-settings = get_settings()
+from app.core.redis_client import get_command_client, note_failure, note_success
 
 PAYLOAD_CACHE_PREFIX = "perm:payload:"
 PAYLOAD_CACHE_TTL = 5 * 60  # 5 分钟
@@ -21,14 +19,12 @@ _local_lock = threading.Lock()
 
 
 async def _get_redis():
-    try:
-        return redis.from_url(settings.REDIS_URL, decode_responses=True, socket_connect_timeout=2)
-    except Exception:
-        return None
+    """共享命令客户端（熔断开启时返回 None）。调用方不要 aclose。"""
+    return get_command_client()
 
 
-def _cache_key(user_id: int, login_version: int) -> str:
-    return f"{PAYLOAD_CACHE_PREFIX}{user_id}:v{login_version}"
+def _cache_key(user_id: int, channel: str, login_version: int) -> str:
+    return f"{PAYLOAD_CACHE_PREFIX}{user_id}:{channel}:v{login_version}"
 
 
 def _local_get(key: str) -> dict | None:
@@ -48,9 +44,9 @@ def _local_set(key: str, value: dict) -> None:
         _local_cache[key] = (time.time(), value)
 
 
-async def get_cached_user_payload(user_id: int, login_version: int) -> dict | None:
+async def get_cached_user_payload(user_id: int, channel: str, login_version: int) -> dict | None:
     """读取缓存的用户 payload（不含 permissions，permissions 单独查）。返回 None 表示未命中。"""
-    key = _cache_key(user_id, login_version)
+    key = _cache_key(user_id, channel, login_version)
     # 先查进程内缓存（最快）
     local = _local_get(key)
     if local is not None:
@@ -61,23 +57,20 @@ async def get_cached_user_payload(user_id: int, login_version: int) -> dict | No
         return None
     try:
         raw = await client.get(key)
+        note_success()
         if not raw:
             return None
         data = json.loads(raw)
         _local_set(key, data)  # 回写进程内
         return data
     except Exception:
+        note_failure()
         return None
-    finally:
-        try:
-            await client.aclose()
-        except Exception:
-            pass
 
 
-async def set_cached_user_payload(user_id: int, login_version: int, payload: dict) -> None:
+async def set_cached_user_payload(user_id: int, channel: str, login_version: int, payload: dict) -> None:
     """写入用户 payload 缓存"""
-    key = _cache_key(user_id, login_version)
+    key = _cache_key(user_id, channel, login_version)
     # org_scope_ids 是 set，需要转 list 才能序列化
     safe = dict(payload)
     if isinstance(safe.get("org_scope_ids"), set):
@@ -90,29 +83,32 @@ async def set_cached_user_payload(user_id: int, login_version: int, payload: dic
         return
     try:
         await client.setex(key, PAYLOAD_CACHE_TTL, json.dumps(safe, default=str))
+        note_success()
     except Exception:
-        pass
-    finally:
-        try:
-            await client.aclose()
-        except Exception:
-            pass
+        note_failure()
+    # client 为共享客户端，不 aclose
 
 
-async def invalidate_user_payload(user_id: int) -> None:
-    """主动失效某用户的所有版本缓存（扫前缀）"""
+async def invalidate_user_payload(user_id: int, channel: str | None = None) -> None:
+    """主动失效某用户（某渠道）的所有版本缓存。
+
+    channel 给定时只清该渠道；为 None 时清该用户所有渠道。同时清进程内缓存与 Redis。
+    """
+    local_prefix = f"{PAYLOAD_CACHE_PREFIX}{user_id}:{channel}:v" if channel else f"{PAYLOAD_CACHE_PREFIX}{user_id}:"
+    redis_pattern = f"{PAYLOAD_CACHE_PREFIX}{user_id}:{channel}:v*" if channel else f"{PAYLOAD_CACHE_PREFIX}{user_id}:*"
+    # 清进程内缓存
+    with _local_lock:
+        stale = [k for k in _local_cache if k.startswith(local_prefix)]
+        for k in stale:
+            _local_cache.pop(k, None)
+    # 清 Redis
     client = await _get_redis()
     if not client:
         return
     try:
-        # 扫所有版本 key（不同 login_version 的）
-        pattern = f"{PAYLOAD_CACHE_PREFIX}{user_id}:v*"
-        async for key in client.scan_iter(match=pattern, count=100):
+        async for key in client.scan_iter(match=redis_pattern, count=100):
             await client.delete(key)
+        note_success()
     except Exception:
-        pass
-    finally:
-        try:
-            await client.aclose()
-        except Exception:
-            pass
+        note_failure()
+    # client 为共享客户端，不 aclose

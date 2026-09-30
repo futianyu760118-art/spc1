@@ -16,6 +16,16 @@ logger = logging.getLogger(__name__)
 _rule_cache: dict[str, str] = {}
 
 
+def _get_settings():
+    from app.core.config import get_settings
+    return get_settings()
+
+
+def _get_wecom_client():
+    from app.services.basicdata.wecom.client import get_wecom_client
+    return get_wecom_client()
+
+
 def clear_rule_cache() -> None:
     """清除规则阈值缓存（配置更新后调用）。"""
     _rule_cache.clear()
@@ -108,9 +118,18 @@ class PriceChangeService:
         # 子表
         items_row = await self.db.execute(text("SELECT * FROM purchase_price_change_item WHERE change_id = :cid ORDER BY seq"), {"cid": change_id})
         record["items"] = [dict(r._mapping) for r in items_row]
-        # 审批日志
-        logs_row = await self.db.execute(text("SELECT * FROM purchase_price_change_approval_log WHERE change_id = :cid ORDER BY operated_at"), {"cid": change_id})
-        record["approval_logs"] = [dict(r._mapping) for r in logs_row]
+        # 审批日志：按 id 升序取，每出现一次 action='submit' 即为新一轮的起点，
+        # 为每条日志标注所属轮次（round），供前端按轮次分组展示。
+        logs_row = await self.db.execute(text("SELECT * FROM purchase_price_change_approval_log WHERE change_id = :cid ORDER BY id"), {"cid": change_id})
+        log_list = [dict(r._mapping) for r in logs_row]
+        _round = 0
+        for lg in log_list:
+            if lg.get("action") == "submit":
+                _round += 1
+            lg["round"] = _round
+        record["approval_logs"] = log_list
+        # 当前轮次 = 累计提交次数（未提交过的草稿为 0）
+        record["approval_round"] = _round
         # AI 分析
         ai_row = await self.db.execute(text("SELECT * FROM purchase_price_change_ai_analysis WHERE change_id = :cid ORDER BY id DESC LIMIT 1"), {"cid": change_id})
         ai = ai_row.fetchone()
@@ -149,6 +168,9 @@ class PriceChangeService:
         row = await self.db.execute(text("SELECT id FROM purchase_price_change WHERE change_no = :no"), {"no": change_no})
         cid = row.scalar()
 
+        # 兜底：物料代码存在但名称缺失的行，按 ERP 主数据自动回填（防手工敲代码不带名称）
+        items_data = await self._enrich_material_names(items_data)
+
         for idx, item in enumerate(items_data):
             old = item.get("old_price")
             new = item.get("new_price")
@@ -175,6 +197,7 @@ class PriceChangeService:
 
             await self._add_approval_log(cid, None, "submit", applicant, "提交审批")
             await self._init_approval_snapshot(cid)
+            await self._notify_approvers_of_level(cid, 1)
             self._run_ai_analysis_background(cid)
 
         record = await self.get_price_change(cid)
@@ -203,6 +226,8 @@ class PriceChangeService:
         )
 
         await self.db.execute(text("DELETE FROM purchase_price_change_item WHERE change_id=:cid"), {"cid": change_id})
+        # 兜底：物料代码存在但名称缺失的行，按 ERP 主数据自动回填
+        items_data = await self._enrich_material_names(items_data)
         for idx, item in enumerate(items_data):
             old = item.get("old_price")
             new = item.get("new_price")
@@ -222,17 +247,8 @@ class PriceChangeService:
         if not record or record.get("approval_status") not in ("draft", "rejected", "recalled"):
             return None
 
-        # 1. 如果没有 self_check_result，自动运行自检
-        check_result = record.get("self_check_result")
-        if isinstance(check_result, str):
-            try:
-                check_result = json.loads(check_result)
-            except Exception:
-                check_result = None
-        if not check_result:
-            check_result = await self.self_check_record(change_id)
-        elif record.get("self_check_status") in (None, "pending"):
-            check_result = await self.self_check_record(change_id)
+        # 1. 每次（重新）提交都用当前明细重跑自检，避免沿用上一轮/驳回前的结果
+        check_result = await self.self_check_record(change_id)
 
         # 2. 校验凭证 + 行动项说明（高风险强制）
         ev_res = await self._validate_and_store_evidence(change_id, self_check_evidence, action_note)
@@ -243,16 +259,18 @@ class PriceChangeService:
                 "_message": ev_res["message"],
             }
 
-        # 3. 正常的提交流程
-        await self.db.execute(text("DELETE FROM purchase_price_change_approval_log WHERE change_id = :cid"), {"cid": change_id})
+        # 3. 开启新一轮审批：不删除历史审批记录（驳回/撤回等过程完整留存可追溯），
+        #    仅重置到第 1 级，并按最新配置重生成审批链快照。
         await self.db.execute(
-            text("UPDATE purchase_price_change SET approval_status='pending', approval_level=1, submitted_at=:now WHERE id=:cid"),
+            text("""UPDATE purchase_price_change
+                    SET approval_status='pending', approval_level=1, submitted_at=:now, version=version+1
+                    WHERE id=:cid AND approval_status IN ('draft','rejected','recalled')"""),
             {"cid": change_id, "now": datetime.now()},
         )
         await self._add_approval_log(change_id, None, "submit", applicant, "提交审批")
         await self._init_approval_snapshot(change_id)
-        self._run_ai_analysis_background(change_id)
         await self._notify_approvers_of_level(change_id, 1)
+        self._run_ai_analysis_background(change_id)
         return await self.get_price_change(change_id)
 
     def _check_node_permission(self, node: dict, approver: str, approver_role: str) -> tuple[bool, str]:
@@ -320,6 +338,8 @@ class PriceChangeService:
             FROM purchase_price_change_approval_log l
             LEFT JOIN sys_user u ON u.username = l.approver
             WHERE l.change_id=:cid AND l.approval_level<:lv AND l.action IN ('approve', 'auto_skip')
+              AND l.id >= (SELECT COALESCE(MAX(s.id), 0) FROM purchase_price_change_approval_log s
+                           WHERE s.change_id=:cid AND s.action='submit')
         """), {"cid": change_id, "lv": before_level})
         result = set()
         for r in rows:
@@ -942,6 +962,60 @@ class PriceChangeService:
         seq = int(max_no.split("-")[-1]) + 1
         return f"PC{today}-{seq:03d}"
 
+    async def _enrich_material_names(self, items: list) -> list:
+        """兜底：对「有物料代码但物料名称为空」的行，从 ERP 物料主数据回填名称/规格/单位。
+
+        只在名称缺失时补（前端选择物料时本应已带回名称；手工敲代码不带名称是历史问题主因）。
+        ERP 不可达或代码在主数据中不存在时静默跳过，不影响单据保存。
+        """
+        missing = [
+            i for i in (items or [])
+            if (i.get("material_code") or "").strip() and not (i.get("material_name") or "").strip()
+        ]
+        if not missing:
+            return items
+        codes = list({str(i["material_code"]).strip() for i in missing})
+        try:
+            from sqlalchemy import create_engine
+            from app.core.config import get_settings
+            settings = get_settings()
+            url = settings.ERP_DB_URL
+            if not url:
+                return items
+            for param in ["TrustServerCertificate=yes", "Encrypt=no"]:
+                if param.split("=")[0] not in url:
+                    url += f"&{param}" if "?" in url else f"?{param}"
+            erp_engine = create_engine(url, connect_args={"login_timeout": 10, "timeout": 15})
+            rows_map: dict[str, tuple] = {}
+            try:
+                with erp_engine.connect() as conn:
+                    placeholders = ",".join(f":mc{i}" for i in range(len(codes)))
+                    rows = conn.execute(
+                        text(f"""SELECT [物料代码], [物料名称], [规格型号], [单位]
+                                FROM k3sv.AIS20161019115614.dbo.h_v_K3_WGICItem
+                                WHERE [物料代码] IN ({placeholders})"""),
+                        {f"mc{i}": c for i, c in enumerate(codes)},
+                    )
+                    for r in rows:
+                        rows_map[r[0]] = (r[1], r[2], r[3])
+            finally:
+                erp_engine.dispose()
+        except Exception as e:
+            logger.warning("调价单物料名称 ERP 兜底回填失败: %s", e)
+            return items
+
+        for item in missing:
+            code = str(item["material_code"]).strip()
+            row = rows_map.get(code)
+            if not row:
+                continue
+            item["material_name"] = row[0] or item.get("material_name")
+            if not (item.get("spec") or "").strip():
+                item["spec"] = row[1] or ""
+            if not (item.get("unit") or "").strip():
+                item["unit"] = row[2] or item.get("unit")
+        return items
+
     async def _resolve_dept_manager(self, applicant: str) -> list[dict]:
         """动态解析申请人的部门经理（直接上级）。applicant 可能是 user_id 或 username。
         返回 [{username, user_id}] 列表（通常 1 个），解析失败返回空列表。
@@ -1180,15 +1254,19 @@ class PriceChangeService:
 
     # ==================== 通知 ====================
 
-    async def _notify_user(self, user_id: int, title: str, content: str, *, ref_type: str = "price_change", ref_id: int = None, priority: str = "normal"):
+    async def _notify_user(self, user_id: int, title: str, content: str, *, ref_type: str = "price_change", ref_id: int = None, priority: str = "normal", sender_name: str = None, sender_id: int = None):
         """给指定用户推一条通知（顶栏铃铛可见）"""
         try:
             await self.db.execute(text("""
-                INSERT INTO notification (user_id, type, title, content, ref_type, ref_id, priority, is_read, created_at)
-                VALUES (:uid, 'price_change', :title, :content, :rt, :rid, :p, FALSE, NOW())
-            """), {"uid": user_id, "title": title, "content": content, "rt": ref_type, "rid": ref_id, "p": priority})
+                INSERT INTO notification (user_id, type, title, content, ref_type, ref_id, sender_id, sender_name, priority, is_read, created_at)
+                VALUES (:uid, 'price_change', :title, :content, :rt, :rid, :sid, :sender, :p, FALSE, NOW())
+            """), {"uid": user_id, "title": title, "content": content, "rt": ref_type, "rid": ref_id, "sid": sender_id, "sender": sender_name, "p": priority})
         except Exception as e:
             logger.warning(f"通知推送失败 user_id={user_id} title={title}: {e}")
+            return
+        # 同 session 未提交也能查到刚插入的行，推送未读数让顶栏角标实时刷新
+        from app.services.notification.notification_broker import publish_unread_update
+        await publish_unread_update(self.db, user_id)
 
     async def _notify_approvers_of_level(self, change_id: int, level: int, *, title_prefix: str = "待您审批"):
         """通知某个级别的审批人。动态节点取 approvers.user_id；固定角色节点查库。"""
@@ -1225,7 +1303,61 @@ class PriceChangeService:
         title = f"[调价单] {title_prefix} - {label}"
         content = f"调价单 {no}（供应商：{supplier}，申请人：{applicant}）需要您{label}。"
         for uid in target_uids:
-            await self._notify_user(uid, title, content, ref_id=change_id, priority="high")
+            # applicant 可能是 user_id 或 username，能转 int 就带上提出人 id
+            try:
+                applicant_id = int(applicant)
+            except (TypeError, ValueError):
+                applicant_id = None
+            await self._notify_user(uid, title, content, ref_id=change_id, priority="high", sender_name=applicant, sender_id=applicant_id)
+
+        await self._notify_approvers_wecom(target_uids, change_id, no, supplier, applicant, label)
+
+    async def _notify_approvers_wecom(self, user_ids: list[int], change_id: int, no: str, supplier: str, applicant: str, label: str):
+        """企业微信推送调价单待审批消息卡片给审批人。未配置企微/推送失败时优雅降级，不影响审批流程。"""
+        if not user_ids:
+            return
+        try:
+            settings = _get_settings()
+            if not (settings.wecom_corp_id and settings.wecom_corp_secret and settings.wecom_agent_id):
+                logger.info("[price_change][wecom] 企业微信未配置，跳过审批推送")
+                return
+            # 查审批人的企微 userid（sys_user.wecom_user_id 已绑定）
+            rows = await self.db.execute(text(
+                "SELECT wecom_user_id FROM sys_user WHERE id = ANY(:uids) AND wecom_user_id IS NOT NULL AND wecom_user_id != ''"
+            ), {"uids": user_ids})
+            wecom_ids = [r[0] for r in rows if r[0]]
+            if not wecom_ids:
+                return
+            base = settings.frontend_base_url or "http://localhost:3000"
+            if base and not base.startswith(("http://", "https://")):
+                base = "http://" + base
+            url = f"{base}/purchase/price-change/{change_id}"
+            desc = f"调价单 {no}\n供应商：{supplier}\n申请人：{applicant}\n审批节点：{label}\n点击查看详情并处理审批。"
+            agent_id = settings.wecom_agent_id
+            try:
+                agent_id = int(agent_id)
+            except (TypeError, ValueError):
+                logger.warning(f"[price_change][wecom] agent_id 配置非法: {settings.wecom_agent_id}")
+                return
+            payload = {
+                "touser": "|".join(wecom_ids),
+                "msgtype": "textcard",
+                "agentid": agent_id,
+                "textcard": {
+                    "title": f"调价单待审批 - {label}",
+                    "description": desc,
+                    "url": url,
+                    "btntxt": "查看详情",
+                },
+            }
+            resp = await _get_wecom_client().send_app_message(payload)
+            errcode = resp.get("errcode", 0)
+            if errcode != 0:
+                logger.warning(f"[price_change][wecom] 推送审批消息失败 errcode={errcode} errmsg={resp.get('errmsg')}")
+            else:
+                logger.info(f"[price_change][wecom] 已推送 {len(wecom_ids)} 位审批人 change_id={change_id}")
+        except Exception as e:
+            logger.warning(f"[price_change][wecom] 审批企微推送异常（已降级）: {e}")
 
     async def _notify_applicant(self, change_id: int, title: str, content: str):
         """通知申请人"""
@@ -1310,11 +1442,13 @@ class PriceChangeService:
         if current_level <= 1:
             return {"success": False, "message": "当前在第1级，没有可撤回的审批"}
 
-        # 查最后一条 approve/auto_skip 日志（即把单子推到当前级别的那次操作）
+        # 查当前轮次内最后一条 approve/auto_skip 日志（即把单子推到当前级别的那次操作）
         log_row = await self.db.execute(text("""
             SELECT id, approval_level, approver, action FROM purchase_price_change_approval_log
             WHERE change_id = :cid AND action IN ('approve', 'auto_skip')
-            ORDER BY operated_at DESC LIMIT 1
+              AND id >= (SELECT COALESCE(MAX(s.id), 0) FROM purchase_price_change_approval_log s
+                         WHERE s.change_id=:cid AND s.action='submit')
+            ORDER BY id DESC LIMIT 1
         """), {"cid": change_id})
         last_log = log_row.fetchone()
         if not last_log:

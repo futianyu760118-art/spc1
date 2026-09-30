@@ -2,10 +2,10 @@
 
 from collections import defaultdict
 from datetime import date, datetime
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.order.sale_order import SaleOrder
+from app.models.order.sale_order import SaleOrder, order_closed_condition, order_not_closed_condition
 from app.models.material.material_demand import MaterialDemand
 from app.models.material.purchase_order import PurchaseOrder
 from app.models.exception.risk_issue import RiskIssue
@@ -66,7 +66,7 @@ class RiskEngine:
 
     async def _calc_delivery_delay(self, order: SaleOrder) -> int:
         """交期延期因子：已发货用 delivery_completed_date vs promised_date，未发货用 today vs promised_date"""
-        if not order.promised_date or order.status == "closed":
+        if not order.promised_date or order.erp_status == 3:
             return 0
         if order.delivery_completed_date:
             # 已发货：用实际发货完成日期与承诺交期比较
@@ -250,7 +250,8 @@ class RiskEngine:
         """评估所有 open/reopened 订单，写回 risk_level/risk_score/risk_factors/risk_assessed_at"""
         result = await self.db.execute(
             select(SaleOrder).where(
-                SaleOrder.status.in_(["open", "reopened", "in_progress"])
+                SaleOrder.status.in_(["open", "reopened", "in_progress"]),
+                order_not_closed_condition(),
             )
         )
         orders = result.scalars().all()
@@ -261,21 +262,39 @@ class RiskEngine:
         green_count = 0
         now = datetime.now()
 
+        updates: list[dict] = []
         for order in orders:
             assessment = await self.assess_order(order)
-            order.risk_level = assessment["risk_level"]
-            order.risk_score = assessment["final_score"]
-            order.risk_factors = assessment["factors"]
-            order.risk_assessed_at = now
-            assessed += 1
-            if assessment["risk_level"] == "red":
-                red_count += 1
-            elif assessment["risk_level"] == "yellow":
-                yellow_count += 1
-            elif assessment["risk_level"] == "blue":
-                blue_count += 1
-            else:
-                green_count += 1
+            new_level = assessment["risk_level"]
+            new_score = assessment["final_score"]
+            new_factors = assessment["factors"]
+            if (
+                getattr(order, "risk_level", None) != new_level
+                or getattr(order, "risk_score", None) != new_score
+                or getattr(order, "risk_factors", None) != new_factors
+            ):
+                updates.append({
+                    "id": order.id,
+                    "risk_level": new_level,
+                    "risk_score": new_score,
+                    "risk_factors": new_factors,
+                    "risk_assessed_at": now,
+                })
+                if new_level == "red":
+                    red_count += 1
+                elif new_level == "yellow":
+                    yellow_count += 1
+                elif new_level == "blue":
+                    blue_count += 1
+                else:
+                    green_count += 1
+
+        assessed = len(updates)
+        if assessed:
+            await self.db.execute(
+                update(SaleOrder),
+                updates,
+            )
 
         await self.db.flush()
 
@@ -357,10 +376,16 @@ class RiskEngine:
 
     async def run_full_scan(self, operator: str = "system") -> dict:
         """执行全量风险扫描：先评估订单风险等级，再按8种规则类型生成 RiskIssue"""
-        # 1) 评估所有订单
+        # 1) 评估所有订单（已关闭订单不评估）
         assess_result = await self.assess_all_orders(operator=operator)
 
-        # 2) 加载所有启用的扫描规则（排除 order_risk 调整规则）
+        # 2) 已关闭订单（erp_status=3）不参与规则扫描
+        closed_result = await self.db.execute(
+            select(SaleOrder.order_no).where(order_closed_condition())
+        )
+        closed_order_nos = set(closed_result.scalars().all())
+
+        # 3) 加载所有启用的扫描规则（排除 order_risk 调整规则）
         rules_result = await self.db.execute(
             select(RiskRule).where(
                 RiskRule.is_active == True,
@@ -378,6 +403,7 @@ class RiskEngine:
                 select(SaleOrder).where(
                     SaleOrder.promised_date != None,
                     SaleOrder.status.in_(["open", "reopened", "in_progress"]),
+                    order_not_closed_condition(),
                 )
             )
             for order in order_result.scalars().all():
@@ -412,6 +438,8 @@ class RiskEngine:
                 select(MaterialDemand).where(MaterialDemand.shortage_flag == True)
             )
             for md in md_result.scalars().all():
+                if md.order_no in closed_order_nos:
+                    continue
                 for rule in sh_rules:
                     cond = rule.condition_json or {}
                     threshold = cond.get("shortage_qty_gt", 0)
@@ -462,6 +490,8 @@ class RiskEngine:
                 )
             )
             for pp in pp_result.scalars().all():
+                if pp.order_no in closed_order_nos:
+                    continue
                 for rule in pl_rules:
                     cond = rule.condition_json or {}
                     threshold = cond.get("threshold_days", 0)
@@ -494,6 +524,8 @@ class RiskEngine:
                 if qi.order_no:
                     by_order[qi.order_no].append(qi)
             for order_no, items in by_order.items():
+                if order_no in closed_order_nos:
+                    continue
                 for rule in q_rules:
                     cond = rule.condition_json or {}
                     threshold = cond.get("open_count_gt", 0)
@@ -515,6 +547,7 @@ class RiskEngine:
                 select(SaleOrder).where(
                     SaleOrder.inspection_result != None,
                     SaleOrder.status.in_(["open", "reopened", "in_progress"]),
+                    order_not_closed_condition(),
                 )
             )
             for order in order_result.scalars().all():

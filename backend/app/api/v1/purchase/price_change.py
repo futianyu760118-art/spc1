@@ -239,8 +239,10 @@ async def get_supplier_last_price(
     from sqlalchemy import text
     result = await db.execute(text("SELECT po_price, po_date FROM purchase_order WHERE material_code=:mat AND supplier_code=:sup ORDER BY po_date DESC LIMIT 1"), {"mat": material_code, "sup": supplier_code or ""})
     row = result.fetchone()
-    if row:
+    # 无采购记录或成交价为空时返回空数据：隐式 return None 会触发响应模型校验 500
+    if row and row[0] is not None:
         return ResponseModel(data={"old_price": float(row[0]), "old_price_date": str(row[1])})
+    return ResponseModel(data=None)
 
 
 @router.get("/material-price-history", response_model=ResponseModel)

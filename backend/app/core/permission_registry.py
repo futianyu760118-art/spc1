@@ -112,7 +112,85 @@ async def sync_permissions_to_db(db: AsyncSession) -> int:
 
 # 已废弃的权限 code —— 这些权限已迁移到 materials.stock_check，
 # 运行期代码（API PermissionChecker / 前端菜单）不再引用，需在每次启动时清理。
-DEPRECATED_PERMISSION_CODES = ("orders.stock_check", "orders.inventory_check")
+# quality.supplier_claim.pending / .config：审批中心上线前的旧权限，已被 approval.pending / approval.config 取代。
+# 仅存在于历史库中（代码从未声明），不清理会继续作为菜单项渲染在「品质管理」下。
+# deploy_versions：部署版本管理功能已整体移除（2026-09-29），代理路由与 deploy_agent 一并删除。
+DEPRECATED_PERMISSION_CODES = (
+    "orders.stock_check",
+    "orders.inventory_check",
+    "quality.supplier_claim.pending",
+    "quality.supplier_claim.config",
+    "deploy_versions",
+)
+
+# 一次性动作迁移:盘点抽检曾声明为 read/manage,现回归标准增删改查。
+# 幂等:每次启动执行,已迁移的行不再变化。
+MIGRATE_AUDIT_ACTIONS = ("materials.stock_check_audit",)
+
+# 一次性改名迁移：DB 是权限定义的真相源，sync_permissions_to_db 只首次插入不覆盖既有行，
+# 故代码侧改名需在此显式回灌。仅当 DB 仍为旧名时更新——管理员在「权限管理」页自定义的名字不被覆盖。
+RENAME_PERMISSION_NAMES = {
+    # 审批中心首个菜单：与页面实际职能（三 Tab 工作台）对齐
+    "approval.pending": ("待我审批", "待办工作台"),
+}
+
+
+async def migrate_permission_names(db: AsyncSession) -> int:
+    """把已更名的权限 code 从旧名回灌为新名（仅旧名时更新，幂等，每次启动执行）。"""
+    from sqlalchemy import text
+
+    changed = 0
+    for code, (old_name, new_name) in RENAME_PERMISSION_NAMES.items():
+        result = await db.execute(
+            text("UPDATE sys_permission SET name = :new WHERE code = CAST(:code AS text) AND name = :old"),
+            {"code": code, "old": old_name, "new": new_name},
+        )
+        changed += result.rowcount or 0
+    await db.commit()
+    if changed:
+        logger.info(f"[权限注册] 权限改名回灌 {changed} 项")
+    return changed
+
+
+async def migrate_permission_actions(db: AsyncSession) -> int:
+    """把 materials.stock_check_audit 的 actions 迁移为标准 CRUD,并把角色 JSON 内的
+    manage 动作迁到 update(该权限此前以 read/manage 声明)。幂等,每次启动执行。"""
+    from sqlalchemy import text
+
+    changed = 0
+    for code in MIGRATE_AUDIT_ACTIONS:
+        await db.execute(
+            text(
+                "UPDATE sys_permission SET actions = '[\"create\", \"read\", \"update\", \"delete\"]'::jsonb "
+                "WHERE code = CAST(:code AS text) AND actions::text <> '[\"create\", \"read\", \"update\", \"delete\"]'"
+            ),
+            {"code": code},
+        )
+        # 角色 JSON: {"materials.stock_check_audit": ["read","manage"]} → manage 迁移为 update,并确保含 read
+        result = await db.execute(
+            text(
+                "UPDATE sys_role SET permissions = jsonb_set( "
+                "  permissions - CAST(:code AS text), "
+                "  ARRAY[:code], "
+                "  ( "
+                "    SELECT COALESCE(jsonb_agg(DISTINCT x.a ORDER BY x.a), '[]'::jsonb) "
+                "    FROM ( "
+                "      SELECT CASE WHEN t.a = 'manage' THEN 'update' ELSE t.a END AS a "
+                "      FROM jsonb_array_elements_text(permissions -> CAST(:code AS text)) AS t(a) "
+                "      UNION SELECT 'read' "
+                "    ) x "
+                "  ) "
+                ") "
+                "WHERE permissions ? CAST(:code AS text) "
+                "  AND permissions -> CAST(:code AS text) ? 'manage'"
+            ),
+            {"code": code},
+        )
+        changed += result.rowcount or 0
+    await db.commit()
+    if changed:
+        logger.info(f"[权限注册] 迁移盘点抽检动作 manage→update,涉及 {changed} 个角色")
+    return changed
 
 
 async def cleanup_deprecated_permissions(db: AsyncSession) -> int:
@@ -181,10 +259,16 @@ declare_permission("materials.purchase_plan", "采购到料计划", module="mate
 declare_permission("materials.issues", "问题物料池", module="materials", parent_code="materials", route_path="/material-issues", sort_order=2)
 declare_permission("materials.long_lead", "长交期物料池", module="materials", parent_code="materials", route_path="/long-lead-materials", sort_order=3)
 declare_permission("materials.kit_analysis", "齐套分析", module="materials", parent_code="materials", route_path="/kit-analysis", sort_order=4)
+declare_permission("materials.kitting", "齐套计算", module="materials", parent_code="materials", actions=["read", "manage"], sort_order=5)
 declare_permission("materials.supplier_risk", "供应商风险分析", module="materials", parent_code="materials", route_path="/supplier-risk", sort_order=5)
 declare_permission("materials.supplier_payment", "供应商付款排程", module="materials", parent_code="materials", route_path="/supplier-payment", sort_order=6)
 declare_permission("materials.stock_check", "物料盘点", module="materials", parent_code="materials", route_path="/stock-check", sort_order=7)
-declare_permission("materials.subcontract_orders", "委外订单", module="materials", parent_code="materials", route_path="/subcontract-orders", sort_order=8)
+declare_permission("materials.task_stock_check", "任务盘点", module="materials", parent_code="materials", route_path="/task-stock-check", sort_order=8)
+declare_permission("materials.stock_check_audit", "盘点抽检", module="materials", parent_code="materials", route_path="/stock-check-audit", sort_order=13)
+declare_permission("materials.subcontract_orders", "委外订单", module="materials", parent_code="materials", route_path="/subcontract-orders", sort_order=9)
+declare_permission("materials.scrap_inventory", "报废物料库存查询", module="materials", parent_code="materials", route_path="/scrap-inventory", sort_order=10)
+declare_permission("materials.inventory_board", "库存看板", module="materials", parent_code="materials", route_path="/inventory-board", sort_order=11)
+declare_permission("materials.occupancy", "物料占用分析", module="materials", parent_code="materials", actions=["read"], route_path="/material-occupancy", sort_order=12)
 
 # 生产协同中心
 declare_permission("production", "生产协同中心", module="production", sort_order=5)
@@ -199,31 +283,21 @@ declare_permission("production.packaging", "包装管理", module="production", 
 declare_permission("production.exceptions", "工序异常池", module="production", parent_code="production", route_path="/process-exceptions", sort_order=9)
 declare_permission("production.daily_report", "生产日报表", module="production", parent_code="production", route_path="/daily-reports", sort_order=10)
 declare_permission("production.labor_price_audit", "工价审核", module="production", parent_code="production", route_path="/labor-price-audits", sort_order=11)
+declare_permission("production.order_wage_lookup", "订单工价查询", module="production", parent_code="production", route_path="/order-wage-lookup", sort_order=12, actions=["read"])
 
 # 异常与质量中心
 declare_permission("exceptions", "异常与质量中心", module="exceptions", sort_order=6)
 declare_permission("exceptions.pool", "异常总池", module="exceptions", parent_code="exceptions", route_path="/issues", sort_order=1)
-declare_permission("exceptions.issue_log", "问题日志", module="exceptions", parent_code="exceptions", route_path="/issue-log", sort_order=2)
-declare_permission("exceptions.change_log", "变更日志", module="exceptions", parent_code="exceptions", route_path="/change-log", sort_order=3)
 declare_permission("exceptions.quality", "品质异常", module="exceptions", parent_code="exceptions", route_path="/quality-issues", sort_order=4)
 declare_permission("exceptions.product_samples", "产品封样", module="exceptions", parent_code="exceptions", route_path="/product-samples", sort_order=5)
 declare_permission("exceptions.closure", "闭环跟踪", module="exceptions", parent_code="exceptions", route_path="/closure-tracking", sort_order=6)
 
-# 会议与任务中心
-declare_permission("meetings", "会议与任务中心", module="meetings", route_path="/meetings", sort_order=7)
-
-# 新品/NPI项目中心
-declare_permission("npi", "新品/NPI项目中心", module="npi", route_path="/npi", sort_order=8)
-
 # 规则配置中心
 declare_permission("rules", "规则配置中心", module="rules", sort_order=9)
 declare_permission("rules.risk_rules", "预警规则", module="rules", parent_code="rules", route_path="/risk-rules", sort_order=1)
-declare_permission("rules.inspection", "点检规则", module="rules", parent_code="rules", route_path="/inspection-rules", sort_order=2)
 declare_permission("rules.node_standards", "节点标准", module="rules", parent_code="rules", route_path="/node-standards", sort_order=3)
 declare_permission("rules.order_standards", "订单标准", module="rules", parent_code="rules", route_path="/order-standards", sort_order=4)
 declare_permission("rules.work_instructions", "作业指导书", module="rules", parent_code="rules", route_path="/work-instructions", sort_order=5)
-declare_permission("rules.responsibility", "责任归属", module="rules", parent_code="rules", route_path="/responsibility-map", sort_order=6)
-declare_permission("rules.status_dict", "状态字典", module="rules", parent_code="rules", route_path="/status-dict", sort_order=7)
 
 # 基础数据与集成中心
 declare_permission("basicdata", "基础数据与集成中心", module="basicdata", sort_order=10)
@@ -245,6 +319,7 @@ declare_permission("basicdata.feedback", "问题反馈", module="basicdata", par
 declare_permission("basicdata.feedback.handle", "处理问题反馈", module="basicdata", parent_code="basicdata.feedback", actions=["handle"], sort_order=1)
 declare_permission("basicdata.files", "文件管理", module="basicdata", parent_code="basicdata", route_path="/basicdata/files", sort_order=4)
 declare_permission("basicdata.data_supply", "数据供给", module="basicdata", parent_code="basicdata", route_path="/basicdata/data-supply", sort_order=10)
+declare_permission("basicdata.share_management", "分享管理", module="basicdata", parent_code="basicdata", route_path="/share-management", sort_order=11)
 declare_permission("announcements", "公告管理", module="basicdata", parent_code="basicdata", route_path="/announcements", sort_order=5)
 declare_permission(
     code="users",
@@ -266,6 +341,14 @@ declare_permission("writeback", "数据回写", module="basicdata", sort_order=1
 declare_permission("writeback.config", "回写SQL配置", module="basicdata", parent_code="writeback", route_path="/writeback-config", sort_order=1)
 declare_permission("writeback.monitor", "回写监控", module="basicdata", parent_code="writeback", route_path="/writeback-monitor", sort_order=2)
 
+# 备份管理（2026-09-29）— 数据库 + uploads 备份/恢复
+declare_permission(
+    "backup", "备份管理",
+    module="basicdata", parent_code="basicdata",
+    actions=["read", "manage"],
+    route_path="/backups", sort_order=12,
+)
+
 # 采购中心
 declare_permission("purchase", "采购中心", module="purchase", sort_order=11)
 declare_permission("purchase.price_change", "调价单管理", module="purchase", parent_code="purchase", route_path="/purchase/price-change", sort_order=1)
@@ -276,3 +359,34 @@ declare_permission("purchase.price_change.archive_delete", "调价单归档删�
 # 财务数据
 declare_permission("finance", "财务数据", module="finance", sort_order=12)
 declare_permission("finance.data", "科目余额", module="finance", parent_code="finance", actions=["read"], route_path="/finance/subject-balances", sort_order=1)
+
+# 品质管理（2026-09-22）— 供应商索赔通知单
+declare_permission("quality", "品质管理", module="quality", sort_order=13)
+declare_permission("quality.supplier_claim", "供应商索赔单", module="quality", parent_code="quality", route_path="/quality/supplier-claims", sort_order=1)
+declare_permission("quality.supplier_claim.archive_delete", "索赔单归档删除", module="quality", parent_code="quality", actions=["delete"], sort_order=2)
+
+# 审批中心（2026-09-22）— 统一待我审批 + 审批链配置（新流程注册 provider 即接入）
+declare_permission("approval", "审批中心", module="approval", sort_order=14)
+declare_permission("approval.pending", "待办工作台", module="approval", parent_code="approval", route_path="/approvals/pending", sort_order=1)
+declare_permission("approval.initiate", "发起申请", module="approval", parent_code="approval", route_path="/approvals/create", sort_order=2)
+declare_permission("approval.config", "审批配置", module="approval", parent_code="approval", route_path="/approvals/configs", sort_order=2)
+# 业务接入管理不单独挂菜单路由，避免与「审批配置」菜单重复（在审批配置页内以 Tab 呈现）
+declare_permission("approval.business", "业务接入管理", module="approval", parent_code="approval",
+                   actions=["read", "update"], sort_order=3)
+
+# MRP 运算（2026-09-24）— 计划方案/引擎/建议/对比
+# 动作: read 查看 / run 触发运算 / review 建议审核 / convert 转化(P2) / param 参数维护
+declare_permission(
+    "materials.mrp", "MRP 运算",
+    module="materials", parent_code="materials",
+    actions=["read", "run", "review", "convert", "param"],
+    route_path="/mrp", sort_order=14,
+)
+
+# 采购申请单（2026-09-24 · MRP P2）
+declare_permission(
+    "materials.purchase_requisition", "采购申请单",
+    module="materials", parent_code="materials",
+    actions=["read", "create", "update", "convert"],
+    route_path="/purchase-requisitions", sort_order=15,
+)

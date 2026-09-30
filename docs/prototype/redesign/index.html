@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>总览 · SPC 供应链中台重设计原型</title>
+<link rel="stylesheet" href="styles.css">
+<!-- PROTOTYPE — 一次性原型，非生产代码 -->
+<style>
+  .ov-wrap { max-width: 960px; margin: 0 auto; padding: 56px 32px 100px; }
+  .ov-hero { text-align: center; margin-bottom: 40px; }
+  .ov-hero .badge-line { display:inline-flex; align-items:center; gap:8px; font-size:11.5px; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:3px 12px; margin-bottom:18px; }
+  .ov-hero h1 { font-size:var(--fs-30); font-weight:700; letter-spacing:-.02em; }
+  .ov-hero p { color:var(--text-2); font-size:var(--fs-14); margin-top:10px; }
+  .ov-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .grp-title { display:flex; align-items:center; gap:8px; font-size:var(--fs-13); font-weight:600; color:var(--text-1); margin:28px 0 12px; }
+  .grp-title .no { font-size:10.5px; font-weight:700; color:var(--brand-500); background:var(--brand-50); border-radius:5px; padding:1px 7px; }
+  .grp-title .hint { font-size:11.5px; font-weight:400; color:var(--text-3); }
+  .ov-grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+  @media (max-width: 1024px) { .ov-grid3 { grid-template-columns:1fr 1fr; } }
+  .ov-card { display:block; padding:20px; position:relative; transition:border-color .12s, box-shadow .12s; }
+  .ov-card:hover { border-color:var(--brand-300); box-shadow:var(--shadow-md); }
+  .ov-card .no { position:absolute; top:18px; right:18px; font-size:11px; font-weight:700; color:var(--brand-500); background:var(--brand-50); padding:1px 8px; border-radius:5px; }
+  .ov-card h3 { font-size:var(--fs-16); font-weight:650; margin-bottom:6px; }
+  .ov-card p { font-size:var(--fs-12); color:var(--text-3); line-height:1.7; }
+  .ov-card .go { display:inline-flex; align-items:center; gap:4px; margin-top:14px; font-size:var(--fs-12); color:var(--brand-600); font-weight:500; }
+  .ov-notes { margin-top:36px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }
+  .ov-note { padding:14px 16px; }
+  .ov-note b { font-size:var(--fs-13); display:block; margin-bottom:4px; }
+  .ov-note span { font-size:11.5px; color:var(--text-3); line-height:1.65; }
+</style>
+</head>
+<body style="background:
+  radial-gradient(700px 400px at 12% 0%, rgba(91,91,214,.07), transparent 60%),
+  radial-gradient(600px 380px at 90% 10%, rgba(14,165,233,.06), transparent 60%),
+  var(--bg);">
+
+<div class="ov-wrap">
+  <div class="ov-hero">
+    <span class="badge-line">● PROTOTYPE v1 · 已确认方向</span>
+    <h1>SPC 供应链中台 · 全站重设计</h1>
+    <p>方案 A「靛蓝精致版」— Linear/Vercel 风格 · 深色侧栏 + 浅色内容 · 去玻璃拟态 · token 变量化预留暗色</p>
+  </div>
+
+  <div class="ov-grid">
+    <a class="card ov-card" href="design-system.html">
+      <span class="no">01</span>
+      <h3>设计系统</h3>
+      <p>色彩（品牌 / 语义 / 风险四级 / 中性 / 图表 8 色）、字体阶与 tabular-nums、间距网格、按钮矩阵、标签体系、表格规范、图表规范、筛选 chips。</p>
+      <span class="go">打开规范 →</span>
+    </a>
+    <a class="card ov-card" href="dashboard.html">
+      <span class="no">02</span>
+      <h3>供应链驾驶舱</h3>
+      <p>6 个 Tab 收敛为 2；KPI 统计卡（左色条 + 环比）；14 天滚动风险堆叠柱；风险分布环形；今日到期订单表 + 待处理事项。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="orders.html">
+      <span class="no">03</span>
+      <h3>订单总控台（旗舰页）</h3>
+      <p>常规页范式：工具栏（搜索 + 快速视图 chips + 右侧按钮）+ 普通表格 + 行 hover 操作 + 底部聚合行/分页；风险徽章 / 齐套率进度 / 交期倒计时。<b style="color:var(--brand-600)">2026-09-03 定稿（普通页面形态）</b>：核心列 ~18 个常显，物料分类到料日期(16)/生产节点/补充维护三组经「列设置」默认收起、勾选即展，需全字段时可一键展开；编辑走弹窗、详情抽屉/订单行展开下钻。<a href="#M5" style="color:var(--brand-600)">与采购到料计划、齐套分析同源互链 →</a></p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="order-detail.html">
+      <span class="no">04</span>
+      <h3>订单详情</h3>
+      <p>顶部横向节点进度条（下单→排产→齐套→生产→发货，计划/实际双行）；风险提示条 + 升级动作；订单行明细表 + 缺料高亮 + 聚合行。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="stock-check.html">
+      <span class="no">05</span>
+      <h3>物料盘点（台账）</h3>
+      <p>双 Tab 收敛（盘点单 / 物料台账）；KPI 统计卡替代图表面板；「新建盘点」下拉聚合三入口 + 快捷盘点直达；差异双色（盈绿 / 亏红）、快照/实时徽章、协同人头像组；「K3 待回写」chip + 行内「K3 回写」直达已完结工作台回写区块。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="stock-check-detail.html">
+      <span class="no">06</span>
+      <h3>盘点执行工作台</h3>
+      <p>独立整页工作台：SSE 协同提示条 + 进度卡带（应盘/已盘/未盘/盈/亏/总差异）+ 完成度；全宽明细表行内录入实盘数、差异实时着色、快照 vs 实时库存；批量盘平 + sticky 保存条；完结弹窗预览 K3 单据分组（完结后进入财务抽检）；发回重填态（红条提示 + 问题行红底 + 财务复点列）；抽检通过态内嵌「K3 回写」区块，右上角可切换四态演示。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="stock-check-audit.html">
+      <span class="no">06+</span>
+      <h3>盘点抽检（财务）</h3>
+      <p>三队列工作台（进行中·过程抽检 / 待抽检 / 已处理）；复点对账抽屉：财务复点数紧贴盘点人实盘数、行内即时「一致/不符」裁定 + 摘要带；发回重填弹窗（不符行默认勾选 + 原因必填）、通过确认弹窗（K3 单据预览）；处置时间线多轮留档。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="procurement-board.html">
+      <span class="no">07</span>
+      <h3>采购看板（驾驶舱 · 精简版）</h3>
+      <p>7 日滚动备料；顶栏 = 标题 + 4 个关键数字（在途 / 逾期 / 今日 / 齐套率）+ 责任人 chips；5 列状态看板（已逾期 / 今日 / 明日 / 未来 7 日 / 已齐套），卡片只留单号 + 物料 + 到料进度 + 责任人。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="shipment-board.html">
+      <span class="no">08</span>
+      <h3>出货计划看板（驾驶舱 · 精简版）</h3>
+      <p>7 日滚动交付；顶栏 = 标题 + 4 个关键数字（待出货 / 逾期 / 今日 / 高风险）+ 业务员 chips；订单卡片只留客户 + 产品 + 完成进度 + 交期（早于出货计划红色预警）+ 风险徽章。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="materials.html">
+      <span class="no">09</span>
+      <h3>物料主数据</h3>
+      <p>总控台同构：工具栏内联搜索 + 属性 chips + 列设置/密度切换；组合式物料列（名称+编码两行）+ 树形缩进 + 采/产 mini 徽标 + 数据来源徽章 + 聚合行；勾选浮起批量操作条；详情侧滑抽屉（基本信息 / ERP 同步 / 层级路径 / 被引用位置）+ 新增编辑弹窗，全部 CSS :has() 零 JS 交互。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="scrap-inventory.html">
+      <span class="no">10</span>
+      <h3>报废物料库存查询</h3>
+      <p>一次性核对工具：载入卡（粘贴 / 上传 segmented 切换 + 解析状态脚注）→ KPI 带（清单 / 有库存 / 零库存 / 未匹配）→ 状态 chips 过滤（radio-hack 真实生效）+ 组合物料列 + 仓库分布下钻抽屉 + 聚合行 + 勾选批量导出。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="users.html">
+      <span class="no">11</span>
+      <h3>用户管理</h3>
+      <p>KPI 带驱动动作（待开通 / 企微未绑 / 默认密码未改点击直达）；chips 筛选（radio-hack 真实生效）+ 组合用户列（头像+用户名+工号）+ 角色彩签 + 企微行内绑定 + 状态开关 + 默认密码 mini 标；批量条（启用/停用/重置密码/高危二次确认）+ 详情抽屉（登录与安全 login_version / 操作记录时间线）+ 批量开通、绑定企微弹窗，全部 CSS :has() 零 JS 交互。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="login.html" style="grid-column: 1 / -1;">
+      <span class="no">12</span>
+      <h3>登录页</h3>
+      <p>方向 B（V2）：浅色品牌横幅（渐变网格 + slogan + 平台指标）+ 上浮登录卡片，药丸式员工/供应商切换，右上角角标一键翻转 密码 ↔ 企微扫码 两态，扫码不再撑高卡片。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 基础数据管理 · 全模块 13 页（2026-09-02） ============ -->
+  <div class="grp-title"><span class="no">M2</span>基础数据管理 · 全模块 13 页<span class="hint">统一 CRUD 范式 + 树形 / 主从 / 只读 / 分析 / 向导五种特殊页 · <a href="basicdata.html">模块中心入口 →</a></span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="bd-customers.html">
+      <span class="no">01</span>
+      <h3>客户</h3>
+      <p>等级 A/B/C chips、信用代码、行业；KPI 带直达筛选；抽屉含近期订单。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-suppliers.html">
+      <span class="no">02</span>
+      <h3>供应商</h3>
+      <p>ERP 供应商 ID 关联列、未关联红色警示、类型 chips；抽屉含名下物料与到料。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-supplier-material-map.html">
+      <span class="no">03</span>
+      <h3>供应商物料对照</h3>
+      <p>三段式向导：粘贴/上传名单 → 匹配确认（多义/未命中+补选）→ 明细 + 导出 CSV。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="materials.html">
+      <span class="no">04</span>
+      <h3>物料 <span style="font-size:9.5px; font-weight:600; color:var(--success); background:var(--success-bg); border:1px solid var(--success-bd); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">已确认</span></h3>
+      <p>树形物料表 + 采/产徽标 + 来源徽章 + 二维码打印（沿用 08-31 方案）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-skus.html">
+      <span class="no">05</span>
+      <h3>SKU</h3>
+      <p>关联物料组合列 + 物料选择器（替代裸 ID）；条码 mono；缺条码维护直达。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-products.html">
+      <span class="no">06</span>
+      <h3>产品</h3>
+      <p>产品线 chips、技术/BOM 双版本、待更新琥珀标；版本履历时间线抽屉。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-warehouses.html">
+      <span class="no">07</span>
+      <h3>仓库</h3>
+      <p>类型 chips、管理员选择器、库位/库存下钻、容量使用率进度、行内启用开关。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-locations.html">
+      <span class="no">08</span>
+      <h3>库位</h3>
+      <p>平铺表 → 树形表：仓/区/架/位四级展开、全称路径、来源徽章、软删灰显。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-processes.html">
+      <span class="no">09</span>
+      <h3>工序</h3>
+      <p>分组 chips、质检点 QC 徽标、标准工时缺失警示、产能推算抽屉。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-organizations.html">
+      <span class="no">10</span>
+      <h3>组织</h3>
+      <p>左组织树（部门/车间/班组+负责人）+ 右员工明细 master-detail，联动切换。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-positions.html">
+      <span class="no">11</span>
+      <h3>岗位</h3>
+      <p>OA 同步只读字典：同步信息条、来源徽章、状态 chips、无 CRUD 按钮。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-employees.html">
+      <span class="no">12</span>
+      <h3>人员</h3>
+      <p>8 态彩色状态、组织路径列（替代裸 ID）、上级汇报关系、状态变更时间线。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="bd-inventory.html" style="grid-column:span 2">
+      <span class="no">13</span>
+      <h3>库存查询与分析</h3>
+      <p>双 Tab（明细 / 统计）；7 KPI；近 N 天已盘 segmented、时间三模式筛选、列设置持久化、导出列选择器；结存=库存−锁定；近期已盘悬浮提示。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="basicdata.html" style="border-style:dashed">
+      <span class="no">HUB</span>
+      <h3>基础数据中心 · 模块总览</h3>
+      <p>13 页导航 + 主数据健康度（ERP 占比 / 待维护项 / 同步状态）。</p>
+      <span class="go">打开模块中心 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 集成与系统 · 全模块 9 页（2026-09-03） ============ -->
+  <div class="grp-title"><span class="no">M3</span>基础数据与集成中心 · 集成与系统 9 页<span class="hint">治理 / 安全 / 配置 / 协作 · 与用户管理同区 · 全套侧栏已互链 · 数据集成页占位待后续</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="sys-roles.html">
+      <span class="no">01</span>
+      <h3>角色管理</h3>
+      <p>彩签角色表（使用人数 / 权限概览）；权限矩阵大弹窗（权限树行 × 5 通用动作列，父行级联、专属子权限 colSpan）；批量授权四步向导（追加/撤销/覆盖）；使用中人数删除警示。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-permissions.html">
+      <span class="no">02</span>
+      <h3>权限管理</h3>
+      <p>权限「注册表」树形维护：名称/编码/路由/操作集 tags/排序/启用开关；users·roles·permissions 系统保护节点锁定；删除/停用全局影响警示（角色矩阵的数据来源）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-audit.html">
+      <span class="no">03</span>
+      <h3>审计日志</h3>
+      <p>动作 chips 过滤 + 操作人/表名组合列 + 记录 ID；字段级变更 旧值→新值 差异高亮（绿/红）；记录级 JSON 对照抽屉 + 同操作者上下文链路；系统 / API 调用行为标记。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-shares.html">
+      <span class="no">04</span>
+      <h3>分享管理</h3>
+      <p>4 KPI（生效/过期/撤销/访问）+ 有效期派生标签（永久绿/限期/过期橙/已撤销红）；行操作复制链接、推送企微（通讯录勾选弹窗）、撤销确认；权限 tags。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-syncsql.html">
+      <span class="no">05</span>
+      <h3>同步SQL配置</h3>
+      <p>SQL 驱动 ERP 集成：类型/间隔/策略/窗口/优先级/最近状态 chips 过滤；四分区编辑弹窗（计划 / SQL+分析 / AI 字段匹配 / 映射行+条件参数）；行内测试动态列结果。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-data-supply.html">
+      <span class="no">06</span>
+      <h3>数据供给</h3>
+      <p>三 Tab：API Key 管理（权限模板 + AppSecret 仅一次展示）/ 调用日志（6 指标 + 接口·Key 分布 tag 云真实筛选 + 429/500 徽章）/ 使用说明（HMAC 签名 + 多语言示例切换 + 接口清单 + 导出文档）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-feedback.html">
+      <span class="no">07</span>
+      <h3>问题反馈</h3>
+      <p>状态 KPI 驱动动作（待处理橙/处理中/已解决/已关闭）；标题组合列含所在页面路径；抽屉详情：描述+附件+回复流+状态流转确认；提交弹窗支持粘贴截图。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-files.html">
+      <span class="no">08</span>
+      <h3>文件管理</h3>
+      <p>全站文件服务视图：KPI（总量/占用/孤儿/近 7 天）+ 类型缩略块 + 业务域 namespace 标签 + 孤儿/已引用状态；清理孤儿向导（N 天前 · 不可撤销警示）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-announcements.html">
+      <span class="no">09</span>
+      <h3>公告管理</h3>
+      <p>紧急公告横幅 + 已读进度；草稿→发布工作流：发布确认弹窗（通知账号预估 + 不可逆警示）、已发布禁改；类型/优先级/状态标签 + 详情正文弹窗。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 物料盘点扩展 · 任务盘点（2026-09-03） ============ -->
+  <div class="grp-title"><span class="no">M4</span>物料盘点扩展 · 1 页（2026-09-03）<span class="hint">生产任务单计划开工日期范围 → BOM 展开物料的已盘 / 未盘覆盖 · 双视图自由切换</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="task-stock-check.html">
+      <span class="no">01</span>
+      <h3>任务盘点（生产任务单物料覆盖）</h3>
+      <p>选计划开工日期范围 → 看「要用到的物料哪些已盘哪些未盘」→ 发起盘点。双视图（顶部工具栏 segmented 自由切换，?variant=A|C 可分享）：A 物料清单驱动（勾选未盘行创建盘点单 + 批量浮条）；C 仓库执行包（仓管按仓领取，一仓一单 + 打印盘点卡）。缺 BOM 任务单警示、(未入库) 合成行口径齐全。（B 产品分组变体已于 09-03 评审移除）</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 订单交付与齐套 · 3 页联动（2026-09-03） ============ -->
+  <div class="grp-title" id="M5"><span class="no">M5</span>订单交付与齐套 · 3 页联动<span class="hint">订单总控台(升级) → 齐套分析(下钻缺料) → 采购到料计划(催料到货) · 数据同源 · 侧栏已互链 · 全站 29 页侧栏已补链接</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="orders.html">
+      <span class="no">A</span>
+      <h3>订单总控台 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">定稿</span></h3>
+      <p>普通页形态：工具栏搜索 + 快速视图 chips（全部/我的待办/今日到期/已逾期/高危/本周发货，实时计数）+ 列设置/刷新/导出/风险扫描；表格核心列 ~18 个常显（部门/等级/客户/单号/风险/数量金额/完成/交期倒计时/出货/客检/包装/料齐套/发货说明/采购齐套进度/关闭/ERP/操作）；「物料分类到料日期 16 列」「生产节点」「补充维护」在列设置里默认收起、勾选即展开成普通列；编辑弹窗 + 风险抽屉 + 行展开订单行明细 + 实时聚合行 + 分页。<b style="color:var(--brand-600)">v5 行内编辑形态（2026-09-07）</b>：表头 ✎/🔒 标记 + 单格点击即编 + 整行编辑 + 「高亮可编辑列」一键铺色，明确区分可手工填写列与 ERP/自动计算只读列（现有列全保留，补回「发货完成」）→ <a href="orders-v5.html" style="color:var(--brand-600)">打开 v5 →</a></p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="purchase-plan.html">
+      <span class="no">B</span>
+      <h3>采购到料计划</h3>
+      <p>7 KPI 点击即筛（待/部分/已齐/逾期/呆滞/关闭）；分析图表 toggle；密集 PO 行（收料进度 mini 条·缺料红·呆滞）；勾选批量编辑条 + 新增/编辑/导入CSV；💬 与供应商沟通抽屉。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="kit-analysis.html">
+      <span class="no">C</span>
+      <h3>齐套分析</h3>
+      <p>5 KPI（平均齐套率/缺料严重/部分齐套/已齐套）；订单表缺料严重排前 + 齐套率三色进度；单行展开下钻：孤儿 BOM 警示 + 左产品卡列 + 右 BOM 物料齐套表（8 态状态/短缺红/口径提示条），点物料跳采购到料计划。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 部署运维 · 1 页（2026-09-04） ============ -->
+  <div class="grp-title" id="M6"><span class="no">M6</span>部署运维 · 1 页（2026-09-04）<span class="hint">将现有 <code style="font-family:Consolas,Menlo,monospace; background:var(--gray-100); padding:0 4px; border-radius:3px;">scripts/manage-version.ps1</code> 的 list / rollback 与 <code style="font-family:Consolas,Menlo,monospace; background:var(--gray-100); padding:0 4px; border-radius:3px;">scripts/deploy-remote.ps1</code> 的部署新版本纳入站内 UI，运维不再离开站点。本页为单页集中设计；侧栏已新增「部署运维」二级分组。</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="deploy-versions.html">
+      <span class="no">01</span>
+      <h3>部署版本 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>服务器健康条 4 KPI（当前版本 / 已保留 N/5 / 7 天部署次数 + 微柱图 / 镜像占用 + 磁盘脉冲）→ 3 张动作卡（部署新版本 / 回退上一版 / 刷新状态）→ 版本表 chips 过滤（全部/当前/可部署/镜像已清理）→ 状态徽章三态（当前绿 / 可部署蓝 / 镜像已清理灰行禁用） → 详情抽屉（元信息 / 镜像 / 配置快照 / 活动日志） + 4 个弹窗（部署新版本带备注、部署此版本、回退、实时步骤+日志流）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 物料占用分析 · 1 页（2026-09-16） ============ -->
+  <div class="grp-title" id="M7"><span class="no">M7</span>物料占用分析 · 1 页（2026-09-16）<span class="hint">"一个物料池子，多个订单按合同交期排队舀水"——把顺序占用本身画出来；双视角互钻（物料→订单 / 订单BOM→物料）。</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="material-occupancy.html">
+      <span class="no">01</span>
+      <h3>物料占用分析 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>按物料视角：物料身份条（库存/在途大数字）+ 4 KPI + <b style="color:var(--brand-600)">签名元素「库存占用瀑布」</b>——按交期排队的分段条（实心=占用 绿·满足 / 琥珀·部分，红斜纹=欠量，虚线断点=库存见底），悬停联动队列表格；占用队列每行带「剩余水位条」看库存逐行耗干 + 断点行标记 + 聚合行。按订单 BOM 视角：产品行分组卡 + 物料「竞争条」（灰=前序占用 / 靛=本单占用 / 黄斜纹=欠量 / 浅灰=富余），点物料跳回按物料视角。口径提示条讲清占用规则。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 库存看板 · 驾驶舱大屏（2026-09-17） ============ -->
+  <div class="grp-title" id="M8"><span class="no">M8</span>库存看板 · 驾驶舱大屏 · 1 页（2026-09-17）<span class="hint">原「库存看板」双 Tab 合一，移入驾驶舱作为第 4 个看板 Tab（与采购/出货看板并列）· 支持全屏投屏巡检</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="inventory-board.html" style="grid-column:span 2">
+      <span class="no">01</span>
+      <h3>库存看板（驾驶舱 · 大屏版） <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>顶栏 5 KPI（物料种类 / 库存总量 / 库存金额 / 覆盖仓库 / 库龄 180 天+）+ 仓库 chips 筛选 + 全屏按钮；<b>2×2 一屏栅格，任何分辨率下无滚动条</b>，四类手绘图形：<b>库存分布·按仓库</b>（环形图<b>数量</b>占比 + 同色横条，hover 双向联动高亮）、<b>库存分布·按类别</b>（100% 堆叠条 + 色点图例）、<b>盘点覆盖</b>（半环仪表已盘率 + 已盘 / 未盘图例 + 近 7 天 · 近 30 天 · 全部历史 窗口切换 + 按仓库覆盖率条）、<b>盘点进度</b>（完成率/盘盈/盘亏 + 进行中单进度 + 30 天完成单数面积折线）。仓库筛选作用于库存分布 2 区块 + 盘点覆盖；盘点进度标注「全仓口径」；矮屏自动隐藏趋势图、行高自适应不裁切。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="dashboard.html">
+      <span class="no">↩</span>
+      <h3>驾驶舱 Tab 入口</h3>
+      <p>驾驶舱 Tab 区已改为 4 个可点 Tab：今日总览 / 采购看板 / 出货计划看板 / <b>库存看板</b>，与生产端 <code style="font-family:Consolas,Menlo,monospace; background:var(--gray-100); padding:0 4px; border-radius:3px;">Dashboard/index.tsx</code> 的 Tab 结构对齐。</p>
+      <span class="go">回到驾驶舱 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 站内信 · 个人消息中心（2026-09-21） ============ -->
+  <div class="grp-title" id="M9"><span class="no">M9</span>站内信 · 个人消息中心 · 1 页 3 变体（2026-09-21）<span class="hint">公告/系统/物料提醒/异常提醒/反馈/盘点审核 统一收口 · 三变体共用同一份 11 条数据（未读 8）便于横向对比 · ?variant=A|B|C 可分享</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="notifications.html" style="grid-column:span 2">
+      <span class="no">01</span>
+      <h3>站内信 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>个人消息中心三变体（底部悬浮条或 ←/→ 切换）：<b style="color:var(--brand-600)">A 邮箱式</b>——左类型分组导航（未读计数）+ 中消息列表 + 右详情栏，radio 单选联动，适合批量处理；<b style="color:var(--brand-600)">B 时间流</b>——置顶紧急公告横幅 + 今天/昨天/本周时间分组单列消息流，类型左色条 + 未读浅底，卡片展开全文，扫读友好；<b style="color:var(--brand-600)">C 台账式</b>——与中台其它页同构的高密度表格（类型/优先级/状态筛选 chips + 行内操作）+ 详情弹窗。签名元素：六类消息色彩系统 + <b style="color:var(--brand-600)">来源单据跳转 pill</b>（盘点单/反馈单/采购到料计划/异常总池）——站内信是业务信号而非死文字；页内交互全部 CSS :has() 零 JS。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="sys-announcements.html">
+      <span class="no">↩</span>
+      <h3>关联 · 公告管理（发送侧）</h3>
+      <p>站内信是接收侧（个人收件箱）；公告管理是发送侧（管理员草稿→发布→全员站内通知），两页数据同源，发布后经 SSE 实时推送到站内信角标。</p>
+      <span class="go">回到公告管理 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 审批中心 · 2 页（2026-09-23） ============ -->
+  <div class="grp-title" id="M10"><span class="no">M10</span>审批中心完善 · 2 页（2026-09-23）<span class="hint">待办工作台三 Tab + 列表内联审批抽屉 + 批量通过 + 超时提醒 · 审批链增强 + 业务接入注册（内置 / SQL 两层）</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="../approval-center/workbench.html">
+      <span class="no">01</span>
+      <h3>待办工作台 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>三 Tab（待我审批 / 我已审批 / 我发起的）；统计卡点击即筛选；搜索 + 业务类型 chips + 仅看超时；已等待时长分级（超时红 / 即将超时橙）；点行开右侧审批抽屉（关键信息 + 审批进度 + 审批记录 + 意见框），通过 / 驳回不跳页；批量通过 + 结果报告；SQL 接入业务只聚合跳转、不可内联审批；空态 / 筛选无结果 / 撤回确认。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="../approval-center/config.html">
+      <span class="no">02</span>
+      <h3>审批配置 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>双 Tab：审批链（链预览、按角色 / 指定人员、多条件 AND 与操作符、节点超时小时数、上移下移、保存前校验与在途影响提示、停用二次确认）；业务接入（内置 Provider / SQL 配置、待办数与链状态、三步向导：基本信息 → 取数 SQL + 测试取数 + 字段映射 + 条件字段声明 → 审批链与保存）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="../approval-center/index.html">
+      <span class="no">HUB</span>
+      <h3>审批中心 · 模块总览</h3>
+      <p>设计说明 + 关键规则（驳回必填意见 / 快照冻结 / 批量范围 / 超时提醒 / 节点二次校验 / SQL 只读 / 停用语义）+ 后端接口与数据改动参考。</p>
+      <span class="go">打开模块总览 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 品质管理 · 供应商索赔单（2026-09-23） ============ -->
+  <div class="grp-title" id="M11"><span class="no">M11</span>品质管理 · 供应商索赔单 · 4 页 + 总览（2026-09-23）<span class="hint">纸质「供应商索赔通知单」线上化 · 台账 + 新建（纸质单实时预览）+ 详情（左纸质单右审批面板，四态演示）+ 打印同源版式 · 待办收口审批中心</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="../quality-center/claims.html">
+      <span class="no">01</span>
+      <h3>索赔单台账 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>KPI 带 4 卡点击即筛（本月索赔金额 / 审批中 / 待我审批 / 已归档）；状态 chips 真实过滤 + 更多筛选含空态演示；密集表格：单号 mono / 供应商组合列 / 原因标签 / 细项 mini 标签 +“+N” / 金额右对齐 / 当前节点 + 等待时长（超时红）/ 附件计数 / 行 hover 操作；聚合行合计 + 提交 / 删除二次确认。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="../quality-center/claim-new.html">
+      <span class="no">02</span>
+      <h3>新建 / 编辑 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>左三段式表单（供应商搜索 / 原因与退回要求单选卡片 / 细项 8 宫格 / 金额大输入 / 计算说明 + 质量协议条款提示 / 附件拖拽）+ 右粘性<b style="color:var(--brand-600)">纸质单实时预览</b>（所见即所打）+ 金额条件节点提示。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="../quality-center/claim-detail.html">
+      <span class="no">03</span>
+      <h3>详情 · 审批 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>左 60% 纸质单只读渲染（与打印同源，签字区随进度填充）+ 右 40% 粘性审批面板（状态卡 / 纵向步骤 + 条件节点跳过标记 / 当前节点操作驳回必填意见 / 按轮次记录 / 附件）；撤回二次确认；右上角切换草稿 / 审批中 / 已归档 / 已驳回四态演示。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="../quality-center/claim-print.html">
+      <span class="no">04</span>
+      <h3>打印视图 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>A4 纸质单版式：公司抬头 + 中英标题 + NO./Issue date → 供应商 → 索赔原因 ■ + 固定条款 → 细项 ☑ 八项 → 方式 + 计算说明 + 共计扣除费用 + 品质部签字 → 退回要求 → 各级意见 / 签字 → 备注；@media print 隐藏工具栏，「另存为 PDF」零后端依赖。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="../quality-center/index.html" style="border-style:dashed">
+      <span class="no">HUB</span>
+      <h3>品质管理 · 模块总览</h3>
+      <p>设计说明 + 4 页导航 + 关键规则（快照冻结 / 金额条件节点 / 多轮留档 / 驳回必填意见 / 打印同源 / 待办收口审批中心）。</p>
+      <span class="go">打开模块总览 →</span>
+    </a>
+  </div>
+
+  <!-- ============ 物料齐套 · MRP 计划（2026-09-28） ============ -->
+  <div class="grp-title" id="M12"><span class="no">M12</span>物料齐套 · MRP 计划 · 7 页（2026-09-28）<span class="hint">把「缺口」讲清楚：总览（今日待办）→ 缺口与建议（三段依据可下钻：为什么缺/有什么可用/怎么补）→ 订单覆盖（这单为什么 0 建议）→ 例外处理 → 批次与 K3 对比 → 参数与替代规则 → 采购申请单（建议→申请→订单闭环）</span></div>
+  <div class="ov-grid3">
+    <a class="card ov-card" href="mrp-plan.html">
+      <span class="no">01</span>
+      <h3>计划总览 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>回答「今天该处理什么」：5 统计卡（待审建议/缺口物料/待处理例外/覆盖订单/上次运算）+ 今日四件事任务卡（直达缺口/例外/申请单/对比）+ 缺口 TOP10（倒计时与紧急下单日）+ 最近批次条与「立即运算」。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-shortage.html">
+      <span class="no">02</span>
+      <h3>缺口与建议（核心） <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>每一行＝一条缺口，行展开给<b>三段依据</b>：① 为什么缺（需求来源订单/行/交期）② 有什么可用（库存/PO/任务/委外/调拨/替代抵扣）③ 怎么补（买/做/替代＋取整说明＋提前期倒推下单日）；状态×类型 chips、批量审核与转采购申请单。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-order.html">
+      <span class="no">03</span>
+      <h3>订单覆盖视图 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>直击「这单为什么 0 建议」：输入订单号 → 逐行看需求被哪些库存/任务/采购在途覆盖、还缺多少；覆盖构成条 + 行展开（任务单号与日期 + 一句话结论）；内置三个案例（两单已覆盖 + 一单缺口）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-exceptions.html">
+      <span class="no">04</span>
+      <h3>例外处理 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>不看未来缺口，专挑现有单据毛病：拖期供给/拖期需求/建议提前/延后/取消减量/低于安全库存/无 BOM；一句话建议（含金蝶码）+ 行展开判定依据；批量改期/忽略/催货与导出变更清单。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-runs.html">
+      <span class="no">05</span>
+      <h3>批次与 K3 对比 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>批次＝每次运算记录（自动/手动、状态/耗时/建议数/例外数），行展开＝数据体检（参数回退/无BOM等）＋K3 对比摘要；下半 K3 影子校验差异清单（match/diff_qty/diff_date/spc_only/k3_only 五态 + 排查入口）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-params.html">
+      <span class="no">06</span>
+      <h3>参数与替代规则 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>三块：物料参数（提前期/安全库存/MOQ/批量策略，未配置按默认 7 天）＋ 计划方案（展望期/供给开关/宽限期/对比阈值，变更下次生效）＋ 替代规则（优先级/比例、offset 抵扣与 replace 替换）。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+    <a class="card ov-card" href="mrp-requisition.html">
+      <span class="no">07</span>
+      <h3>采购申请单 <span style="font-size:9.5px; font-weight:600; color:var(--brand-600); background:var(--brand-50); border:1px solid var(--brand-200); border-radius:var(--r-full); padding:0 6px; line-height:15px; vertical-align:1px;">新</span></h3>
+      <p>MRP 建议 → 采购申请 → 采购订单闭环：列表（来源 MRP/手工、状态、当前节点）+ 详情（明细、审批时间线）+ 转采购订单弹窗（按行默认剩余量）+ 审批纸张视图；转单生成 SPC 侧采购订单。</p>
+      <span class="go">打开页面 →</span>
+    </a>
+  </div>
+
+  <div class="ov-notes">
+    <div class="card ov-note">
+      <b>设计决策</b>
+      <span>视觉 + 交互 + 规范全面重做；保留 8 大中心信息架构；浅色主题先行，全部颜色走 CSS 变量为暗色预留扩展。</span>
+    </div>
+    <div class="card ov-note">
+      <b>零依赖交付</b>
+      <span>纯 HTML/CSS + 手绘 SVG 图表，无 CDN、无构建。双击任意 html 文件即可离线浏览；底部橙色条为原型导航，非设计内容。</span>
+    </div>
+    <div class="card ov-note">
+      <b>后续路线</b>
+      <span>确认方向后：其余 55+ 页面按本规范落地 React + AntD（ConfigProvider token + 共享组件改造）；会议 / NPI 占位模块新设计。</span>
+    </div>
+  </div>
+
+  <div style="text-align:center; margin-top:36px; font-size:11px; color:var(--text-3);">
+    设计文档：docs/superpowers/specs/2026-08-26-supply-chain-redesign-design.md · 盘点页：2026-08-27-stock-check-redesign-design.md · 物料主数据页：2026-08-31-materials-masterdata-redesign-design.md · 基础数据模块：2026-09-02-basicdata-module-redesign-design.md · 集成与系统模块：2026-09-03-system-integration-modules-redesign-design.md · 任务盘点页：2026-09-03-task-stock-coverage-redesign-design.md · 部署版本页：2026-09-04-deploy-versions-page-design.md · K3 回写交互：2026-09-09-k3-writeback-ux-design.md · 库存看板（驾驶舱大屏）：2026-09-17-inventory-board-cockpit-redesign-design.md · 品质管理模块：2026-09-23-quality-center-prototype-design.md · MRP 计划（原型 M12）：引擎口径见 2026-09-24-mrp-engine-market-upgrade-design.md
+  </div>
+</div>
+
+<div class="protobar">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html" class="cur">总览</a>
+  <a href="deploy-versions.html">部署版本</a>
+  <a href="design-system.html">设计系统</a>
+  <a href="dashboard.html">驾驶舱</a>
+  <a href="orders.html">订单总控台</a>
+  <a href="order-detail.html">订单详情</a>
+  <a href="purchase-plan.html">采购到料计划</a>
+  <a href="kit-analysis.html">齐套分析</a>
+  <a href="mrp-plan.html">MRP 计划</a>
+  <a href="mrp-requisition.html">采购申请单</a>
+  <a href="material-occupancy.html">物料占用分析</a>
+  <a href="inventory-board.html">库存看板</a>
+  <a href="materials.html">物料主数据</a>
+  <a href="users.html">用户管理</a>
+  <a href="stock-check.html">物料盘点</a>
+  <a href="stock-check-detail.html">盘点工作台</a>
+  <a href="stock-check-audit.html">盘点抽检</a>
+  <a href="task-stock-check.html">任务盘点</a>
+  <a href="procurement-board.html">采购看板</a>
+  <a href="shipment-board.html">出货看板</a>
+  <a href="scrap-inventory.html">报废库存查询</a>
+  <a href="notifications.html">站内信</a>
+  <a href="../approval-center/workbench.html">待办工作台</a>
+  <a href="../approval-center/config.html">审批配置</a>
+  <a href="../quality-center/index.html">品质管理</a>
+  <a href="basicdata.html">基础数据中心</a>
+  <a href="login.html">登录</a>
+</div>
+
+</body>
+</html>

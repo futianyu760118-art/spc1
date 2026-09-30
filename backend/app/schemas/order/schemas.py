@@ -90,6 +90,15 @@ class SaleOrderListOut(SaleOrderOut):
     kit_risk_level: Optional[str] = None
     kit_total_materials: int = 0
     kit_received_materials: int = 0
+    shipping_plan_change_count: int = 0
+
+
+class ShippingPlanHistoryItem(BaseModel):
+    id: int
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    operator: Optional[str] = None
+    operated_at: Optional[str] = None
 
 
 class SaleOrderUpdate(BaseModel):
@@ -376,6 +385,7 @@ class OrderProductMaterialsOut(BaseModel):
     product_name: Optional[str] = None
     product_model: Optional[str] = None
     bom_no: Optional[str] = None
+    bom_id: Optional[str] = None
     order_qty: Optional[float] = None
     promised_date: Optional[date] = None
     total_materials: int = 0

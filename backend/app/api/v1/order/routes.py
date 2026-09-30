@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func, asc, desc, case, or_
+from sqlalchemy import select, func, asc, desc, case, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from sqlalchemy.orm import selectinload
@@ -12,7 +12,7 @@ import traceback
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
-from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.order.sale_order import SaleOrder, SaleOrderLine, order_not_closed_condition
 from app.models.material.material_demand import MaterialDemand
 from app.models.material.mrp_plan_order import MrpPlanOrder
 from app.models.material.purchase_order import PurchaseOrder
@@ -22,7 +22,7 @@ from app.models.basicdata.customer import Customer
 from app.models.basicdata.audit_log import AuditLog
 from app.schemas.common import ResponseModel, PageResult
 from app.models.exception.risk_issue import RiskIssue
-from app.schemas.order.schemas import SaleOrderOut, SaleOrderUpdate, OrderCreate, OrderDetailOut, MaterialDemandOut, BindingOut, PODetail, RiskIssueOut, SaleOrderListOut, SaleOrderLineOut, OrderProductMaterialsOut
+from app.schemas.order.schemas import SaleOrderOut, SaleOrderUpdate, OrderCreate, OrderDetailOut, MaterialDemandOut, BindingOut, PODetail, RiskIssueOut, SaleOrderListOut, SaleOrderLineOut, OrderProductMaterialsOut, ShippingPlanHistoryItem
 from app.services.common.export_service import GenericExportService, ExportColumn
 from app.services.order.order_materials_service import get_order_product_materials
 
@@ -40,6 +40,7 @@ SORTABLE_COLUMNS = {
     'order_no': SaleOrder.order_no,
     'order_qty': SaleOrder.order_qty,
     'order_amount': SaleOrder.order_amount,
+    'completed_qty': SaleOrder.completed_qty,
     'order_date': SaleOrder.order_date,
     'promised_date': SaleOrder.promised_date,
     'shipping_plan': SaleOrder.shipping_plan,
@@ -257,8 +258,8 @@ async def list_orders(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        query = select(SaleOrder)
-        count_query = select(func.count(SaleOrder.id))
+        query = select(SaleOrder).where(SaleOrder.is_deleted == 0)
+        count_query = select(func.count(SaleOrder.id)).where(SaleOrder.is_deleted == 0)
         customer_grade_joined = False
     
         if risk_level:
@@ -456,7 +457,7 @@ async def list_orders(
             func.sum(case((SaleOrder.risk_level == 'green', 1), else_=0)).label('green_count'),
             func.sum(SaleOrder.order_qty).label('order_qty_total'),
             func.sum(SaleOrder.order_amount).label('order_amount_total'),
-        )
+        ).where(SaleOrder.is_deleted == 0)
         # 应用与主查询相同的筛选条件
         if risk_level:
             levels = [x.strip() for x in risk_level.split(',') if x.strip()]
@@ -617,6 +618,21 @@ async def list_orders(
         query = query.options(selectinload(SaleOrder.lines)).order_by(*order_clauses).offset((page - 1) * page_size).limit(page_size)
         result = await db.execute(query)
         orders = result.scalars().all()
+
+        # 出货计划变更次数（来源 audit_log，供总控台历史图标徽标）
+        order_ids = [order.id for order in orders]
+        change_count_map: dict[int, int] = {}
+        if order_ids:
+            change_result = await db.execute(
+                select(AuditLog.record_id, func.count().label("cnt"))
+                .where(
+                    AuditLog.table_name == "sale_order",
+                    AuditLog.field_name == "shipping_plan",
+                    AuditLog.record_id.in_(order_ids),
+                )
+                .group_by(AuditLog.record_id)
+            )
+            change_count_map = {row.record_id: row.cnt for row in change_result.all()}
     
         order_nos = [order.order_no for order in orders]
         customer_codes = {order.customer_code for order in orders if order.customer_code}
@@ -673,6 +689,7 @@ async def list_orders(
                 promised_date=order.promised_date or (min(promised_dates) if promised_dates else None),
                 planned_start_date=order.planned_start_date or (min(planned_dates) if planned_dates else None),
                 material_dates=merged_material_dates,
+                shipping_plan_change_count=change_count_map.get(order.id, 0),
             )
             items.append(SaleOrderListOut(**order_dict))
     
@@ -1134,11 +1151,14 @@ async def list_risk_pool(
     current_user: dict = Depends(PermissionChecker("orders.risk_pool", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    """订单风险池 — 延期 + 高/中风险订单"""
+    """订单风险池 — 未关闭订单中的延期 + 高/中风险订单"""
     today = date.today()
-    risk_filter = or_(
-        SaleOrder.risk_level.in_(['red', 'yellow']),
-        (SaleOrder.promised_date < today) & (SaleOrder.status != 'closed'),
+    risk_filter = and_(
+        order_not_closed_condition(),
+        or_(
+            SaleOrder.risk_level.in_(['red', 'yellow']),
+            SaleOrder.promised_date < today,
+        ),
     )
     query = select(SaleOrder).where(risk_filter)
     count_query = select(func.count(SaleOrder.id)).where(risk_filter)
@@ -1167,7 +1187,7 @@ async def list_risk_pool(
         func.sum(case((SaleOrder.risk_level == 'yellow', 1), else_=0)).label('yellow_count'),
         func.sum(case((SaleOrder.risk_level == 'blue', 1), else_=0)).label('blue_count'),
         func.sum(case((SaleOrder.risk_level == 'green', 1), else_=0)).label('green_count'),
-        func.sum(case(((SaleOrder.promised_date < today) & (SaleOrder.status != 'closed'), 1), else_=0)).label('overdue_count'),
+        func.sum(case((SaleOrder.promised_date < today, 1), else_=0)).label('overdue_count'),
     ).where(risk_filter)
 
     # 全局统计不受 keyword 和 risk_level 筛选影响
@@ -1324,9 +1344,39 @@ async def get_order_product_materials_view(
 ):
     items = await get_order_product_materials(db, order_no=order_no, line_no=line_no)
     if not items:
-        exists = await db.execute(select(SaleOrder.id).where(SaleOrder.order_no == order_no))
+        exists = await db.execute(select(SaleOrder.id).where(SaleOrder.order_no == order_no).limit(1))
         if not exists.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="订单不存在")
+    return ResponseModel(data=items)
+
+
+# ── 出货计划变更时间线（来源 audit_log）──
+@router.get("/shipping-plan-history", response_model=ResponseModel[list[ShippingPlanHistoryItem]])
+async def get_shipping_plan_history(
+    record_id: int = Query(..., description="sale_order.id"),
+    current_user: dict = Depends(PermissionChecker("orders.list", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """订单出货计划变更时间线，按操作时间倒序"""
+    result = await db.execute(
+        select(AuditLog)
+        .where(
+            AuditLog.table_name == "sale_order",
+            AuditLog.field_name == "shipping_plan",
+            AuditLog.record_id == record_id,
+        )
+        .order_by(AuditLog.operated_at.desc(), AuditLog.id.desc())
+    )
+    items = [
+        ShippingPlanHistoryItem(
+            id=log.id,
+            old_value=log.old_value,
+            new_value=log.new_value,
+            operator=log.operator,
+            operated_at=log.operated_at.strftime("%Y-%m-%d %H:%M:%S") if log.operated_at else None,
+        )
+        for log in result.scalars().all()
+    ]
     return ResponseModel(data=items)
 
 
@@ -1341,7 +1391,7 @@ async def get_order_detail(
     q = select(SaleOrder).options(selectinload(SaleOrder.lines)).where(SaleOrder.order_no == order_no)
     if line_no:
         q = q.where(SaleOrder.line_no == line_no)
-    result = await db.execute(q)
+    result = await db.execute(q.order_by(SaleOrder.id.desc()).limit(1))
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
@@ -1457,9 +1507,12 @@ async def create_order(
     current_user: dict = Depends(PermissionChecker("orders.list", "create")),
     db: AsyncSession = Depends(get_db),
 ):
-    exists = await db.execute(select(SaleOrder).where(SaleOrder.order_no == data.sale_order.order_no))
-    if exists.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="订单号已存在")
+    if data.sale_order.erp_id is not None:
+        exists = await db.execute(
+            select(SaleOrder.id).where(SaleOrder.erp_id == data.sale_order.erp_id).limit(1)
+        )
+        if exists.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="ERP订单ID已存在")
 
     order = SaleOrder(**data.sale_order.model_dump())
     db.add(order)
@@ -1481,7 +1534,7 @@ async def update_order(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(SaleOrder).where(SaleOrder.order_no == order_no)
+        select(SaleOrder).where(SaleOrder.order_no == order_no).order_by(SaleOrder.id.desc()).limit(1)
     )
     order = result.scalar_one_or_none()
     if not order:
@@ -1522,4 +1575,27 @@ async def import_run_order_csv_endpoint(
     result = await import_run_order_csv(filepath, db)
     await log_audit(db, "run_order", 0, "import", field_name="run_order_csv", new_value=filepath, operator=current_user["username"])
     await db.commit()
+    return ResponseModel(data=result)
+
+
+# ── 出货计划导入 ──
+@router.post("/import/shipping-plan", response_model=ResponseModel[dict])
+async def import_shipping_plan_endpoint(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(PermissionChecker("orders.list", "import")),
+    db: AsyncSession = Depends(get_db),
+):
+    """导入出货计划表（表头含「销售订单号」「计划时间」），只更新订单头 shipping_plan"""
+    from app.services.order.import_csv import import_shipping_plan
+
+    filename = file.filename or ""
+    if not filename.lower().endswith((".csv", ".xlsx")):
+        raise HTTPException(status_code=400, detail="仅支持 .csv 或 .xlsx 文件")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件为空")
+    try:
+        result = await import_shipping_plan(content, filename, db, operator=current_user["username"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return ResponseModel(data=result)

@@ -23,6 +23,7 @@ from app.models.material.purchase_invoice import PurchaseInvoice
 from app.models.material.payment_apply import PaymentApply
 from app.models.material.subcontract_order import SubcontractOrder
 from app.models.material.subcontract_order_detail import SubcontractOrderDetail
+from app.models.material.transfer_order import TransferOrder
 from app.models.basicdata.sync_sql_config import SyncSqlConfig
 from app.models.basicdata.customer import Customer
 from app.models.basicdata.supplier import Supplier
@@ -740,6 +741,7 @@ class ERPSyncService:
             print(f"ERP数据：{rows}")
             logger.info(f"从 ERP 获取到 {len(rows)} 条订单记录")
             valid_cols = self._get_model_columns(SaleOrder)
+            erp_ids_in_k3: set[int] = set()
 
             for row in rows:
                 try:
@@ -747,6 +749,11 @@ class ERPSyncService:
                     row_dict = self._map_row(row, mapping)
                     order_no = str(row_dict.get("order_no", "")).strip()
                     line_no = str(row_dict.get("line_no", "")).strip()
+                    raw_erp_id = row_dict.get("erp_id")
+                    try:
+                        erp_id = int(raw_erp_id) if raw_erp_id not in (None, "") else None
+                    except (TypeError, ValueError):
+                        erp_id = None
                     row_dict["order_no"] = order_no
                     row_dict["line_no"] = line_no
 
@@ -754,6 +761,14 @@ class ERPSyncService:
                         stats["skipped"] += 1
                         await self.spc_db.commit()
                         continue
+
+                    if erp_id is None:
+                        stats["skipped"] += 1
+                        logger.warning(f"订单缺少 erp_id，跳过: {order_no}")
+                        await self.spc_db.commit()
+                        continue
+
+                    erp_ids_in_k3.add(erp_id)
 
                     # 如果 line_no 为空，设置默认值
                     if not line_no:
@@ -766,7 +781,7 @@ class ERPSyncService:
 
                     result = await self.spc_db.execute(
                         select(SaleOrder).where(
-                            SaleOrder.order_no == order_no,
+                            SaleOrder.erp_id == erp_id,
                         )
                     )
                     existing = result.scalar_one_or_none()
@@ -781,13 +796,17 @@ class ERPSyncService:
                                     setattr(existing, k, v)
                                     changed[k] = True
 
+                            if getattr(existing, "is_deleted", 0) == 1:
+                                existing.is_deleted = 0
+                                changed["is_deleted"] = True
+
                             if changed:
                                 now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
                                 times = dict(existing.field_synced_at or {})
                                 times.update({k: now_str for k in changed})
                                 existing.field_synced_at = times
 
-                            if hasattr(existing, "data_source"):
+                            if hasattr(existing, "data_source") and existing.data_source != "erp":
                                 existing.data_source = "erp"
                             stats["updated"] += 1
                         else:
@@ -807,6 +826,22 @@ class ERPSyncService:
                     except Exception:
                         pass
                     stats["errors"].append(f"订单 {row_dict.get('order_no')}-{row_dict.get('line_no')}: {e}")
+
+            if erp_ids_in_k3:
+                from sqlalchemy import update as sa_update
+                result = await self.spc_db.execute(
+                    sa_update(SaleOrder)
+                    .where(
+                        SaleOrder.data_source == "erp",
+                        SaleOrder.erp_id.isnot(None),
+                        ~SaleOrder.erp_id.in_(erp_ids_in_k3),
+                        SaleOrder.is_deleted == 0,
+                    )
+                    .values(is_deleted=1)
+                )
+                if result.rowcount:
+                    logger.info(f"标记 K3 已删除订单: {result.rowcount} 条")
+                    stats["deleted"] = result.rowcount
 
             await self.spc_db.flush()
             await self.spc_db.commit()
@@ -871,9 +906,18 @@ class ERPSyncService:
                         row_dict["line_no"] = line_no
 
                     # 查找关联的 SaleOrder 以获取 sale_order_id
-                    sale_order_result = await self.spc_db.execute(
-                        select(SaleOrder).where(SaleOrder.order_no == order_no).limit(1)
-                    )
+                    # 重号场景: 明细行带 erp_id(订单头主键)则精确匹配, 否则按 order_no 取最新一张
+                    raw_header_erp_id = row_dict.get("erp_id")
+                    try:
+                        header_erp_id = int(raw_header_erp_id) if raw_header_erp_id not in (None, "") else None
+                    except (TypeError, ValueError):
+                        header_erp_id = None
+                    header_query = select(SaleOrder).where(SaleOrder.order_no == order_no)
+                    if header_erp_id is not None:
+                        header_query = header_query.where(SaleOrder.erp_id == header_erp_id)
+                    else:
+                        header_query = header_query.order_by(SaleOrder.id.desc())
+                    sale_order_result = await self.spc_db.execute(header_query.limit(1))
                     sale_order = sale_order_result.scalar_one_or_none()
                     if not sale_order:
                         stats["skipped"] += 1
@@ -1051,7 +1095,7 @@ class ERPSyncService:
                             select(SaleOrder).where(
                                 SaleOrder.order_no == order_no,
                                 SaleOrder.line_no == line_no,
-                            )
+                            ).limit(1)
                         )
                         if not order_exists.scalar_one_or_none():
                             stats["skipped"] += 1
@@ -2261,22 +2305,14 @@ class ERPSyncService:
                         existing = result.scalar_one_or_none()
 
                     if not emp_code and not existing:
-                        # 如果是新记录且 emp_code 为空，尝试用 oa_user_id 或 login_id 填充
-                        if oa_user_id:
-                            emp_code = oa_user_id
-                            row_dict["emp_code"] = emp_code
-                            logger.info(f"[员工同步] 第{idx+1}条记录 emp_code 为空，使用 oa_user_id 填充: {emp_code}")
-                        elif login_id:
-                            emp_code = login_id
-                            row_dict["emp_code"] = emp_code
-                            logger.info(f"[员工同步] 第{idx+1}条记录 emp_code 为空，使用 login_id 填充: {emp_code}")
-                        else:
-                            # 所有标识都为空，生成临时 emp_code
-                            import uuid
-                            temp_emp_code = f"TEMP_{uuid.uuid4().hex[:8]}"
-                            emp_code = temp_emp_code
-                            row_dict["emp_code"] = emp_code
-                            logger.warning(f"[员工同步] 第{idx+1}条记录所有标识为空，生成临时 emp_code: {temp_emp_code}")
+                        # 源数据缺 emp_code: 直接写 NULL,不再用 oa_user_id / login_id / TEMP_xxx 兜底填充。
+                        # 后续关联靠 oa_user_id 或 login_id(两者 unique)反查。
+                        # 已存在但源 emp_code 为空的记录不会被覆盖(existing 分支已处理)。
+                        row_dict["emp_code"] = None
+                        logger.warning(
+                            f"[员工同步] 第{idx+1}条记录 emp_code 为空, 写入 NULL "
+                            f"(emp_name={emp_name}, oa_user_id={oa_user_id or '-'}, login_id={login_id or '-'})"
+                        )
 
                     row_dict = self._filter_model_fields(row_dict, valid_cols)
                     row_dict = self._coerce_row_types(row_dict, Employee)
@@ -2985,6 +3021,24 @@ class ERPSyncService:
             rows = await self._execute_erp_sql(sql_text, params)
             logger.info(f"从 ERP 获取到 {len(rows)} 条工价审核记录")
 
+            oa_id_col = None
+            for src, tgt in (mapping or {}).items():
+                t = tgt.get("target") if isinstance(tgt, dict) else tgt
+                if t == "oa_id":
+                    oa_id_col = src
+                    break
+            if oa_id_col:
+                seen_oa: dict[str, object] = {}
+                for row in rows:
+                    oa_val = row.get(oa_id_col)
+                    key = str(oa_val).strip() if oa_val is not None else None
+                    if key:
+                        seen_oa[key] = row
+                    else:
+                        seen_oa[f"__none_{id(row)}"] = row
+                rows = list(seen_oa.values())
+                logger.info(f"oa_id 去重后: {len(rows)} 条")
+
             stats = await self._bulk_upsert(
                 ProductionLaborPriceAudit,
                 rows,
@@ -3223,6 +3277,76 @@ class ERPSyncService:
         return stats
 
     # ------------------------------------------------------------------
+    # 调拨单同步（K3 仓库调拨 FTranType=41）
+    # ------------------------------------------------------------------
+    async def sync_transfer_orders(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
+        """同步仓库调拨单。幂等依据: (transfer_no, entry_id)。
+
+        调拨单量小（月均百余单），采用「近 120 天窗口快照 + 陈旧行清理」策略：
+        K3 侧取消/删除的单据从快照消失即清理，可识别取消变更。since 不参与过滤。
+        注意：本账套调拨均为直接调拨（审核即入库存），在途口径见 kitting_calc_service。
+        """
+        stats = {"synced": 0, "created": 0, "updated": 0, "skipped": 0, "errors": []}
+
+        try:
+            await self._connect_erp()
+            sql_text, mapping = await self._load_sql_config("transfer_orders")
+
+            params = {}
+            if custom_params:
+                params.update(custom_params)
+                logger.info(f"调拨单使用自定义参数: {custom_params}")
+
+            rows = await self._execute_erp_sql(sql_text, params)
+            logger.info(f"从 ERP 获取到 {len(rows)} 条调拨单明细记录")
+
+            stats = await self._bulk_upsert(
+                TransferOrder,
+                rows,
+                mapping,
+                key_fields=["transfer_no", "entry_id"],
+                label="调拨单",
+            )
+
+            erp_keys: set[tuple] = set()
+            for row in rows:
+                row_dict = self._map_row(row, mapping)
+                no = row_dict.get("transfer_no")
+                eid = row_dict.get("entry_id")
+                if no:
+                    erp_keys.add((str(no), eid if eid is not None else 1))
+
+            if erp_keys:
+                # 清理限定近 120 天窗口：窗口外的历史行保留，避免历史单据被误删
+                existing = await self.spc_db.execute(
+                    select(TransferOrder).where(
+                        TransferOrder.data_source == "erp",
+                        TransferOrder.transfer_date >= (datetime.now() - timedelta(days=120)).date(),
+                    )
+                )
+                deleted_count = 0
+                for t in existing.scalars().all():
+                    if (t.transfer_no, t.entry_id) not in erp_keys:
+                        await self.spc_db.delete(t)
+                        deleted_count += 1
+                if deleted_count:
+                    await self.spc_db.flush()
+                    await self.spc_db.commit()
+                    logger.info(f"调拨单清理: 删除 {deleted_count} 条 ERP 中已不存在的记录")
+
+            await self.spc_db.flush()
+            await self.spc_db.commit()
+            logger.info(f"调拨单同步完成: {stats}")
+
+        except Exception as e:
+            stats["errors"].append(str(e))
+            logger.exception(f"调拨单同步异常: {e}")
+        finally:
+            self._close_erp(keep_alive=True)
+
+        return stats
+
+    # ------------------------------------------------------------------
     # 全量同步
     # ------------------------------------------------------------------
     async def sync_all(self, since: Optional[datetime] = None, custom_params: Optional[dict] = None) -> dict:
@@ -3256,6 +3380,7 @@ class ERPSyncService:
             results["inventory"] = await self.sync_inventory(since, custom_params)
             results["subcontract_orders"] = await self.sync_subcontract_orders(since, custom_params)
             results["subcontract_order_details"] = await self.sync_subcontract_order_details(since, custom_params)
+            results["transfer_orders"] = await self.sync_transfer_orders(since, custom_params)
             return results
         finally:
             self._close_erp()

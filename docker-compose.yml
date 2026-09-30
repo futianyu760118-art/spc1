@@ -5,6 +5,7 @@ services:
       - "8000:8000"
     environment:
       TZ: Asia/Shanghai
+      SERVER_ID: ${SERVER_ID:-spc-dev}
       DATABASE_URL: ${DATABASE_URL}
       DATABASE_URL_SYNC: ${DATABASE_URL_SYNC}
       ERP_DB_URL: ${ERP_DB_URL}
@@ -12,6 +13,9 @@ services:
       ERP_SYNC_ENABLED: ${ERP_SYNC_ENABLED:-false}
       ERP_SYNC_BATCH_SIZE: ${ERP_SYNC_BATCH_SIZE}
       ERP_SYNC_DEFAULT_PASSWORD: ${ERP_SYNC_DEFAULT_PASSWORD}
+      # K3 账套分离：K3_DB=同步/读取(默认生产)；K3_WRITE_DB=回写目标(空则回落 K3_DB)
+      K3_DB: ${K3_DB:-k3sv.AIS20161019115614}
+      K3_WRITE_DB: ${K3_WRITE_DB:-}
       REDIS_URL: ${REDIS_URL}
       SECRET_KEY: ${SECRET_KEY}
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
@@ -39,6 +43,7 @@ services:
       WRITEBACK_CLAIM_TIMEOUT: ${WRITEBACK_CLAIM_TIMEOUT:-}
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
+      - ./data/backups:/app/backups
       #python init_database.py &&
     command: >
       sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000"

@@ -4,7 +4,9 @@ __pycache__/
 *.egg-info/
 dist/
 venv/
+.pytest_cache/
 .env
+.env.local
 
 # Node
 node_modules/
@@ -82,3 +84,8 @@ docs/
 *.xlsx
 本周*.csv
 本周*.xlsx
+
+# AI 反馈实现 runner 本地文件（凭据/日志/锁，绝不提交）
+scripts/ai-feedback-runner/config.local.json
+scripts/ai-feedback-runner/runs/
+scripts/ai-feedback-runner/.runner.lock

@@ -13,6 +13,29 @@ const api = axios.create({
   timeout: 30000,
 })
 
+export const REDIRECT_AFTER_LOGIN_KEY = 'redirect_after_login'
+
+// 401 登出后的回跳目标：移动端入口（/m/）回到移动端登录页，桌面端回到 /login
+function loginPathForCurrentEntry(): string {
+  try {
+    return window.location.pathname.startsWith('/m/') ? '/m/login' : '/login'
+  } catch {
+    return '/login'
+  }
+}
+
+// 在跳转登录前记住当前路径，便于登录成功后回跳（应对 401 全页刷新丢失路由 state 的场景）
+function rememberRedirectBeforeLogin() {
+  try {
+    const { pathname, search } = window.location
+    if (pathname && pathname !== '/login') {
+      sessionStorage.setItem(REDIRECT_AFTER_LOGIN_KEY, pathname + search)
+    }
+  } catch {
+    // ignore
+  }
+}
+
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().currentToken
   if (token) {
@@ -65,18 +88,21 @@ api.interceptors.response.use(
         messageApi?.warning({ content: detail, duration: 2 })
         setTimeout(() => {
           exitShare()
-          window.location.href = '/login'
+          rememberRedirectBeforeLogin()
+          window.location.href = loginPathForCurrentEntry()
         }, 1500)
       } else if (forceLogout === 'true') {
         messageApi?.warning({ content: detail, duration: 2 })
         setTimeout(() => {
           logout()
-          window.location.href = '/login'
+          rememberRedirectBeforeLogin()
+          window.location.href = loginPathForCurrentEntry()
         }, 1500)
       } else {
         messageApi?.error(detail)
         logout()
-        window.location.href = '/login'
+        rememberRedirectBeforeLogin()
+        window.location.href = loginPathForCurrentEntry()
       }
     } else if (status === 403) {
       error.message = error.response?.data?.detail || '权限不足，无法执行此操作'
@@ -99,23 +125,34 @@ export default api
 
 // ============ Auth (基础数据与集成中心) ============
 export const authApi = {
-  login: (username: string, password: string, loginType: 'employee' | 'supplier' = 'employee') => {
+  login: (username: string, password: string, loginType: 'employee' | 'supplier' = 'employee', channel?: string, rememberMe?: boolean) => {
     const formData = new URLSearchParams()
     formData.append('username', username)
     formData.append('password', password)
     formData.append('login_type', loginType)
+    if (channel) formData.append('channel', channel)
+    if (rememberMe) formData.append('remember_me', 'true')
     return api.post('/basicdata/auth/login', formData, {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       skipErrorToast: true,
     })
   },
   getMe: () => api.get('/basicdata/auth/me'),
-  wecomOauthUrl: () => api.get('/basicdata/auth/wecom-oauth-url'),
-  wecomLogin: (code: string) => api.post('/basicdata/auth/wecom-login', { code }),
+  wecomOauthUrl: (state?: string, redirectPath?: string) =>
+    api.get('/basicdata/auth/wecom-oauth-url', {
+      params: { ...(state ? { state } : {}), ...(redirectPath ? { redirect_path: redirectPath } : {}) },
+    }),
+  wecomLogin: (code: string, channel?: string) => api.post('/basicdata/auth/wecom-login', channel ? { code, channel } : { code }),
+  wecomQrConfig: () => api.get('/basicdata/auth/wecom-qr-config'),
   changePassword: (old_password: string, new_password: string) =>
     api.put('/basicdata/auth/change-password', { old_password, new_password }),
   updatePreferences: (data: { font_size_scale?: string; ui_preferences?: Record<string, any> }) =>
     api.put('/basicdata/auth/preferences', data),
+  updateProfile: (display_name: string) =>
+    api.put('/basicdata/auth/profile', { display_name }),
+  wecomBindUrl: () => api.get('/basicdata/auth/wecom-bind-url'),
+  wecomBind: (code: string) => api.post('/basicdata/auth/wecom-bind', { code }),
+  wecomUnbind: () => api.delete('/basicdata/auth/wecom-bind'),
 }
 
 export const permissionApi = {
@@ -156,6 +193,12 @@ export const orderApi = {
   exportOrders: (params: Record<string, any>) =>
     api.get('/orders/export', { params, responseType: 'blob' }),
   getShippingAnalytics: () => api.get('/orders/shipping-analytics'),
+  getShippingPlanHistory: (recordId: number) =>
+    api.get('/orders/shipping-plan-history', { params: { record_id: recordId } }),
+  importShippingPlan: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/orders/import/shipping-plan', fd)
+  },
 }
 
 export const runOrderApi = {
@@ -239,12 +282,22 @@ export const materialApi = {
     api.get(`/materials/kit-analysis/${orderNo}/product-bom-flat`, {
       params: { product_code: productCode, ...(bomId ? { bom_id: bomId } : {}) },
     }),
+  // 物料占用分析
+  searchOccupancyMaterials: (params: { keyword?: string }) =>
+    api.get('/materials/occupancy/search-materials', { params }),
+  searchOccupancyOrders: (params: { keyword?: string }) =>
+    api.get('/materials/occupancy/search-orders', { params }),
+  getOccupancyByMaterial: (params: { material_code: string }) =>
+    api.get('/materials/occupancy/by-material', { params }),
+  getOccupancyByOrder: (params: { order_no: string }) =>
+    api.get('/materials/occupancy/by-order', { params }),
   // 物料盘点
   createStockCheckFromOrder: (orderNo: string, data?: {
     title?: string
     check_date?: string
     remark?: string
     selected_products?: Array<{ product_code?: string | null; bom_no?: string | null }>
+    recent_days?: number
   }) =>
     api.post(`/materials/stock-check/from-order/${orderNo}`, data || {}),
   getRecentStockChecks: (params: Record<string, any> = {}) =>
@@ -253,6 +306,28 @@ export const materialApi = {
     api.get('/materials/stock-check/my-items', { params }),
   getStockCheckStats: (params: { check_type?: string; date_from?: string; date_to?: string; status?: string } = {}) =>
     api.get('/materials/stock-check/stats', { params }),
+  getStockCheckKpi: () => api.get('/materials/stock-check/kpi'),
+  getTaskStockCoverage: (params: {
+    start_date: string
+    end_date: string
+    status?: 'all' | 'checked' | 'unchecked'
+    keyword?: string
+    wh_id?: number
+    wh_ids?: string
+    unstocked?: boolean
+    sort_by?: string
+    sort_order?: 'asc' | 'desc'
+    include_sample?: boolean
+    recent_days?: number
+    page?: number
+    page_size?: number
+  }) => api.get('/materials/stock-check/task-coverage', { params }),
+  getTaskCoverageMaterialOrders: (params: {
+    start_date: string
+    end_date: string
+    material_id: number
+    include_sample?: boolean
+  }) => api.get('/materials/stock-check/task-coverage/material-orders', { params }),
   getStockChecksByOrder: (orderNo: string) =>
     api.get(`/materials/stock-check/by-order/${orderNo}`),
   getStockCheck: (checkId: number) =>
@@ -281,6 +356,33 @@ export const materialApi = {
     api.post(`/materials/stock-check/${checkId}/complete`, { expected_version }),
   cancelStockCheck: (checkId: number, expected_version?: number) =>
     api.post(`/materials/stock-check/${checkId}/cancel`, { expected_version }),
+  getStockCheckWritebacks: (checkId: number) =>
+    api.get(`/materials/stock-check/${checkId}/writebacks`),
+  retryStockCheckWritebacks: (checkId: number) =>
+    api.post(`/materials/stock-check/${checkId}/writebacks/retry`),
+  // 财务抽检处置: pass=通过 / exempt=免检 / reject=发回重填 / flag=过程标记
+  auditStockCheck: (
+    checkId: number,
+    action: 'pass' | 'exempt' | 'reject' | 'flag',
+    data?: {
+      comment?: string
+      item_ids?: number[]
+      audit_items?: Array<{ item_id: number; audit_qty: number }>
+      expected_version?: number
+    },
+  ) => api.post(`/materials/stock-check/${checkId}/audit/${action}`, data || {}),
+  getStockCheckAuditLogs: (checkId: number) =>
+    api.get(`/materials/stock-check/${checkId}/audit-logs`),
+  // 盘点人对被标记问题行申请复议(仅发回态;原因必填)
+  appealStockCheckItems: (
+    checkId: number,
+    data: { item_ids: number[]; reason: string; expected_version?: number },
+  ) => api.post(`/materials/stock-check/${checkId}/appeal`, data),
+  // 财务裁决复议: accept=true 支持(撤销标记) / false 驳回(维持标记)
+  resolveStockCheckAppeal: (
+    checkId: number,
+    data: { item_ids: number[]; accept: boolean; comment?: string; expected_version?: number },
+  ) => api.post(`/materials/stock-check/${checkId}/appeal/resolve`, data),
   getMaterialHistory: (params: { material_id: number }) =>
     api.get('/materials/stock-check/material-history', { params }),
   listMaterialCandidates: (params: { keyword?: string; wh_id?: string | number; page?: number; page_size?: number } = {}) =>
@@ -291,9 +393,14 @@ export const materialApi = {
     date_from?: string
     date_to?: string
     check_type?: string
+    only_mine?: boolean
+    diff_only?: boolean
+    sort_by?: string
+    sort_order?: 'asc' | 'desc'
     page?: number
     page_size?: number
   } = {}) => api.get('/materials/stock-check/counted-ledger', { params }),
+  listCountedWarehouses: () => api.get('/materials/stock-check/counted-warehouses'),
   createStockCheckFromMaterials: (data: {
     material_ids?: number[]
     items?: Array<{ material_id: number; wh_id?: number | null }>
@@ -301,11 +408,16 @@ export const materialApi = {
     check_date?: string
     remark?: string
     co_checker_user_ids?: number[]
+    recent_days?: number
   }) => api.post('/materials/stock-check/from-materials', data),
   updateStockCheckCoCheckers: (checkId: number, co_checker_user_ids: number[], expected_version?: number) =>
     api.put(`/materials/stock-check/${checkId}/co-checkers`, { co_checker_user_ids, expected_version }),
-  refreshStockCheckBom: (checkId: number) =>
-    api.post(`/materials/stock-check/${checkId}/refresh-bom`),
+  refreshStockCheckBom: (checkId: number, recentDays?: number) =>
+    api.post(`/materials/stock-check/${checkId}/refresh-bom`, null, {
+      params: recentDays != null ? { recent_days: recentDays } : {},
+    }),
+  refreshStockCheckWarehouses: (checkId: number) =>
+    api.post(`/materials/stock-check/${checkId}/refresh-warehouses`),
   getCoCheckerCandidates: () =>
     api.get('/materials/stock-check/co-checker-candidates'),
   updateStockCheckPresence: (checkId: number, itemId: number | null) =>
@@ -313,9 +425,36 @@ export const materialApi = {
   addStockCheckItems: (checkId: number, data: {
     material_ids?: number[]
     items?: Array<{ material_id: number; wh_id?: number | null }>
+    recent_days?: number
   }) => api.post(`/materials/stock-check/${checkId}/items`, data),
+  resolveStockCheckCode: (code: string, whId?: number | null) =>
+    api.get('/materials/stock-check/resolve-code', { params: { code, wh_id: whId ?? undefined } }),
+  listScanWarehouses: () => api.get('/materials/stock-check/scan-warehouses'),
+  quickCountStockCheck: (data: {
+    material_id: number
+    wh_id?: number | null
+    actual_qty: number
+  }) => api.post('/materials/stock-check/quick-count', data),
+  getTodayQuickCheck: () =>
+    api.get('/materials/stock-check/quick-count/today'),
+  removeQuickCountItem: (itemId: number) =>
+    api.delete(`/materials/stock-check/quick-count/items/${itemId}`),
+  importQuickCountExcel: (file: File, dates?: string[]) => {
+    const fd = new FormData(); fd.append('file', file)
+    if (dates?.length) fd.append('dates', dates.join(','))
+    return api.post('/materials/stock-check/quick-count/import', fd, { skipErrorToast: true })
+  },
+  previewQuickCountExcel: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/materials/stock-check/quick-count/import-preview', fd, { skipErrorToast: true })
+  },
   removeStockCheckItem: (itemId: number) =>
     api.delete(`/materials/stock-check/items/${itemId}`),
+  // K3 盘盈盘亏单导入
+  listK3GainLossBills: (params: { date_from?: string; date_to?: string; tran_type?: string }) =>
+    api.get('/materials/stock-check/k3/bills', { params }),
+  importK3Bills: (bill_nos: string[]) =>
+    api.post('/materials/stock-check/k3/import', { bill_nos }),
   // 供应商风险
   getSupplierRisk: (params: Record<string, any>) =>
     api.get('/materials/supplier-risk', { params }),
@@ -351,6 +490,26 @@ export const materialApi = {
     api.put(`/materials/subcontract-orders/${id}/details/${detailId}`, data),
   deleteSubcontractOrderDetail: (id: number, detailId: number) =>
     api.delete(`/materials/subcontract-orders/${id}/details/${detailId}`),
+  // 报废物料库存查询（无状态查询工具；导出走 useExport 的 blob POST）
+  queryScrapInventory: (codes: string[]) =>
+    api.post('/materials/scrap-inventory/query', { codes }),
+  queryScrapInventoryFile: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/materials/scrap-inventory/query-file', fd, { skipErrorToast: true })
+  },
+  // 采购申请单（MRP P2）
+  listPurchaseRequisitions: (params: Record<string, any>) =>
+    api.get('/materials/purchase-requisitions', { params }),
+  getPurchaseRequisition: (id: number) =>
+    api.get(`/materials/purchase-requisitions/${id}`),
+  createPurchaseRequisition: (data: Record<string, any>) =>
+    api.post('/materials/purchase-requisitions', data),
+  updatePurchaseRequisition: (id: number, data: Record<string, any>) =>
+    api.put(`/materials/purchase-requisitions/${id}`, data),
+  submitPurchaseRequisition: (id: number) =>
+    api.post(`/materials/purchase-requisitions/${id}/submit`, {}),
+  convertPurchaseRequisitionToPo: (id: number, items: Array<{ line_id: number; qty: number }>) =>
+    api.post(`/materials/purchase-requisitions/${id}/convert-to-po`, { items }),
 }
 
 // ============ 供应商即时沟通 ============
@@ -394,24 +553,6 @@ export const exceptionApi = {
   getClosureTracking: (params?: Record<string, any>) => api.get('/exceptions/pool/closure-tracking', { params }),
   getClosureTrackingPersonDetails: (params: { owner: string; source_type?: string; status?: string }) =>
     api.get('/exceptions/pool/closure-tracking/person-details', { params }),
-  // 问题日志
-  listIssueLog: (params: Record<string, any>) => api.get('/exceptions/issue-log', { params }),
-  createIssueLog: (data: Record<string, any>) => api.post('/exceptions/issue-log', data),
-  updateIssueLog: (id: number, data: Record<string, any>) => api.put(`/exceptions/issue-log/${id}`, data),
-  deleteIssueLog: (id: number) => api.delete(`/exceptions/issue-log/${id}`),
-  importIssueLog: (file: File) => {
-    const fd = new FormData(); fd.append('file', file)
-    return api.post('/exceptions/issue-log/import', fd)
-  },
-  // 变更日志
-  listChangeLog: (params: Record<string, any>) => api.get('/exceptions/change-log', { params }),
-  createChangeLog: (data: Record<string, any>) => api.post('/exceptions/change-log', data),
-  updateChangeLog: (id: number, data: Record<string, any>) => api.put(`/exceptions/change-log/${id}`, data),
-  deleteChangeLog: (id: number) => api.delete(`/exceptions/change-log/${id}`),
-  importChangeLog: (file: File) => {
-    const fd = new FormData(); fd.append('file', file)
-    return api.post('/exceptions/change-log/import', fd)
-  },
   // 品质异常
   listQuality: (params: Record<string, any>) => {
     const queryParams = new URLSearchParams()
@@ -505,13 +646,6 @@ export const importExportApi = {
 }
 
 export const dataSupplyApi = {
-  listAvailableTypes: () => api.get('/basicdata/data-supply/configs/available-types'),
-  dataTypeOptions: () => api.get('/basicdata/data-supply/data-type-options'),
-  listConfigs: (params?: Record<string, any>) => api.get('/basicdata/data-supply/configs', { params }),
-  createConfig: (data: Record<string, any>) => api.post('/basicdata/data-supply/configs', data),
-  updateConfig: (configId: number, data: Record<string, any>) =>
-    api.put(`/basicdata/data-supply/configs/${configId}`, data),
-  deleteConfig: (configId: number) => api.delete(`/basicdata/data-supply/configs/${configId}`),
   listApiKeys: (params?: Record<string, any>) => api.get('/basicdata/data-supply/api-keys', { params }),
   createApiKey: (data: Record<string, any>) => api.post('/basicdata/data-supply/api-keys', data),
   updateApiKey: (keyId: number, data: Record<string, any>) =>
@@ -558,13 +692,6 @@ export const documentApi = {
   archiveWorkInstruction: (id: number) => api.post(`/rules/work-instructions/${id}/archive`),
 }
 
-export const inspectionRuleApi = {
-  list: (params: Record<string, any> = {}) => api.get('/rules/inspections', { params }),
-  create: (data: any) => api.post('/rules/inspections', data),
-  update: (id: number, data: any) => api.put(`/rules/inspections/${id}`, data),
-  delete: (id: number) => api.delete(`/rules/inspections/${id}`),
-}
-
 export const nodeStandardApi = {
   list: (params: Record<string, any> = {}) => api.get('/rules/node-standards', { params }),
   create: (data: any) => api.post('/rules/node-standards', data),
@@ -572,23 +699,10 @@ export const nodeStandardApi = {
   delete: (id: number) => api.delete(`/rules/node-standards/${id}`),
 }
 
-export const responsibilityApi = {
-  list: (params: Record<string, any> = {}) => api.get('/rules/responsibilities', { params }),
-  create: (data: any) => api.post('/rules/responsibilities', data),
-  update: (id: number, data: any) => api.put(`/rules/responsibilities/${id}`, data),
-  delete: (id: number) => api.delete(`/rules/responsibilities/${id}`),
-}
-
-export const statusDictApi = {
-  list: (params: Record<string, any> = {}) => api.get('/rules/status-dict', { params }),
-  create: (data: any) => api.post('/rules/status-dict', data),
-  update: (id: number, data: any) => api.put(`/rules/status-dict/${id}`, data),
-  delete: (id: number) => api.delete(`/rules/status-dict/${id}`),
-}
-
 // ============ 审计日志 (基础数据与集成中心) ============
 export const auditApi = {
   list: (params: Record<string, any>) => api.get('/basicdata/audit/logs', { params }),
+  stats: (params: Record<string, any> = {}) => api.get('/basicdata/audit/logs/stats', { params }),
 }
 
 // ============ Pilot ============
@@ -623,6 +737,8 @@ export const feedbackApi = {
     api.post(`/basicdata/feedback/${id}/reply`, data),
   updateStatus: (id: number, status: string) =>
     api.patch(`/basicdata/feedback/${id}/status`, { status }),
+  aiQueue: (id: number) => api.post(`/basicdata/feedback/${id}/ai-queue`),
+  aiCancel: (id: number) => api.post(`/basicdata/feedback/${id}/ai-cancel`),
   remove: (id: number) => api.delete(`/basicdata/feedback/${id}`),
 }
 
@@ -655,6 +771,7 @@ export const assistantApi = {
 // ============ 公告管理 (基础数据与集成中心) ============
 export const announcementApi = {
   list: (params: Record<string, any> = {}) => api.get('/basicdata/announcements', { params }),
+  stats: () => api.get('/basicdata/announcements/stats'),
   create: (data: Record<string, any>) => api.post('/basicdata/announcements', data),
   update: (id: number, data: Record<string, any>) => api.put(`/basicdata/announcements/${id}`, data),
   remove: (id: number) => api.delete(`/basicdata/announcements/${id}`),
@@ -673,6 +790,7 @@ export const notificationApi = {
 // ============ 用户管理 (基础数据与集成中心) ============
 export const userApi = {
   list: (params?: any) => api.get('/basicdata/users', { params }),
+  stats: () => api.get('/basicdata/users/stats'),
   roles: (params?: Record<string, any>) => api.get('/basicdata/users/roles', { params }),
   employeeOptions: (params?: { keyword?: string }) => api.get('/basicdata/users/employee-options', { params }),
   createRole: (data: { role_code: string; role_name: string; permissions?: Record<string, string[]> }) =>
@@ -692,7 +810,7 @@ export const userApi = {
   syncRoles: () => api.post('/basicdata/users/sync-roles'),
   listUnprovisionedEmployees: (params?: { keyword?: string; org_name?: string; position_name?: string; page?: number; page_size?: number }) =>
     api.get('/basicdata/users/unprovisioned-employees', { params }),
-  batchProvision: (data: { emp_codes: string[]; role_id?: number; default_password?: string }) =>
+  batchProvision: (data: { emp_codes: string[]; role_id?: number; default_password?: string; usernames?: Record<string, string> }) =>
     api.post('/basicdata/users/batch-provision', data),
   batchToggleActive: (data: { user_ids?: number[]; is_active: boolean; filter?: { role_code?: string; is_active?: boolean; keyword?: string; org_name?: string; position_name?: string; supplier_name?: string } }) =>
     api.put('/basicdata/users/batch/toggle-active', data),
@@ -747,6 +865,21 @@ export const wecomApi = {
   listDepartments: () =>
     api.get<WecomDepartment[], WecomDepartment[]>('/wecom/departments'),
   testConnection: () => api.post('/wecom/test-connection'),
+  jsapiConfig: (url: string) =>
+    api.get<
+      { appId: string; timestamp: number; nonceStr: string; signature: string; jsApiList: string[] },
+      { appId: string; timestamp: number; nonceStr: string; signature: string; jsApiList: string[] }
+    >('/wecom/jsapi-config', { params: { url } }),
 }
 
+// ============ 库存看板（驾驶舱 · 大屏版） ============
+export const inventoryBoardApi = {
+  getOverview: (params?: { warehouse_id?: number; category?: string }) =>
+    api.get('/materials/inventory-board/overview', { params }),
+  getStockCheck: (params?: { trend_days?: number; active_limit?: number; diff_limit?: number }) =>
+    api.get('/materials/inventory-board/stock-check', { params }),
+  /** 盘点覆盖：已盘 / 未盘（物料×仓库）；recent_days: 7/30，-1=全部历史 */
+  getCoverage: (params?: { recent_days?: number }) =>
+    api.get('/materials/inventory-board/coverage', { params }),
+}
 

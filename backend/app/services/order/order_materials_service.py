@@ -298,7 +298,7 @@ async def get_order_product_materials(
         order_query = select(SaleOrder).where(SaleOrder.order_no == order_no)
         if line_no:
             order_query = order_query.where(SaleOrder.line_no == line_no)
-        order = (await db.execute(order_query)).scalar_one_or_none()
+        order = (await db.execute(order_query.order_by(SaleOrder.id.desc()).limit(1))).scalar_one_or_none()
         if order:
             lines = [
                 SimpleNamespace(
@@ -346,6 +346,7 @@ async def get_order_product_materials(
             product_name=first.product_name,
             product_model=getattr(first, "product_model", None),
             bom_no=getattr(first, "bom_no", None),
+            bom_id=merged_bom_id,
             order_qty=_to_float(total_qty),
             promised_date=promised,
             total_materials=len(tree),

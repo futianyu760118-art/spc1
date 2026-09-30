@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>采购申请单 · SPC 中台重设计原型</title>
+<link rel="stylesheet" href="styles.css">
+<!--
+  PROTOTYPE — 一次性原型，非生产代码；含少量原型 JS（行点击切换详情 / 状态筛选 / 转采购订单弹窗 / 纸张视图切换）。
+  MRP 计划 · 采购申请单（2026-09-28）：MRP 建议转单 / 手工新建的采购申请单列表 + 详情 + 纸张视图。
+    → 4 KPI（待审批 2 / 已批准 1 / 已转单 3 / 本月共 12，点击筛列表）
+    → 工具栏（单号 / 申请人搜索 · 状态 chips · 新建 / 导出）
+    → 主表 6 行演示样本（草稿 / 审批中 / 已批准 / 已转单），点击行切换下方详情
+    → 详情：头卡（申请人 / 部门 / 来源 / 提交时间 / 关联批次）+ 申请明细表 + 审批进度 timeline
+      + 动作（提交审批 / 编辑 / 转采购订单弹窗 / 导出 / 纸张视图）
+    → 纸张视图：白纸卡（页眉 / 明细表 / 审批意见栏）
+  默认详情 PR-20260928-002（MRPRUN-20260928-035 批次，¥86,400，2 行 LED 灯珠 + 透镜）。
+-->
+<style>
+  .ov{position:fixed;inset:0;display:flex;z-index:9998;opacity:0;transition:opacity .15s;pointer-events:none}
+  .ov.show{opacity:1}
+  #poModal{background:rgba(15,23,42,.45);align-items:center;justify-content:center}
+  #poModal.show{pointer-events:auto}
+  .info-strip{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;background:var(--info-bg);border:1px solid var(--info-bd);border-radius:var(--r-md);padding:9px 14px;font-size:var(--fs-12);color:#075985;line-height:1.7}
+  .info-strip b{color:#075985}
+  .info-strip svg{flex-shrink:0;margin-top:2px;color:var(--brand-500)}
+  .stat-click{cursor:pointer}
+  .stat-click:hover{border-color:var(--brand-300);box-shadow:var(--shadow-md)}
+  .stat-click.sel{border-color:var(--brand-300);box-shadow:var(--shadow-md);background:#fcfcff}
+  .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .toolbar .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .toolbar .right{margin-left:auto;display:flex;gap:6px;align-items:center}
+  .tbl th{white-space:nowrap;background:var(--gray-50)}
+  .tbl td{white-space:nowrap;height:42px}
+  .tbl tbody tr{cursor:pointer}
+  .tbl tbody tr.sel{background:#eef0fe}
+  .tbl tbody tr.sel:hover{background:#e4e7fc}
+  .link{color:var(--brand-600);text-decoration:none;font-weight:600}
+  a.link:hover{text-decoration:underline}
+  .row-links a{margin-right:10px}
+  .zero2{color:var(--text-3)}
+  .money{font-weight:600;color:var(--text-1)}
+  .doc-head{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  .dh-main{min-width:0}
+  .dh-title{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700}
+  .dh-meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:7px;font-size:12px;color:var(--text-2)}
+  .dh-meta b{color:var(--text-1);font-weight:600}
+  .dh-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+  .detail-grid{display:grid;grid-template-columns:1fr 320px;gap:12px;margin-top:12px;align-items:start}
+  @media(max-width:1100px){.detail-grid{grid-template-columns:1fr}}
+  .line-tbl{min-width:1180px}
+  .timeline .tl-item.cur::before{background:var(--brand-500);border-color:var(--brand-500);box-shadow:0 0 0 3px rgba(91,91,214,.16)}
+  .paper{background:#fff;border:1px solid var(--gray-200);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);padding:34px 40px;max-width:1000px;margin-top:12px}
+  .paper-hd{text-align:center;padding-bottom:12px;border-bottom:3px double var(--gray-300)}
+  .paper-hd h2{font-size:20px;font-weight:700;letter-spacing:.3em;text-indent:.3em}
+  .paper-hd .pno{font-size:12px;color:var(--text-2);margin-top:6px;font-variant-numeric:tabular-nums}
+  .paper-meta{display:flex;gap:26px;flex-wrap:wrap;font-size:12px;color:var(--text-2);padding:12px 0;border-bottom:1px solid var(--gray-200)}
+  .paper-meta b{color:var(--text-1);font-weight:600}
+  .paper-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:14px}
+  .paper-tbl th,.paper-tbl td{border:1px solid var(--gray-300);padding:7px 9px;text-align:left}
+  .paper-tbl th{background:var(--gray-50);font-weight:600;color:var(--text-1);font-size:11.5px}
+  .paper-tbl td.num,.paper-tbl th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .paper-tbl tr.total td{background:var(--gray-50);font-weight:700}
+  .paper-approve{margin-top:18px;border:1px solid var(--gray-300);border-radius:var(--r-md);padding:10px 14px;font-size:12.5px;color:var(--text-1);min-height:64px}
+  .paper-approve .pa-h{font-size:11px;color:var(--text-3);margin-bottom:6px}
+  .modal{width:680px;max-width:94vw;background:var(--surface);border-radius:var(--r-lg);box-shadow:var(--shadow-lg);overflow:hidden;transform:translateY(8px);transition:.15s}
+  #poModal.show .modal{transform:none}
+  .modal-head{display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--gray-100)}
+  .modal-head h3{font-size:14px;font-weight:600}
+  .modal-head .icon-btn{margin-left:auto}
+  .modal-body{padding:14px 16px}
+  .modal-note{font-size:12px;color:var(--text-2);background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--r-md);padding:8px 11px;line-height:1.7;margin-bottom:12px}
+  .mini-tbl{width:100%;border-collapse:collapse;font-size:12px}
+  .mini-tbl th,.mini-tbl td{padding:6px 9px;border-bottom:1px solid var(--gray-100);text-align:left;white-space:nowrap}
+  .mini-tbl th{color:var(--text-3);font-size:11px;font-weight:500;background:var(--gray-50)}
+  .mini-tbl td.num,.mini-tbl th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .mi{width:100%;height:28px;border:1px solid var(--border);border-radius:var(--r-sm);padding:0 8px;font:inherit;font-size:12px;text-align:right;outline:none}
+  .mi:focus{border-color:var(--brand-500);box-shadow:0 0 0 3px rgba(91,91,214,.14)}
+  .modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--gray-100);background:var(--gray-50)}
+  .empty-note{display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:12px;height:120px}
+  .foot-note{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:var(--text-3);line-height:1.7;margin-top:14px}
+  .foot-note svg{flex-shrink:0;margin-top:2px}
+  .foot-note b{color:var(--text-2);font-weight:600}
+</style>
+</head>
+<body>
+
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.2-5.5"/><path d="M4 4v4.5h4.5"/><path d="M10.5 9.2v5.6l4.8-2.8z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17.2v.1"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3.5 8 12 4l8.5 4v8L12 20l-8.5-4z"/><path d="M3.5 8 12 12l8.5-4M12 12v8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m4 13.5 8 4.2 8-4.2"/></symbol>
+  <symbol id="i-bld" viewBox="0 0 24 24"><rect x="5" y="3.5" width="14" height="17" rx="1.5"/><path d="M9 8h2M13 8h2M9 12h2M13 12h2M9 16h2M13 16h2"/></symbol>
+  <symbol id="i-cart" viewBox="0 0 24 24"><path d="M3 4.5h2.5L8 15h10.5L21 7.5H6"/><circle cx="9.5" cy="19" r="1.6"/><circle cx="17" cy="19" r="1.6"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.2 2.8-4.8 5.5-4.8s4.9 1.6 5.5 4.8"/><circle cx="16.8" cy="9.5" r="2.6"/><path d="M16.4 14.8c2.3.2 3.7 1.6 4.1 3.7"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M9 19c-1.5.5-3.5.4-5-.6.6-1.4 1.6-2.3 3-2.8"/><path d="M13.5 21c-.3-1.8-.1-3.5.5-5"/><path d="M14 4.5C17 3 20.5 3.5 20.5 3.5S21 7 19.5 10c-1 2-3 4.5-5.5 6L9 12.5S11 8 14 4.5z"/><circle cx="15.5" cy="8.5" r="1.3"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13"/><path d="M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10.3 19a2 2 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+  <symbol id="i-rows" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></symbol>
+  <symbol id="i-cols" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M9.5 4.5v15M14.5 4.5v15"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 3.5V8h-4.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M8.5 10h7M8.5 13.5h4.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8M17.5 7H20M4 17h2.5M11.5 17H20"/><circle cx="14.5" cy="7" r="2"/><circle cx="8.5" cy="17" r="2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L20 8a2.4 2.4 0 0 0-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">SPC</div>
+      <div class="logo-text">SPC 供应链中台<small>SUPPLY CHAIN CENTER</small></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>供应链驾驶舱</a>
+
+      <div class="nav-group-title">订单交付中心</div>
+      <a class="nav-item" href="orders.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>订单总控台<span class="count">126</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-run"/></svg>跑单管理</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>订单风险池<span class="count hot">4</span></a>
+
+      <div class="nav-group-title">物料齐套中心</div>
+      <a class="nav-item" href="purchase-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cal"/></svg>采购到料计划<span class="count">16</span></a>
+      <a class="nav-item" href="kit-analysis.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-layers"/></svg>齐套分析</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-box"/></svg>问题物料池<span class="count hot">7</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clock"/></svg>长交期物料池</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bld"/></svg>供应商风险分析</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cart"/></svg>委外订单</a>
+      <a class="nav-item" href="mrp-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rows"/></svg>MRP 计划</a>
+      <a class="nav-item active" href="mrp-requisition.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>采购申请单</a>
+
+      <div class="nav-group-title">生产协同中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>生产驾驶舱</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>待排工作台<span class="count">12</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>工序异常池</a>
+
+      <div class="nav-group-title">异常与质量中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>异常总池<span class="count hot">5</span></a>
+
+      <div class="nav-group-title">协同与项目</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>会议与任务中心<span class="ph">开发中</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rocket"/></svg>新品 / NPI 项目中心<span class="ph">开发中</span></a>
+
+      <div class="nav-group-title">规则与数据</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sliders"/></svg>规则配置中心</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-db"/></svg>基础数据与集成</a>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-crumb">物料齐套中心<b>采购申请单</b></div>
+      <div class="topbar-actions">
+        <div class="global-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>搜索订单、物料、客户…<kbd>Ctrl K</kbd></div>
+        <div class="icon-btn" title="消息反馈"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bell"/></svg><span class="dot"></span></div>
+        <div class="avatar-user"><div class="avatar">华</div><span class="name">王华 · 计划员</span></div>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- 说明条 -->
+      <div class="info-strip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="15" height="15"><use href="#i-doc"/></svg>
+        <span><b>MRP 建议审核通过后可一键转采购申请单，走审批后转采购订单；也可手工新建。</b></span>
+      </div>
+
+      <!-- 4 KPI -->
+      <div class="grid g4" style="margin-bottom:14px">
+        <div class="card stat-card stat-click" id="k-wait" onclick="setKpi('wait')" style="--accent:var(--warning);--accent-bg:var(--warning-bg)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clock"/></svg></div>
+          <div class="stat-main"><div class="label">待审批</div><div class="value">2<small>单</small></div></div>
+        </div>
+        <div class="card stat-card stat-click" id="k-approved" onclick="setKpi('approved')" style="--accent:var(--success);--accent-bg:var(--success-bg)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg></div>
+          <div class="stat-main"><div class="label">已批准</div><div class="value">1<small>单</small></div></div>
+        </div>
+        <div class="card stat-card stat-click" id="k-converted" onclick="setKpi('converted')" style="--accent:var(--brand-500);--accent-bg:var(--brand-50)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cart"/></svg></div>
+          <div class="stat-main"><div class="label">已转单</div><div class="value">3<small>单</small></div></div>
+        </div>
+        <div class="card stat-card stat-click" id="k-all" onclick="setKpi('all')" style="--accent:var(--info);--accent-bg:var(--info-bg)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg></div>
+          <div class="stat-main"><div class="label">本月共</div><div class="value">12<small>单</small></div></div>
+        </div>
+      </div>
+
+      <!-- 工具栏 -->
+      <div class="toolbar">
+        <div class="input input-search" style="width:220px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg><input id="kw" placeholder="单号 / 申请人" oninput="render()" style="border:none;outline:none;background:transparent;width:100%"></div>
+        <div class="chips">
+          <span class="chip active" id="tAll" onclick="setStatus('all')">全部</span>
+          <span class="chip" id="tDraft" onclick="setStatus('draft')">草稿</span>
+          <span class="chip" id="tPending" onclick="setStatus('pending')">审批中</span>
+          <span class="chip" id="tApproved" onclick="setStatus('approved')">已批准</span>
+          <span class="chip" id="tClosed" onclick="setStatus('closed')">已关闭</span>
+        </div>
+        <div class="right">
+          <button class="btn btn-primary btn-sm" onclick="toast('演示：新建采购申请单（手工）')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-plus"/></svg>新建</button>
+          <button class="btn btn-secondary btn-sm" onclick="toast('已导出 Excel：采购申请单.xlsx')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cols"/></svg>导出</button>
+        </div>
+      </div>
+
+      <!-- 列表 -->
+      <div class="card">
+        <div class="card-head" style="padding:10px 16px">
+          <h3 style="font-size:14px">采购申请单列表</h3>
+          <span class="hint" id="listHint"></span>
+          <span class="more">点击行查看详情</span>
+        </div>
+        <div class="card-body p0 tbl-wrap">
+          <table class="tbl" style="min-width:1040px">
+            <thead><tr>
+              <th style="width:170px">单号</th>
+              <th style="width:90px">状态</th>
+              <th style="width:92px">申请人</th>
+              <th style="width:80px">来源</th>
+              <th class="num" style="width:60px">行数</th>
+              <th class="num" style="width:110px">预估金额</th>
+              <th style="width:150px">提交时间</th>
+              <th style="width:120px">当前节点</th>
+              <th style="width:110px">操作</th>
+            </tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <span class="total" id="pgTotal"></span>
+          <span class="pg">‹</span><span class="pg cur">1</span><span class="pg">›</span>
+          <span style="margin-left:8px">20 条/页</span>
+        </div>
+      </div>
+
+      <!-- 详情 -->
+      <div id="detailNormal">
+        <div class="card" id="docHead" style="margin-top:14px"></div>
+        <div class="detail-grid" id="detailGrid">
+          <div class="card">
+            <div class="card-head" style="padding:10px 16px">
+              <h3 style="font-size:14px">申请明细</h3>
+              <span class="hint" id="lineHint"></span>
+            </div>
+            <div class="card-body p0 tbl-wrap">
+              <table class="tbl line-tbl">
+                <thead><tr>
+                  <th class="num" style="width:44px">行号</th>
+                  <th style="width:250px">物料</th>
+                  <th style="width:230px">名称</th>
+                  <th class="num" style="width:90px">申请数量</th>
+                  <th style="width:100px">到货日</th>
+                  <th style="width:130px">建议供应商</th>
+                  <th class="num" style="width:82px">参考单价</th>
+                  <th class="num" style="width:100px">预估金额</th>
+                  <th class="num" style="width:82px">已转数量</th>
+                  <th style="width:92px">行状态</th>
+                </tr></thead>
+                <tbody id="lineBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head" style="padding:10px 16px"><h3 style="font-size:14px">审批进度</h3></div>
+            <div class="card-body" style="padding:16px"><div class="timeline" id="tlBody"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 纸张视图 -->
+      <div class="paper" id="paperView" style="display:none"></div>
+
+      <!-- 底部说明 -->
+      <div class="foot-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-msg"/></svg>
+        <span>转单生成 SPC 侧采购订单（<b>data_source=mrp</b>），K3 建单由采购员按导出清单执行。</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- 转采购订单弹窗 -->
+<div class="ov" id="poModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="poTitle">转采购订单</h3>
+      <span class="icon-btn" onclick="closePo()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-x"/></svg></span>
+    </div>
+    <div class="modal-body">
+      <div class="modal-note">按行填写本次转单数量（默认剩余数量）；确认后生成 SPC 侧采购订单（data_source=mrp）。</div>
+      <table class="mini-tbl">
+        <thead><tr>
+          <th>物料编码</th>
+          <th>名称</th>
+          <th class="num">申请数量</th>
+          <th class="num">已转数量</th>
+          <th class="num" style="width:130px">本次转单</th>
+        </tr></thead>
+        <tbody id="poBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-secondary btn-sm" onclick="closePo()">取消</button>
+      <button class="btn btn-primary btn-sm" onclick="confirmPo()">确认转单</button>
+    </div>
+  </div>
+</div>
+
+<div class="ov" id="ovToast" style="align-items:flex-end;justify-content:center;padding:0 0 46px;background:transparent;pointer-events:none">
+  <div style="background:#111318;color:#fff;font-size:13px;padding:9px 16px;border-radius:999px;box-shadow:var(--shadow-lg)">✓ <span id="toastTxt"></span></div>
+</div>
+
+<!-- 原型切换条（非设计内容） -->
+<div class="protobar">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html">总览</a>
+  <a href="design-system.html">设计系统</a>
+  <a href="mrp-plan.html">MRP 计划</a>
+  <a href="mrp-shortage.html">缺口与建议</a>
+  <a href="mrp-order.html">订单覆盖</a>
+  <a href="mrp-exceptions.html">例外处理</a>
+  <a href="mrp-runs.html">批次与对比</a>
+  <a href="mrp-params.html">参数与替代</a>
+  <a href="mrp-requisition.html" class="cur">采购申请单</a>
+  <a href="purchase-plan.html">采购到料计划</a>
+  <a href="kit-analysis.html">齐套分析</a>
+</div>
+
+<script>
+var MONTH_TOTAL=12;
+var ST={
+  draft:{label:'草稿',c:'var(--gray-500)',b:'var(--gray-100)'},
+  pending:{label:'审批中',c:'var(--warning)',b:'var(--warning-bg)'},
+  approved:{label:'已批准',c:'var(--success)',b:'var(--success-bg)'},
+  converted:{label:'已转单',c:'var(--brand-600)',b:'var(--brand-50)'},
+  closed:{label:'已关闭',c:'var(--gray-400)',b:'var(--gray-100)'}
+};
+var SRC={
+  mrp:{label:'MRP',full:'MRP 建议转单'},
+  manual:{label:'手工',full:'手工新建'}
+};
+var KPI={wait:['draft','pending'],approved:['approved'],converted:['converted'],all:null};
+
+function L(code,name,qty,due,sup,price,converted){return {code:code,name:name,qty:qty,due:due,sup:sup,price:price,converted:converted||0}}
+
+var DOCS=[
+ {no:'PR-20260928-002',st:'approved',src:'mrp',applicant:'admin',dept:'采购部',submit:'2026-09-28 09:12',node:'财务（待审）',batch:'MRPRUN-20260928-035',amount:86400,
+  approveNote:'同意 — 王强 09-28 11:05',
+  flow:[
+   {s:'done',t:'2026-09-28 09:12',title:'提交申请',who:'admin · 采购部'},
+   {s:'done',t:'2026-09-28 11:05',title:'采购经理审批',who:'王强 · 同意'},
+   {s:'cur',t:'待处理',title:'财务审批',who:'李敏 · 待审'}
+  ],
+  lines:[
+   L('1.6.3.E2835-18V-4000K-1W','LED 灯珠 2835 18V 4000K 1W',32000,'2026-10-30','深圳明辉光电',2.50,0),
+   L('1.8.3.RSG-圆4-10','LED 灯珠透镜 圆4-10',4320,'2026-11-04','中山精工',1.48,0)
+  ]},
+ {no:'PR-20260928-001',st:'draft',src:'manual',applicant:'planner01',dept:'生产计划部',submit:'',node:'—',
+  approveNote:'（草稿尚未提交，暂无审批意见）',
+  flow:[{s:'',t:'—',title:'提交申请',who:'草稿 · 尚未提交审批'}],
+  lines:[
+   L('3.2.1.JGW02-B1WP150-001','LED 工矿灯 JGW02 150W',16,'2026-11-15','中山精工',800,0)
+  ]},
+ {no:'PR-20260927-004',st:'pending',src:'mrp',applicant:'purchaser01',dept:'采购部',submit:'2026-09-27 16:40',node:'财务（待审）',batch:'MRPRUN-20260927-031',
+  approveNote:'同意 — 王强 09-27 17:52 · 财务审批中',
+  flow:[
+   {s:'done',t:'2026-09-27 16:40',title:'提交申请',who:'purchaser01 · 采购部'},
+   {s:'done',t:'2026-09-27 17:52',title:'采购经理审批',who:'王强 · 同意'},
+   {s:'cur',t:'待处理',title:'财务审批',who:'李敏 · 待审'}
+  ],
+  lines:[
+   L('1.6.3.E2835-18V-4000K-1W','LED 灯珠 2835 18V 4000K 1W',40000,'2026-10-30','深圳明辉光电',2.50,0),
+   L('1.8.3.RSG-圆4-10','LED 灯珠透镜 圆4-10',5000,'2026-11-04','中山精工',1.48,0),
+   L('2.1.PCB-JGW02-V3','PCB 电路板 JGW02 V3',4240,'2026-11-02','苏州维嘉电路',5.00,0)
+  ]},
+ {no:'PR-20260926-003',st:'converted',src:'mrp',applicant:'admin',dept:'采购部',submit:'2026-09-26 10:20',node:'已完成',batch:'MRPRUN-20260926-028',
+  approveNote:'同意 — 王强 09-26 11:08 · 财务 李敏 09-26 14:30',
+  flow:[
+   {s:'done',t:'2026-09-26 10:20',title:'提交申请',who:'admin · 采购部'},
+   {s:'done',t:'2026-09-26 11:08',title:'采购经理审批',who:'王强 · 同意'},
+   {s:'done',t:'2026-09-26 14:30',title:'财务审批',who:'李敏 · 同意'},
+   {s:'done',t:'2026-09-26 15:05',title:'转采购订单',who:'已生成 MRP-PR-20260926-003-1/2'}
+  ],
+  lines:[
+   L('1.6.3.E2835-18V-4000K-1W','LED 灯珠 2835 18V 4000K 1W',16000,'2026-10-28','深圳明辉光电',2.50,16000),
+   L('1.8.3.RSG-圆4-10','LED 灯珠透镜 圆4-10',3514,'2026-10-31','中山精工',1.48,3514)
+  ]},
+ {no:'PR-20260925-002',st:'converted',src:'manual',applicant:'planner01',dept:'生产计划部',submit:'2026-09-25 14:05',node:'已完成',
+  approveNote:'同意 — 王强 09-25 15:20 · 财务 李敏 09-25 16:02',
+  flow:[
+   {s:'done',t:'2026-09-25 14:05',title:'提交申请',who:'planner01 · 生产计划部'},
+   {s:'done',t:'2026-09-25 15:20',title:'采购经理审批',who:'王强 · 同意'},
+   {s:'done',t:'2026-09-25 16:02',title:'财务审批',who:'李敏 · 同意'},
+   {s:'done',t:'2026-09-25 16:30',title:'转采购订单',who:'已生成 MRP-PR-20260925-002-1/1'}
+  ],
+  lines:[
+   L('2.1.PCB-GW220-V31','PCB 电路板 GW220 V31',90,'2026-10-20','苏州维嘉电路',96,90)
+  ]},
+ {no:'PR-20260924-001',st:'converted',src:'mrp',applicant:'admin',dept:'采购部',submit:'2026-09-24 11:30',node:'已完成',batch:'MRPRUN-20260924-025',
+  approveNote:'同意 — 王强 09-24 13:15 · 财务 李敏 09-24 15:40',
+  flow:[
+   {s:'done',t:'2026-09-24 11:30',title:'提交申请',who:'admin · 采购部'},
+   {s:'done',t:'2026-09-24 13:15',title:'采购经理审批',who:'王强 · 同意'},
+   {s:'done',t:'2026-09-24 15:40',title:'财务审批',who:'李敏 · 同意'},
+   {s:'done',t:'2026-09-24 16:10',title:'转采购订单',who:'已生成 MRP-PR-20260924-001-1/2'}
+  ],
+  lines:[
+   L('1.6.3.E2835-18V-4000K-1W','LED 灯珠 2835 18V 4000K 1W',8000,'2026-10-18','深圳明辉光电',2.50,8000),
+   L('1.8.3.RSG-圆4-10','LED 灯珠透镜 圆4-10',2000,'2026-10-22','中山精工',1.48,2000)
+  ]}
+];
+
+var cur='PR-20260928-002', kpi='all', stFilter='all', kw='', paper=false, poNo='';
+
+function fmt(n){return n.toLocaleString()}
+function money(n){return '¥'+n.toLocaleString('zh-CN',{maximumFractionDigits:2})}
+function noDate(no){return no.slice(3,7)+'-'+no.slice(7,9)+'-'+no.slice(9,11)}
+function docOf(no){return DOCS.filter(function(d){return d.no===no})[0]}
+function sumOf(lines){return lines.reduce(function(s,l){return s+l.qty*l.price},0)}
+function amountOf(d){return d.amount||sumOf(d.lines)}
+
+function stTag(st){var d=ST[st];return '<span class="tag" style="color:'+d.c+';background:'+d.b+'"><span class="dot"></span>'+d.label+'</span>'}
+function srcTag(src){
+  var d=SRC[src];
+  return src==='mrp'
+    ?'<span class="tag tag-purple">'+d.label+'</span>'
+    :'<span class="tag" style="color:var(--text-2);background:var(--gray-100)">'+d.label+'</span>';
+}
+function lineTag(l){
+  if(l.converted>=l.qty)return '<span class="tag" style="color:var(--success);background:var(--success-bg)">已转单</span>';
+  if(l.converted>0)return '<span class="tag" style="color:var(--warning);background:var(--warning-bg)">部分转单</span>';
+  return '<span class="tag" style="color:var(--info);background:var(--info-bg)">待转单</span>';
+}
+
+/* ============ 列表 ============ */
+function curDocs(){
+  return DOCS.filter(function(d){
+    if(kpi!=='all'&&KPI[kpi].indexOf(d.st)<0)return false;
+    if(stFilter!=='all'&&d.st!==stFilter)return false;
+    if(kw){
+      var q=kw.toUpperCase();
+      if(d.no.toUpperCase().indexOf(q)<0&&d.applicant.toUpperCase().indexOf(q)<0)return false;
+    }
+    return true;
+  });
+}
+function rowHTML(d){
+  var ops='<span class="row-links"><a class="link" href="javascript:void 0" onclick="event.stopPropagation();selectDoc(\''+d.no+'\')">详情</a>'
+    +(d.st==='approved'?'<a class="link" href="javascript:void 0" onclick="event.stopPropagation();openPo(\''+d.no+'\')">转单</a>':'')
+    +'</span>';
+  return '<tr class="'+(cur===d.no?'sel':'')+'" onclick="selectDoc(\''+d.no+'\')">'
+   +'<td class="strong mono">'+d.no+'</td>'
+   +'<td>'+stTag(d.st)+'</td>'
+   +'<td>'+d.applicant+'</td>'
+   +'<td>'+srcTag(d.src)+'</td>'
+   +'<td class="num">'+d.lines.length+'</td>'
+   +'<td class="num"><b class="money">'+money(amountOf(d))+'</b></td>'
+   +'<td class="mono">'+(d.submit||'<span class="zero2">—</span>')+'</td>'
+   +'<td>'+(d.node==='—'?'<span class="zero2">—</span>':d.node)+'</td>'
+   +'<td>'+ops+'</td></tr>';
+}
+function render(){
+  kw=document.getElementById('kw').value.trim();
+  var arr=curDocs();
+  document.getElementById('tbody').innerHTML=arr.length?arr.map(rowHTML).join(''):'<tr><td colspan="9"><div class="empty-note">没有符合条件的采购申请单</div></td></tr>';
+  document.getElementById('listHint').textContent='演示样本 '+arr.length+' 条 / 本月共 '+MONTH_TOTAL+' 条';
+  document.getElementById('pgTotal').textContent='共 '+arr.length+' 条';
+  document.getElementById('tAll').className='chip'+(stFilter==='all'?' active':'');
+  document.getElementById('tDraft').className='chip'+(stFilter==='draft'?' active':'');
+  document.getElementById('tPending').className='chip'+(stFilter==='pending'?' active':'');
+  document.getElementById('tApproved').className='chip'+(stFilter==='approved'?' active':'');
+  document.getElementById('tClosed').className='chip'+(stFilter==='closed'?' active':'');
+  ['wait','approved','converted','all'].forEach(function(k){
+    document.getElementById('k-'+k).className='card stat-card stat-click'+(kpi===k?' sel':'');
+  });
+  renderDetail();
+}
+function setStatus(s){stFilter=s;render()}
+function setKpi(k){kpi=(kpi===k&&k!=='all')?'all':k;render()}
+function selectDoc(no){cur=no;paper=false;render()}
+
+/* ============ 详情 ============ */
+function actionBtn(label,icon,onclick,primary){
+  return '<button class="btn '+(primary?'btn-primary':'btn-secondary')+' btn-sm" onclick="'+onclick+'">'
+   +'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#'+icon+'"/></svg>'+label+'</button>';
+}
+function headHTML(d){
+  var meta='<span>申请人 <b>'+d.applicant+'</b></span>'
+   +'<span>部门 <b>'+d.dept+'</b></span>'
+   +'<span>来源 <b>'+SRC[d.src].full+'</b></span>'
+   +'<span>提交时间 <b>'+(d.submit||'—')+'</b></span>'
+   +(d.batch?'<span>关联批次 <b>'+d.batch+'</b></span>':'');
+  return '<div class="card-body" style="padding:14px 16px"><div class="doc-head">'
+   +'<div class="dh-main"><div class="dh-title">'+d.no+stTag(d.st)+'</div><div class="dh-meta">'+meta+'</div></div>'
+   +'<div class="dh-actions">'
+   +actionBtn('提交审批','i-check','submitDoc()',false)
+   +actionBtn('编辑','i-edit','editDoc()',false)
+   +actionBtn('转采购订单','i-cart',"openPo('"+d.no+"')",d.st==='approved')
+   +actionBtn('导出','i-cols','exportDoc()',false)
+   +actionBtn(paper?'返回单据视图':'纸张视图','i-doc','togglePaper()',false)
+   +'</div></div></div>';
+}
+function lineHTML(l,i){
+  return '<tr><td class="num" style="color:var(--text-3)">'+(i+1)+'</td>'
+   +'<td class="mono">'+l.code+'</td>'
+   +'<td>'+l.name+'</td>'
+   +'<td class="num strong">'+fmt(l.qty)+'</td>'
+   +'<td class="mono">'+l.due+'</td>'
+   +'<td>'+l.sup+'</td>'
+   +'<td class="num">'+money(l.price)+'</td>'
+   +'<td class="num"><b class="money">'+money(l.qty*l.price)+'</b></td>'
+   +'<td class="num">'+(l.converted?fmt(l.converted):'<span class="zero2">0</span>')+'</td>'
+   +'<td>'+lineTag(l)+'</td></tr>';
+}
+function timelineHTML(d){
+  return d.flow.map(function(f){
+    return '<div class="tl-item'+(f.s==='done'?' done':f.s==='cur'?' cur':'')+'">'
+     +'<div class="t">'+f.t+'</div><div class="what">'+f.title+'</div><div class="who">'+f.who+'</div></div>';
+  }).join('');
+}
+function paperHTML(d){
+  var rows=d.lines.map(function(l,i){
+    return '<tr><td class="num">'+(i+1)+'</td>'
+     +'<td class="mono">'+l.code+'</td><td>'+l.name+'</td>'
+     +'<td class="num">'+fmt(l.qty)+'</td><td class="mono">'+l.due+'</td><td>'+l.sup+'</td>'
+     +'<td class="num">'+money(l.price)+'</td><td class="num">'+money(l.qty*l.price)+'</td></tr>';
+  }).join('');
+  var qty=0,amt=0;
+  d.lines.forEach(function(l){qty+=l.qty;amt+=l.qty*l.price});
+  return '<div class="paper-hd"><h2>采购申请单</h2><div class="pno">单号：'+d.no+'</div></div>'
+   +'<div class="paper-meta">'
+   +'<span>申请人：<b>'+d.applicant+'</b></span>'
+   +'<span>部门：<b>'+d.dept+'</b></span>'
+   +'<span>日期：<b>'+noDate(d.no)+'</b></span>'
+   +'<span>状态：<b>'+ST[d.st].label+'</b></span>'
+   +'</div>'
+   +'<table class="paper-tbl"><thead><tr>'
+   +'<th class="num" style="width:40px">行号</th><th>物料编码</th><th>物料名称</th><th class="num">申请数量</th>'
+   +'<th>到货日期</th><th>建议供应商</th><th class="num">参考单价</th><th class="num">预估金额</th>'
+   +'</tr></thead><tbody>'+rows
+   +'<tr class="total"><td colspan="3">合计</td><td class="num">'+fmt(qty)+'</td><td colspan="3"></td><td class="num">'+money(amt)+'</td></tr>'
+   +'</tbody></table>'
+   +'<div class="paper-approve"><div class="pa-h">审批意见</div>'+d.approveNote+'</div>';
+}
+function renderDetail(){
+  var d=docOf(cur);
+  document.getElementById('docHead').innerHTML=headHTML(d);
+  document.getElementById('lineBody').innerHTML=d.lines.map(lineHTML).join('');
+  document.getElementById('tlBody').innerHTML=timelineHTML(d);
+  document.getElementById('lineHint').textContent='共 '+d.lines.length+' 行 · 预估 '+money(amountOf(d));
+  document.getElementById('paperView').innerHTML=paperHTML(d);
+  document.getElementById('detailGrid').style.display=paper?'none':'';
+  document.getElementById('paperView').style.display=paper?'':'none';
+}
+function togglePaper(){paper=!paper;renderDetail()}
+
+/* ============ 动作 ============ */
+function submitDoc(){
+  var d=docOf(cur);
+  if(d.st==='draft'){toast('演示：已提交审批 '+d.no)}
+  else{toast('当前状态（'+ST[d.st].label+'）无需重复提交')}
+}
+function editDoc(){toast('演示：打开编辑 '+cur)}
+function exportDoc(){toast('已导出 Excel：'+cur+'.xlsx')}
+function openPo(no){
+  var d=docOf(no||cur);
+  if(d.st!=='approved'){toast('仅「已批准」状态的申请单可转采购订单（当前：'+ST[d.st].label+'）');return}
+  poNo=d.no;
+  document.getElementById('poTitle').textContent='转采购订单 — '+d.no;
+  document.getElementById('poBody').innerHTML=d.lines.map(function(l){
+    var remain=l.qty-l.converted;
+    return '<tr><td class="mono">'+l.code+'</td><td>'+l.name+'</td>'
+     +'<td class="num">'+fmt(l.qty)+'</td><td class="num">'+fmt(l.converted)+'</td>'
+     +'<td class="num"><input class="mi" type="number" value="'+remain+'" min="0" max="'+remain+'"></td></tr>';
+  }).join('');
+  document.getElementById('poModal').classList.add('show');
+}
+function closePo(){document.getElementById('poModal').classList.remove('show')}
+function confirmPo(){
+  var d=docOf(poNo||cur);
+  closePo();
+  toast('演示：已生成采购订单 MRP-'+d.no+'-1/'+d.lines.length);
+}
+function toast(t){var o=document.getElementById('ovToast');document.getElementById('toastTxt').textContent=t;o.classList.add('show');clearTimeout(window.__tt);window.__tt=setTimeout(function(){o.classList.remove('show')},1800)}
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>批次与 K3 对比 · SPC 中台重设计原型</title>
+<link rel="stylesheet" href="styles.css">
+<!--
+  PROTOTYPE — 一次性原型，非生产代码；含少量原型 JS（立即运算 / 批次行展开数据体检与 K3 摘要 / 差异排查 toast）。
+  MRP 计划 · 批次与 K3 对比（2026-09-28）：回答「每批运算干了什么、和 K3 一致吗」。
+    → 二级 Tabs（总览 / 缺口与建议 / 订单覆盖 / 例外 / 批次与对比 / 参数与替代）→ 怎么看说明条
+    → 上排统计卡（上次运算 8.7s 成功 / 本批建议 1,001 / 本批例外 18,253 / K3 match 1）+ 立即运算卡（范围 全部/按订单号/按物料）
+    → 批次表（run 号 / 类型 / 状态 / 触发人 / 耗时 / 建议数 / 例外数 / 时间 / 操作），行展开＝数据体检 + K3 对比摘要
+    → K3 对比卡：5 张差异统计小卡 + 差异清单（match / diff_qty / diff_date / spc_only / k3_only）+ 口径注。
+  演示数据与 mrp-plan / mrp-shortage 同批（MRPRUN-20260928-035 · 建议 1,001 / 例外 18,253）。
+-->
+<style>
+  .ov{position:fixed;inset:0;display:flex;z-index:9998;opacity:0;transition:opacity .15s;pointer-events:none}
+  .ov.show{opacity:1}
+  .info-strip{display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;background:var(--info-bg);border:1px solid var(--info-bd);border-radius:var(--r-md);padding:9px 14px;font-size:var(--fs-12);color:#075985;line-height:1.7}
+  .info-strip b{color:#075985}
+  .info-strip svg{flex-shrink:0;margin-top:2px;color:var(--brand-500)}
+  .stat-click{cursor:pointer}
+  .stat-click:hover{border-color:var(--brand-300);box-shadow:var(--shadow-md)}
+  .stat-sub{font-size:11px;color:var(--text-3);margin-top:2px;font-variant-numeric:tabular-nums}
+  .g5{grid-template-columns:repeat(5,1fr)}
+  @media(max-width:1280px){.g5{grid-template-columns:repeat(3,1fr)}}
+  @media(max-width:820px){.g5{grid-template-columns:repeat(2,1fr)}}
+  .run-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(330px,1.5fr);gap:12px;margin-bottom:14px;align-items:stretch}
+  @media(max-width:1500px){.run-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.run-card{grid-column:span 2}}
+  @media(max-width:820px){.run-grid{grid-template-columns:1fr}.run-card{grid-column:span 1}}
+  .run-card{padding:13px 14px;display:flex;flex-direction:column;gap:9px}
+  .run-head{display:flex;align-items:center;gap:8px}
+  .run-head b{font-size:13.5px}
+  .run-note{margin-left:auto;font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums;background:var(--gray-50);border:1px solid var(--border);border-radius:999px;padding:2px 9px;white-space:nowrap}
+  .run-body{display:flex;gap:8px;align-items:center}
+  .scope-sel{height:32px;padding:0 6px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);font:inherit;font-size:var(--fs-12);color:var(--text-1);cursor:pointer;outline:none;flex-shrink:0}
+  .scope-sel:focus{border-color:var(--brand-500);box-shadow:0 0 0 3px rgba(91,91,214,.14)}
+  .run-hint{font-size:11px;color:var(--text-3);line-height:1.6;margin-top:auto}
+  .tbl th{white-space:nowrap;background:var(--gray-50)}
+  .tbl td{white-space:nowrap;height:44px}
+  .open-tr{width:30px;text-align:center;cursor:pointer;color:var(--text-3)}
+  .open-tr svg{transition:transform .15s;vertical-align:-2px}
+  tr.openx .open-tr svg{transform:rotate(180deg);color:var(--brand-500)}
+  .link{color:var(--brand-600);text-decoration:none;font-weight:600;cursor:pointer}
+  a.link:hover{text-decoration:underline}
+  .row-links a{margin-right:10px}
+  .zero2{color:var(--text-3)}
+  .mc{font-size:12.5px;font-weight:600;color:var(--text-1);font-variant-numeric:tabular-nums}
+  .sp{font-size:10.5px;color:var(--text-3);margin-top:1px;font-weight:400}
+  .err-mini{font-size:10.5px;color:var(--danger);margin-top:2px}
+
+  /* 行展开：数据体检 + K3 对比摘要 */
+  .subrow td{background:transparent;padding:0!important;white-space:normal}
+  .subrow .sub-pad{border-top:1px dashed var(--gray-200);background:#fbfcfe;padding:14px 18px 16px 20px}
+  .drill2{display:grid;grid-template-columns:1.15fr 1fr;gap:12px;align-items:start}
+  @media(max-width:1200px){.drill2{grid-template-columns:1fr}}
+  .drill-sec{border:1px solid var(--gray-200);border-radius:9px;background:#fff;padding:11px 13px;min-width:0}
+  .ds-h{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--text-1);margin-bottom:8px}
+  .ds-h .ds-tag{margin-left:auto;font-size:10.5px;font-weight:500;color:var(--text-3)}
+  .h-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  @media(max-width:1400px){.h-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .h-tile{border:1px solid var(--gray-200);border-radius:8px;padding:8px 10px;background:var(--gray-50);min-width:0}
+  .h-tile .k{font-size:10.5px;color:var(--text-3);font-family:Consolas,monospace;word-break:break-all}
+  .h-tile .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0 1px}
+  .h-tile .v small{font-size:10.5px;font-weight:500;color:var(--text-3)}
+  .h-tile .d{font-size:10.5px;color:var(--text-3);line-height:1.55}
+  .h-tile .d b{color:var(--text-2)}
+  .h-tile.ok{border-color:var(--success-bd);background:var(--success-bg)}
+  .h-tile.ok .v{color:var(--success)}
+  .h-tile.warn{border-color:var(--warning-bd);background:var(--warning-bg)}
+  .h-tile.warn .v{color:var(--warning)}
+  .k3-tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+  @media(max-width:1400px){.k3-tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  .k3-tile{border:1px solid var(--gray-200);border-radius:8px;padding:8px 10px;background:#fff;min-width:0}
+  .k3-tile .k{font-size:10.5px;font-weight:600;display:flex;align-items:center;gap:5px}
+  .k3-tile .v{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+  .ds-note{font-size:11.5px;color:var(--text-2);line-height:1.7;margin-top:8px;background:var(--gray-50);border-radius:6px;padding:6px 9px}
+  .ds-link{font-size:11.5px;margin-top:8px;display:inline-block}
+  .err-box{font-size:12px;color:var(--danger);background:var(--danger-bg);border:1px solid var(--danger-bd);border-radius:8px;padding:9px 12px;line-height:1.7}
+  .err-box .eb-note{color:var(--text-2);font-size:11.5px;margin-top:4px}
+
+  /* K3 对比卡 */
+  .kpi-mini{border:1px solid var(--border);border-radius:9px;padding:10px 12px;background:#fff;min-width:0}
+  .kpi-mini .k{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-2)}
+  .kpi-mini .k i{width:8px;height:8px;border-radius:2px;display:inline-block;background:currentColor}
+  .kpi-mini .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:4px;line-height:1.2}
+  .kpi-mini .d{font-size:10.5px;color:var(--text-3);margin-top:2px}
+  .dtag{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:6px;font-size:11.5px;font-weight:500;white-space:nowrap}
+  .dt-match{color:var(--success);background:var(--success-bg)}
+  .dt-qty{color:var(--risk-midhigh);background:var(--risk-midhigh-bg)}
+  .dt-date{color:var(--warning);background:var(--warning-bg)}
+  .dt-spc{color:var(--chart-5);background:#f5f3ff}
+  .dt-k3{color:var(--gray-500);background:var(--gray-100)}
+  .sp-warn{font-size:10.5px;color:var(--warning);margin-top:1px}
+  .calc-note{font-size:11px;color:var(--text-3);line-height:1.8;border-top:1px dashed var(--gray-200);padding-top:9px;margin-top:10px}
+  .calc-note b{color:var(--text-2)}
+</style>
+</head>
+<body>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.8"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.8"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.8"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.2-5.5"/><path d="M4 4v4.5h4.5"/><path d="M10.5 9.2v5.6l4.8-2.8z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4M12 17.2v.1"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M8 3v4M16 3v4M3.5 10h17"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3.5 8 12 4l8.5 4v8L12 20l-8.5-4z"/><path d="M3.5 8 12 12l8.5-4M12 12v8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 4 8.5 4.5L12 13 3.5 8.5z"/><path d="m4 13.5 8 4.2 8-4.2"/></symbol>
+  <symbol id="i-bld" viewBox="0 0 24 24"><rect x="5" y="3.5" width="14" height="17" rx="1.5"/><path d="M9 8h2M13 8h2M9 12h2M13 12h2M9 16h2M13 16h2"/></symbol>
+  <symbol id="i-cart" viewBox="0 0 24 24"><path d="M3 4.5h2.5L8 15h10.5L21 7.5H6"/><circle cx="9.5" cy="19" r="1.6"/><circle cx="17" cy="19" r="1.6"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19.5c.6-3.2 2.8-4.8 5.5-4.8s4.9 1.6 5.5 4.8"/><circle cx="16.8" cy="9.5" r="2.6"/><path d="M16.4 14.8c2.3.2 3.7 1.6 4.1 3.7"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M9 19c-1.5.5-3.5.4-5-.6.6-1.4 1.6-2.3 3-2.8"/><path d="M13.5 21c-.3-1.8-.1-3.5.5-5"/><path d="M14 4.5C17 3 20.5 3.5 20.5 3.5S21 7 19.5 10c-1 2-3 4.5-5.5 6L9 12.5S11 8 14 4.5z"/><circle cx="15.5" cy="8.5" r="1.3"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13"/><path d="M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10.3 19a2 2 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4.5 12.5 5 5 10-11"/></symbol>
+  <symbol id="i-rows" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></symbol>
+  <symbol id="i-cols" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M9.5 4.5v15M14.5 4.5v15"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.5-5.8"/><path d="M20 3.5V8h-4.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/><path d="M8.5 10h7M8.5 13.5h4.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8M17.5 7H20M4 17h2.5M11.5 17H20"/><circle cx="14.5" cy="7" r="2"/><circle cx="8.5" cy="17" r="2"/></symbol>
+</svg>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">SPC</div>
+      <div class="logo-text">SPC 供应链中台<small>SUPPLY CHAIN CENTER</small></div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item" href="dashboard.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>供应链驾驶舱</a>
+
+      <div class="nav-group-title">订单交付中心</div>
+      <a class="nav-item" href="orders.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>订单总控台<span class="count">126</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-run"/></svg>跑单管理</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>订单风险池<span class="count hot">4</span></a>
+
+      <div class="nav-group-title">物料齐套中心</div>
+      <a class="nav-item" href="purchase-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cal"/></svg>采购到料计划<span class="count">16</span></a>
+      <a class="nav-item" href="kit-analysis.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-layers"/></svg>齐套分析</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-box"/></svg>问题物料池<span class="count hot">7</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-clock"/></svg>长交期物料池</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bld"/></svg>供应商风险分析</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-cart"/></svg>委外订单</a>
+      <a class="nav-item active" href="mrp-plan.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rows"/></svg>MRP 计划</a>
+      <a class="nav-item" href="mrp-requisition.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-doc"/></svg>采购申请单</a>
+
+      <div class="nav-group-title">生产协同中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-dash"/></svg>生产驾驶舱</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg>待排工作台<span class="count">12</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>工序异常池</a>
+
+      <div class="nav-group-title">异常与质量中心</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg>异常总池<span class="count hot">5</span></a>
+
+      <div class="nav-group-title">协同与项目</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-users"/></svg>会议与任务中心<span class="ph">开发中</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rocket"/></svg>新品 / NPI 项目中心<span class="ph">开发中</span></a>
+
+      <div class="nav-group-title">规则与数据</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-sliders"/></svg>规则配置中心</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-db"/></svg>基础数据与集成</a>
+    </nav>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-crumb">物料齐套中心<b>批次与 K3 对比</b></div>
+      <div class="topbar-actions">
+        <div class="global-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="14" height="14"><use href="#i-search"/></svg>搜索订单、物料、客户…<kbd>Ctrl K</kbd></div>
+        <div class="icon-btn" title="消息反馈"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-bell"/></svg><span class="dot"></span></div>
+        <div class="avatar-user"><div class="avatar">华</div><span class="name">王华 · 计划员</span></div>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- 二级 Tabs：MRP 计划 -->
+      <div class="card mb12">
+        <div class="tabs" style="padding:0 8px">
+          <a class="tab" href="mrp-plan.html">总览</a>
+          <a class="tab" href="mrp-shortage.html">缺口与建议<span class="n hot">1001</span></a>
+          <a class="tab" href="mrp-order.html">订单覆盖</a>
+          <a class="tab" href="mrp-exceptions.html">例外</a>
+          <a class="tab active" href="mrp-runs.html">批次与对比</a>
+          <a class="tab" href="mrp-params.html">参数与替代</a>
+        </div>
+      </div>
+
+      <!-- 怎么看 -->
+      <div class="info-strip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" width="15" height="15"><use href="#i-rows"/></svg>
+        <span><b>怎么看：</b>批次＝每次运算的记录（每晚 02:00 自动 + 可手动）。K3 对比＝影子校验：把 SPC 建议与 K3 计划订单并排比。</span>
+      </div>
+
+      <!-- 上排统计卡 + 立即运算 -->
+      <div class="run-grid">
+        <div class="card stat-card" style="--accent:var(--success);--accent-bg:var(--success-bg)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-run"/></svg></div>
+          <div class="stat-main"><div class="label">上次运算</div><div class="value">8.7s<small>成功</small></div><div class="stat-sub">MRPRUN-20260928-035 · 09-28 09:12</div></div>
+        </div>
+        <div class="card stat-card" style="--accent:var(--brand-500);--accent-bg:var(--brand-50)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-rows"/></svg></div>
+          <div class="stat-main"><div class="label">本批建议</div><div class="value">1,001<small>条</small></div><div class="stat-sub">批次 -035 生成 · 待审核 12 条</div></div>
+        </div>
+        <div class="card stat-card" style="--accent:var(--risk-midhigh);--accent-bg:var(--risk-midhigh-bg)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-alert"/></svg></div>
+          <div class="stat-main"><div class="label">本批例外</div><div class="value">18,253<small>条</small></div><div class="stat-sub">待处理 320 条（拖期供给 53 / 拖期需求 12）</div></div>
+        </div>
+        <div class="card stat-card stat-click" onclick="document.getElementById('k3Card').scrollIntoView({behavior:'smooth'})" style="--accent:var(--success);--accent-bg:var(--success-bg)">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-check"/></svg></div>
+          <div class="stat-main"><div class="label">K3 match</div><div class="value">1<small>项</small></div><div class="stat-sub">近 7 天并集 1,847 项 · 差异 1,846 项</div></div>
+        </div>
+        <div class="card run-card">
+          <div class="run-head"><b>立即运算</b><span class="run-note">下次自动运算 今晚 02:00</span></div>
+          <div class="run-body">
+            <select class="scope-sel" id="runScope" onchange="runScopeChanged()">
+              <option value="all">全部</option>
+              <option value="order">按订单号</option>
+              <option value="material">按物料</option>
+            </select>
+            <input class="input disabled" id="runKey" placeholder="全部订单（无需填写）" disabled style="flex:1;min-width:0">
+            <button class="btn btn-primary" onclick="runNow()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-run"/></svg>立即运算</button>
+          </div>
+          <div class="run-hint">影子模式：只生成建议与例外，不自动投放任务单；按订单 / 按物料适合改单后快速重算。</div>
+        </div>
+      </div>
+
+      <!-- 批次表 -->
+      <div class="card">
+        <div class="card-head" style="padding:10px 16px">
+          <h3 style="font-size:14px">运算批次</h3>
+          <span class="hint">近 7 天 · 演示 6 条</span>
+          <span style="margin-left:auto;font-size:12px;color:var(--text-3)">点击行首箭头展开「数据体检 + K3 对比摘要」</span>
+        </div>
+        <div class="card-body p0 tbl-wrap">
+          <table class="tbl" style="min-width:1120px">
+            <thead><tr>
+              <th style="width:30px"></th>
+              <th style="width:250px">批次号 / 范围</th>
+              <th style="width:70px">类型</th>
+              <th style="width:130px">状态</th>
+              <th style="width:70px">触发人</th>
+              <th class="num" style="width:70px">耗时</th>
+              <th class="num" style="width:88px">建议数</th>
+              <th class="num" style="width:96px">例外数</th>
+              <th style="width:140px">时间</th>
+              <th style="width:168px">操作</th>
+            </tr></thead>
+            <tbody id="runBody"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <span class="total" id="runTotal"></span>
+          <span class="pg">‹</span><span class="pg cur">1</span><span class="pg">›</span>
+          <span style="margin-left:8px">20 条/页 · 批次保留 90 天</span>
+        </div>
+      </div>
+      <!-- K3 对比 -->
+      <div class="card mt12" id="k3Card">
+        <div class="card-head" style="padding:10px 16px">
+          <h3 style="font-size:14px">K3 对比</h3>
+          <span class="hint">影子校验 · 近 7 天批次并集 · 按物料聚合 · 并集 1,847 项</span>
+          <span class="more" onclick="toast('演示：已导出差异清单 K3对比-20260928.xlsx')">导出差异</span>
+        </div>
+        <div class="card-body">
+          <div class="grid g5" id="k3Kpis" style="margin-bottom:12px"></div>
+          <div class="tbl-wrap" style="border:1px solid var(--gray-200);border-radius:9px">
+            <table class="tbl" style="min-width:960px">
+              <thead><tr>
+                <th style="width:300px">物料</th>
+                <th class="num" style="width:100px">SPC 量</th>
+                <th style="width:110px">SPC 需求日</th>
+                <th class="num" style="width:100px">K3 量</th>
+                <th style="width:110px">K3 需求日</th>
+                <th style="width:120px">差异类型</th>
+                <th style="width:90px">操作</th>
+              </tr></thead>
+              <tbody id="k3Body"></tbody>
+            </table>
+          </div>
+          <div class="pager" style="padding:10px 2px 0">
+            <span class="total" id="k3Total"></span>
+            <span class="pg">‹</span><span class="pg cur">1</span><span class="pg">›</span>
+            <span style="margin-left:8px">20 条/页</span>
+          </div>
+          <div class="calc-note">口径：K3 对比取<b>近 7 天批次并集</b>、<b>按物料聚合</b>；需求日按 <b>±3 天窗口</b>对齐；数量差 <b>≤5%</b> 记 <b>match</b>；diff_qty＝量差超 5% · diff_date＝需求日差超 3 天 · spc_only＝仅 SPC 有建议 · k3_only＝仅 K3 有计划；K3 对比为影子校验，不影响 SPC 建议生效。</div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="ov" id="ovToast" style="align-items:flex-end;justify-content:center;padding:0 0 46px;background:transparent;pointer-events:none">
+  <div style="background:#111318;color:#fff;font-size:13px;padding:9px 16px;border-radius:999px;box-shadow:var(--shadow-lg)">✓ <span id="toastTxt"></span></div>
+</div>
+
+<!-- 原型切换条（非设计内容） -->
+<div class="protobar">
+  <span class="pt-label">PROTOTYPE</span>
+  <a href="index.html">总览</a>
+  <a href="design-system.html">设计系统</a>
+  <a href="mrp-plan.html">MRP 计划</a>
+  <a href="mrp-shortage.html">缺口与建议</a>
+  <a href="mrp-order.html">订单覆盖</a>
+  <a href="mrp-exceptions.html">例外</a>
+  <a href="mrp-runs.html" class="cur">批次与对比</a>
+  <a href="mrp-params.html">参数与替代</a>
+  <a href="mrp-requisition.html">采购申请单</a>
+</div>
+
+<script>
+var K3META={
+  match:['match','var(--success)','dt-match','一致：量差 ≤5% 且需求日 ±3 天内'],
+  diff_qty:['diff_qty','var(--risk-midhigh)','dt-qty','数量差 > 5%'],
+  diff_date:['diff_date','var(--warning)','dt-date','需求日差 > 3 天'],
+  spc_only:['spc_only','var(--chart-5)','dt-spc','SPC 有建议 · K3 无计划'],
+  k3_only:['k3_only','var(--gray-500)','dt-k3','K3 有计划 · SPC 无建议']
+};
+var K3COUNT={match:1,diff_qty:95,diff_date:38,spc_only:867,k3_only:846};
+
+/* ============ 批次数据（与 mrp-plan / mrp-shortage 同批） ============ */
+/* health：dwb=demand_without_bom / nb=no_bom / mpm=material_property_missing / pf=param_fallback / sub=subcontract_date_approx */
+var RUNS=[
+ {no:'MRPRUN-20260928-035',type:'manual',scope:'全量 · 影子模式',status:'success',user:'王华',dur:'8.7s',sugg:1001,exc:18253,time:'09-28 09:12',
+  health:{dwb:14,nb:2,mpm:8,pf:{total:30893,cfg:1,his:697,def:30195},sub:true},
+  k3:{match:1,diff_qty:95,diff_date:38,spc_only:867,k3_only:846}},
+ {no:'MRPRUN-20260928-034',type:'manual',scope:'按订单 HJ202609-0025-0215',status:'success',user:'王华',dur:'5.3s',sugg:0,exc:144,time:'09-28 08:40',
+  health:{dwb:2,nb:0,mpm:3,pf:{total:1860,cfg:1,his:44,def:1815},sub:false},
+  k3:null,k3note:'按订单运算不生成 K3 对比：影子校验仅全量运算执行。'},
+ {no:'MRPRUN-20260928-033',type:'manual',scope:'按订单 HJ202609-0017-0207',status:'success',user:'王华',dur:'6.5s',sugg:0,exc:20,time:'09-27 17:25',
+  health:{dwb:0,nb:0,mpm:1,pf:{total:412,cfg:1,his:9,def:402},sub:false},
+  k3:null,k3note:'按订单运算不生成 K3 对比：影子校验仅全量运算执行。'},
+ {no:'MRPRUN-20260928-032',type:'auto',scope:'定时预排 · 每晚 02:00',status:'scheduled',user:'系统',dur:'—',sugg:null,exc:null,time:'09-29 02:00（今晚）',
+  health:null,k3:null,note:'批次计划于 09-29 02:00 执行：到点自动生成建议、例外与 K3 对比，无需人工触发。'},
+ {no:'MRPRUN-20260928-031',type:'manual',scope:'全量',status:'failed',user:'王华',dur:'1.2s',sugg:null,exc:null,time:'09-27 10:32',
+  err:'连接池超时，已重试',health:null,k3:null,note:'已重试成功；失败批次不计入 K3 比对口径，建议避开 ERP 同步时段执行全量运算。'},
+ {no:'MRPRUN-20260926-030',type:'auto',scope:'全量 · 定时',status:'success',user:'系统',dur:'6.8s',sugg:1150,exc:18900,time:'09-26 02:00',
+  health:{dwb:11,nb:2,mpm:7,pf:{total:30960,cfg:1,his:680,def:30279},sub:false},
+  k3:null,k3note:'全量批次已被后续 -035 覆盖：K3 对比口径取近 7 天并集的最新结果。'}
+];
+
+/* ============ K3 差异清单（演示样本 5 条 / 全量并集 1,847 项） ============ */
+var DIFFS=[
+ {code:'1.6.3.E2835-18V-4000K-1W',name:'LED 灯珠 2835 18V 4000K 1W',spc:32000,spcDate:'10-30',k3:22848,k3Date:'10-30',kind:'diff_qty',hint:'量差 39%（SPC 32,000 vs K3 22,848）> 5%'},
+ {code:'3.1.JWA02-B1WA10C-001',name:'LED 泛光灯 JWA02（半成品）',spc:null,spcDate:'',k3:2003,k3Date:'10-26',kind:'k3_only',note:'K3 历史计划已投放为任务单',hint:'K3 有计划、SPC 无建议：优先核对是否已投放任务单'},
+ {code:'1.6.4.C.1.0805.50V104K',name:'LED 灯珠 0805 50V 104K',spc:15000,spcDate:'10-02',k3:14820,k3Date:'10-02',kind:'match',hint:'量差 1.2% ≤5% · 需求日差 0 天，记为 match'},
+ {code:'1.8.3.RSG-圆4-10',name:'LED 灯珠透镜 圆4-10',spc:4320,spcDate:'11-04',k3:null,k3Date:'',kind:'spc_only',hint:'SPC 有建议、K3 无计划：核对 K3 手工计划口径'},
+ {code:'2.3.1.JFS05-01',name:'泛光灯 JFS05 前壳组件',spc:500,spcDate:'11-04',k3:500,k3Date:'11-12',kind:'diff_date',hint:'需求日差 8 天 > 3 天窗口'}
+];
+
+function fmt(n){return n.toLocaleString()}
+function runOf(no){return RUNS.filter(function(r){return r.no===no})[0]}
+function typeTag(t){
+  if(t==='manual')return '<span class="tag" style="color:var(--brand-600);background:var(--brand-50)">手动</span>';
+  return '<span class="tag" style="color:var(--text-2);background:var(--gray-100)">自动</span>';
+}
+function statusTag(r){
+  if(r.status==='success')return '<span class="tag" style="color:var(--success);background:var(--success-bg)"><span class="dot"></span>成功</span>';
+  if(r.status==='failed')return '<span class="tag" style="color:var(--danger);background:var(--danger-bg)"><span class="dot"></span>失败</span><div class="err-mini">'+r.err+'</div>';
+  return '<span class="tag" style="color:var(--info);background:var(--info-bg)"><span class="dot"></span>计划中</span>';
+}
+function runRowHTML(r){
+  return '<tr data-run="'+r.no+'"'+(expanded===r.no?' class="openx"':'')+'>'
+   +'<td class="open-tr" onclick="toggleDrill(\''+r.no+'\')" title="展开数据体检与 K3 对比摘要"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><use href="#i-chev"/></svg></td>'
+   +'<td><div class="mc">'+r.no+'</div><div class="sp">'+r.scope+'</div></td>'
+   +'<td>'+typeTag(r.type)+'</td>'
+   +'<td>'+statusTag(r)+'</td>'
+   +'<td>'+r.user+'</td>'
+   +'<td class="num">'+r.dur+'</td>'
+   +'<td class="num">'+(r.sugg==null?'<span class="zero2">—</span>':fmt(r.sugg))+'</td>'
+   +'<td class="num">'+(r.exc==null?'<span class="zero2">—</span>':fmt(r.exc))+'</td>'
+   +'<td class="mono">'+r.time+'</td>'
+   +'<td><span class="row-links"><a class="link" onclick="viewRun(\''+r.no+'\')">查看</a><a class="link" onclick="rerun(\''+r.no+'\')">重跑</a><a class="link" onclick="exportRun(\''+r.no+'\')">导出</a></span></td></tr>';
+}
+function renderRuns(){
+  document.getElementById('runBody').innerHTML=RUNS.map(runRowHTML).join('');
+  document.getElementById('runTotal').textContent='共 6 条（演示样本 / 近 7 天） · 最新批次 '+RUNS[0].no;
+}
+function diffRowHTML(d){
+  var m=K3META[d.kind];
+  return '<tr><td><div class="mc">'+d.code+'</div><div class="sp">'+d.name+'</div>'+(d.note?'<div class="sp-warn">'+d.note+'</div>':'')+'</td>'
+   +'<td class="num">'+(d.spc==null?'<span class="zero2">—</span>':fmt(d.spc))+'</td>'
+   +'<td class="mono">'+(d.spcDate||'<span class="zero2">—</span>')+'</td>'
+   +'<td class="num">'+(d.k3==null?'<span class="zero2">—</span>':fmt(d.k3))+'</td>'
+   +'<td class="mono">'+(d.k3Date||'<span class="zero2">—</span>')+'</td>'
+   +'<td><span class="dtag '+m[2]+'" title="'+d.hint+'">'+m[0]+'</span></td>'
+   +'<td><a class="link" onclick="troubleshoot(\''+d.code+'\')">排查</a></td></tr>';
+}
+function renderDiffs(){
+  document.getElementById('k3Body').innerHTML=DIFFS.map(diffRowHTML).join('');
+  document.getElementById('k3Kpis').innerHTML=Object.keys(K3META).map(function(k){
+    var m=K3META[k];
+    return '<div class="kpi-mini"><div class="k" style="color:'+m[1]+'"><i></i>'+m[0]+'</div><div class="v" style="color:'+m[1]+'">'+fmt(K3COUNT[k])+'</div><div class="d">'+m[3]+'</div></div>';
+  }).join('');
+  document.getElementById('k3Total').textContent='共 5 条（演示样本） · 全量并集 1,847 项（近 7 天批次）';
+}
+/* ============ 行展开：数据体检 + K3 对比摘要 ============ */
+var expanded='';
+function tile(k,v,u,d,cls){
+  return '<div class="h-tile '+cls+'"><div class="k">'+k+'</div><div class="v">'+fmt(v)+' <small>'+u+'</small></div><div class="d">'+d+'</div></div>';
+}
+function pfTile(pf){
+  return '<div class="h-tile"><div class="k">param_fallback</div><div class="v">'+fmt(pf.total)+' <small>项</small></div>'
+   +'<div class="d">参数回退：已配置 <b>'+pf.cfg+'</b> · 历史推导 <b>'+fmt(pf.his)+'</b> · 全局默认 <b>'+fmt(pf.def)+'</b></div></div>';
+}
+function subTile(on){
+  return on
+   ?'<div class="h-tile warn"><div class="k">subcontract_date_approx</div><div class="v" style="font-size:12.5px">委外日期暂用单据日</div><div class="d">委外到料日缺失：以委外单日期近似，可能造成需求日偏差</div></div>'
+   :'<div class="h-tile ok"><div class="k">subcontract_date_approx</div><div class="v" style="font-size:12.5px">未触发</div><div class="d">委外到料日均来自有效日期</div></div>';
+}
+function k3tile(k,v){
+  var m=K3META[k];
+  return '<div class="k3-tile"><div class="k" style="color:'+m[1]+'"><i style="width:8px;height:8px;border-radius:2px;background:currentColor;display:inline-block"></i>'+m[0]+'</div><div class="v" style="color:'+m[1]+'" title="'+m[3]+'">'+fmt(v)+'</div></div>';
+}
+function healthHTML(h){
+  return '<div class="drill-sec"><div class="ds-h">数据体检<span class="ds-tag">本批运算输入质量</span></div><div class="h-tiles">'
+   +tile('demand_without_bom',h.dwb,'项','需求行找不到 BOM：按 0 用量估算，建议可能偏小',h.dwb>0?'warn':'ok')
+   +tile('no_bom',h.nb,'项','物料主数据未维护 BOM：无法展开用量',h.nb>0?'warn':'ok')
+   +tile('material_property_missing',h.mpm,'项','属性缺失：默认按外购处理（可改自制 / 委外）',h.mpm>0?'warn':'ok')
+   +pfTile(h.pf)+subTile(h.sub)
+   +'</div></div>';
+}
+function k3SummaryHTML(r){
+  if(r.k3){
+    return '<div class="drill-sec"><div class="ds-h">K3 对比摘要<span class="ds-tag">影子校验 · 本批口径</span></div><div class="k3-tiles">'
+     +k3tile('match',r.k3.match)+k3tile('diff_qty',r.k3.diff_qty)+k3tile('diff_date',r.k3.diff_date)+k3tile('spc_only',r.k3.spc_only)+k3tile('k3_only',r.k3.k3_only)
+     +'</div><a class="ds-link" href="javascript:void 0" onclick="document.getElementById(\'k3Card\').scrollIntoView({behavior:\'smooth\'})">查看完整差异清单（近 7 天并集 1,847 项）→</a></div>';
+  }
+  return '<div class="drill-sec"><div class="ds-h">K3 对比摘要<span class="ds-tag">影子校验</span></div><div class="ds-note" style="margin-top:0">'+(r.k3note||'本批次无 K3 对比结果。')+'</div></div>';
+}
+function drillHTML(r){
+  if(r.status==='failed')return '<div class="err-box">⚠ 错误信息：'+r.err+'<div class="eb-note">'+r.note+'</div></div>';
+  if(r.status==='scheduled'||!r.health)return '<div class="ds-note" style="margin-top:0">'+r.note+'</div>';
+  return '<div class="drill2">'+healthHTML(r.health)+k3SummaryHTML(r)+'</div>';
+}
+function toggleDrill(no){
+  var tr=document.querySelector('tr[data-run="'+no+'"]');
+  var sub=document.getElementById('subdrill');
+  if(expanded===no){if(sub)sub.remove();if(tr)tr.classList.remove('openx');expanded='';return}
+  if(sub)sub.remove();
+  document.querySelectorAll('tr.openx').forEach(function(x){x.classList.remove('openx')});
+  var r=runOf(no);if(!r||!tr)return;
+  expanded=no;tr.classList.add('openx');
+  tr.insertAdjacentHTML('afterend','<tr class="subrow" id="subdrill"><td colspan="10"><div class="sub-pad">'+drillHTML(r)+'</div></td></tr>');
+}
+
+/* ============ 动作 ============ */
+function runScopeChanged(){
+  var v=document.getElementById('runScope').value;
+  var inp=document.getElementById('runKey');
+  if(v==='all'){inp.value='';inp.disabled=true;inp.className='input disabled';inp.placeholder='全部订单（无需填写）'}
+  else{inp.disabled=false;inp.className='input';inp.placeholder=v==='order'?'订单号，如 HJ202609-0025-0215':'物料编码，如 1.6.3.E2835-18V-4000K-1W'}
+}
+function runNow(){
+  var v=document.getElementById('runScope').value;
+  var k=document.getElementById('runKey').value.trim();
+  if(v!=='all'&&!k){toast('请先填写'+(v==='order'?'订单号':'物料编码'));return}
+  var label={all:'全部',order:'按订单',material:'按物料'}[v];
+  toast('演示：已提交运算任务（范围：'+label+(k?' · '+k:'')+'），预计 1 分钟内完成');
+}
+function viewRun(no){toast('演示：打开批次详情 '+no+'（建议 / 例外 / 数据体检 / K3 对比）')}
+function rerun(no){toast('演示：已按相同范围重跑 '+no+'，新批次生成中')}
+function exportRun(no){toast('演示：已导出批次结果 '+no+'.xlsx')}
+function troubleshoot(code){toast('演示：打开排查面板 — '+code+'（并排显示 SPC / K3 需求与来源）')}
+function toast(t){var o=document.getElementById('ovToast');document.getElementById('toastTxt').textContent=t;o.classList.add('show');clearTimeout(window.__tt);window.__tt=setTimeout(function(){o.classList.remove('show')},1800)}
+
+renderRuns();
+renderDiffs();
+runScopeChanged();
+</script>
+</body>
+</html>

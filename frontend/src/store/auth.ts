@@ -18,6 +18,7 @@ interface UserInfo {
   is_default_password: boolean
   login_version: number
   position_name?: string | null
+  wecom_user_id?: string | null
 }
 
 interface ShareUserInfo {
@@ -44,6 +45,7 @@ interface AuthState {
   currentUser: (UserInfo | ShareUserInfo) | null
   
   setAuth: (token: string, user: UserInfo | null) => void
+  updateUserField: (patch: Partial<UserInfo>) => void
   setShareAuth: (token: string, targetPath: string, sharePermissions?: string[]) => void
   exitShare: () => void
   logout: () => void
@@ -78,8 +80,6 @@ const sharePathToPermission: Record<string, string> = {
   '/supplier-risk': 'materials.supplier_risk',
   '/supplier-payment': 'materials.supplier_payment',
   '/issues': 'exceptions',
-  '/issue-log': 'exceptions.issue_log',
-  '/change-log': 'exceptions.change_log',
   '/quality-issues': 'exceptions.quality',
   '/product-samples': 'exceptions.product_samples',
   '/closure-tracking': 'exceptions.closure',
@@ -91,21 +91,17 @@ const sharePathToPermission: Record<string, string> = {
   '/assembly': 'production.assembly',
   '/packaging': 'production.packaging',
   '/process-exceptions': 'production.exceptions',
-  '/meetings': 'meetings',
-  '/npi': 'npi',
   '/import': 'basicdata.import',
   '/risk-rules': 'rules.risk_rules',
-  '/inspection-rules': 'rules.inspection',
   '/node-standards': 'rules.node_standards',
   '/order-standards': 'rules.order_standards',
   '/work-instructions': 'rules.work_instructions',
-  '/responsibility-map': 'rules.responsibility',
-  '/status-dict': 'rules.status_dict',
   '/users': 'users',
   '/audit': 'audit',
   '/sync-config': 'settings',
   '/basicdata/customers': 'basicdata.data',
   '/basicdata/suppliers': 'basicdata.data',
+  '/basicdata/supplier-material-map': 'basicdata.data.suppliers',
   '/basicdata/materials': 'basicdata.data',
   '/basicdata/skus': 'basicdata.data',
   '/basicdata/products': 'basicdata.data',
@@ -190,6 +186,17 @@ export const useAuthStore = create<AuthState>((set, get) => {
       } else {
         set({ originalToken: token, originalUser: user })
       }
+    },
+
+    updateUserField: (patch) => {
+      const state = get()
+      if (!state.originalUser) return
+      const updated = { ...state.originalUser, ...patch }
+      localStorage.setItem('user', JSON.stringify(updated))
+      set({
+        originalUser: updated,
+        currentUser: state.shareUser ? state.currentUser : updated,
+      })
     },
     
     setShareAuth: (token, targetPath, sharePermissions) => {
