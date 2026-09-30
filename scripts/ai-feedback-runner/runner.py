@@ -5,8 +5,10 @@
 2. 按改动范围执行门禁（backend pytest / frontend build / 敏感文件扫描）；
 3. 通过后本地提交并回写反馈结果（ai-finish），失败则回写失败原因。
 
-设计与约定见 docs/superpowers/specs/2026-09-29-feedback-ai-autofix-design.md。
+设计与约定见 docs/superpowers/specs/2026-09-29-feedback-ai-autofix-design.md、
+docs/superpowers/specs/2026-09-30-feedback-ai-progress-design.md。
 运行：<python.exe> runner.py [--config config.local.json] [--once] [--cleanup]
+注意：.runner.lock 仅保证同一工作目录单实例；同一后端应只运行一个 runner 实例。
 """
 from __future__ import annotations
 
