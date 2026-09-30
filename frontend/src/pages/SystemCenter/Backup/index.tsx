@@ -5,7 +5,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import {
   CloudDownloadOutlined, DatabaseOutlined, DeleteOutlined,
-  ReloadOutlined, SafetyOutlined, SettingOutlined,
+  QuestionCircleOutlined, ReloadOutlined, SafetyOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import {
   backupApi, downloadBackup,
@@ -36,6 +36,23 @@ function fmtSize(bytes: number): string {
 }
 
 const EMPTY_JOB: BackupJobVo = { job_id: '', type: 'backup', status: 'running', steps: [], logs: [], result: null }
+
+/** 备份范围说明（口径与 backup_service 实际行为一致：pg_dump 全库 + uploads 打包，其余不落备份） */
+const BACKUP_SCOPE_TIP = (
+  <div style={{ maxWidth: 320 }}>
+    <div><b>备份包含</b></div>
+    <ul style={{ paddingLeft: 18, margin: '4px 0 8px' }}>
+      <li>数据库：PostgreSQL 全库（业务数据、系统配置、账号与权限）</li>
+      <li>附件：uploads 目录全部上传文件（图纸、文档等）</li>
+      <li>每份备份 = 库 + 附件双文件，均记录 sha256 校验和，恢复前自动校验</li>
+    </ul>
+    <div><b>备份不包含</b></div>
+    <ul style={{ paddingLeft: 18, margin: '4px 0' }}>
+      <li>服务器环境与密钥配置（.env、部署文件），需另行在服务器侧备份</li>
+      <li>Redis 缓存数据（登录黑名单等临时数据，可自动重建）</li>
+    </ul>
+  </div>
+)
 
 export default function BackupPage() {
   const hasPermission = useAuthStore((s: any) => s.hasPermission) as (r: string, a: string) => boolean
@@ -245,6 +262,11 @@ export default function BackupPage() {
           <Title level={4} style={{ margin: 0 }}>备份管理</Title>
           <div style={{ color: 'var(--text-secondary, #888)', fontSize: 12, marginTop: 4 }}>
             数据库 + 附件双文件备份；恢复将回滚到所选时间点（自动先打安全快照）。
+            <Tooltip title={BACKUP_SCOPE_TIP}>
+              <span style={{ marginLeft: 6, color: '#1677ff', cursor: 'help' }}>
+                <QuestionCircleOutlined /> 备份范围
+              </span>
+            </Tooltip>
           </div>
         </div>
         <Space>
