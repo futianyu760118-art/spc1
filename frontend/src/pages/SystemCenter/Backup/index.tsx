@@ -338,7 +338,7 @@ export default function BackupPage() {
     : null
 
   return (
-    <Card>
+    <Card className="backup-card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div style={{ color: 'var(--text-secondary, #888)', fontSize: 12 }}>
           数据库 + 附件双文件备份；恢复将回滚到所选时间点（自动先打安全快照）。
@@ -372,6 +372,7 @@ export default function BackupPage() {
         columns={columns}
         dataSource={rows}
         loading={loading}
+        scroll={{ y: 'calc(100vh - 360px)' }}
         pagination={{
           current: page, pageSize, total, showSizeChanger: true,
           onChange: (p, ps) => { setPage(p); setPageSize(ps) },

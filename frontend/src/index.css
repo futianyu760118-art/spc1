@@ -2569,6 +2569,16 @@ a.si-wh-link:hover { color: #4c4dc2; }
   .clm-paper-wrap { background: #fff; padding: 0; border-radius: 0; }
 }
 
+/* ===== 备份管理：一屏布局（窗口不出现滚动条，表体内部细滚动条悬停可见，同 order-list-card 约定） ===== */
+.backup-card .ant-table-body { overflow-y: auto !important; }
+.backup-card .ant-table-body::-webkit-scrollbar:vertical { width: 6px; }
+.backup-card .ant-table-body::-webkit-scrollbar-track:vertical { background: transparent; }
+.backup-card .ant-table-body::-webkit-scrollbar-thumb:vertical { background: transparent; border-radius: 3px; }
+.backup-card .ant-table-body:hover::-webkit-scrollbar-thumb:vertical { background: #cbd5e1; }
+.backup-card .ant-table-body:hover::-webkit-scrollbar-thumb:vertical:hover { background: #94a3b8; }
+.backup-card .ant-table-body { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.backup-card .ant-table-body:hover { scrollbar-color: #cbd5e1 transparent; }
+
 /* ===== 问题反馈：AI 实现列警报灯（排队慢闪 / 实现中呼吸 / 失败急闪 / 已实现常亮） ===== */
 .fb-ai-lamp {
   --lamp: #cbd5e1;
