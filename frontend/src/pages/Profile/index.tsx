@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Card, Form, Input, Button, Descriptions, Space, Result, Divider, message, Tag, Modal } from 'antd'
+import { Card, Form, Input, Button, Descriptions, Space, Result, Divider, message, Tag, Modal, Switch } from 'antd'
 import { useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/store/auth'
 import { authApi } from '@/services/api'
+import { useUiPreferencesStore } from '@/store/uiPreferences'
+import { NEW_TAB_NAV_FLAG } from '@/utils/appHistory'
 
 interface WecomQrConfig {
     enabled: boolean
@@ -53,6 +55,8 @@ export default function Profile() {
     const isInWecom =
         typeof navigator !== 'undefined' &&
         navigator.userAgent.toLowerCase().includes('wxwork')
+    const openInNewTab = useUiPreferencesStore((s) => s.getFlag(NEW_TAB_NAV_FLAG, true))
+    const setUiFlag = useUiPreferencesStore((s) => s.setFlag)
 
     if (!currentUser || ('is_share_user' in currentUser)) {
         return (
@@ -166,6 +170,21 @@ export default function Profile() {
 
     return (
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <Card title="偏好设置" bordered={false}>
+                <Space direction="vertical" size="small">
+                    <Space size="middle">
+                        <Switch
+                            checked={openInNewTab}
+                            onChange={(checked) => setUiFlag(NEW_TAB_NAV_FLAG, checked)}
+                        />
+                        <span style={{ fontWeight: 500 }}>跨页跳转在新标签页打开</span>
+                    </Space>
+                    <div style={{ color: '#64748b', fontSize: 13 }}>
+                        开启后，菜单切换、下钻详情等跨页跳转会在新的浏览器标签页中打开，当前页面及其筛选条件保持不变；同页内的筛选、切签等操作不受影响。
+                    </div>
+                </Space>
+            </Card>
+
             <Card title="基本信息" bordered={false}>
                 <Descriptions column={1} size="small" labelStyle={{ width: 120 }}>
                     <Descriptions.Item label="用户名">{user.username}</Descriptions.Item>
