@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Table, Button, Space, Input, Select, Form, message, Modal, Image } from 'antd'
+import { Table, Button, Space, Input, Select, Form, message, Modal, Image, Tooltip, Badge } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, DeleteOutlined, MessageOutlined,
   DownloadOutlined, PaperClipOutlined, ClockCircleOutlined,
@@ -32,11 +32,11 @@ const statusMeta: Record<string, { label: string; cls: string }> = {
   closed: { label: '已关闭', cls: 'sc-tag-wait' },
 }
 
-const aiStatusMeta: Record<string, { label: string; cls: string }> = {
-  queued: { label: '排队中', cls: 'sc-tag-wait' },
-  running: { label: '实现中', cls: 'sc-tag-kit' },
-  done: { label: '已实现', cls: 'sc-tag-done' },
-  failed: { label: '失败', cls: 'sc-tag-danger' },
+const aiStatusMeta: Record<string, { label: string; cls: string; badge: 'success' | 'processing' | 'error' | 'default' | 'warning' }> = {
+  queued: { label: '排队中', cls: 'sc-tag-wait', badge: 'warning' },
+  running: { label: '实现中', cls: 'sc-tag-kit', badge: 'processing' },
+  done: { label: '已实现', cls: 'sc-tag-done', badge: 'success' },
+  failed: { label: '失败', cls: 'sc-tag-danger', badge: 'error' },
 }
 
 const aiStageMeta: Record<string, { label: string }> = {
@@ -365,10 +365,15 @@ export default function FeedbackManagement() {
       render: (v: string) => <span className={`sc-tag ${statusMeta[v]?.cls || 'sc-tag-plain'}`}><span className="dot" />{statusMeta[v]?.label || v}</span>,
     },
     {
-      title: 'AI 实现', dataIndex: 'ai_status', key: 'ai_status', width: 100,
-      render: (v: string) => (v && v !== 'none'
-        ? <span className={`sc-tag ${aiStatusMeta[v]?.cls || 'sc-tag-plain'}`}>{aiStatusMeta[v]?.label || v}</span>
-        : <span className="sc-note">—</span>),
+      title: 'AI 实现', dataIndex: 'ai_status', key: 'ai_status', width: 70,
+      render: (v: string) => {
+        const meta = aiStatusMeta[v]
+        return (
+          <Tooltip title={meta?.label || '未派单'}>
+            <Badge status={meta?.badge || 'default'} />
+          </Tooltip>
+        )
+      },
     },
     { title: '提交人', dataIndex: 'submitter_name', key: 'submitter_name', width: 140, render: (v: string) => <Operator name={v} /> },
     {
