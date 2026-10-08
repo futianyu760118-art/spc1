@@ -1,0 +1,119 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+venv/
+.pytest_cache/
+.env
+.env.local
+
+# Node
+node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+.trae/
+.windsurf/
+
+# Docker
+pg_data/
+data/uploads/
+
+# OS
+.DS_Store
+Thumbs.db
+data/
+
+# Dev logs
+backend_dev.log
+frontend_dev.log
+*.dev.log
+
+# Agent run logs
+backend/logs/assistant/
+
+# Build cache
+*.tsbuildinfo
+
+# Temp scripts（本机调试用，不提交）
+backend/check_*.py
+backend/perf_test.py
+backend/migrate_frozen.py
+backend/seed_process_test_data.py
+backend/test_delete_preview.py
+backend/fix_name*.py
+backend/perf_*.py
+backend/quick_test.py
+backend/test_*.py
+
+# 本地调试输出(不提交)
+backend/report_pretty.txt
+backend/roots_no_params.json
+backend/test_inventory_list_report.json
+backend/test_subject_balance_report.json
+
+# 根目录调试脚本(不提交)
+/*.py
+# 但保留 init_database 等必要脚本(在 backend/ 下)
+
+# 日志文件
+*.log
+*.err.log
+*.err2.log
+uvicorn.*
+
+# 文档(本机笔记，不提交)
+docs/
+*.md
+!AGENTS.md
+!CODE_WIKI.md
+!README.md
+!backend/ERP_INTEGRATION.md
+
+# 临时压缩包
+*.tar
+
+# Tool / session artifacts
+.git.bak/
+.superpowers/
+
+# Local work files
+*.xlsx
+本周*.csv
+本周*.xlsx
+
+# AI 反馈实现 runner 本地文件（凭据/日志/锁，绝不提交）
+scripts/ai-feedback-runner/config.local.json
+scripts/ai-feedback-runner/runs/
+scripts/ai-feedback-runner/.runner.lock
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
