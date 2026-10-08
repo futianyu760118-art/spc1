@@ -150,12 +150,15 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
       const prices = h.data?.prices || []
       upItem(key, '_otherPrices', prices)
       const sc = form.getFieldValue('supplier_code') || ''
-      const cur = prices.find((p: any) => p.supplier_code === sc)
-      if (cur) {
-        upItem(key, 'old_price', cur.price)
-        upItem(key, 'old_price_date', cur.start_date || '')
+      // 取所有供应商中「报价时间最新」的一条作为原价（按需求：取最近一次报价）
+      const latest = prices
+        .slice()
+        .sort((a: any, b: any) => String(b.start_date || '').localeCompare(String(a.start_date || '')))[0]
+      if (latest && latest.price != null) {
+        upItem(key, 'old_price', latest.price)
+        upItem(key, 'old_price_date', latest.start_date || '')
       } else if (sc) {
-        // 回退：查 ERP 采购订单该供应商最近一次成交价（修复后的 supplier-last-price）
+        // 兜底：ERP 无任何报价时，查该供应商最近一次采购订单成交价
         try {
           const lp: any = await purchaseApi.lastPrice(mc, sc)
           if (lp.data?.old_price) {

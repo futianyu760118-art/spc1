@@ -175,11 +175,13 @@ class PriceChangeService:
             old = item.get("old_price")
             new = item.get("new_price")
             pct = round((float(new) / float(old) - 1) * 100, 2) if old and float(old) > 0 and new and float(new) > 0 else None
+            # old_price_date 列为 varchar(16), 只保留日期部分, 防止带时分秒的字符串超长
+            old_price_date = (item.get("old_price_date") or "")[:10] or None
             await self.db.execute(
                 text("INSERT INTO purchase_price_change_item (change_id, seq, material_code, material_name, spec, unit, order_qty, delivery_qty, old_price, old_price_date, new_price, price_change_pct, remark) VALUES (:cid, :seq, :mc, :mn, :sp, :un, :oq, :dq, :op, :opd, :np, :pct, :rm)"),
                 {"cid": cid, "seq": idx + 1, "mc": item.get("material_code"), "mn": item.get("material_name"),
                  "sp": item.get("spec"), "un": item.get("unit"), "oq": item.get("order_qty"),
-                 "dq": item.get("delivery_qty"), "op": old, "opd": item.get("old_price_date"),
+                 "dq": item.get("delivery_qty"), "op": old, "opd": old_price_date,
                  "np": new, "pct": pct, "rm": item.get("remark")},
             )
 
@@ -232,11 +234,13 @@ class PriceChangeService:
             old = item.get("old_price")
             new = item.get("new_price")
             pct = round((float(new) / float(old) - 1) * 100, 2) if old and float(old) > 0 and new and float(new) > 0 else None
+            # old_price_date 列为 varchar(16), 只保留日期部分
+            old_price_date = (item.get("old_price_date") or "")[:10] or None
             await self.db.execute(
                 text("INSERT INTO purchase_price_change_item (change_id, seq, material_code, material_name, spec, unit, order_qty, delivery_qty, old_price, old_price_date, new_price, price_change_pct, remark) VALUES (:cid, :seq, :mc, :mn, :sp, :un, :oq, :dq, :op, :opd, :np, :pct, :rm)"),
                 {"cid": change_id, "seq": idx + 1, "mc": item.get("material_code"), "mn": item.get("material_name"),
                  "sp": item.get("spec"), "un": item.get("unit"), "oq": item.get("order_qty"),
-                 "dq": item.get("delivery_qty"), "op": old, "opd": item.get("old_price_date"),
+                 "dq": item.get("delivery_qty"), "op": old, "opd": old_price_date,
                  "np": new, "pct": pct, "rm": item.get("remark")},
             )
 
