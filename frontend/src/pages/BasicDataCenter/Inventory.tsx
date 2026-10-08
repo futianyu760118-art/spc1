@@ -6,6 +6,8 @@ import {
 } from '@ant-design/icons'
 import api from '../../services/api'
 import { useAuthStore } from '../../store/auth'
+import { useThemeStore } from '../../store/theme'
+import { tableHeaderFitWidth } from '../../utils'
 import { useExport } from '../../hooks/useExport'
 import { useTableScrollY } from '../../hooks/useTableScrollY'
 import dayjs from 'dayjs'
@@ -153,20 +155,22 @@ function TimeFilterDropdown({ value, onApply }: { value?: TimeFilterValue; onApp
   )
 }
 
-/** 呆滞天数筛选: 参考时间 = 最后出库时间(无则最后入库时间), 空/未来时间显示 '-' 不计入 */
-type DormantFilterValue = { relation: 'gt' | 'lt'; days: number }
+/** 呆滞天数筛选: 参考时间 = 最后出库时间(无则最后入库时间), 空/未来时间显示 '-' 不计入; none=仅看 '-' 行 */
+type DormantFilterValue = { relation: 'gt' | 'lt' | 'none'; days?: number }
 
-const dormantParams = (v?: DormantFilterValue | null): Record<string, number> => {
+const dormantParams = (v?: DormantFilterValue | null): Record<string, number | boolean> => {
   if (!v) return {}
-  return v.relation === 'gt' ? { days_in_stock_gt: v.days } : { days_in_stock_lt: v.days }
+  if (v.relation === 'none') return { days_in_stock_none: true }
+  return v.relation === 'gt' ? { days_in_stock_gt: v.days! } : { days_in_stock_lt: v.days! }
 }
 
 function DormantFilterDropdown({ value, onApply }: { value?: DormantFilterValue; onApply: (v?: DormantFilterValue) => void }) {
-  const [relation, setRelation] = useState<'gt' | 'lt'>(value?.relation ?? 'gt')
+  const [relation, setRelation] = useState<'gt' | 'lt' | 'none'>(value?.relation ?? 'gt')
   const [days, setDays] = useState<number | null>(value?.days ?? null)
 
   const apply = (clear?: boolean) => {
     if (clear) { onApply(undefined); return }
+    if (relation === 'none') { onApply({ relation: 'none' }); return }
     if (days != null && days >= 0) onApply({ relation, days })
     else onApply(undefined)
   }
@@ -180,14 +184,19 @@ function DormantFilterDropdown({ value, onApply }: { value?: DormantFilterValue;
         options={[
           { value: 'gt', label: '大于 N 天' },
           { value: 'lt', label: '小于 N 天' },
+          { value: 'none', label: "无收发记录('-')" },
         ]}
       />
-      <InputNumber
-        size="small" min={0} max={100000} style={{ width: '100%' }} addonAfter="天"
-        value={days ?? undefined} onChange={(v) => setDays(v ?? null)} placeholder="N"
-      />
+      {relation !== 'none' && (
+        <InputNumber
+          size="small" min={0} max={100000} style={{ width: '100%' }} addonAfter="天"
+          value={days ?? undefined} onChange={(v) => setDays(v ?? null)} placeholder="N"
+        />
+      )}
       <span style={{ fontSize: 12, color: '#94a3b8' }}>
-        按呆滞天数(最后出库时间,无则最后入库时间)距今天数过滤；从未收发(显示 '-')的行不计入。
+        {relation === 'none'
+          ? "仅看呆滞天数显示 '-' 的行(最后出库与最后入库时间皆空或为未来时间)。"
+          : '按呆滞天数(最后出库时间,无则最后入库时间)距今天数过滤；从未收发(显示 \'-\')的行不计入。'}
       </span>
       <Space style={{ justifyContent: 'flex-end' }}>
         <Button size="small" onClick={() => apply(true)}>清除</Button>
@@ -327,6 +336,14 @@ function qtyColumn(
       />
     ),
   }
+}
+
+/** 表头列宽兜底：标题 + 内边距 + 排序/筛选图标预留，随全局字号缩放；配合 index.css 库存页表头名完整显示不省略 */
+function withHeaderFitWidth<T extends { title: unknown; width?: number; sorter?: unknown; filters?: unknown; filterDropdown?: unknown }>(cols: T[], fontSizeScale: number) {
+  return cols.map(c => {
+    const reserve = 24 + (c.sorter ? 18 : 0) + ((c.filters || c.filterDropdown) ? 16 : 0)
+    return { ...c, width: Math.max(typeof c.width === 'number' ? c.width : 120, tableHeaderFitWidth(String(c.title ?? '').length, fontSizeScale, reserve)) }
+  })
 }
 
 /** 导出字段选项（key 与后端导出列一致） */
@@ -566,6 +583,7 @@ function useRecentDaysDebounce(days: number, reload: () => void) {
 
 /** 库存明细：物料 x 仓库 x 库位 */
 function InventoryDetail() {
+  const fontSizeScale = useThemeStore(s => s.fontSizeScale)
   const [data, setData] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
@@ -768,10 +786,10 @@ function InventoryDetail() {
   ]
   const allKeys = allColumns.map(c => c.key)
   const colOrder = [...colConfig.order, ...allKeys.filter(k => !colConfig.order.includes(k))]
-  const columns = colOrder
+  const columns = withHeaderFitWidth(colOrder
     .filter(k => !colConfig.hidden[k])
     .map(k => allColumns.find(c => c.key === k)!)
-    .filter(Boolean)
+    .filter(Boolean), fontSizeScale)
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -819,6 +837,7 @@ function InventoryDetail() {
 
 /** 按物料 x 仓库 统计（合并库位维度） */
 function InventoryByWarehouse() {
+  const fontSizeScale = useThemeStore(s => s.fontSizeScale)
   const [data, setData] = useState<InventoryByWhItem[]>([])
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
@@ -1015,10 +1034,10 @@ function InventoryByWarehouse() {
   ]
   const allKeys = allColumns.map(c => c.key)
   const colOrder = [...colConfig.order, ...allKeys.filter(k => !colConfig.order.includes(k))]
-  const columns = colOrder
+  const columns = withHeaderFitWidth(colOrder
     .filter(k => !colConfig.hidden[k])
     .map(k => allColumns.find(c => c.key === k)!)
-    .filter(Boolean)
+    .filter(Boolean), fontSizeScale)
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

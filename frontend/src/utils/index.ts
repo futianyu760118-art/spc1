@@ -38,3 +38,8 @@ export function waitPill(submittedAt: string | null | undefined, thresholdHours:
     : `已等待 ${hours} 小时`
   return { level, text }
 }
+
+// 表头列宽预估：标题 CJK 字符数 × 13px + 预留（内边距 + 排序/筛选图标 + 页面自有额外区），随全局字号缩放；配合 CSS 取消表头省略，保证表头名完整显示
+export function tableHeaderFitWidth(charCount: number, fontSizeScale: number, reserve = 60): number {
+  return (charCount * 13 + reserve) * fontSizeScale
+}

@@ -185,8 +185,9 @@ def _inventory_time_query_params(
     last_picking_at_over_days: Optional[int] = Query(None, ge=0, le=100000, description="最后领料时间距今超过 N 天(含从未领料)"),
     days_in_stock_gt: Optional[int] = Query(None, ge=0, le=100000, description="呆滞天数大于 N 天(参考=最后出库时间,无则最后入库时间;两时间皆空的 '-' 行不计入)"),
     days_in_stock_lt: Optional[int] = Query(None, ge=0, le=100000, description="呆滞天数小于 N 天(参考同 gt;两时间皆空的 '-' 行不计入)"),
+    days_in_stock_none: Optional[bool] = Query(None, description="仅看无呆滞天数的行(最后出库与最后入库皆空或为未来时间,单元格显示 '-')"),
 ) -> dict:
-    """三个收发时间字段的筛选参数(依赖注入,列表/导出共用),另含呆滞天数 大于/小于 N 天 阈值筛选。"""
+    """三个收发时间字段的筛选参数(依赖注入,列表/导出共用),另含呆滞天数 大于/小于 N 天 阈值筛选及仅看无呆滞天数('-')行。"""
     return {
         "last_inbound_at_start": last_inbound_at_start,
         "last_inbound_at_end": last_inbound_at_end,
@@ -202,6 +203,7 @@ def _inventory_time_query_params(
         "last_picking_at_over_days": last_picking_at_over_days,
         "days_in_stock_gt": days_in_stock_gt,
         "days_in_stock_lt": days_in_stock_lt,
+        "days_in_stock_none": days_in_stock_none,
     }
 
 
@@ -254,9 +256,13 @@ def _inventory_dormant_conds(getter, params: Optional[dict] = None) -> list:
     呆滞天数 = (now - COALESCE(最后出库时间, 最后入库时间)) 取整天数;两时间皆空或未来时间的 '-' 行不计入筛选。
     getter(field) 返回字段对应的 SQL 表达式:行级传 Inventory 列;按仓库聚合视图传 MAX 聚合表达式。
     - days_in_stock_gt: 呆滞天数 > N 天
-    - days_in_stock_lt: 呆滞天数 < N 天"""
+    - days_in_stock_lt: 呆滞天数 < N 天
+    - days_in_stock_none: 仅看无呆滞天数的行(参考时间皆空或未来,即单元格显示 '-'),此时忽略 gt/lt"""
     if not params:
         return []
+    if params.get("days_in_stock_none"):
+        ref = func.coalesce(getter("last_outbound_at"), getter("last_inbound_at"))
+        return [or_(ref.is_(None), ref > datetime.now())]
     gt = params.get("days_in_stock_gt")
     lt = params.get("days_in_stock_lt")
     if gt is None and lt is None:
