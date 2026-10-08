@@ -30,11 +30,18 @@ export default function ShareAccess() {
         // 构建目标路径（含参数）
         let targetUrl = target_path
         if (target_params && typeof target_params === 'object') {
-          // 对于订单详情等动态路由，替换路径参数
-          // 例如 target_path="/orders/:orderNo/lines/:lineNo", target_params={orderNo:"xxx",lineNo:"1"}
-          const pathParams = Object.entries(target_params)
-          for (const [key, value] of pathParams) {
-            targetUrl = targetUrl.replace(`:${key}`, String(value))
+          // 路径参数(:key)替换；其余参数作为 query string 附加
+          const leftover: Record<string, string> = {}
+          for (const [key, value] of Object.entries(target_params)) {
+            if (targetUrl.includes(`:${key}`)) {
+              targetUrl = targetUrl.replace(`:${key}`, String(value))
+            } else {
+              leftover[key] = String(value)
+            }
+          }
+          const qs = new URLSearchParams(leftover).toString()
+          if (qs) {
+            targetUrl += (targetUrl.includes('?') ? '&' : '?') + qs
           }
         }
 

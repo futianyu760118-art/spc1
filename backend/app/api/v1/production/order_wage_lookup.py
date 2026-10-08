@@ -25,6 +25,13 @@ from app.services.basicdata.erp_sync_service import ERPConnectionError
 from app.services.production.product_process_capacity_sync_service import (
     ProductProcessCapacitySyncService,
 )
+from app.services.production.order_wage_gap_service import (
+    TASK_LINE_WORKSHOPS,
+    bom_candidates,
+    dedupe_capacities,
+    match_wage,
+    send_daily_wage_reminder,
+)
 from app.schemas.common import ResponseModel, PageResult
 
 router = APIRouter()
@@ -94,60 +101,13 @@ def _to_float(value) -> Optional[float]:
         return None
 
 
-def _dedupe_capacities(records: list[ProductProcessCapacity]) -> list[ProductProcessCapacity]:
-    """按 oa_detail_id 去重, 保留 last_sync_time 最新(次选 id 最大)的一条。"""
-    best: dict[str, ProductProcessCapacity] = {}
-    for rec in records:
-        key = rec.oa_detail_id or f"__row_{rec.id}"
-        cur = best.get(key)
-        if cur is None:
-            best[key] = rec
-            continue
-        cur_time = cur.last_sync_time or cur.created_at
-        rec_time = rec.last_sync_time or rec.created_at
-        if (rec_time, rec.id) > (cur_time, cur.id):
-            best[key] = rec
-    return list(best.values())
-
-
-# 样品单 BOM 前缀: 匹配工价时先去掉前缀再匹配量产 BOM
-BOM_SAMPLE_PREFIXES = ("Y-", "P-")
-
-
-def _bom_candidates(bom: Optional[str]) -> list[str]:
-    """工价匹配候选: 样品单 BOM(Y-/P-开头)去掉前缀优先, 原始编码兜底。"""
-    raw = (bom or "").strip()
-    if not raw:
-        return []
-    for prefix in BOM_SAMPLE_PREFIXES:
-        if raw.startswith(prefix):
-            stripped = raw[len(prefix):].strip()
-            if stripped and stripped != raw:
-                return [stripped, raw]
-            break
-    return [raw]
-
-
-def _match_wage(
-    line_bom: Optional[str],
-    by_bom: dict[str, list[ProductProcessCapacity]],
-) -> tuple[Optional[str], list[ProductProcessCapacity]]:
-    """仅 BOM 匹配: 样品BOM去前缀优先, 原始编码兜底, 不做产品兜底。"""
-    raw = (line_bom or "").strip()
-    for candidate in _bom_candidates(line_bom):
-        if candidate in by_bom:
-            match_type = "bom" if candidate == raw else "bom_stripped"
-            return match_type, by_bom[candidate]
-    return None, []
-
-
 def _build_item(
     line: SaleOrderLine,
     order: SaleOrder,
     by_bom: dict,
     tasks_by_line: dict[tuple, List[TaskOrderBrief]],
 ) -> OrderWageItem:
-    match_type, caps = _match_wage(line.bom_no, by_bom)
+    match_type, caps = match_wage(line.bom_no, by_bom)
     details: List[WageProcessDetail] = []
     wage_total = 0.0
     for cap in caps:
@@ -208,6 +168,10 @@ def _base_filters(
     include_closed: bool,
     promised_from: Optional[date] = None,
     promised_to: Optional[date] = None,
+    order_date_from: Optional[date] = None,
+    order_date_to: Optional[date] = None,
+    qty_min: Optional[float] = None,
+    qty_max: Optional[float] = None,
 ) -> list:
     filters = [SaleOrderLine.status != "closed"]
     if not include_closed:
@@ -215,7 +179,7 @@ def _base_filters(
     if order_no:
         filters.append(SaleOrderLine.order_no.ilike(f"%{order_no}%"))
     if line_no:
-        filters.append(SaleOrderLine.line_no == line_no)
+        filters.append(SaleOrderLine.line_no.ilike(f"%{line_no}%"))
     if product_code:
         filters.append(
             or_(
@@ -238,6 +202,16 @@ def _base_filters(
             filters.append(promised >= promised_from)
         if promised_to:
             filters.append(promised <= promised_to)
+    if order_date_from or order_date_to:
+        order_date = func.coalesce(SaleOrder.order_date, SaleOrder.audit_date)
+        if order_date_from:
+            filters.append(order_date >= order_date_from)
+        if order_date_to:
+            filters.append(order_date <= order_date_to)
+    if qty_min is not None:
+        filters.append(SaleOrderLine.order_qty >= qty_min)
+    if qty_max is not None:
+        filters.append(SaleOrderLine.order_qty <= qty_max)
     return filters
 
 
@@ -246,21 +220,26 @@ async def lookup_order_wage(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     order_no: Optional[str] = Query(None, description="订单号模糊搜索"),
-    line_no: Optional[str] = Query(None, description="订单行号(精确)"),
+    line_no: Optional[str] = Query(None, description="订单行号模糊搜索"),
     product_code: Optional[str] = Query(None, description="产品编码模糊搜索"),
     bom_no: Optional[str] = Query(None, description="BOM编码模糊搜索"),
     customer: Optional[str] = Query(None, description="客户模糊搜索"),
     wage_status: Optional[str] = Query(None, description="筛选: has=有工价 / no=无工价 / 空=全部"),
+    match_type: Optional[str] = Query(None, description="匹配方式筛选: bom=BOM精确 / bom_stripped=BOM去前缀 / none=未匹配 / 空=全部"),
     include_closed: bool = Query(False, description="是否包含ERP已关闭(is_closed=1)的订单"),
     only_with_tasks: bool = Query(True, description="只显示匹配到生产任务单(装配一线/精益)的订单行"),
     promised_from: Optional[date] = Query(None, description="交期起(含), 支持跨月范围"),
     promised_to: Optional[date] = Query(None, description="交期止(含), 支持跨月范围"),
+    order_date_from: Optional[date] = Query(None, description="下单日期起(含)"),
+    order_date_to: Optional[date] = Query(None, description="下单日期止(含)"),
+    qty_min: Optional[float] = Query(None, description="数量下限(含)"),
+    qty_max: Optional[float] = Query(None, description="数量上限(含)"),
     current_user: dict = Depends(PermissionChecker("production.order_wage_lookup", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     filters = _base_filters(
         order_no, line_no, product_code, bom_no, customer, include_closed,
-        promised_from, promised_to,
+        promised_from, promised_to, order_date_from, order_date_to, qty_min, qty_max,
     )
 
     base_stmt = (
@@ -275,7 +254,7 @@ async def lookup_order_wage(
     # 预加载工价数据: 按涉及的 BOM 候选(样品BOM含去前缀形态)匹配
     involved_boms: set[str] = set()
     for r in all_rows:
-        involved_boms.update(_bom_candidates(r[0].bom_no))
+        involved_boms.update(bom_candidates(r[0].bom_no))
     by_bom: dict[str, list] = {}
     if involved_boms:
         cap_rows = (
@@ -288,15 +267,17 @@ async def lookup_order_wage(
                 )
             )
         ).scalars().all()
-        deduped = _dedupe_capacities(list(cap_rows))
+        deduped = dedupe_capacities(list(cap_rows))
         for cap in deduped:
             if cap.bom_code and cap.bom_code in involved_boms:
                 by_bom.setdefault(cap.bom_code, []).append(cap)
 
-    # 全量行 -> 工价状态(用于统计和 wage_status 过滤)
+    # 全量行 -> 工价状态(用于统计和 wage_status/match_type 过滤)
     item_status: dict[int, tuple[str, Optional[str]]] = {}
+    match_type_by_line: dict[int, str] = {}
     for line, order in all_rows:
-        match_type, caps = _match_wage(line.bom_no, by_bom)
+        match_type_v, caps = match_wage(line.bom_no, by_bom)
+        match_type_by_line[line.id] = match_type_v or "none"
         has_wage = False
         reason = None
         for cap in caps:
@@ -318,6 +299,8 @@ async def lookup_order_wage(
         all_rows = [r for r in all_rows if item_status[r[0].id][0] == "has_wage"]
     elif wage_status == "no":
         all_rows = [r for r in all_rows if item_status[r[0].id][0] == "no_wage"]
+    if match_type:
+        all_rows = [r for r in all_rows if match_type_by_line.get(r[0].id, "none") == match_type]
 
     # 订单下查: 取装配一线/精益车间任务单, 按 (订单,物料=行产品) 对应到行
     tasks_by_line: dict[tuple, List[TaskOrderBrief]] = {}
@@ -406,9 +389,7 @@ class TaskOrderItem(BaseModel):
     task_order_id: Optional[int] = None
 
 
-ASSEMBLY_WORKSHOPS = ["装配一线", "精益车间"]
-# 订单行级关联的任务单车间: 成品车间, 物料代码与订单行产品一致, 可精确对应行号
-TASK_LINE_WORKSHOPS = ["装配一线", "精益车间"]
+ASSEMBLY_WORKSHOPS = TASK_LINE_WORKSHOPS
 
 
 @router.get("/task-orders", response_model=ResponseModel[PageResult[TaskOrderItem]])
@@ -563,6 +544,26 @@ async def sync_oa_wage(
         0,
         "sync",
         field_name="oa_sync",
+        new_value=str(result),
+        operator=current_user["username"],
+    )
+    await db.commit()
+    return ResponseModel(data=result)
+
+
+@router.post("/send-reminder", response_model=ResponseModel[dict])
+async def send_wage_reminder(
+    current_user: dict = Depends(PermissionChecker("production.order_wage_lookup", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """手动触发一次工价缺口企微提醒(每日定时任务同逻辑, 用于立即验证/补发)。"""
+    result = await send_daily_wage_reminder(db)
+    await log_audit(
+        db,
+        "product_process_capacity",
+        0,
+        "sync",
+        field_name="wage_reminder",
         new_value=str(result),
         operator=current_user["username"],
     )

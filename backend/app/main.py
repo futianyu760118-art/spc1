@@ -16,6 +16,7 @@ from app.services.scheduler.data_supply_alert import data_supply_alert_scheduler
 from app.services.scheduler.approval_timeout_reminder import approval_timeout_reminder  # noqa: F401
 from app.services.scheduler.mrp_scheduler import mrp_scheduler  # noqa: F401
 from app.services.scheduler.backup_scheduler import backup_scheduler  # noqa: F401
+from app.services.scheduler.wage_reminder_scheduler import wage_reminder_scheduler  # noqa: F401
 
 
 class SafeJSONEncoder(json.JSONEncoder):
@@ -169,6 +170,8 @@ async def lifespan(app: FastAPI):
     mrp_scheduler.start()
     # 启动时：开启定时备份调度
     backup_scheduler.start()
+    # 启动时：开启订单工价缺口每日提醒（工作日 08:30 企微推送）
+    wage_reminder_scheduler.start()
     # 启动时：开启写回 Worker
     from app.services.basicdata.writeback_worker import writeback_worker
     writeback_worker.start()
@@ -193,6 +196,7 @@ async def lifespan(app: FastAPI):
     backup_scheduler.stop()
     capacity_sync_scheduler.stop()
     await mrp_scheduler.stop()
+    wage_reminder_scheduler.stop()
     overdue_checker.stop()
     data_supply_alert_scheduler.stop()
     approval_timeout_reminder.stop()
