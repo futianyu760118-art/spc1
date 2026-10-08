@@ -52,7 +52,8 @@ async def list_records(
     current_user: dict = Depends(PermissionChecker("backup", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(BackupRecord)
+    # 软删除记录（手动删除/保留策略清理）不再出现在备份管理列表
+    query = select(BackupRecord).where(BackupRecord.status != "deleted")
     if source:
         query = query.where(BackupRecord.source == source)
     if status:
