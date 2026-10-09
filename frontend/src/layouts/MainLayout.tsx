@@ -49,6 +49,7 @@ import {
 import { useAuthStore } from '../store/auth'
 import { usePermissionStore, PermNode } from '../store/permission'
 import { authApi, notificationApi } from '../services/api'
+import { notificationStream } from '../services/notificationStream'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
 import { FloatingAssistant } from '../components/Assistant'
@@ -722,11 +723,7 @@ export default function MainLayout() {
   useEffect(() => {
     if (!originalToken || isShareUser() || !canUseTopbar.notifications) return
 
-    let es: EventSource | null = null
     let pollTimer: ReturnType<typeof setInterval> | null = null
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    let closed = false
-
     const stopPolling = () => {
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
     }
@@ -736,44 +733,21 @@ export default function MainLayout() {
       pollTimer = setInterval(fetchUnreadCount, 60000)
     }
 
-    const connect = () => {
-      if (closed) return
-      try {
-        es = new EventSource(`/api/v1/notifications/stream?token=${encodeURIComponent(originalToken)}`)
-      } catch {
+    // 通知流跨页签共享(整个浏览器只持一条 SSE), 避免 SSE 占尽同源连接预算
+    const unsubscribe = notificationStream.subscribe(originalToken, (ev) => {
+      if (ev.type === 'unread') {
+        setUnreadTotal((ev.data as any)?.total || 0)
+      } else if (ev.type === 'degraded') {
+        // 断开/Redis 故障: 轮询兜底; 恢复后停止
         startPolling()
-        return
-      }
-      es.addEventListener('open', () => {
-        // SSE 连上：停掉降级轮询
+      } else {
         stopPolling()
-      })
-      es.addEventListener('unread', (ev: MessageEvent) => {
-        try {
-          const data = JSON.parse(ev.data)
-          setUnreadTotal(data.total || 0)
-        } catch { /* silent */ }
-      })
-      // 订阅降级（Redis 断链退避重连中）：轮询兜底；恢复后停止
-      es.addEventListener('degraded', () => { startPolling() })
-      es.addEventListener('recovered', () => { stopPolling() })
-      es.addEventListener('error', () => {
-        // 断开/Redis 故障：关 SSE → 启动降级轮询；30s 后尝试恢复实时
-        try { es?.close() } catch { /* silent */ }
-        es = null
-        startPolling()
-        if (reconnectTimer) clearTimeout(reconnectTimer)
-        reconnectTimer = setTimeout(() => { if (!closed) connect() }, 30000)
-      })
-    }
-
-    connect()
+      }
+    })
 
     return () => {
-      closed = true
-      try { es?.close() } catch { /* silent */ }
+      unsubscribe()
       stopPolling()
-      if (reconnectTimer) clearTimeout(reconnectTimer)
     }
   }, [originalToken, isShareUser, canUseTopbar.notifications, fetchUnreadCount])
 

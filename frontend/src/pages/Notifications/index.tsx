@@ -7,6 +7,7 @@ import {
   RightOutlined, CheckCircleFilled, TransactionOutlined, MoreOutlined, ClockCircleOutlined, InboxOutlined,
 } from '@ant-design/icons'
 import { notificationApi } from '../../services/api'
+import { notificationStream } from '../../services/notificationStream'
 import { useAuthStore } from '../../store/auth'
 import './index.css'
 
@@ -145,13 +146,11 @@ export default function Notifications() {
   fetchListRef.current = fetchList
   const fetchCountsRef = useRef(fetchCounts)
   fetchCountsRef.current = fetchCounts
-  // SSE 实时：未读数与列表静默刷新（创建/已读都会触发 unread 事件）；断开后 30s 重连（对齐 MainLayout）
+  // 通知流跨页签共享(整个浏览器只持一条 SSE, 见 notificationStream.ts): 未读数与列表
+  // 静默刷新(创建/已读都会触发 unread 事件); 断开降级轮询, 恢复后停止
   useEffect(() => {
     if (!originalToken) return
-    let es: EventSource | null = null
-    let retryTimer: ReturnType<typeof setTimeout> | null = null
     let pollTimer: ReturnType<typeof setInterval> | null = null
-    let closed = false
     const stopPolling = () => {
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
     }
@@ -160,32 +159,22 @@ export default function Notifications() {
       fetchCountsRef.current()
       pollTimer = setInterval(() => fetchCountsRef.current(), 60000)
     }
-    const connect = () => {
-      if (closed) return
-      try {
-        es = new EventSource(`/api/v1/notifications/stream?token=${encodeURIComponent(originalToken)}`)
-      } catch { return }
-      es.addEventListener('open', () => { setSseOn(true); stopPolling() })
-      es.addEventListener('unread', () => { fetchCountsRef.current(); fetchListRef.current() })
-      // 订阅降级（Redis 断链退避重连中）：轮询兜底；恢复后停止（unread 补偿帧会刷新列表）
-      es.addEventListener('degraded', () => { setSseOn(false); startPolling() })
-      es.addEventListener('recovered', () => { setSseOn(true); stopPolling() })
-      es.addEventListener('error', () => {
+    const unsubscribe = notificationStream.subscribe(originalToken, (ev) => {
+      if (ev.type === 'unread') {
+        fetchCountsRef.current()
+        fetchListRef.current()
+      } else if (ev.type === 'degraded') {
         setSseOn(false)
         startPolling()
-        try { es?.close() } catch { /* silent */ }
-        es = null
-        if (retryTimer) clearTimeout(retryTimer)
-        retryTimer = setTimeout(connect, 30000)
-      })
-    }
-    connect()
+      } else {
+        setSseOn(true)
+        stopPolling()
+      }
+    })
     return () => {
-      closed = true
-      if (retryTimer) clearTimeout(retryTimer)
+      unsubscribe()
       stopPolling()
       setSseOn(false)
-      try { es?.close() } catch { /* silent */ }
     }
   }, [originalToken])
 
