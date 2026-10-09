@@ -161,13 +161,17 @@ class ApiClient:
         return body["data"]
 
     def finish(self, feedback_id: int, success: bool, branch: str | None = None,
-               summary: str | None = None, error: str | None = None) -> None:
-        response = self._request("POST", f"/api/v1/basicdata/feedback/{feedback_id}/ai-finish", json={
+               summary: str | None = None, error: str | None = None,
+               result: dict | None = None) -> None:
+        payload: dict = {
             "success": success,
             "branch": branch,
             "summary": summary,
             "error": error,
-        })
+        }
+        if result is not None:
+            payload["result"] = result
+        response = self._request("POST", f"/api/v1/basicdata/feedback/{feedback_id}/ai-finish", json=payload)
         body = self._json(response)
         if body.get("code") != 0:
             raise RuntimeError(f"回写结果失败: {body.get('message')}")
@@ -294,6 +298,48 @@ def committed_changes(worktree: Path, base_sha: str) -> list[str]:
     """代理自行 commit 时，取其相对基线提交的文件清单。"""
     result = run_command(["git", "diff", "--name-only", base_sha, "HEAD"], cwd=worktree, check=True)
     return [line.strip().replace("\\", "/") for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+RESULT_MAX_FILES = 200
+RESULT_OUTPUT_TAIL = 4000
+
+
+def collect_files(worktree: Path, base_sha: str) -> list[dict]:
+    """相对基线的改动文件清单：name-status 的 A/M/D 合并 numstat 行数（二进制记 0，rename 记 D+A）。"""
+    statuses = run_command(
+        ["git", "-c", "core.quotepath=false", "diff", "--name-status", base_sha, "HEAD"],
+        cwd=worktree, check=True,
+    ).stdout
+    numstat = run_command(
+        ["git", "-c", "core.quotepath=false", "diff", "--numstat", base_sha, "HEAD"],
+        cwd=worktree, check=True,
+    ).stdout
+    counts: dict[str, tuple[int, int]] = {}
+    for line in (numstat or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        added, deleted, path = parts
+        counts[path.strip()] = (
+            int(added) if added.strip().isdigit() else 0,
+            int(deleted) if deleted.strip().isdigit() else 0,
+        )
+    files: list[dict] = []
+    for line in (statuses or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0].strip()[:1]
+        if status == "R" and len(parts) >= 3:
+            old, new = parts[1].strip(), parts[-1].strip()
+            new_additions, new_deletions = counts.get(new, (0, 0))
+            files.append({"path": old, "status": "D", "additions": 0, "deletions": 0})
+            files.append({"path": new, "status": "A", "additions": new_additions, "deletions": new_deletions})
+            continue
+        path = parts[-1].strip()
+        additions, deletions = counts.get(path, (0, 0))
+        files.append({"path": path, "status": status or "M", "additions": additions, "deletions": deletions})
+    return files[:RESULT_MAX_FILES]
 
 
 def load_env_values(repo_dir: Path) -> dict[str, str]:
@@ -563,7 +609,7 @@ def invoke_claude(cfg: dict, worktree: Path, prompt: str, run_dir: Path,
 
 
 def run_gates(cfg: dict, worktree: Path, files: list[str], run_dir: Path,
-              progress: ProgressReporter) -> str:
+              progress: ProgressReporter, gates_out: list[dict]) -> str:
     repo_dir = Path(cfg["repo_dir"])
     checks: list[tuple[str, str, Path]] = []
     backend_command = cfg["gates"]["backend_command"].format(python=cfg["backend_python"])
@@ -583,17 +629,29 @@ def run_gates(cfg: dict, worktree: Path, files: list[str], run_dir: Path,
             if name == "frontend":
                 ensure_node_modules(worktree, repo_dir)
             log(f"门禁执行 [{name}]: {command}")
+            started = time.monotonic()
             try:
                 result = run_command(
                     command, cwd=cwd, shell=True, timeout=timeout,
                     env=backend_env if name == "backend" else None,
                 )
             except subprocess.TimeoutExpired:
-                gate_lines.append(f"[{name}] 超时（>{cfg['gates']['timeout_minutes']} 分钟）")
+                timeout_text = f"超时（>{cfg['gates']['timeout_minutes']} 分钟）"
+                gate_lines.append(f"[{name}] {timeout_text}")
+                gates_out.append({"name": name, "passed": False, "exitCode": None,
+                                  "durationSeconds": int(time.monotonic() - started),
+                                  "outputTail": timeout_text})
                 raise RunFailure(f"门禁超时 [{name}]，日志: {run_dir}")
+            stdout_tail = (result.stdout or "")[-3000:]
+            stderr_tail = (result.stderr or "")[-2000:]
             gate_lines.append(f"[{name}] exit={result.returncode}")
-            gate_lines.append((result.stdout or "")[-3000:])
-            gate_lines.append((result.stderr or "")[-2000:])
+            gate_lines.append(stdout_tail)
+            gate_lines.append(stderr_tail)
+            output_tail = "\n".join(part for part in (stdout_tail, stderr_tail) if part)[-RESULT_OUTPUT_TAIL:]
+            gates_out.append({"name": name, "passed": result.returncode == 0,
+                              "exitCode": result.returncode,
+                              "durationSeconds": int(time.monotonic() - started),
+                              "outputTail": output_tail or None})
             if result.returncode != 0:
                 raise RunFailure(f"门禁失败 [{name}] exit={result.returncode}，日志: {run_dir}")
     finally:
@@ -633,6 +691,8 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     log(f"开始处理反馈 #{feedback_id}: {feedback.get('title')}")
     progress = ProgressReporter(api, feedback_id)
+    gates: list[dict] = []
+    result: dict = {"runDir": str(run_dir)}
     try:
         progress.stage("preparing")
         worktree, branch, base_sha = prepare_worktree(cfg, feedback)
@@ -656,15 +716,21 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
             git(cfg, "branch", "-D", branch, check=False)
             raise RunFailure(f"改动触碰敏感文件，已阻断并删除分支: {', '.join(blocked)}")
 
-        gate_summary = run_gates(cfg, worktree, files, run_dir, progress)
+        gate_summary = run_gates(cfg, worktree, files, run_dir, progress, gates)
 
         progress.stage("committing")
         commit_stat = commit_changes(worktree, feedback, base_sha)
         (run_dir / "diff-stat.txt").write_text(commit_stat, encoding="utf-8")
 
         summary = compose_summary(parsed, branch, commit_stat, gate_summary, run_dir)
+        result.update({
+            "branch": branch,
+            "summary": (parsed.get("result") or "").strip()[:1500],
+            "files": collect_files(worktree, base_sha),
+            "gates": gates,
+        })
         try:
-            api.finish(feedback_id, True, branch=branch, summary=summary)
+            api.finish(feedback_id, True, branch=branch, summary=summary, result=result)
         except Exception as exc:
             raise RunFailure(
                 f"实现已完成（分支 {branch} 已保留，请人工审核），但结果回写失败: {exc}"
@@ -672,8 +738,10 @@ def process_feedback(cfg: dict, api: ApiClient, feedback: dict) -> None:
         log(f"反馈 #{feedback_id} 实现完成: {branch}")
     except Exception as exc:
         log(f"反馈 #{feedback_id} 处理失败: {exc}")
+        result["error"] = str(exc)[:2000]
+        result["gates"] = gates
         try:
-            api.finish(feedback_id, False, error=f"{exc}\n运行日志: {run_dir}")
+            api.finish(feedback_id, False, error=f"{exc}\n运行日志: {run_dir}", result=result)
         except Exception as finish_exc:
             log(f"回写失败原因也失败（反馈停留在 running，可人工重新排队）: {finish_exc}")
 

@@ -146,6 +146,8 @@ async def _test_db():
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
+        # 既有测试库补列：create_all 只建缺失表不加列（同 init_database 的 migrate_columns 模式）
+        await conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS ai_result JSONB"))
         # approval_config 模型在 purchase 域（故意不导入），直接 DDL 建表
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS approval_config (

@@ -433,6 +433,7 @@ class DatabaseInitializer:
                 "ai_stage": "VARCHAR(32)",
                 "ai_stage_started_at": "TIMESTAMP",
                 "ai_progress": "JSONB",
+                "ai_result": "JSONB",
             },
             "notification": {
                 "sender_id": "INTEGER",

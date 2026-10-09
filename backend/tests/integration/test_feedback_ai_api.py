@@ -409,3 +409,125 @@ async def test_ai_queue_wait_requires_handle_permission(client):
         headers=viewer_headers,
     )
     assert r.status_code == 403
+
+
+def _sample_result(feedback_id: int) -> dict:
+    return {
+        "branch": f"ai-feedback/{feedback_id}",
+        "summary": "修复了抽屉展示",
+        "files": [
+            {"path": "frontend/src/pages/BasicDataCenter/FeedbackManagement/index.tsx",
+             "status": "M", "additions": 120, "deletions": 30},
+            {"path": "backend/app/api/v1/basicdata/feedback.py",
+             "status": "M", "additions": 40, "deletions": 2},
+            {"path": "docs/x.md", "status": "A", "additions": 5, "deletions": 0},
+        ],
+        "gates": [
+            {"name": "backend", "passed": True, "exitCode": 0, "durationSeconds": 90, "outputTail": "12 passed"},
+            {"name": "frontend", "passed": True, "exitCode": 0, "durationSeconds": 45, "outputTail": "built in 45s"},
+        ],
+        "runDir": "runs/12-20261009-120000",
+    }
+
+
+async def test_ai_finish_with_result_persists(client):
+    headers = await login(client, "admin")
+    fb = await _queue_and_claim(client, headers, title="结果-落库")
+
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={"success": True, "branch": f"ai-feedback/{fb['id']}", "summary": "ok",
+              "result": _sample_result(fb["id"])},
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0
+    result = body["data"]["ai_result"]
+    assert result["branch"] == f"ai-feedback/{fb['id']}"
+    assert len(result["files"]) == 3
+    assert result["files"][2]["status"] == "A"
+    assert len(result["gates"]) == 2
+    assert result["gates"][0]["passed"] is True
+    assert result["gates"][0]["durationSeconds"] == 90
+
+    r = await client.get(f"/api/v1/basicdata/feedback/{fb['id']}", headers=headers)
+    assert r.json()["data"]["ai_result"]["runDir"] == "runs/12-20261009-120000"
+
+
+async def test_ai_finish_result_clamped(client):
+    headers = await login(client, "admin")
+    fb = await _queue_and_claim(client, headers, title="结果-钳制")
+
+    result = _sample_result(fb["id"])
+    result["files"] = [
+        {"path": "x" * 500, "status": "m", "additions": -3, "deletions": 5},
+        *[{"path": f"src/f{i}.tsx", "status": "M", "additions": 1, "deletions": 1} for i in range(219)],
+    ]
+    result["gates"] = [
+        {"name": "backend", "passed": False, "exitCode": 1, "outputTail": "y" * 9000}
+    ]
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={"success": True, "summary": "ok", "result": result},
+        headers=headers,
+    )
+    clamped = r.json()["data"]["ai_result"]
+    assert len(clamped["files"]) == 200
+    assert len(clamped["files"][0]["path"]) == 300
+    assert clamped["files"][0]["status"] == "M"
+    assert clamped["files"][0]["additions"] == 0
+    assert len(clamped["gates"][0]["outputTail"]) == 4000
+    assert clamped["gates"][0]["passed"] is False
+
+
+async def test_ai_finish_result_oversize_dropped(client):
+    headers = await login(client, "admin")
+    fb = await _queue_and_claim(client, headers, title="结果-超限丢弃")
+
+    result = _sample_result(fb["id"])
+    result["files"] = [
+        {"path": "p" * 300, "status": "M", "additions": 1, "deletions": 1}
+        for _ in range(200)
+    ]
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={"success": True, "summary": "ok", "result": result},
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0
+    assert body["data"]["ai_result"] is None
+    assert body["data"]["ai_status"] == "done"
+
+
+async def test_ai_finish_failure_with_result(client):
+    headers = await login(client, "admin")
+    fb = await _queue_and_claim(client, headers, title="结果-失败回写")
+
+    r = await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={"success": False, "error": "门禁失败",
+              "result": {"error": "门禁失败 [backend] exit=1",
+                         "gates": [{"name": "backend", "passed": False, "exitCode": 1,
+                                    "outputTail": "FAILED tests/test_x.py"}]}},
+        headers=headers,
+    )
+    body = r.json()
+    assert body["data"]["ai_status"] == "failed"
+    assert body["data"]["ai_result"]["error"] == "门禁失败 [backend] exit=1"
+    assert body["data"]["ai_result"]["gates"][0]["passed"] is False
+
+
+async def test_requeue_clears_ai_result(client):
+    headers = await login(client, "admin")
+    fb = await _queue_and_claim(client, headers, title="结果-重排清空")
+
+    await client.post(
+        f"/api/v1/basicdata/feedback/{fb['id']}/ai-finish",
+        json={"success": False, "error": "x", "result": {"error": "x"}},
+        headers=headers,
+    )
+    r = await client.post(f"/api/v1/basicdata/feedback/{fb['id']}/ai-queue", headers=headers)
+    data = r.json()["data"]
+    assert data["ai_status"] == "queued"
+    assert data["ai_result"] is None
