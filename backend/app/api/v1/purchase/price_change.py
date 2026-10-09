@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker, oauth2_scheme, decode_access_token
+from app.core.audit import log_audit
 from app.schemas.common import ResponseModel
 from app.services.purchase.price_change_service import PriceChangeService
 
@@ -661,9 +662,39 @@ async def approve_price_change(
     extra = result.get("message_extra", "")
     if result["finished"]:
         msg = f"审批通过，已归档{extra}"
+        # 归档后自动回写 K3 供应商报价表(原 OA 表单手动同步的替代)
+        try:
+            from app.services.purchase.price_change_k3_quote_sync import sync_price_change_quotes_to_k3
+            k3res = await sync_price_change_quotes_to_k3(change_id, db)
+            if k3res.get("success"):
+                msg += f"；K3报价已同步(新增{k3res.get('entries_inserted', 0)}条)"
+            else:
+                msg += f"；K3报价同步失败: {k3res.get('message', '')}，可在详情页手动重试"
+        except Exception as exc:
+            msg += f"；K3报价同步异常: {exc}，可在详情页手动重试"
     else:
         msg = f"第{result['level']}级审批通过{extra}"
     return ResponseModel(message=msg)
+
+
+@router.post("/{change_id}/sync-k3-quote", response_model=ResponseModel)
+async def sync_k3_quote(
+    change_id: int,
+    user: dict = Depends(get_current_user_payload),
+    _: dict = Depends(PermissionChecker("purchase.price_change", "update")),
+    db: AsyncSession = Depends(get_db),
+):
+    """手动触发调价单 K3 报价回写(审批通过后自动执行, 此接口用于失败重试)。"""
+    from app.services.purchase.price_change_k3_quote_sync import sync_price_change_quotes_to_k3
+    result = await sync_price_change_quotes_to_k3(change_id, db)
+    await log_audit(
+        db, "purchase_price_change", change_id, "sync", field_name="k3_quote",
+        new_value=str(result), operator=user["username"],
+    )
+    await db.commit()
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "K3回写失败"))
+    return ResponseModel(data=result, message="K3报价同步完成")
 
 
 @router.post("/{change_id}/reject", response_model=ResponseModel)

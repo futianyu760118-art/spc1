@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Button, Collapse, Descriptions, Input, Modal, Space, Steps, Table, Tag, Tabs, Timeline, Alert, Divider, Upload, message } from 'antd'
+import { Button, Collapse, Descriptions, Input, Modal, Space, Steps, Table, Tag, Tabs, Timeline, Alert, Divider, Upload, message, Image } from 'antd'
 import { FileTextOutlined, AuditOutlined, BulbOutlined, WarningOutlined } from '@ant-design/icons'
-import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, RollbackOutlined, ClockCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, DeleteOutlined, ExclamationCircleOutlined, ReloadOutlined, SendOutlined, UploadOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, CheckOutlined, CloseOutlined, RollbackOutlined, ClockCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, DeleteOutlined, ExclamationCircleOutlined, ReloadOutlined, SendOutlined, UploadOutlined, CloudSyncOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { purchaseApi } from '../../../services/purchase'
 import { fileApi } from '../../../services/api'
@@ -37,6 +37,7 @@ export default function PriceChangeDetail() {
   const [r, setR] = useState<any>(null)
   const [comment, setComment] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [k3Syncing, setK3Syncing] = useState(false)
   const [refreshingAi, setRefreshingAi] = useState(false)
   const [loading, setLoading] = useState(false)
   // 详情页提交弹窗
@@ -425,6 +426,26 @@ export default function PriceChangeDetail() {
               </>
             )}
             {s === 'pending' && <Button icon={<RollbackOutlined />} onClick={() => act('recall')} loading={submitting}>撤回</Button>}
+            {s === 'approved' && (
+              <Button
+                icon={<CloudSyncOutlined />}
+                loading={k3Syncing}
+                onClick={async () => {
+                  setK3Syncing(true)
+                  try {
+                    const res: any = await purchaseApi.syncK3Quote(Number(id))
+                    const d = res.data || {}
+                    message.success(`K3报价同步完成: 新增${d.entries_inserted ?? 0}条, 已存在${d.already_exists ?? 0}条`)
+                  } catch {
+                    // 错误已由全局拦截器提示
+                  } finally {
+                    setK3Syncing(false)
+                  }
+                }}
+              >
+                同步K3报价
+              </Button>
+            )}
             {s === 'pending' && (() => {
               const currentUser = useAuthStore.getState().currentUser
               const canAct = canApproveNode(currentUser, currentStep)
@@ -785,7 +806,7 @@ export default function PriceChangeDetail() {
             <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
           ) : (
             <div style={{ textAlign: 'center' }}>
-              <img src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
+              <Image src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
             </div>
           )
         })()}

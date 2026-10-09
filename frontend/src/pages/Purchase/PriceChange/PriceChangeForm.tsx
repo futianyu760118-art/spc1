@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Alert, Button, DatePicker, Divider, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message, AutoComplete, Upload } from 'antd'
+import { Alert, Button, DatePicker, Divider, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message, AutoComplete, Upload, Image } from 'antd'
 import { PlusOutlined, DeleteOutlined, SaveOutlined, SendOutlined, ArrowLeftOutlined, SearchOutlined, CloseOutlined, WarningOutlined, ExclamationCircleOutlined, CheckCircleOutlined, UploadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { purchaseApi } from '../../../services/purchase'
@@ -870,7 +870,7 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
             <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
           ) : (
             <div style={{ textAlign: 'center' }}>
-              <img src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
+              <Image src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
             </div>
           )
         })()}
