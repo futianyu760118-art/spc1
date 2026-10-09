@@ -25,18 +25,25 @@ function shouldOpenInNewTab(target: Path, currentPathname: string): boolean {
 }
 
 export function createAppHistory(): BrowserHistory {
-  const history = createBrowserHistory()
+  // 必须与 react-router-dom 自带 BrowserRouter 一致传 v5Compat: true，
+  // 否则 push/replace 只改 URL 不通知监听器，页面不重渲（登录后停在登录页）
+  const history = createBrowserHistory({ v5Compat: true })
   const originalPush = history.push.bind(history)
   history.push = (to: To, state?: any) => {
     const target = resolveTarget(to, history.location.pathname)
     if (shouldOpenInNewTab(target, history.location.pathname)) {
+      // 不能传 'noopener' 特性串：规范要求 noopener 时 window.open 恒返回 null，
+      // 会让弹窗拦截降级判断失效（新标签开了、本页也跟着跳）。
+      // 改为打开后手动置空 opener，同源下合法且安全等价
       const win = window.open(
         `${window.location.origin}${target.pathname}${target.search}${target.hash}`,
-        '_blank',
-        'noopener'
+        '_blank'
       )
+      if (win) {
+        win.opener = null
+        return
+      }
       // 弹窗拦截器可能拦掉非用户手势触发的 window.open（如异步保存后自动跳转），此时退回本页跳转保证不失效
-      if (win) return
     }
     originalPush(to, state)
   }
