@@ -1823,6 +1823,17 @@ a.si-wh-link:hover { color: #4c4dc2; }
   text-overflow: clip;
 }
 
+/* 库存页：表头名完整显示永不省略（列宽由组件按标题+图标+字号缩放预估，两个 Tab 共用） */
+.sc-page .inv-page-tabs .ant-table-thead > tr > th .ant-table-column-title {
+  overflow: visible;
+  text-overflow: clip;
+}
+.sc-page .inv-page-tabs .ant-table-thead > tr > th.ant-table-cell-ellipsis {
+  overflow: visible;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
 /* 订单总控台：表格体右侧不常驻滚动条（内容不超高时不占位，悬停才浮现 6px 细条） */
 .sc-page .order-list-card .ant-table-body { overflow-y: auto !important; }
 .sc-page .order-list-card .ant-table-body::-webkit-scrollbar:vertical { width: 6px; }
@@ -2556,4 +2567,50 @@ a.si-wh-link:hover { color: #4c4dc2; }
   .clm-no-print { display: none !important; }
   .clm-print .clm-sheet { width: auto; max-width: none; box-shadow: none; }
   .clm-paper-wrap { background: #fff; padding: 0; border-radius: 0; }
+}
+
+/* ===== 备份管理：一屏布局（窗口不出现滚动条，表体内部细滚动条悬停可见，同 order-list-card 约定） ===== */
+.backup-card .ant-table-body { overflow-y: auto !important; }
+.backup-card .ant-table-body::-webkit-scrollbar:vertical { width: 6px; }
+.backup-card .ant-table-body::-webkit-scrollbar-track:vertical { background: transparent; }
+.backup-card .ant-table-body::-webkit-scrollbar-thumb:vertical { background: transparent; border-radius: 3px; }
+.backup-card .ant-table-body:hover::-webkit-scrollbar-thumb:vertical { background: #cbd5e1; }
+.backup-card .ant-table-body:hover::-webkit-scrollbar-thumb:vertical:hover { background: #94a3b8; }
+.backup-card .ant-table-body { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.backup-card .ant-table-body:hover { scrollbar-color: #cbd5e1 transparent; }
+
+/* ===== 问题反馈：AI 实现列警报灯（排队慢闪 / 实现中呼吸 / 失败急闪 / 已实现常亮） ===== */
+.fb-ai-lamp {
+  --lamp: #cbd5e1;
+  --lamp-deep: #94a3b8;
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .8) 0%, rgba(255, 255, 255, 0) 40%),
+    radial-gradient(circle at 50% 68%, var(--lamp-deep) 0%, var(--lamp) 64%);
+  box-shadow: inset 0 -1px 2px rgba(0, 0, 0, .22);
+}
+.fb-ai-lamp::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 5px 1px var(--lamp), 0 0 12px 3px var(--lamp);
+  opacity: 0;
+}
+.fb-ai-lamp--queued { --lamp: #f59e0b; --lamp-deep: #b45309; }
+.fb-ai-lamp--queued::before { animation: fb-lamp-glow 2.4s ease-in-out infinite; }
+.fb-ai-lamp--running { --lamp: #0284c7; --lamp-deep: #075985; }
+.fb-ai-lamp--running::before { animation: fb-lamp-glow 1.2s ease-in-out infinite; }
+.fb-ai-lamp--done { --lamp: #16a34a; --lamp-deep: #15803d; }
+.fb-ai-lamp--done::before { opacity: .55; }
+.fb-ai-lamp--failed { --lamp: #dc2626; --lamp-deep: #b91c1c; }
+.fb-ai-lamp--failed::before { animation: fb-lamp-glow .7s ease-in-out infinite; }
+@keyframes fb-lamp-glow {
+  0%, 100% { opacity: .15; }
+  50% { opacity: 1; }
 }

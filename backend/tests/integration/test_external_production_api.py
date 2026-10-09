@@ -4,16 +4,15 @@
 覆盖：鉴权 401/403、工单状态映射与 DB 层过滤、工序/关联/报工锚点校验、
 双源关联、产能聚合（含周日口径）、空过滤仍携带 data_as_of、request_id 回显、
 任务单订单号经 sale_order.erp_id 解析（输出与过滤）、
-2026-09-29 AEOS 交接口径：generated_at/warnings 信封、带时区 ISO 时间、
-超 24h 一律 low + stale=true（历史快照不再豁免）、空表只回退本域导入/同步时间、
-工序空结果锚点说明与空数据源结构化错误。
+2026-09-30 时效口径：data_as_of 为普通 ISO；工序/报工/产能为历史快照基线（有数据即
+stale=false、置信度下限 medium）；空表回退同步/导入时间，工序空结果回退生产任务单同步时间，
+无任何来源则 code=503 结构化错误。
 """
 
 from datetime import date, datetime, timedelta
 
 import pytest_asyncio
 
-from app.api.v1.external.freshness import iso_aware
 from tests.integration.test_external_quality_api import signed_get
 
 WO_LIST = "/api/v1/external/production/work-orders/list"
@@ -118,8 +117,7 @@ async def test_work_orders_mapping_and_status(ext_client, external_keys, prod_se
     wo1 = by_no["WO-2609-001"]
     assert wo1["planned_qty"] == 100.0 and wo1["completed_qty"] == 100.0 and wo1["repair_qty"] == 2.0
     assert wo1["bom_id"] == "101" and wo1["source_system"] == "oa"
-    # 记录级时间戳同样带时区，不允许无时区字符串
-    assert datetime.fromisoformat(wo1["updated_at"]).tzinfo is not None
+    assert wo1["updated_at"] is not None
     for field in ("uom", "good_qty", "scrap_qty", "received_qty", "estimated_finish_at",
                   "schedule_version", "owner", "blocking", "blocking_reason", "bom_version"):
         assert wo1[field] is None
@@ -202,17 +200,12 @@ async def test_work_orders_freshness_and_echo(ext_client, external_keys, prod_se
     assert data["data_as_of"] is not None
     assert data["data_confidence"] in ("high", "medium")
     assert data["stale"] is False
-    assert data["warnings"] == []
-    # generated_at / data_as_of 均带时区，且两者分开返回（不允许用响应时间冒充快照时间）
-    assert datetime.fromisoformat(data["data_as_of"]).tzinfo is not None
-    assert datetime.fromisoformat(data["generated_at"]).tzinfo is not None
-    assert data["generated_at"] != data["data_as_of"]
     assert data["request_id"] == "prod-001"
 
 
 async def test_empty_table_freshness_contract(ext_client, external_keys, db):
-    """源表无任何行：工序回退自己的 CSV 导入时间（带锚点空结果说明），
-    报工回退自己的同步时间且已过期 → low + stale=true，产能无回退源则 code=503 结构化错误。"""
+    """源表无任何行：工序回退自己的 CSV 导入时间，报工回退自己的同步时间（基线不判过期），
+    产能无回退源则 code=503 结构化错误。"""
     from sqlalchemy import func, select
 
     from app.models.basicdata.audit_log import AuditLog
@@ -228,23 +221,21 @@ async def test_empty_table_freshness_contract(ext_client, external_keys, db):
                          {"order_no": "SO-NOT-EXIST", "request_id": "prod-empty-ops"})
     data = r.json()["data"]
     assert data["items"] == [] and data["total"] == 0
-    # 表为空 → 回退本域 audit_log 的 process_progress 最近导入时间（不借生产任务单同步时间）
-    assert data["data_as_of"] == iso_aware(import_at)
+    # 表为空且无生产任务单同步种子 → 回退本域 audit_log 的 process_progress 最近导入时间
+    assert data["data_as_of"] == import_at.isoformat()
     assert data["data_confidence"] == "high"
     assert data["stale"] is False
-    # 空结果必须说明锚点限制，不得返回看似完整的空结果
-    assert any("order_no 锚点" in w for w in data["warnings"])
     assert data["request_id"] == "prod-empty-ops"
 
     r = await signed_get(ext_client, REPORTS_LIST, "production.reports.list", key,
                          {"work_order_no": "WO-NOT-EXIST"})
     data = r.json()["data"]
     assert data["items"] == [] and data["total"] == 0
-    # 表为空 → 回退 sync_sql_config 的 production_daily_reports 最近成功同步时间（2026-08-06，已过期）
-    assert data["data_as_of"] == iso_aware(datetime(2026, 8, 6, 15, 44, 3))
-    assert data["data_confidence"] == "low"
-    assert data["stale"] is True
-    assert any("有效期" in w for w in data["warnings"])
+    # 表为空 → 回退 sync_sql_config 的 production_daily_reports 同步时间（2026-08-06）；
+    # 报工为历史快照基线：不按 24h 判过期，置信度下限 medium
+    assert data["data_as_of"] == datetime(2026, 8, 6, 15, 44, 3).isoformat()
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False
 
     r = await signed_get(ext_client, CAPACITY_LIST, "production.capacity.list", key,
                          {"date_start": "2026-09-23", "date_end": "2026-09-23"})
@@ -256,19 +247,18 @@ async def test_empty_table_freshness_contract(ext_client, external_keys, db):
     assert "数据源不可用" in body["message"]
 
 
-async def test_operations_not_borrow_task_order_sync_time(ext_client, external_keys, db):
-    """工序域不得借用生产任务单同步时间冒充本域快照时间（跨域时间泄漏回归）。"""
+async def test_operations_empty_uses_task_order_sync_time(ext_client, external_keys, db):
+    """工序表无行时回退生产任务单同步时间兜底（2026-09-30 口径：不再判过期、允许跨域借用）。"""
     from sqlalchemy import delete, text
 
     from app.models.basicdata.sync_sql_config import SyncSqlConfig
 
-    # 生产任务单同步时间为 1 小时前（新鲜），工序域只能用自己 3 小时前的 CSV 导入时间
     recent = (datetime.now() - timedelta(hours=1)).replace(microsecond=0)
     await db.execute(text("""
         INSERT INTO sync_sql_config
             (sync_type, description, sql_text, sync_interval, sync_strategy,
              sync_priority, sync_enabled, is_active, last_sync_time)
-        VALUES ('production_task_orders', 'pytest 跨域泄漏回归种子', 'SELECT 1', '1h', 'full',
+        VALUES ('production_task_orders', 'pytest 工序空表回退种子', 'SELECT 1', '1h', 'full',
                 5, TRUE, TRUE, :t)
         ON CONFLICT (sync_type) DO UPDATE SET last_sync_time = EXCLUDED.last_sync_time
     """), {"t": recent})
@@ -278,7 +268,9 @@ async def test_operations_not_borrow_task_order_sync_time(ext_client, external_k
                              external_keys["production"], {"order_no": "SO-NOT-EXIST"})
         data = r.json()["data"]
         assert data["items"] == [] and data["total"] == 0
-        assert data["data_as_of"] != iso_aware(recent)
+        assert data["data_as_of"] == recent.isoformat()
+        assert data["data_confidence"] == "high"
+        assert data["stale"] is False
     finally:
         await db.execute(delete(SyncSqlConfig).where(
             SyncSqlConfig.sync_type == "production_task_orders"))
@@ -335,8 +327,6 @@ async def test_order_links_dual_source(ext_client, external_keys, prod_seeded):
                          {"work_order_no": "WO-2609-002"})
     data = r.json()["data"]
     assert data["total"] == 1 and data["items"][0]["link_type"] == "production_task"
-    # 仅给 work_order_no 时 schedule_snapshot 无法查询，必须在 warnings 中说明部分结果
-    assert any("schedule_snapshot" in w for w in data["warnings"])
 
     r = await signed_get(ext_client, LINKS_LIST, "production.order_links.list", key,
                          {"order_no": "SO-2609-001", "link_type": "schedule_snapshot"})
@@ -359,7 +349,6 @@ async def test_reports_list(ext_client, external_keys, prod_seeded):
     item = data["items"][0]  # report_date 倒序：09-22 在前
     assert item["report_type"] == "daily_erp" and item["reported_qty"] == 40.0
     assert item["order_no"] == "SO-2609-001" and item["operation_name"] == "组装"
-    assert any("逐日明细行" in w for w in data["warnings"])
     for field in ("is_reversed", "reversal_of", "revision", "good_qty", "scrap_qty", "uom", "reported_by"):
         assert item[field] is None
 
@@ -405,8 +394,8 @@ async def test_capacity_aggregation(ext_client, external_keys, prod_seeded):
     assert r.json()["data"]["total"] == 0
 
 
-async def test_capacity_stale_after_validity(ext_client, external_keys, db):
-    """产能快照超过 24h 有效期：真实 data_as_of + low + stale=true + 过期告警，不再豁免。"""
+async def test_capacity_baseline_not_marked_stale(ext_client, external_keys, db):
+    """产能为历史快照基线：超过 24h 仍 stale=false、置信度下限 medium。"""
     from app.models.production.capacity_slot import CapacitySlot
 
     stale_at = (datetime.now() - timedelta(hours=30)).replace(microsecond=0)
@@ -419,17 +408,15 @@ async def test_capacity_stale_after_validity(ext_client, external_keys, db):
                          {"date_start": "2026-09-23", "date_end": "2026-09-23"})
     data = r.json()["data"]
     assert data["total"] == 1
-    assert data["data_as_of"] == iso_aware(stale_at)
-    assert data["data_confidence"] == "low"
-    assert data["stale"] is True
-    assert any("有效期" in w for w in data["warnings"])
-    # 缺排产基础条件时可用分钟为 null，并给出字段缺失告警
+    assert data["data_as_of"] == stale_at.isoformat()
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False
+    # 缺排产基础条件时可用分钟为 null
     assert data["items"][0]["available_minutes"] is None
-    assert any("排产基础条件" in w for w in data["warnings"])
 
 
-async def test_operations_stale_after_validity(ext_client, external_keys, db):
-    """工序快照超过 24h：真实 data_as_of + low + stale=true（历史快照不再豁免过期判定）。"""
+async def test_operations_baseline_not_marked_stale(ext_client, external_keys, db):
+    """工序为历史快照基线：超过 24h 仍 stale=false、置信度下限 medium。"""
     from app.models.production.process_progress import ProcessProgress
 
     stale_at = (datetime.now() - timedelta(hours=30)).replace(microsecond=0)
@@ -441,13 +428,13 @@ async def test_operations_stale_after_validity(ext_client, external_keys, db):
                          external_keys["production"], {"order_no": "SO-OLD-001"})
     data = r.json()["data"]
     assert data["total"] == 1
-    assert data["data_as_of"] == iso_aware(stale_at)
-    assert data["data_confidence"] == "low"
-    assert data["stale"] is True
+    assert data["data_as_of"] == stale_at.isoformat()
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False
 
 
-async def test_reports_stale_after_validity(ext_client, external_keys, db):
-    """报工快照超过 24h：真实 data_as_of + low + stale=true + 明细口径告警。"""
+async def test_reports_baseline_not_marked_stale(ext_client, external_keys, db):
+    """报工为历史快照基线：超过 24h 仍 stale=false、置信度下限 medium。"""
     from app.models.production.production_daily_report import ProductionDailyReport
 
     stale_at = (datetime.now() - timedelta(hours=30)).replace(microsecond=0)
@@ -460,7 +447,6 @@ async def test_reports_stale_after_validity(ext_client, external_keys, db):
                          external_keys["production"], {"work_order_no": "WO-OLD-001"})
     data = r.json()["data"]
     assert data["total"] == 1
-    assert data["data_as_of"] == iso_aware(stale_at)
-    assert data["data_confidence"] == "low"
-    assert data["stale"] is True
-    assert any("逐日明细行" in w for w in data["warnings"])
+    assert data["data_as_of"] == stale_at.isoformat()
+    assert data["data_confidence"] == "medium"
+    assert data["stale"] is False

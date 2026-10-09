@@ -96,6 +96,7 @@ async def _test_db():
     #    order_material_po_binding 非法外键（po_no 无唯一约束）卡死，且与本功能无关
     from app.models.basicdata.announcement import Notification
     from app.models.basicdata.audit_log import AuditLog
+    from app.models.basicdata.backup import BackupConfig, BackupRecord
     from app.models.basicdata.bom import Bom
     from app.models.basicdata.bom_detail import BomDetail
     from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog
@@ -127,6 +128,7 @@ async def _test_db():
     tables = [
         SysRole.__table__, SysUser.__table__, UserOrgScope.__table__,
         SysPermission.__table__,
+        BackupRecord.__table__, BackupConfig.__table__,
         SupplierClaim.__table__, SupplierClaimApprovalLog.__table__,
         Notification.__table__, FileAsset.__table__,
         Feedback.__table__,
@@ -144,6 +146,8 @@ async def _test_db():
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
+        # 既有测试库补列：create_all 只建缺失表不加列（同 init_database 的 migrate_columns 模式）
+        await conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS ai_result JSONB"))
         # approval_config 模型在 purchase 域（故意不导入），直接 DDL 建表
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS approval_config (
@@ -216,7 +220,8 @@ async def client(_test_db):
         await conn.execute(text(
             "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, feedback, "
             "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
-            "purchase_order, approval_instance, approval_task, approval_record RESTART IDENTITY CASCADE"
+            "purchase_order, approval_instance, approval_task, approval_record, "
+            "backup_record RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
         await conn.execute(text("""

@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
-import { Table, Button, Space, Input, Select, Form, message, Modal, Image } from 'antd'
+import { useEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from 'react'
+import { Table, Button, Space, Input, Select, Form, message, Modal, Image, Tooltip, Typography } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, DeleteOutlined, MessageOutlined,
   DownloadOutlined, PaperClipOutlined, ClockCircleOutlined,
   SyncOutlined, CheckCircleOutlined, CloseCircleOutlined,
+  CheckOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { feedbackApi } from '../../../services/api'
@@ -56,6 +57,40 @@ const elapsedMinutes = (from?: string | null) => {
   return Math.max(0, dayjs().diff(dayjs(from), 'minute'))
 }
 
+const SEC_LABEL: CSSProperties = {
+  fontSize: 'calc(12px * var(--font-size-scale))', color: '#94a3b8',
+  fontWeight: 600, letterSpacing: '0.05em', marginBottom: 8,
+}
+
+const ACTION_PREFIX_COLORS: Array<[string, string]> = [
+  ['执行命令', '#c4b5fd'],
+  ['读取', '#7dd3fc'],
+  ['修改', '#fdba74'],
+  ['新建', '#86efac'],
+]
+const actionColor = (text: string) => ACTION_PREFIX_COLORS.find(([p]) => text?.startsWith(p))?.[1] || '#cbd5e1'
+
+const FILE_STATUS_META: Record<string, { label: string; bg: string; color: string }> = {
+  A: { label: '新增', bg: '#dcfce7', color: '#15803d' },
+  M: { label: '修改', bg: '#ffedd5', color: '#c2410c' },
+  D: { label: '删除', bg: '#fee2e2', color: '#b91c1c' },
+}
+const fileBadge = (status: string) => {
+  const m = FILE_STATUS_META[status] || FILE_STATUS_META.M
+  return (
+    <span style={{
+      background: m.bg, color: m.color, borderRadius: 4, padding: '0 6px',
+      fontSize: 'calc(11px * var(--font-size-scale))', fontWeight: 600, flexShrink: 0,
+    }}>{m.label}</span>
+  )
+}
+
+const GATE_NAME_LABELS: Record<string, string> = { backend: '后端测试', frontend: '前端构建' }
+const fmtDuration = (seconds?: number | null) => {
+  if (seconds == null) return ''
+  return seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`
+}
+
 const STATUS_CLS = (k?: string) => (k ? statusMeta[k]?.cls || 'sc-tag-plain' : 'sc-tag-plain')
 const STATUS_LBL = (k?: string) => (k ? statusMeta[k]?.label || k : '—')
 
@@ -91,6 +126,215 @@ const Operator = ({ name, dim }: { name?: string | null; dim?: boolean }) =>
     </span>
   ) : <span className="sc-note">—</span>
 
+const TERMINAL_PANEL: CSSProperties = {
+  background: '#0f172a', borderRadius: 8,
+  fontFamily: 'Consolas, Menlo, monospace',
+  fontSize: 'calc(12px * var(--font-size-scale))',
+}
+
+function AiSection({
+  detail, action, actionBoxRef, filesExpanded, onToggleFiles, openGate, onToggleGate,
+}: {
+  detail: any
+  action: ReactNode
+  actionBoxRef: MutableRefObject<HTMLDivElement | null>
+  filesExpanded: boolean
+  onToggleFiles: () => void
+  openGate: string | null
+  onToggleGate: (key: string) => void
+}) {
+  const result = detail.ai_result || null
+  const stages = stageEntries(detail.ai_progress)
+  const actions = actionEntries(detail.ai_progress)
+  const files = result?.files || []
+  const gates = result?.gates || []
+  const totalAdd = files.reduce((s: number, f: any) => s + (f.additions || 0), 0)
+  const totalDel = files.reduce((s: number, f: any) => s + (f.deletions || 0), 0)
+  const visibleFiles = filesExpanded ? files : files.slice(0, 8)
+
+  return (
+    <>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span className={`sc-tag ${aiStatusMeta[detail.ai_status]?.cls || 'sc-tag-plain'}`}>
+          {aiStatusMeta[detail.ai_status]?.label || detail.ai_status}
+        </span>
+        {detail.ai_branch && (
+          <Typography.Text copyable className="sc-mono" style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#475569' }}>
+            {detail.ai_branch}
+          </Typography.Text>
+        )}
+        {(detail.ai_requested_by || detail.ai_requested_at) && (
+          <span className="sc-note">
+            {detail.ai_requested_by ? `${detail.ai_requested_by} 派单` : '派单'}
+            {detail.ai_requested_at ? ` · ${dayjs(detail.ai_requested_at).format('MM-DD HH:mm')}` : ''}
+          </span>
+        )}
+        {action}
+      </div>
+
+      {stages.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={SEC_LABEL}>执行进度</div>
+          {stages.map((e: any, i: number, arr: any[]) => {
+            const isCurrent = detail.ai_status === 'running' && detail.ai_stage === e.stage
+            const next = arr[i + 1]
+            const duration = next ? dayjs(next.at).diff(dayjs(e.at), 'minute') : null
+            return (
+              <div key={`stage-${i}-${e.stage}`} style={{ display: 'flex', gap: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', alignSelf: 'stretch' }}>
+                  <span style={{
+                    width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
+                    background: isCurrent ? '#eef0ff' : '#f0fdf4',
+                    color: isCurrent ? '#5b5bd6' : '#16a34a',
+                    boxShadow: isCurrent ? '0 0 0 3px rgba(91,91,214,.12)' : undefined,
+                  }}>
+                    {isCurrent ? <LoadingOutlined spin /> : <CheckOutlined />}
+                  </span>
+                  {i < arr.length - 1 && <span style={{ width: 2, flex: 1, minHeight: 10, background: '#e2e8f0', margin: '2px 0' }} />}
+                </div>
+                <div style={{ paddingBottom: i < arr.length - 1 ? 12 : 0, minWidth: 0, flex: 1 }}>
+                  <span style={{ fontSize: 'calc(13px * var(--font-size-scale))', color: isCurrent ? '#0f172a' : '#334155', fontWeight: isCurrent ? 600 : 500 }}>
+                    {aiStageMeta[e.stage]?.label || e.text || e.stage}
+                  </span>
+                  <span className="sc-note" style={{ marginLeft: 8 }}>{fmtClock(e.at)}</span>
+                  {isCurrent
+                    ? <span className="sc-note" style={{ marginLeft: 8 }}>已运行 {elapsedMinutes(detail.ai_stage_started_at)} 分钟</span>
+                    : duration !== null && <span className="sc-note" style={{ marginLeft: 8 }}>耗时 {duration} 分钟</span>}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {actions.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ ...SEC_LABEL, marginBottom: 6 }}>最近动作（{actions.length}）</div>
+          <div ref={actionBoxRef} style={{ ...TERMINAL_PANEL, padding: '10px 12px', maxHeight: 240, overflow: 'auto', lineHeight: 1.9 }}>
+            {actions.map((e: any, i: number) => (
+              <div key={`action-${i}`} style={{ display: 'flex', gap: 10 }}>
+                <span style={{ color: '#475569', flexShrink: 0 }}>{fmtClock(e.at)}</span>
+                <span style={{ color: actionColor(e.text), whiteSpace: 'pre-wrap', wordBreak: 'break-all', minWidth: 0 }}>{e.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(detail.ai_status === 'done' || detail.ai_status === 'failed') && (result ? (
+        <div style={{ marginTop: 12 }}>
+          {detail.ai_status === 'failed' && result.error && (
+            <div style={{
+              background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8,
+              padding: '8px 12px', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+              fontSize: 'calc(12.5px * var(--font-size-scale))', color: '#b91c1c', lineHeight: 1.7, marginBottom: 10,
+            }}>
+              {result.error}
+            </div>
+          )}
+          {detail.ai_status === 'done' && result.summary && (
+            <div style={{
+              background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
+              padding: '8px 12px', fontSize: 'calc(12.5px * var(--font-size-scale))', color: '#334155', lineHeight: 1.7, marginBottom: 10,
+            }}>
+              <Markdown>{result.summary}</Markdown>
+            </div>
+          )}
+          {files.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={SEC_LABEL}>
+                改动文件 · {files.length} 个
+                <span style={{ color: '#16a34a', margin: '0 4px' }}>+{totalAdd}</span>
+                <span style={{ color: '#dc2626' }}>-{totalDel}</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {visibleFiles.map((f: any, i: number) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    {fileBadge(f.status)}
+                    <span className="sc-mono" style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#334155', wordBreak: 'break-all', minWidth: 0, flex: 1 }}>
+                      {f.path}
+                    </span>
+                    {(f.additions > 0 || f.deletions > 0) && (
+                      <span style={{ fontSize: 'calc(11.5px * var(--font-size-scale))', flexShrink: 0 }}>
+                        <span style={{ color: '#16a34a' }}>+{f.additions}</span>
+                        <span style={{ color: '#dc2626' }}> / -{f.deletions}</span>
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {files.length > 8 && (
+                <a style={{ fontSize: 'calc(12px * var(--font-size-scale))', marginTop: 4, display: 'inline-block' }} onClick={onToggleFiles}>
+                  {filesExpanded ? '收起' : `展开全部 ${files.length} 个文件`}
+                </a>
+              )}
+            </div>
+          )}
+          {gates.length > 0 && (
+            <div>
+              <div style={SEC_LABEL}>门禁结果</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {gates.map((g: any) => {
+                  const key = String(g.name)
+                  const isOpen = openGate === key
+                  return (
+                    <div key={key} style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#f8fafc', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 'calc(12.5px * var(--font-size-scale))', fontWeight: 600, color: '#334155' }}>
+                          {GATE_NAME_LABELS[g.name] || g.name}
+                        </span>
+                        {g.passed ? (
+                          <span style={{ color: '#16a34a', fontSize: 'calc(12px * var(--font-size-scale))', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <CheckCircleOutlined />通过
+                          </span>
+                        ) : (
+                          <span style={{ color: '#dc2626', fontSize: 'calc(12px * var(--font-size-scale))', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            <CloseCircleOutlined />失败
+                          </span>
+                        )}
+                        {g.exitCode != null && g.exitCode !== 0 && <span className="sc-mono sc-note">exit={g.exitCode}</span>}
+                        {g.durationSeconds != null && <span className="sc-note">{fmtDuration(g.durationSeconds)}</span>}
+                        {g.outputTail && (
+                          <a style={{ marginLeft: 'auto', fontSize: 'calc(12px * var(--font-size-scale))' }} onClick={() => onToggleGate(key)}>
+                            {isOpen ? '收起输出' : '查看输出'}
+                          </a>
+                        )}
+                      </div>
+                      {isOpen && g.outputTail && (
+                        <pre style={{
+                          ...TERMINAL_PANEL, margin: 0, padding: '8px 10px', maxHeight: 200, overflow: 'auto',
+                          fontSize: 'calc(11.5px * var(--font-size-scale))', color: '#cbd5e1', lineHeight: 1.7,
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                        }}>
+                          {g.outputTail}
+                        </pre>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {result.runDir && (
+            <div className="sc-note sc-mono" style={{ marginTop: 10, wordBreak: 'break-all' }}>
+              运行日志：{result.runDir}（开发机）
+            </div>
+          )}
+        </div>
+      ) : detail.ai_note ? (
+        <div style={{
+          marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
+          padding: '8px 12px', whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto',
+          fontSize: 'calc(12.5px * var(--font-size-scale))', color: '#334155', lineHeight: 1.7,
+        }}>
+          {detail.ai_note}
+        </div>
+      ) : null)}
+    </>
+  )
+}
+
 export default function FeedbackManagement() {
   const hasPermission = useAuthStore(s => s.hasPermission)
   const canHandle = hasPermission('basicdata.feedback.handle', 'handle') || hasPermission('basicdata.feedback', 'update')
@@ -110,6 +354,8 @@ export default function FeedbackManagement() {
   const [sortInfo, setSortInfo] = useState<{ sort_by?: string; sort_order?: string }>({})
 
   const [detail, setDetail] = useState<any>(null)
+  const [filesExpanded, setFilesExpanded] = useState(false)
+  const [openGate, setOpenGate] = useState<string | null>(null)
   const [replyForm] = Form.useForm()
   const [replying, setReplying] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<any>(null)
@@ -166,6 +412,8 @@ export default function FeedbackManagement() {
 
   const openDetail = (record: any) => {
     setDetail(record)
+    setFilesExpanded(false)
+    setOpenGate(null)
     replyForm.setFieldsValue({ reply: '', status: undefined })
   }
 
@@ -365,10 +613,12 @@ export default function FeedbackManagement() {
       render: (v: string) => <span className={`sc-tag ${statusMeta[v]?.cls || 'sc-tag-plain'}`}><span className="dot" />{statusMeta[v]?.label || v}</span>,
     },
     {
-      title: 'AI 实现', dataIndex: 'ai_status', key: 'ai_status', width: 100,
-      render: (v: string) => (v && v !== 'none'
-        ? <span className={`sc-tag ${aiStatusMeta[v]?.cls || 'sc-tag-plain'}`}>{aiStatusMeta[v]?.label || v}</span>
-        : <span className="sc-note">—</span>),
+      title: 'AI 实现', dataIndex: 'ai_status', key: 'ai_status', width: 70,
+      render: (v: string) => (
+        <Tooltip title={aiStatusMeta[v]?.label || '未派单'}>
+          <span className={`fb-ai-lamp fb-ai-lamp--${v || 'none'}`} />
+        </Tooltip>
+      ),
     },
     { title: '提交人', dataIndex: 'submitter_name', key: 'submitter_name', width: 140, render: (v: string) => <Operator name={v} /> },
     {
@@ -488,7 +738,7 @@ export default function FeedbackManagement() {
       <BdDrawer
         open={!!detail}
         onClose={() => setDetail(null)}
-        width={640}
+        width={720}
         title={detail?.title}
         code={detail ? `#${detail.id} · ${detail.page_path || ''}` : ''}
         tags={detail && (
@@ -508,7 +758,7 @@ export default function FeedbackManagement() {
                 </div>
                 {detail.attachments?.length > 0 && (
                   <div style={{ marginTop: 12 }}>
-                    <div style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#94a3b8', fontWeight: 600, letterSpacing: '0.05em', marginBottom: 8 }}>
+                    <div style={SEC_LABEL}>
                       附件（{detail.attachments.length}）
                     </div>
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -550,71 +800,15 @@ export default function FeedbackManagement() {
 
             {detail.ai_status && detail.ai_status !== 'none' && (
               <DrawerSection title="AI 实现">
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <span className={`sc-tag ${aiStatusMeta[detail.ai_status]?.cls || 'sc-tag-plain'}`}>
-                    {aiStatusMeta[detail.ai_status]?.label || detail.ai_status}
-                  </span>
-                  {detail.ai_branch && (
-                    <span className="sc-mono" style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#475569' }}>
-                      {detail.ai_branch}
-                    </span>
-                  )}
-                  {canHandle && aiAction(detail)}
-                </div>
-                {detail.ai_progress?.length > 0 && (
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#94a3b8', fontWeight: 600, letterSpacing: '0.05em', marginBottom: 8 }}>
-                      执行进度
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {stageEntries(detail.ai_progress).map((e: any, i: number, arr: any[]) => {
-                        const isCurrent = detail.ai_status === 'running' && detail.ai_stage === e.stage
-                        const next = arr[i + 1]
-                        const duration = next ? dayjs(next.at).diff(dayjs(e.at), 'minute') : null
-                        return (
-                          <div key={`stage-${i}-${e.stage}`} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{
-                              width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                              background: isCurrent ? '#5b5bd6' : '#cbd5e1',
-                              boxShadow: isCurrent ? '0 0 0 3px rgba(91,91,214,.15)' : undefined,
-                            }} />
-                            <span style={{ fontSize: 'calc(12.5px * var(--font-size-scale))', color: isCurrent ? '#0f172a' : '#64748b', fontWeight: isCurrent ? 600 : 400 }}>
-                              {aiStageMeta[e.stage]?.label || e.text || e.stage}
-                            </span>
-                            <span className="sc-note">{fmtClock(e.at)}</span>
-                            {isCurrent
-                              ? <span className="sc-note">已运行 {elapsedMinutes(detail.ai_stage_started_at)} 分钟</span>
-                              : duration !== null && <span className="sc-note">耗时 {duration} 分钟</span>}
-                          </div>
-                        )
-                      })}
-                    </div>
-                    {actionEntries(detail.ai_progress).length > 0 && (
-                      <>
-                        <div style={{ fontSize: 'calc(12px * var(--font-size-scale))', color: '#94a3b8', fontWeight: 600, letterSpacing: '0.05em', margin: '10px 0 6px' }}>
-                          最近动作
-                        </div>
-                        <div ref={actionBoxRef} style={{ maxHeight: 160, overflow: 'auto', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 10px' }}>
-                          {actionEntries(detail.ai_progress).map((e: any, i: number) => (
-                            <div key={`action-${i}`} className="sc-note" style={{ lineHeight: 1.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              <span className="sc-mono" style={{ marginRight: 6 }}>{fmtClock(e.at)}</span>
-                              {e.text}
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-                {detail.ai_note && (
-                  <div style={{
-                    marginTop: 8, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
-                    padding: '8px 12px', whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto',
-                    fontSize: 'calc(12.5px * var(--font-size-scale))', color: '#334155', lineHeight: 1.7,
-                  }}>
-                    {detail.ai_note}
-                  </div>
-                )}
+                <AiSection
+                  detail={detail}
+                  action={canHandle ? aiAction(detail) : null}
+                  actionBoxRef={actionBoxRef}
+                  filesExpanded={filesExpanded}
+                  onToggleFiles={() => setFilesExpanded(v => !v)}
+                  openGate={openGate}
+                  onToggleGate={(key) => setOpenGate(prev => (prev === key ? null : key))}
+                />
               </DrawerSection>
             )}
 

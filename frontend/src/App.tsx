@@ -1,7 +1,8 @@
 import React from 'react'
-import {BrowserRouter, Routes, Route, Navigate, useLocation} from 'react-router-dom'
+import {unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLocation} from 'react-router-dom'
 import {App as AntdApp, ConfigProvider, Result, Button} from 'antd'
 import MainLayout from './layouts/MainLayout'
+import { appHistory } from './utils/appHistory'
 import Dashboard from './pages/Dashboard/index'
 import OrderList from './pages/OrderDelivery/OrderList/index'
 import RunOrderList from './pages/OrderDelivery/RunOrderList/index'
@@ -178,7 +179,7 @@ export default function App() {
         >
             <AntdApp>
                 <AntdMessageBridge/>
-                <BrowserRouter>
+                <HistoryRouter history={appHistory}>
                     <Routes>
                         <Route path="/login" element={<Login/>}/>
                         <Route path="/share/:token" element={<ShareAccess/>}/>
@@ -297,7 +298,7 @@ export default function App() {
                             <Route path="finance/subject-balances" element={<SubjectBalances/>} key="finance-subject-balances"/>
                         </Route>
                     </Routes>
-                </BrowserRouter>
+                </HistoryRouter>
             </AntdApp>
         </ConfigProvider>
     )

@@ -54,6 +54,7 @@ import ShareButton from '../components/ShareButton'
 import { FloatingAssistant } from '../components/Assistant'
 import GlobalSearch from '../components/GlobalSearch/GlobalSearch'
 import FontSizeSetting from '../components/FontSizeSetting'
+import { usePageTitle } from '../hooks'
 import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
 
 const { Sider, Content } = Layout
@@ -877,8 +878,20 @@ export default function MainLayout() {
     const extraPageNames: Record<string, string> = {
       '/profile': '个人中心',
     }
-    return findCrumb(navTree, location.pathname) || { root: '供应链中台', page: extraPageNames[location.pathname] || '' }
+    // 不在菜单叶子下的动态详情路由（标题与面包屑共用回退）
+    const extraPagePrefixes: Array<[string, string]> = [
+      ['/approvals/items/', '审批详情'],
+    ]
+    const matched = findCrumb(navTree, location.pathname)
+    if (matched) return matched
+    const exact = extraPageNames[location.pathname]
+    if (exact) return { root: '供应链中台', page: exact }
+    const prefixHit = extraPagePrefixes.find(([p]) => location.pathname.startsWith(p))
+    return { root: '供应链中台', page: prefixHit ? prefixHit[1] : '' }
   }, [navTree, location.pathname])
+
+  // 浏览器标签标题跟随当前页（菜单 label 为单一来源），新标签打开的页面可凭标题区分
+  usePageTitle(crumb.page || crumb.root)
 
   const userDisplayName = currentUser && 'display_name' in currentUser
     ? (currentUser.display_name || currentUser.username)

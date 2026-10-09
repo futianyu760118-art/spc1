@@ -28,7 +28,7 @@ import RiskBadge from '../../../components/RiskBadge'
 import RiskDetailModal from '../../../components/RiskDetailModal'
 import { orderApi, riskApi } from '../../../services/api'
 import api from '../../../services/api'
-import { formatDate, formatDateTime } from '../../../utils'
+import { formatDate, formatDateTime, tableHeaderFitWidth } from '../../../utils'
 import { useExport } from '../../../hooks/useExport'
 import ExportColumnSelector, { type ExportColumnOption } from '../../../components/ExportColumnSelector'
 import { useUiPreferencesStore } from '../../../store/uiPreferences'
@@ -2052,7 +2052,7 @@ export default function OrderList() {
     if (col.key === 'action') return col
     const meta = FIELD_EDIT_META[col.key]
     /* 列宽需容纳表头（左侧标记预留区 + 标题 + 排序/筛选图标 + 内边距），并随全局字号缩放，表头名永不省略 */
-    const headerW = ((typeof col.title === 'string' ? col.title.length : 6) * 13 + 96) * fontSizeScale
+    const headerW = tableHeaderFitWidth(typeof col.title === 'string' ? col.title.length : 6, fontSizeScale, 96)
     return {
       ...col,
       ellipsis: undefined,

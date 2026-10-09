@@ -12,6 +12,7 @@
     "@ant-design/charts": "^2.2.1",
     "@ant-design/icons": "^5.5.2",
     "@ant-design/pro-components": "^2.8.1",
+    "@remix-run/router": "^1.23.2",
     "antd": "^5.22.6",
     "antd-mobile": "^5.42.3",
     "axios": "^1.7.9",

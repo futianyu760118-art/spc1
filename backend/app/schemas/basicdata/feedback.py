@@ -39,11 +39,36 @@ class FeedbackStatusUpdate(BaseModel):
     status: str  # pending/processing/resolved/closed
 
 
+class FeedbackAiResultFile(BaseModel):
+    path: str
+    status: str = "M"  # A/M/D
+    additions: int = 0
+    deletions: int = 0
+
+
+class FeedbackAiResultGate(BaseModel):
+    name: str  # backend/frontend
+    passed: bool
+    exitCode: Optional[int] = None
+    durationSeconds: Optional[int] = None
+    outputTail: Optional[str] = None
+
+
+class FeedbackAiResult(BaseModel):
+    branch: Optional[str] = None
+    summary: Optional[str] = None
+    files: Optional[List[FeedbackAiResultFile]] = None
+    gates: Optional[List[FeedbackAiResultGate]] = None
+    runDir: Optional[str] = None
+    error: Optional[str] = None
+
+
 class FeedbackAiFinish(BaseModel):
     success: bool
     branch: Optional[str] = None
     summary: Optional[str] = None
     error: Optional[str] = None
+    result: Optional[FeedbackAiResult] = None
 
 
 class FeedbackAiProgress(BaseModel):
@@ -76,6 +101,7 @@ class FeedbackOut(BaseModel):
     ai_stage: Optional[str] = None
     ai_stage_started_at: Optional[datetime] = None
     ai_progress: Optional[List[Any]] = None
+    ai_result: Optional[dict] = None
     updated_at: Optional[datetime] = None
 
 

@@ -4,8 +4,8 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  CloudDownloadOutlined, DatabaseOutlined, DeleteOutlined,
-  LoadingOutlined, QuestionCircleOutlined, ReloadOutlined, SafetyOutlined, SettingOutlined,
+  DatabaseOutlined, DeleteOutlined, FileZipOutlined,
+  LoadingOutlined, QuestionCircleOutlined, ReloadOutlined, RollbackOutlined, SafetyOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import {
   backupApi, downloadBackup,
@@ -13,7 +13,7 @@ import {
 } from '../../../services/backup'
 import { useAuthStore } from '../../../store/auth'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 
 const SOURCE_LABEL: Record<string, { text: string; color: string }> = {
   manual: { text: '手动', color: 'blue' },
@@ -291,30 +291,36 @@ export default function BackupPage() {
       ),
     },
     {
-      title: '操作', width: 260, fixed: 'right',
+      title: '操作', width: 140, fixed: 'right',
       render: (_, r) => {
         const ok = r.status === 'success' && canManage
         return (
           <Space size={4}>
-            <Button type="link" size="small" disabled={!ok}
-              icon={<CloudDownloadOutlined />}
-              onClick={() => downloadBackup(r.id, 'db', r.db_file)}>库</Button>
-            <Button type="link" size="small" disabled={!ok}
-              icon={<CloudDownloadOutlined />}
-              onClick={() => downloadBackup(r.id, 'uploads', r.uploads_file)}>附件</Button>
-            <Button type="link" size="small" danger disabled={!ok}
-              onClick={() => { setRestoreTarget(r); setConfirmText('') }}>恢复</Button>
-            <Popconfirm
-              title="确认删除该备份？"
-              disabled={!ok || r.id === latestId}
-              onConfirm={async () => {
-                try { await backupApi.remove(r.id); message.success('已删除'); refresh() }
-                catch (e: any) { message.error(String(e?.response?.data?.detail || e?.message || e)) }
-              }}
-            >
-              <Button type="link" size="small" danger disabled={!ok || r.id === latestId}
-                icon={<DeleteOutlined />}>删除</Button>
-            </Popconfirm>
+            <Tooltip title="下载库文件">
+              <Button size="small" disabled={!ok} icon={<DatabaseOutlined />}
+                onClick={() => downloadBackup(r.id, 'db', r.db_file)} />
+            </Tooltip>
+            <Tooltip title="下载附件包">
+              <Button size="small" disabled={!ok} icon={<FileZipOutlined />}
+                onClick={() => downloadBackup(r.id, 'uploads', r.uploads_file)} />
+            </Tooltip>
+            <Tooltip title="恢复">
+              <Button size="small" danger disabled={!ok} icon={<RollbackOutlined />}
+                onClick={() => { setRestoreTarget(r); setConfirmText('') }} />
+            </Tooltip>
+            <Tooltip title={r.id === latestId ? '最新一份备份不可删除' : '删除'}>
+              <Popconfirm
+                title="确认删除该备份？"
+                disabled={!ok || r.id === latestId}
+                onConfirm={async () => {
+                  try { await backupApi.remove(r.id); message.success('已删除'); refresh() }
+                  catch (e: any) { message.error(String(e?.response?.data?.detail || e?.message || e)) }
+                }}
+              >
+                <Button size="small" danger disabled={!ok || r.id === latestId}
+                  icon={<DeleteOutlined />} />
+              </Popconfirm>
+            </Tooltip>
           </Space>
         )
       },
@@ -332,18 +338,15 @@ export default function BackupPage() {
     : null
 
   return (
-    <Card>
+    <Card className="backup-card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-        <div>
-          <Title level={4} style={{ margin: 0 }}>备份管理</Title>
-          <div style={{ color: 'var(--text-secondary, #888)', fontSize: 12, marginTop: 4 }}>
-            数据库 + 附件双文件备份；恢复将回滚到所选时间点（自动先打安全快照）。
-            <Tooltip title={BACKUP_SCOPE_TIP}>
-              <span style={{ marginLeft: 6, color: '#1677ff', cursor: 'help' }}>
-                <QuestionCircleOutlined /> 备份范围
-              </span>
-            </Tooltip>
-          </div>
+        <div style={{ color: 'var(--text-secondary, #888)', fontSize: 12 }}>
+          数据库 + 附件双文件备份；恢复将回滚到所选时间点（自动先打安全快照）。
+          <Tooltip title={BACKUP_SCOPE_TIP}>
+            <span style={{ marginLeft: 6, color: '#1677ff', cursor: 'help' }}>
+              <QuestionCircleOutlined /> 备份范围
+            </span>
+          </Tooltip>
         </div>
         <Space>
           {stats?.next_run && <Text type="secondary" style={{ fontSize: 12 }}>下次定时：{stats.next_run}</Text>}
@@ -369,6 +372,7 @@ export default function BackupPage() {
         columns={columns}
         dataSource={rows}
         loading={loading}
+        scroll={{ y: 'calc(100vh - 360px)' }}
         pagination={{
           current: page, pageSize, total, showSizeChanger: true,
           onChange: (p, ps) => { setPage(p); setPageSize(ps) },

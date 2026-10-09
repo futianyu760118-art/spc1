@@ -5,6 +5,7 @@
 - admin 可查看全部、回复、删除
 """
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
@@ -23,6 +24,9 @@ from app.schemas.common import ResponseModel
 from app.schemas.basicdata.feedback import (
     FeedbackAiFinish,
     FeedbackAiProgress,
+    FeedbackAiResult,
+    FeedbackAiResultFile,
+    FeedbackAiResultGate,
     FeedbackCreate,
     FeedbackListOut,
     FeedbackOut,
@@ -593,6 +597,47 @@ _AI_STAGE_LABELS = {
 _AI_PROGRESS_MAX_ENTRIES = 50
 _AI_PROGRESS_MAX_ACTIONS_PER_POST = 20
 _AI_PROGRESS_ACTION_MAX_LEN = 200
+_AI_RESULT_MAX_FILES = 200
+_AI_RESULT_MAX_GATES = 4
+_AI_RESULT_MAX_PATH_LEN = 300
+_AI_RESULT_MAX_OUTPUT_TAIL = 4000
+_AI_RESULT_MAX_SUMMARY = 1500
+_AI_RESULT_MAX_ERROR = 2000
+_AI_RESULT_MAX_BYTES = 64 * 1024
+
+
+def _clamp_ai_result(result: FeedbackAiResult) -> Optional[dict]:
+    """钳制 runner 回写的结构化结果（只钳制不拒绝，避免回写 422 卡死反馈）；整体超限返回 None 退化为 ai_note 展示。"""
+    clamped = FeedbackAiResult(
+        branch=(result.branch or "")[:128] or None,
+        summary=(result.summary or "")[:_AI_RESULT_MAX_SUMMARY] or None,
+        runDir=(result.runDir or "")[:_AI_RESULT_MAX_PATH_LEN] or None,
+        error=(result.error or "")[:_AI_RESULT_MAX_ERROR] or None,
+        files=[
+            FeedbackAiResultFile(
+                path=(f.path or "")[:_AI_RESULT_MAX_PATH_LEN],
+                status=((f.status or "M").strip().upper()[:1] or "M"),
+                additions=max(0, f.additions or 0),
+                deletions=max(0, f.deletions or 0),
+            )
+            for f in (result.files or [])[:_AI_RESULT_MAX_FILES]
+        ] or None,
+        gates=[
+            FeedbackAiResultGate(
+                name=(g.name or "")[:32],
+                passed=bool(g.passed),
+                exitCode=g.exitCode,
+                durationSeconds=g.durationSeconds,
+                outputTail=(g.outputTail or "")[:_AI_RESULT_MAX_OUTPUT_TAIL] or None,
+            )
+            for g in (result.gates or [])[:_AI_RESULT_MAX_GATES]
+        ] or None,
+    )
+    dumped = clamped.model_dump()
+    if len(json.dumps(dumped, ensure_ascii=False).encode("utf-8")) > _AI_RESULT_MAX_BYTES:
+        logger.warning("[feedback] ai_result 超过 %d 字节，已丢弃（界面退化为 ai_note 展示）", _AI_RESULT_MAX_BYTES)
+        return None
+    return dumped
 
 
 @router.post("/{feedback_id}/ai-queue", response_model=ResponseModel[FeedbackOut])
@@ -621,6 +666,7 @@ async def ai_queue_feedback(
     fb.ai_progress = None
     fb.ai_stage = None
     fb.ai_stage_started_at = None
+    fb.ai_result = None
     fb.ai_requested_by = current_user.get("username")
     fb.ai_requested_at = datetime.now()
     if fb.status == "pending":
@@ -765,6 +811,7 @@ async def ai_finish_feedback(
         fb.ai_note = body.error
         reply_text = f"【AI 自动实现失败】{body.error or '未知原因'}。修改反馈后可点击「重试」。"
 
+    fb.ai_result = _clamp_ai_result(body.result) if body.result else None
     fb.ai_stage = None
     fb.ai_stage_started_at = None
     fb.reply = reply_text
