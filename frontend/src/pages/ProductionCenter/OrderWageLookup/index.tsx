@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { Table, Button, Space, Input, Select, Switch, Tag, Tooltip, Card, Statistic, Row, Col, DatePicker, message } from 'antd'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { Table, Button, Space, Input, InputNumber, Select, Switch, Tag, Tooltip, Card, Statistic, Row, Col, DatePicker, message } from 'antd'
 import { SearchOutlined, ReloadOutlined, CloudSyncOutlined } from '@ant-design/icons'
+import { useSearchParams } from 'react-router-dom'
 import dayjs, { Dayjs } from 'dayjs'
 import { productionApi } from '@/services/api'
 
@@ -57,17 +58,45 @@ const OrderWageTab: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [stats, setStats] = useState<WageStats>({ total: 0, has_wage: 0, no_wage: 0, no_wage_no_bom: 0, no_wage_not_covered: 0, no_wage_zero: 0 })
 
-  const [searchOrderNo, setSearchOrderNo] = useState('')
-  const [searchProductCode, setSearchProductCode] = useState('')
-  const [searchBomNo, setSearchBomNo] = useState('')
-  const [searchCustomer, setSearchCustomer] = useState('')
-  const [searchWageStatus, setSearchWageStatus] = useState<'all' | 'has' | 'no'>('all')
-  const [includeClosed, setIncludeClosed] = useState(false)
-  const [onlyWithTasks, setOnlyWithTasks] = useState(true)
+  const [searchParams] = useSearchParams()
+  // 查询态(触发请求)
+  const [searchOrderNo, setSearchOrderNo] = useState(searchParams.get('order_no') || '')
+  const [searchProductCode, setSearchProductCode] = useState(searchParams.get('product_code') || '')
+  const [searchBomNo, setSearchBomNo] = useState(searchParams.get('bom_no') || '')
+  const [searchCustomer, setSearchCustomer] = useState(searchParams.get('customer') || '')
+  // 输入草稿态(仅控制输入框显示, 防抖后才写入查询态)
+  const [draftOrderNo, setDraftOrderNo] = useState(searchParams.get('order_no') || '')
+  const [draftProductCode, setDraftProductCode] = useState(searchParams.get('product_code') || '')
+  const [draftBomNo, setDraftBomNo] = useState(searchParams.get('bom_no') || '')
+  const [draftCustomer, setDraftCustomer] = useState(searchParams.get('customer') || '')
+  const [searchWageStatus, setSearchWageStatus] = useState<'all' | 'has' | 'no'>(
+    (searchParams.get('wage_status') as 'all' | 'has' | 'no') || 'all',
+  )
+  const [matchTypeFilter, setMatchTypeFilter] = useState(searchParams.get('match_type') || '')
+  const [includeClosed, setIncludeClosed] = useState(searchParams.get('include_closed') === 'true')
+  const [onlyWithTasks, setOnlyWithTasks] = useState(searchParams.get('only_with_tasks') !== 'false')
   const [promisedRange, setPromisedRange] = useState<RangeValue>(null)
+  const [orderDateRange, setOrderDateRange] = useState<RangeValue>(null)
+  const [qtyMin, setQtyMin] = useState<number | null>(null)
+  const [qtyMax, setQtyMax] = useState<number | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [syncLoading, setSyncLoading] = useState(false)
+
+  // 文本筛选防抖(避免每敲一个字都请求)
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const clearDebounces = () => {
+    Object.values(debounceTimers.current).forEach((t) => clearTimeout(t))
+    debounceTimers.current = {}
+  }
+  const setDebounced = (key: string, fn: (v: string) => void, value: string) => {
+    if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key])
+    debounceTimers.current[key] = setTimeout(() => {
+      fn(value)
+      setPage(1)
+    }, 300)
+  }
+  useEffect(() => () => clearDebounces(), [])
 
   const handleSyncOA = async () => {
     setSyncLoading(true)
@@ -98,10 +127,15 @@ const OrderWageTab: React.FC = () => {
         bom_no: searchBomNo || undefined,
         customer: searchCustomer || undefined,
         wage_status: searchWageStatus === 'all' ? undefined : searchWageStatus,
+        match_type: matchTypeFilter || undefined,
         include_closed: includeClosed,
         only_with_tasks: onlyWithTasks,
         promised_from: promisedRange?.[0] ? promisedRange[0].format('YYYY-MM-DD') : undefined,
         promised_to: promisedRange?.[1] ? promisedRange[1].format('YYYY-MM-DD') : undefined,
+        order_date_from: orderDateRange?.[0] ? orderDateRange[0].format('YYYY-MM-DD') : undefined,
+        order_date_to: orderDateRange?.[1] ? orderDateRange[1].format('YYYY-MM-DD') : undefined,
+        qty_min: qtyMin ?? undefined,
+        qty_max: qtyMax ?? undefined,
       }
       const res = await productionApi.lookupOrderWage(params)
       setData(res.data.items || [])
@@ -112,7 +146,7 @@ const OrderWageTab: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, searchOrderNo, searchProductCode, searchBomNo, searchCustomer, searchWageStatus, includeClosed, onlyWithTasks, promisedRange])
+  }, [page, pageSize, searchOrderNo, searchProductCode, searchBomNo, searchCustomer, searchWageStatus, matchTypeFilter, includeClosed, onlyWithTasks, promisedRange, orderDateRange, qtyMin, qtyMax])
 
   useEffect(() => {
     fetchData()
@@ -127,14 +161,23 @@ const OrderWageTab: React.FC = () => {
   }
 
   const handleReset = () => {
+    clearDebounces()
     setSearchOrderNo('')
     setSearchProductCode('')
     setSearchBomNo('')
     setSearchCustomer('')
+    setDraftOrderNo('')
+    setDraftProductCode('')
+    setDraftBomNo('')
+    setDraftCustomer('')
     setSearchWageStatus('all')
+    setMatchTypeFilter('')
     setIncludeClosed(false)
     setOnlyWithTasks(true)
     setPromisedRange(null)
+    setOrderDateRange(null)
+    setQtyMin(null)
+    setQtyMax(null)
     if (page !== 1) {
       setPage(1)
       return
@@ -153,12 +196,32 @@ const OrderWageTab: React.FC = () => {
     )
   }
 
+  // Excel 式表头筛选行: 表头文字下方常驻筛选控件, 联动服务端全量数据
+  const filterTitle = (text: string, control: React.ReactNode) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '2px 0' }}>
+      <span>{text}</span>
+      {control}
+    </div>
+  )
+
   const columns: any[] = [
     {
-      title: '订单号/行号',
+      title: filterTitle(
+        '订单号/行号',
+        <Input
+          size="small"
+          placeholder="订单号"
+          value={draftOrderNo}
+          allowClear
+          onChange={(e) => {
+            setDraftOrderNo(e.target.value)
+            setDebounced('order_no', setSearchOrderNo, e.target.value)
+          }}
+        />,
+      ),
       dataIndex: 'order_no',
       key: 'order_no',
-      width: 200,
+      width: 190,
       render: (_: any, r: any) => (
         <span>
           {r.order_no}
@@ -166,9 +229,39 @@ const OrderWageTab: React.FC = () => {
         </span>
       ),
     },
-    { title: '客户', dataIndex: 'customer', key: 'customer', width: 130, ellipsis: true },
     {
-      title: '产品编码',
+      title: filterTitle(
+        '客户',
+        <Input
+          size="small"
+          placeholder="客户"
+          value={draftCustomer}
+          allowClear
+          onChange={(e) => {
+            setDraftCustomer(e.target.value)
+            setDebounced('customer', setSearchCustomer, e.target.value)
+          }}
+        />,
+      ),
+      dataIndex: 'customer',
+      key: 'customer',
+      width: 140,
+      ellipsis: true,
+    },
+    {
+      title: filterTitle(
+        '产品编码',
+        <Input
+          size="small"
+          placeholder="产品编码"
+          value={draftProductCode}
+          allowClear
+          onChange={(e) => {
+            setDraftProductCode(e.target.value)
+            setDebounced('product_code', setSearchProductCode, e.target.value)
+          }}
+        />,
+      ),
       dataIndex: 'product_code',
       key: 'product_code',
       width: 200,
@@ -176,25 +269,132 @@ const OrderWageTab: React.FC = () => {
       render: (v: string) => v || '-',
     },
     {
-      title: 'BOM编码',
+      title: filterTitle(
+        'BOM编码',
+        <Input
+          size="small"
+          placeholder="BOM编码"
+          value={draftBomNo}
+          allowClear
+          onChange={(e) => {
+            setDraftBomNo(e.target.value)
+            setDebounced('bom_no', setSearchBomNo, e.target.value)
+          }}
+        />,
+      ),
       dataIndex: 'bom_no',
       key: 'bom_no',
       width: 220,
       ellipsis: true,
       render: (v: string) => v || <span style={{ color: '#999' }}>(无)</span>,
     },
-    { title: '下单日期', dataIndex: 'order_date', key: 'order_date', width: 110 },
-    { title: '交期', dataIndex: 'promised_date', key: 'promised_date', width: 110 },
-    { title: '数量', dataIndex: 'order_qty', key: 'order_qty', width: 90, align: 'right' as const },
     {
-      title: '工价状态',
+      title: filterTitle(
+        '下单日期',
+        <RangePicker
+          size="small"
+          value={orderDateRange}
+          onChange={(v) => {
+            setOrderDateRange(v)
+            setPage(1)
+          }}
+          presets={buildRangePresets()}
+          style={{ width: '100%' }}
+        />,
+      ),
+      dataIndex: 'order_date',
+      key: 'order_date',
+      width: 120,
+    },
+    {
+      title: filterTitle(
+        '交期',
+        <RangePicker
+          size="small"
+          value={promisedRange}
+          onChange={(v) => {
+            setPromisedRange(v)
+            setPage(1)
+          }}
+          presets={buildRangePresets()}
+          style={{ width: '100%' }}
+        />,
+      ),
+      dataIndex: 'promised_date',
+      key: 'promised_date',
+      width: 120,
+    },
+    {
+      title: filterTitle(
+        '数量',
+        <div style={{ display: 'flex', gap: 4 }}>
+          <InputNumber
+            size="small"
+            placeholder="≥"
+            value={qtyMin}
+            onChange={(v) => {
+              setQtyMin(v as number | null)
+              setPage(1)
+            }}
+            style={{ width: '50%' }}
+          />
+          <InputNumber
+            size="small"
+            placeholder="≤"
+            value={qtyMax}
+            onChange={(v) => {
+              setQtyMax(v as number | null)
+              setPage(1)
+            }}
+            style={{ width: '50%' }}
+          />
+        </div>,
+      ),
+      dataIndex: 'order_qty',
+      key: 'order_qty',
+      width: 130,
+      align: 'right' as const,
+    },
+    {
+      title: filterTitle(
+        '工价状态',
+        <Select
+          size="small"
+          value={searchWageStatus}
+          onChange={(v) => {
+            setSearchWageStatus(v)
+            setPage(1)
+          }}
+          style={{ width: '100%' }}
+        >
+          <Option value="all">全部</Option>
+          <Option value="has">有工价</Option>
+          <Option value="no">无工价</Option>
+        </Select>,
+      ),
       dataIndex: 'wage_status',
       key: 'wage_status',
       width: 100,
       render: (_: any, r: any) => wageStatusTag(r),
     },
     {
-      title: '匹配方式',
+      title: filterTitle(
+        '匹配方式',
+        <Select
+          size="small"
+          value={matchTypeFilter || 'all'}
+          onChange={(v) => {
+            setMatchTypeFilter(v === 'all' ? '' : v)
+            setPage(1)
+          }}
+          style={{ width: '100%' }}
+        >
+          <Option value="all">全部</Option>
+          <Option value="bom">BOM精确</Option>
+          <Option value="bom_stripped">BOM去前缀</Option>
+          <Option value="none">未匹配</Option>
+        </Select>,
+      ),
       dataIndex: 'match_type',
       key: 'match_type',
       width: 110,
@@ -301,55 +501,12 @@ const OrderWageTab: React.FC = () => {
     <div>
       <Card size="small" style={{ marginBottom: 16 }}>
         <Space wrap size={[12, 12]}>
-          <Input
-            placeholder="订单号"
-            value={searchOrderNo}
-            onChange={(e) => setSearchOrderNo(e.target.value)}
-            onPressEnter={handleSearch}
-            style={{ width: 200 }}
-            allowClear
-          />
-          <Input
-            placeholder="产品编码"
-            value={searchProductCode}
-            onChange={(e) => setSearchProductCode(e.target.value)}
-            onPressEnter={handleSearch}
-            style={{ width: 180 }}
-            allowClear
-          />
-          <Input
-            placeholder="BOM编码"
-            value={searchBomNo}
-            onChange={(e) => setSearchBomNo(e.target.value)}
-            onPressEnter={handleSearch}
-            style={{ width: 180 }}
-            allowClear
-          />
-          <Input
-            placeholder="客户"
-            value={searchCustomer}
-            onChange={(e) => setSearchCustomer(e.target.value)}
-            onPressEnter={handleSearch}
-            style={{ width: 140 }}
-            allowClear
-          />
-          <RangePicker
-            value={promisedRange}
-            onChange={setPromisedRange}
-            presets={buildRangePresets()}
-            placeholder={['交期起', '交期止']}
-          />
-          <Select value={searchWageStatus} onChange={(v) => setSearchWageStatus(v)} style={{ width: 120 }}>
-            <Option value="all">全部状态</Option>
-            <Option value="has">有工价</Option>
-            <Option value="no">无工价</Option>
-          </Select>
           <Space size={4}>
-            <Switch size="small" checked={includeClosed} onChange={setIncludeClosed} />
+            <Switch size="small" checked={includeClosed} onChange={(v) => { setIncludeClosed(v); setPage(1) }} />
             <span style={{ fontSize: 13, color: '#666' }}>含已关闭订单</span>
           </Space>
           <Space size={4}>
-            <Switch size="small" checked={onlyWithTasks} onChange={setOnlyWithTasks} />
+            <Switch size="small" checked={onlyWithTasks} onChange={(v) => { setOnlyWithTasks(v); setPage(1) }} />
             <span style={{ fontSize: 13, color: '#666' }}>只看有任务单</span>
           </Space>
           <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>
@@ -363,7 +520,7 @@ const OrderWageTab: React.FC = () => {
               同步OA工价
             </Button>
           </Tooltip>
-          <span style={{ fontSize: 12, color: '#999' }}>工价每小时自动同步一次</span>
+          <span style={{ fontSize: 12, color: '#999' }}>各列筛选项在表头下方，输入即查；工价每小时自动同步一次</span>
         </Space>
       </Card>
 
@@ -415,6 +572,7 @@ const OrderWageTab: React.FC = () => {
           loading={loading}
           columns={columns}
           dataSource={data}
+          scroll={{ x: 1760 }}
           pagination={{
             current: page,
             pageSize,

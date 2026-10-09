@@ -240,8 +240,9 @@ async def get_supplier_last_price(
     result = await db.execute(text("SELECT po_price, po_date FROM purchase_order WHERE material_code=:mat AND supplier_code=:sup ORDER BY po_date DESC LIMIT 1"), {"mat": material_code, "sup": supplier_code or ""})
     row = result.fetchone()
     # 无采购记录或成交价为空时返回空数据：隐式 return None 会触发响应模型校验 500
+    # old_price_date 列为 varchar(16), 只保留日期部分
     if row and row[0] is not None:
-        return ResponseModel(data={"old_price": float(row[0]), "old_price_date": str(row[1])})
+        return ResponseModel(data={"old_price": float(row[0]), "old_price_date": str(row[1])[:10]})
     return ResponseModel(data=None)
 
 
@@ -325,8 +326,8 @@ async def get_erp_material_prices(
                     "price": float(r[2]) if r[2] else None,
                     "qty_min": float(r[3]) if r[3] else None,
                     "qty_max": float(r[4]) if r[4] else None,
-                    "start_date": str(r[5]) if r[5] else None,
-                    "end_date": str(r[6]) if r[6] else None,
+                    "start_date": str(r[5])[:10] if r[5] else None,
+                    "end_date": str(r[6])[:10] if r[6] else None,
                 })
         erp_engine.dispose()
         return ResponseModel(data={"material_code": material_code, "prices": prices})

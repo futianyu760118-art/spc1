@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     frontend_base_url: Optional[str] = None
     data_supply_alert_wecom_uids: str = ""  # 逗号分隔的企微 userid，空则告警只记日志
 
+    # 订单工价缺口每日提醒
+    wage_reminder_enabled: bool = True
+    wage_reminder_usernames: str = "chenqiaoxia"  # 收件人系统用户名, 逗号分隔(需绑定 wecom_user_id)
+    wage_reminder_hour: int = 8
+    wage_reminder_minute: int = 30
+
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
