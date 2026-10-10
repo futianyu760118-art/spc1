@@ -132,6 +132,9 @@ interface Filters {
   delivery_completed: string[]
   is_closed: string[]
   order_type: string[]
+  order_no_text: string[]
+  customer_code: string[]
+  shipping_status_desc: string[]
   promised_date_range: [string, string] | null
   shipping_plan_range: [string, string] | null
   order_date_range: [string, string] | null
@@ -382,6 +385,9 @@ export default function OrderList() {
     delivery_completed: ['no'],
     is_closed: [],
     order_type: ['big'],
+    order_no_text: [],
+    customer_code: [],
+    shipping_status_desc: [],
     promised_date_range: null,
     shipping_plan_range: null,
     order_date_range: null,
@@ -819,12 +825,24 @@ export default function OrderList() {
     chipCountsTimer.current = window.setTimeout(() => { fetchChipCounts(base) }, 600)
   }, [fetchChipCounts])
 
+  /* 关键词搜索防抖：逐键输入只发一次列表请求（最新筛选状态经 ref 读取，避免闭包过期） */
+  const filtersRef = useRef(filters)
+  useEffect(() => { filtersRef.current = filters }, [filters])
+  const keywordTimerRef = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (keywordTimerRef.current) window.clearTimeout(keywordTimerRef.current)
+  }, [])
+
+  /* 请求序号：防止并发请求响应乱序覆盖最新筛选结果 */
+  const fetchSeqRef = useRef(0)
+
   const fetchOrders = useCallback(async (
     page = 1,
     pageSize = 50,
     overrideFilters?: Filters,
     overrideSort?: { sort_by?: string; sort_order?: string },
   ) => {
+    const seq = ++fetchSeqRef.current
     setLoading(true)
     try {
       const f = overrideFilters ?? filters
@@ -847,6 +865,9 @@ export default function OrderList() {
       if (f.delivery_completed.length > 0) params.delivery_completed = f.delivery_completed.join(',')
       if (f.is_closed.length > 0) params.is_closed = f.is_closed.join(',')
       if (f.order_type.length > 0) params.order_type = f.order_type.join(',')
+      if (f.order_no_text.length > 0) params.order_no = f.order_no_text.join(',')
+      if (f.customer_code.length > 0) params.customer_code = f.customer_code.join(',')
+      if (f.shipping_status_desc.length > 0) params.shipping_status_desc = f.shipping_status_desc.join(',')
       if (f.year) params.year = f.year
       if (f.promised_date_range) {
         params.promised_date_start = f.promised_date_range[0]
@@ -890,6 +911,7 @@ export default function OrderList() {
       }
       Object.assign(params, quickViewParams(quickView))
       const res: any = await orderApi.list(params)
+      if (seq !== fetchSeqRef.current) return
       const items = res.data.items || []
       setOrders(items)
       setPagination({ current: res.data.page, pageSize: res.data.page_size, total: res.data.total })
@@ -907,10 +929,10 @@ export default function OrderList() {
       })
       scheduleChipCounts(countBase)
     } catch (err: any) {
-      const detail = err?.response?.data?.message || err?.response?.data?.detail || err?.message || '未知错误'
+      if (seq !== fetchSeqRef.current) return
       console.error('[OrderList] fetchOrders failed:', err)
     } finally {
-      setLoading(false)
+      if (seq === fetchSeqRef.current) setLoading(false)
     }
   }, [filters, sortInfo, quickView, quickViewParams, scheduleChipCounts])
 
@@ -936,38 +958,55 @@ export default function OrderList() {
     const sortOrder = sorter.order === 'ascend' ? 'asc' : sorter.order === 'descend' ? 'desc' : undefined
     // 风险等级列按分值排序
     if (sortField === 'risk_level') sortField = 'risk_score'
-    
-    // 处理各种筛选
-    const riskLevelFilter = tableFilters.risk_level?.length > 0 ? tableFilters.risk_level : []
-    const customerGradeFilter = tableFilters.customer_grade?.length > 0 ? tableFilters.customer_grade : []
-    const departmentFilter = tableFilters.department?.length > 0 ? tableFilters.department : []
-    const statusFilter = tableFilters.status?.length > 0 ? tableFilters.status : []
-    const inspectionResultFilter = tableFilters.inspection_result?.length > 0 ? tableFilters.inspection_result : []
-    const packagingStatusFilter = tableFilters.packaging_status?.length > 0 ? tableFilters.packaging_status : []
-    const procurementStatusFilter = tableFilters.procurement_status?.length > 0 ? tableFilters.procurement_status : []
-    const deliveryCompletedFilter = tableFilters.delivery_completed_date != null
-      ? (tableFilters.delivery_completed_date.length > 0 ? tableFilters.delivery_completed_date : [])
-      : filters.delivery_completed
-    const orderTypeFilter = tableFilters.order_no?.length > 0 ? tableFilters.order_no : []
-    const isClosedFilter = tableFilters.is_closed?.length > 0 ? tableFilters.is_closed : []
+
+    // 全部筛选列均为受控列（filteredValue），tableFilters 恒为完整状态：
+    // 仅在键存在时覆盖（undefined = 该列当前隐藏/未参与），null/[] 表示用户清空
+    const newFilters: Filters = { ...filters }
+    const applyArr = (key: keyof Filters, value: any) => {
+      if (value === undefined) return
+      ;(newFilters as any)[key] = Array.isArray(value) ? value : []
+    }
+    applyArr('risk_level', tableFilters.risk_level)
+    applyArr('customer_grade', tableFilters.customer_grade)
+    applyArr('department', tableFilters.department)
+    applyArr('status', tableFilters.status)
+    applyArr('inspection_result', tableFilters.inspection_result)
+    applyArr('packaging_status', tableFilters.packaging_status)
+    applyArr('procurement_status', tableFilters.procurement_status)
+    applyArr('delivery_completed', tableFilters.delivery_completed_date)
+    applyArr('is_closed', tableFilters.is_closed)
+    applyArr('customer_code', tableFilters.customer_code)
+    applyArr('shipping_status_desc', tableFilters.shipping_status_desc)
+    if (tableFilters.order_no !== undefined) {
+      const keys: string[] = Array.isArray(tableFilters.order_no) ? tableFilters.order_no : []
+      newFilters.order_type = keys.filter(k => k === 'big' || k === 'sample')
+      newFilters.order_no_text = keys.filter(k => k !== 'big' && k !== 'sample')
+    }
+    const DATE_RANGE_KEYS: { tk: string; fk: keyof Filters }[] = [
+      { tk: 'promised_date', fk: 'promised_date_range' },
+      { tk: 'shipping_plan', fk: 'shipping_plan_range' },
+      { tk: 'order_date', fk: 'order_date_range' },
+      { tk: 'customer_inspection_date', fk: 'customer_inspection_date_range' },
+      { tk: 'planned_start_date', fk: 'planned_start_date_range' },
+      { tk: 'material_ready_date', fk: 'material_ready_date_range' },
+      { tk: 'front_process_date', fk: 'front_process_date_range' },
+      { tk: 'first_article_date', fk: 'first_article_date_range' },
+      { tk: 'assembly_start_date', fk: 'assembly_start_date_range' },
+      { tk: 'assembly_complete_date', fk: 'assembly_complete_date_range' },
+    ]
+    DATE_RANGE_KEYS.forEach(({ tk, fk }) => {
+      if (tableFilters[tk] === undefined) return
+      const v = Array.isArray(tableFilters[tk]) && Array.isArray(tableFilters[tk][0]) ? tableFilters[tk][0] : null
+      ;(newFilters as any)[fk] = v && v.length === 2 ? v : null
+    })
 
     const newSort = { sort_by: sortField, sort_order: sortOrder }
-    const newFilters = {
-      ...filters,
-      risk_level: riskLevelFilter,
-      customer_grade: customerGradeFilter,
-      department: departmentFilter,
-      status: statusFilter,
-      inspection_result: inspectionResultFilter,
-      packaging_status: packagingStatusFilter,
-      procurement_status: procurementStatusFilter,
-      delivery_completed: deliveryCompletedFilter,
-      is_closed: isClosedFilter,
-      order_type: orderTypeFilter,
-    }
+    const filterChanged = JSON.stringify(newFilters) !== JSON.stringify(filters)
+    const sortChanged = newSort.sort_by !== sortInfo.sort_by || newSort.sort_order !== sortInfo.sort_order
     setSortInfo(newSort)
     setFilters(newFilters)
-    fetchOrders(pag.current, pag.pageSize, newFilters, newSort)
+    // 筛选/排序变化回到第 1 页；纯翻页保持当前页
+    fetchOrders(filterChanged || sortChanged ? 1 : pag.current, pag.pageSize, newFilters, newSort)
   }
 
   const handleScan = async () => {
@@ -1016,6 +1055,9 @@ export default function OrderList() {
     if (filters.delivery_completed.length > 0) params.delivery_completed = filters.delivery_completed.join(',')
     if (filters.is_closed.length > 0) params.is_closed = filters.is_closed.join(',')
     if (filters.order_type.length > 0) params.order_type = filters.order_type.join(',')
+    if (filters.order_no_text.length > 0) params.order_no = filters.order_no_text.join(',')
+    if (filters.customer_code.length > 0) params.customer_code = filters.customer_code.join(',')
+    if (filters.shipping_status_desc.length > 0) params.shipping_status_desc = filters.shipping_status_desc.join(',')
     if (filters.year) params.year = filters.year
     if (filters.promised_date_range) {
       params.promised_date_start = filters.promised_date_range[0]
@@ -1134,42 +1176,86 @@ export default function OrderList() {
     }
   }, [detailCache, detailLoading])
 
+  /* 日期范围列筛选下拉（受控列）：筛选仅 confirm() → onChange 单一请求路径；重置清空后单次拉取 */
+  const dateFilterDropdown = (rangeField: keyof Filters) =>
+    ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+      <div style={{ padding: 8 }}>
+        <RangePicker
+          locale={zhCN.DatePicker}
+          value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
+          onChange={(dates) => {
+            if (dates && dates[0] && dates[1]) {
+              setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
+            } else {
+              setSelectedKeys([])
+            }
+          }}
+          style={{ width: 250, marginBottom: 8, display: 'block' }}
+          placeholder={['开始日期', '结束日期']}
+        />
+        <Space>
+          <Button type="primary" onClick={() => confirm()} size="small">
+            筛选
+          </Button>
+          <Button
+            onClick={() => {
+              clearFilters()
+              const newFilters = { ...filters, [rangeField]: null }
+              setFilters(newFilters)
+              fetchOrders(1, pagination.pageSize, newFilters, sortInfo)
+            }}
+            size="small"
+          >
+            重置
+          </Button>
+        </Space>
+      </div>
+    )
+
+  /* 日期范围列受控 filteredValue：AntD 日期筛选 selectedKeys 为 [[start, end]] 格式 */
+  const dateFilteredValue = (rangeField: keyof Filters) => {
+    const range = filters[rangeField] as [string, string] | null
+    return range ? [range] : null
+  }
+
+  /* 文本列筛选下拉（受控列）：筛选仅 confirm() → onChange 单一请求路径；重置清空后单次拉取 */
+  const textFilterDropdown = (placeholder: string, filterField: keyof Filters) =>
+    ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
+      <div style={{ padding: 8 }}>
+        <Input
+          placeholder={placeholder}
+          value={selectedKeys[0]}
+          onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
+          style={{ width: 188, marginBottom: 8, display: 'block' }}
+        />
+        <Space>
+          <Button type="primary" onClick={() => confirm()} size="small">
+            筛选
+          </Button>
+          <Button
+            onClick={() => {
+              clearFilters()
+              const newFilters = { ...filters, [filterField]: [] }
+              setFilters(newFilters)
+              fetchOrders(1, pagination.pageSize, newFilters, sortInfo)
+            }}
+            size="small"
+          >
+            重置
+          </Button>
+        </Space>
+      </div>
+    )
+
   const columns = useMemo<any[]>(() => [
     // ── 基本信息（固定左侧）──
     {
       title: '销售部门', dataIndex: 'department', key: 'department', minWidth: 70, fixed: 'left' as const,
       sorter: true,
       render: (v: string | null) => v || <span style={{ color: '#cbd5e1' }}>-</span>,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder="输入销售部门"
-            value={selectedKeys[0]}
-            onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => confirm()}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: textFilterDropdown('输入销售部门', 'department'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
-      onFilter: (value: string, record: OrderRow) => 
-        record.department ? record.department.toLowerCase().includes(value.toLowerCase()) : false,
+      filteredValue: filters.department,
     },
     {
       title: '发货完成', dataIndex: 'delivery_completed_date', key: 'delivery_completed_date', minWidth: 90, fixed: 'left' as const,
@@ -1179,6 +1265,7 @@ export default function OrderList() {
         { text: '未发货', value: 'no' },
       ],
       filterMultiple: true,
+      filteredValue: filters.delivery_completed,
     },
     {
       title: '客户等级', dataIndex: 'customer_grade', key: 'customer_grade', minWidth: 60, fixed: 'left' as const,
@@ -1194,6 +1281,7 @@ export default function OrderList() {
         { text: 'D级', value: 'D' },
       ],
       filterMultiple: true,
+      filteredValue: filters.customer_grade,
     },
     {
       title: '客户', dataIndex: 'customer_code', key: 'customer_code', minWidth: 70, fixed: 'left' as const,
@@ -1206,36 +1294,9 @@ export default function OrderList() {
         const tooltip = [r.customer, v].filter(Boolean).join(' / ')
         return <Tooltip title={tooltip}>{displayValue}</Tooltip>
       }, sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder="输入客户代码"
-            value={selectedKeys[0]}
-            onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => confirm()}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: textFilterDropdown('输入客户代码', 'customer_code'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
-      onFilter: (value: string, record: OrderRow) => 
-        [record.customer_code, record.customer].some(text => text?.toLowerCase().includes(value.toLowerCase())),
+      filteredValue: filters.customer_code,
     },
     {
       title: '单号', dataIndex: 'order_no', key: 'order_no', minWidth: 120, fixed: 'left' as const,
@@ -1266,7 +1327,7 @@ export default function OrderList() {
         { text: '样品单（HJY开头）', value: 'sample' },
       ],
       filterMultiple: true,
-      filteredValue: filters.order_type,
+      filteredValue: [...filters.order_type, ...filters.order_no_text],
       filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
         <div style={{ padding: 8, width: 200 }}>
           <Input
@@ -1302,6 +1363,9 @@ export default function OrderList() {
             <Button
               onClick={() => {
                 clearFilters()
+                const newFilters = { ...filters, order_type: [], order_no_text: [] }
+                setFilters(newFilters)
+                fetchOrders(1, pagination.pageSize, newFilters, sortInfo)
               }}
               size="small"
             >
@@ -1311,11 +1375,6 @@ export default function OrderList() {
         </div>
       ),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
-      onFilter: (value: string, record: OrderRow) => {
-        if (value === 'big') return record.order_no ? record.order_no.toUpperCase().startsWith('HJ') && !record.order_no.toUpperCase().startsWith('HJY') : false
-        if (value === 'sample') return record.order_no ? record.order_no.toUpperCase().startsWith('HJY') : false
-        return record.order_no ? record.order_no.toLowerCase().includes(value.toLowerCase()) : false
-      },
     },
     {
       title: '风险等级', dataIndex: 'risk_level', key: 'risk_level', minWidth: 80,
@@ -1331,6 +1390,7 @@ export default function OrderList() {
         { text: '正常', value: 'green' },
       ],
       filterMultiple: true,
+      filteredValue: filters.risk_level,
     },
     {
       title: '数量', dataIndex: 'order_qty', key: 'order_qty', minWidth: 60, align: 'right' as const,
@@ -1347,95 +1407,15 @@ export default function OrderList() {
     {
       title: '下单时间', dataIndex: 'order_date', key: 'order_date', minWidth: 90,
       render: (v: string) => <DateCell value={v} />, sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, order_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, order_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('order_date_range'),
+      filteredValue: dateFilteredValue('order_date_range'),
     },
     // ── 交期 & 计划 ──
     {
       title: '合同交期', dataIndex: 'promised_date', key: 'promised_date', minWidth: 85,
       render: (v: string | null, r: OrderRow) => <DateCell value={v} overdue={!!(v && v < today() && r.status !== 'closed')} />, sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, promised_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, promised_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('promised_date_range'),
+      filteredValue: dateFilteredValue('promised_date_range'),
     },
     {
       title: '出货计划', dataIndex: 'shipping_plan', key: 'shipping_plan', minWidth: 85,
@@ -1460,141 +1440,21 @@ export default function OrderList() {
         )
       },
       sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, shipping_plan_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, shipping_plan_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('shipping_plan_range'),
+      filteredValue: dateFilteredValue('shipping_plan_range'),
     },
     {
       title: '客户验货时间', dataIndex: 'customer_inspection_date', key: 'customer_inspection_date', minWidth: 100,
       render: editableDate('customer_inspection_date'), sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, customer_inspection_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, customer_inspection_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('customer_inspection_date_range'),
+      filteredValue: dateFilteredValue('customer_inspection_date_range'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
     },
     {
       title: '上线时间', dataIndex: 'planned_start_date', key: 'planned_start_date', minWidth: 85,
       render: editableDate('planned_start_date'), sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, planned_start_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, planned_start_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('planned_start_date_range'),
+      filteredValue: dateFilteredValue('planned_start_date_range'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
     },
     {
@@ -1615,6 +1475,7 @@ export default function OrderList() {
         { text: '待检', value: '待检' },
       ],
       filterMultiple: true,
+      filteredValue: filters.inspection_result,
     },
     {
       title: '包装完成状况', dataIndex: 'packaging_status', key: 'packaging_status', minWidth: 100,
@@ -1632,6 +1493,7 @@ export default function OrderList() {
         { text: '未开始', value: '未开始' },
       ],
       filterMultiple: true,
+      filteredValue: filters.packaging_status,
     },
     {
       title: 'BOM回收', dataIndex: 'bom_return_date', key: 'bom_return_date', minWidth: 80,
@@ -1640,48 +1502,8 @@ export default function OrderList() {
     {
       title: '料齐套时间', dataIndex: 'material_ready_date', key: 'material_ready_date', minWidth: 85,
       render: editableDate('material_ready_date', { green: true }), sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, material_ready_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, material_ready_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('material_ready_date_range'),
+      filteredValue: dateFilteredValue('material_ready_date_range'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
     },
     // ── 发货 & 采购 ──
@@ -1689,36 +1511,9 @@ export default function OrderList() {
       title: '发货状态即时说明', dataIndex: 'shipping_status_desc', key: 'shipping_status_desc', minWidth: 120,
       ellipsis: true,
       render: editableText('shipping_status_desc'),
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder="输入发货状态说明"
-            value={selectedKeys[0]}
-            onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => confirm()}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: textFilterDropdown('输入发货状态说明', 'shipping_status_desc'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
-      onFilter: (value: string, record: OrderRow) => 
-        record.shipping_status_desc ? record.shipping_status_desc.toLowerCase().includes(value.toLowerCase()) : false,
+      filteredValue: filters.shipping_status_desc,
     },
     {
       title: '采购物料齐套', dataIndex: 'procurement_status', key: 'procurement_status', minWidth: 100,
@@ -1735,278 +1530,42 @@ export default function OrderList() {
           </Tooltip>
         )
       },
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <Input
-            placeholder="输入采购状态"
-            value={selectedKeys[0]}
-            onChange={(e) => setSelectedKeys(e.target.value ? [e.target.value] : [])}
-            style={{ width: 188, marginBottom: 8, display: 'block' }}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => confirm()}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: textFilterDropdown('输入采购状态', 'procurement_status'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
-      onFilter: (value: string, record: OrderRow) => 
-        record.procurement_status ? record.procurement_status.toLowerCase().includes(value.toLowerCase()) : false,
+      filteredValue: filters.procurement_status,
     },
     // ── 物料分类到料日期（16列 from material_dates JSONB）──
     ...MATERIAL_KEYS.map(key => ({
       title: key, key: `mat_${key}`, minWidth: key.length > 6 ? 100 : 70,
       render: (_: any, r: OrderRow) => editableDate(`mat_${key}`)(r.material_dates?.[key] || null, r),
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters }
-                if (selectedKeys[0]) {
-                  const materialKey = `${key}_date_range` as keyof Filters
-                  ;(newFilters as any)[materialKey] = selectedKeys[0]
-                }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters }
-                const materialKey = `${key}_date_range` as keyof Filters
-                ;(newFilters as any)[materialKey] = null
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
-      filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
     })),
     // ── 生产节点 ──
     {
       title: '前道', dataIndex: 'front_process_date', key: 'front_process_date', minWidth: 80,
       render: editableDate('front_process_date'), sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, front_process_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, front_process_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('front_process_date_range'),
+      filteredValue: dateFilteredValue('front_process_date_range'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
     },
     {
       title: '首件检验日期', dataIndex: 'first_article_date', key: 'first_article_date', minWidth: 100,
       render: editableDate('first_article_date'), sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, first_article_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, first_article_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('first_article_date_range'),
+      filteredValue: dateFilteredValue('first_article_date_range'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
     },
     {
       title: '组装上线日期', dataIndex: 'assembly_start_date', key: 'assembly_start_date', minWidth: 100,
       render: editableDate('assembly_start_date'), sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, assembly_start_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, assembly_start_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('assembly_start_date_range'),
+      filteredValue: dateFilteredValue('assembly_start_date_range'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
     },
     {
       title: '组装完成日期', dataIndex: 'assembly_complete_date', key: 'assembly_complete_date', minWidth: 100,
       render: editableDate('assembly_complete_date', { green: true }), sorter: true,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => (
-        <div style={{ padding: 8 }}>
-          <RangePicker
-            locale={zhCN.DatePicker}
-            value={selectedKeys[0] ? [dayjs(selectedKeys[0][0]), dayjs(selectedKeys[0][1])] : null}
-            onChange={(dates) => {
-              if (dates && dates[0] && dates[1]) {
-                setSelectedKeys([[dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]])
-              } else {
-                setSelectedKeys([])
-              }
-            }}
-            style={{ width: 250, marginBottom: 8, display: 'block' }}
-            placeholder={['开始日期', '结束日期']}
-          />
-          <Space>
-            <Button
-              type="primary"
-              onClick={() => {
-                const newFilters = { ...filters, assembly_complete_date_range: selectedKeys[0] || null }
-                setFilters(newFilters)
-                confirm()
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              筛选
-            </Button>
-            <Button
-              onClick={() => {
-                clearFilters()
-                const newFilters = { ...filters, assembly_complete_date_range: null }
-                setFilters(newFilters)
-                fetchOrders(pagination.current, pagination.pageSize, newFilters, sortInfo)
-              }}
-              size="small"
-            >
-              重置
-            </Button>
-          </Space>
-        </div>
-      ),
+      filterDropdown: dateFilterDropdown('assembly_complete_date_range'),
+      filteredValue: dateFilteredValue('assembly_complete_date_range'),
       filterIcon: (filtered: boolean) => <FilterOutlined style={{ color: filtered ? '#1890ff' : undefined }} />,
     },
     // ── 备注 ──
@@ -2036,6 +1595,7 @@ export default function OrderList() {
         { text: '已关闭', value: 3 },
       ],
       filterMultiple: true,
+      filteredValue: filters.status,
     },
     {
       title: '操作', key: 'action', width: 108, fixed: 'right' as const,
@@ -2097,9 +1657,10 @@ export default function OrderList() {
           onChange={e => {
             const newKeyword = e.target.value
             setFilters(f => ({ ...f, keyword: newKeyword }))
-            // 直接传递新的keyword值，避免状态更新延迟问题
-            const newFilters = { ...filters, keyword: newKeyword }
-            fetchOrders(1, pagination.pageSize, newFilters)
+            if (keywordTimerRef.current) window.clearTimeout(keywordTimerRef.current)
+            keywordTimerRef.current = window.setTimeout(() => {
+              fetchOrders(1, pagination.pageSize, { ...filtersRef.current, keyword: newKeyword })
+            }, 400)
           }}
           style={{ width: 230 }}
         />

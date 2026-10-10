@@ -220,6 +220,9 @@ async def list_orders(
     keyword: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
     customer: Optional[str] = Query(None),
+    customer_code: Optional[str] = Query(None, description="客户编码，模糊匹配"),
+    order_no: Optional[str] = Query(None, description="订单号，模糊匹配"),
+    shipping_status_desc: Optional[str] = Query(None, description="发货状态即时说明，模糊匹配"),
     customer_grade: Optional[str] = Query(None, description="客户等级，多选逗号分隔如 A,B"),
     data_source: Optional[str] = Query(None),
     department: Optional[str] = Query(None, description="销售部门，多选逗号分隔"),
@@ -277,6 +280,18 @@ async def list_orders(
             like_expr = f"%{customer}%"
             query = query.where(SaleOrder.customer.ilike(like_expr))
             count_query = count_query.where(SaleOrder.customer.ilike(like_expr))
+        if customer_code:
+            like_expr = f"%{customer_code}%"
+            query = query.where(SaleOrder.customer_code.ilike(like_expr))
+            count_query = count_query.where(SaleOrder.customer_code.ilike(like_expr))
+        if order_no:
+            like_expr = f"%{order_no}%"
+            query = query.where(SaleOrder.order_no.ilike(like_expr))
+            count_query = count_query.where(SaleOrder.order_no.ilike(like_expr))
+        if shipping_status_desc:
+            like_expr = f"%{shipping_status_desc}%"
+            query = query.where(SaleOrder.shipping_status_desc.ilike(like_expr))
+            count_query = count_query.where(SaleOrder.shipping_status_desc.ilike(like_expr))
         if customer_grade:
             grades = [x.strip() for x in customer_grade.split(',') if x.strip()]
             if grades:
@@ -290,8 +305,8 @@ async def list_orders(
         if department:
             departments = [x.strip() for x in department.split(',') if x.strip()]
             if len(departments) == 1:
-                query = query.where(SaleOrder.department == departments[0])
-                count_query = count_query.where(SaleOrder.department == departments[0])
+                query = query.where(SaleOrder.department.ilike(f"%{departments[0]}%"))
+                count_query = count_query.where(SaleOrder.department.ilike(f"%{departments[0]}%"))
             elif departments:
                 query = query.where(SaleOrder.department.in_(departments))
                 count_query = count_query.where(SaleOrder.department.in_(departments))
@@ -330,8 +345,8 @@ async def list_orders(
         if procurement_status:
             statuses = [x.strip() for x in procurement_status.split(',') if x.strip()]
             if len(statuses) == 1:
-                query = query.where(SaleOrder.procurement_status == statuses[0])
-                count_query = count_query.where(SaleOrder.procurement_status == statuses[0])
+                query = query.where(SaleOrder.procurement_status.ilike(f"%{statuses[0]}%"))
+                count_query = count_query.where(SaleOrder.procurement_status.ilike(f"%{statuses[0]}%"))
             elif statuses:
                 query = query.where(SaleOrder.procurement_status.in_(statuses))
                 count_query = count_query.where(SaleOrder.procurement_status.in_(statuses))
@@ -470,6 +485,15 @@ async def list_orders(
         if customer:
             like_expr = f"%{customer}%"
             stats_query = stats_query.where(SaleOrder.customer.ilike(like_expr))
+        if customer_code:
+            like_expr = f"%{customer_code}%"
+            stats_query = stats_query.where(SaleOrder.customer_code.ilike(like_expr))
+        if order_no:
+            like_expr = f"%{order_no}%"
+            stats_query = stats_query.where(SaleOrder.order_no.ilike(like_expr))
+        if shipping_status_desc:
+            like_expr = f"%{shipping_status_desc}%"
+            stats_query = stats_query.where(SaleOrder.shipping_status_desc.ilike(like_expr))
         if customer_grade:
             grades = [x.strip() for x in customer_grade.split(',') if x.strip()]
             if grades:
@@ -481,7 +505,7 @@ async def list_orders(
         if department:
             departments = [x.strip() for x in department.split(',') if x.strip()]
             if len(departments) == 1:
-                stats_query = stats_query.where(SaleOrder.department == departments[0])
+                stats_query = stats_query.where(SaleOrder.department.ilike(f"%{departments[0]}%"))
             elif departments:
                 stats_query = stats_query.where(SaleOrder.department.in_(departments))
         if status:
@@ -511,7 +535,7 @@ async def list_orders(
         if procurement_status:
             statuses = [x.strip() for x in procurement_status.split(',') if x.strip()]
             if len(statuses) == 1:
-                stats_query = stats_query.where(SaleOrder.procurement_status == statuses[0])
+                stats_query = stats_query.where(SaleOrder.procurement_status.ilike(f"%{statuses[0]}%"))
             elif statuses:
                 stats_query = stats_query.where(SaleOrder.procurement_status.in_(statuses))
         if delivery_completed:
@@ -753,6 +777,9 @@ async def export_orders(
     keyword: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
     customer: Optional[str] = Query(None),
+    customer_code: Optional[str] = Query(None, description="客户编码，模糊匹配"),
+    order_no: Optional[str] = Query(None, description="订单号，模糊匹配"),
+    shipping_status_desc: Optional[str] = Query(None, description="发货状态即时说明，模糊匹配"),
     customer_grade: Optional[str] = Query(None, description="客户等级，多选逗号分隔如 A,B"),
     data_source: Optional[str] = Query(None),
     department: Optional[str] = Query(None, description="销售部门，多选逗号分隔"),
@@ -805,6 +832,15 @@ async def export_orders(
     if customer:
         like_expr = f"%{customer}%"
         query = query.where(SaleOrder.customer.ilike(like_expr))
+    if customer_code:
+        like_expr = f"%{customer_code}%"
+        query = query.where(SaleOrder.customer_code.ilike(like_expr))
+    if order_no:
+        like_expr = f"%{order_no}%"
+        query = query.where(SaleOrder.order_no.ilike(like_expr))
+    if shipping_status_desc:
+        like_expr = f"%{shipping_status_desc}%"
+        query = query.where(SaleOrder.shipping_status_desc.ilike(like_expr))
     if customer_grade:
         grades = [x.strip() for x in customer_grade.split(',') if x.strip()]
         if grades:
@@ -817,7 +853,7 @@ async def export_orders(
     if department:
         departments = [x.strip() for x in department.split(',') if x.strip()]
         if len(departments) == 1:
-            query = query.where(SaleOrder.department == departments[0])
+            query = query.where(SaleOrder.department.ilike(f"%{departments[0]}%"))
         elif departments:
             query = query.where(SaleOrder.department.in_(departments))
     if status:
@@ -847,7 +883,7 @@ async def export_orders(
     if procurement_status:
         statuses = [x.strip() for x in procurement_status.split(',') if x.strip()]
         if len(statuses) == 1:
-            query = query.where(SaleOrder.procurement_status == statuses[0])
+            query = query.where(SaleOrder.procurement_status.ilike(f"%{statuses[0]}%"))
         elif statuses:
             query = query.where(SaleOrder.procurement_status.in_(statuses))
     if delivery_completed:
