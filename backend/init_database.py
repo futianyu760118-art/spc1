@@ -354,6 +354,8 @@ class DatabaseInitializer:
                 "last_inbound_at": "TIMESTAMP",
                 "last_outbound_at": "TIMESTAMP",
                 "last_picking_at": "TIMESTAMP",
+                "manual_location_id": "INTEGER",
+                "manual_location_name": "VARCHAR(100)",
             },
             "scm_inventory_check": {
                 "covered_products": "JSONB",

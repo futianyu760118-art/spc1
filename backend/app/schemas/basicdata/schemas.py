@@ -355,6 +355,13 @@ class LocationOut(LocationBase):
     model_config = {"from_attributes": True}
 
 
+class InventoryLocationUpdate(BaseModel):
+    """库存行库位手动维护：location_name 为 None 且未传 location_id 时恢复 ERP 原库位"""
+
+    location_id: Optional[int] = None
+    location_name: Optional[str] = None
+
+
 # ── Process ──
 class ProcessBase(BaseModel):
     process_code: str

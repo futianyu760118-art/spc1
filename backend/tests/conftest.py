@@ -102,6 +102,8 @@ async def _test_db():
     from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog
     from app.models.basicdata.file_asset import FileAsset
     from app.models.basicdata.feedback import Feedback
+    from app.models.basicdata.inventory import Inventory
+    from app.models.basicdata.location import Location
     from app.models.basicdata.material import Material
     from app.models.basicdata.permission import SysPermission
     from app.models.basicdata.sync_sql_config import SyncSqlConfig
@@ -109,6 +111,7 @@ async def _test_db():
     from app.models.basicdata.supplier import Supplier
     from app.models.basicdata.user_org_scope import UserOrgScope
     from app.models.exception.quality_issue import QualityIssue
+    from app.models.material.inventory_check import StockCheck, StockCheckItem
     from app.models.material.purchase_order import PurchaseOrder
     from app.models.material.purchase_requisition import (
         PurchaseRequisition,
@@ -143,6 +146,8 @@ async def _test_db():
         Material.__table__, PurchaseOrder.__table__,
         PurchaseRequisition.__table__, PurchaseRequisitionLine.__table__,
         PurchaseRequisitionApprovalLog.__table__,
+        Inventory.__table__, Location.__table__,
+        StockCheck.__table__, StockCheckItem.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -221,7 +226,8 @@ async def client(_test_db):
             "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, feedback, "
             "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
             "purchase_order, approval_instance, approval_task, approval_record, "
-            "backup_record RESTART IDENTITY CASCADE"
+            "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item "
+            "RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
         await conn.execute(text("""
