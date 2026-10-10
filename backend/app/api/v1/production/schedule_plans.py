@@ -6110,6 +6110,15 @@ async def list_todo_workbench(
     schedule_bucket: Optional[str] = Query(None, pattern="^(lean|assembly|packaging|mixed|pending)$"),
     todo_status: Optional[str] = Query(None, pattern="^(ready|pending|reschedule)$"),
     kit_risk_level: Optional[str] = Query(None, pattern="^(green|yellow|red)$"),
+    order_no: Optional[str] = Query(None, description="订单号模糊"),
+    product_code: Optional[str] = Query(None, description="产品编码模糊"),
+    bom_no: Optional[str] = Query(None, description="BOM编码模糊"),
+    qty_min: Optional[float] = Query(None, description="数量下限"),
+    qty_max: Optional[float] = Query(None, description="数量上限"),
+    promised_from: Optional[date] = Query(None, description="出货计划起"),
+    promised_to: Optional[date] = Query(None, description="出货计划止"),
+    eta_from: Optional[date] = Query(None, description="最晚ETA起"),
+    eta_to: Optional[date] = Query(None, description="最晚ETA止"),
     skip_snapshot_reconcile: bool = Query(False),
     read_context: dict = Depends(_get_production_schedule_read_context),
 ):
@@ -6127,6 +6136,15 @@ async def list_todo_workbench(
         schedule_bucket or "",
         todo_status or "",
         kit_risk_level or "",
+        order_no or "",
+        product_code or "",
+        bom_no or "",
+        qty_min if qty_min is not None else "",
+        qty_max if qty_max is not None else "",
+        promised_from.isoformat() if promised_from else "",
+        promised_to.isoformat() if promised_to else "",
+        eta_from.isoformat() if eta_from else "",
+        eta_to.isoformat() if eta_to else "",
         int(skip_snapshot_reconcile),
     )
     stats = {
@@ -6187,6 +6205,27 @@ async def list_todo_workbench(
             # 把 excluded 也计入统计 (前端能看到缺UPPH的订单数量)
             ProductionOrderScheduleSnapshot.display_status.in_(["ready", "pending", "excluded"]),
         ]
+        # 表格列筛选(订单号/产品/BOM/数量/出货计划/最晚ETA)
+        extra_snapshot_conditions = []
+        if order_no:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.order_no.ilike(f"%{order_no}%"))
+        if product_code:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.product_code.ilike(f"%{product_code}%"))
+        if bom_no:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.bom_no.ilike(f"%{bom_no}%"))
+        if qty_min is not None:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.order_qty >= qty_min)
+        if qty_max is not None:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.order_qty <= qty_max)
+        if promised_from is not None:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.promised_date >= promised_from)
+        if promised_to is not None:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.promised_date <= promised_to)
+        if eta_from is not None:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.latest_material_eta >= eta_from)
+        if eta_to is not None:
+            extra_snapshot_conditions.append(ProductionOrderScheduleSnapshot.latest_material_eta <= eta_to)
+        snapshot_stats_base_conditions.extend(extra_snapshot_conditions)
         if risk_level:
             snapshot_stats_base_conditions.append(ProductionOrderScheduleSnapshot.risk_level == risk_level)
         if keyword:
@@ -6258,6 +6297,7 @@ async def list_todo_workbench(
                 ProductionOrderScheduleSnapshot.promised_date <= last_day,
                 snapshot_status_condition,
             ]
+            snapshot_base_conditions.extend(extra_snapshot_conditions)
             if risk_level:
                 snapshot_base_conditions.append(ProductionOrderScheduleSnapshot.risk_level == risk_level)
             if keyword:

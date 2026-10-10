@@ -124,6 +124,17 @@ class Settings(BaseSettings):
     wage_reminder_hour: int = 8
     wage_reminder_minute: int = 30
 
+    # 待排快照定时刷新(每天刷新当前及未来若干月的待排快照, 避免新订单不进排产池)
+    snapshot_refresh_enabled: bool = True
+    snapshot_refresh_hour: int = 3
+    snapshot_refresh_minute: int = 30
+    snapshot_refresh_months_ahead: int = 2  # 未来月数(含当月共 N+1 个月)
+    snapshot_refresh_limit: int = 500       # 单月最多刷新订单数(后端上限500)
+
+    # 已排产订单变更检测(出货计划/数量/UPPH 变更 -> 标记待重排)
+    change_detect_enabled: bool = True
+    change_detect_interval_hours: int = 1
+
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
