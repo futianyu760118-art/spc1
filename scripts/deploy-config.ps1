@@ -21,16 +21,16 @@ $DEPLOY_SERVERS = @(
         Role         = "full"
         EnvFile      = ".env"
     }
-    #@{
-    #    Name         = "app1"
-    #    Host         = "1.2.3.4"
-    #    User         = "ubuntu"
-    #    Pass         = ""
-    #    IdentityFile = ""
-    #    Path         = "/home/ubuntu/apps/hj-spc"
-    #    Role         = "app"
-    #    EnvFile      = ".env.app1"
-    #}
+    @{
+        Name         = "mac-server"
+        Host         = "192.168.0.127"
+        User         = "mac"
+        Pass         = ""
+        IdentityFile = "C:\Users\hjxsz\.ssh\id_ed25519"
+        Path         = "/Users/mac/hjgd-IM/docker/SPC"
+        Role         = "app"
+        EnvFile      = ".env.app1"
+    }
 )
 
 # ===== 旧单机配置（$DEPLOY_SERVERS 为空时使用，向后兼容）=====

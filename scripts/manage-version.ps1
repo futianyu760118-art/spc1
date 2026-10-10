@@ -138,7 +138,7 @@ if [ -z "$COMPOSE_FILE" ]; then COMPOSE_FILE=docker-compose-prod.yml; fi
 cp "versions/$V/$COMPOSE_FILE" "./$COMPOSE_FILE"
 docker compose -f "$COMPOSE_FILE" up -d
 docker compose -f "$COMPOSE_FILE" ps
-(for i in $(seq 1 20); do
+(for i in {1..20}; do
   if curl -s -o /dev/null http://localhost:18085/api/v1/common/ping; then echo BACKEND-OK; exit 0; fi
   sleep 3
 done
