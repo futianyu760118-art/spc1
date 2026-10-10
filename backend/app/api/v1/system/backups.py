@@ -94,6 +94,7 @@ async def list_records(
             "next_run": next_run.strftime("%Y-%m-%d %H:%M:%S") if next_run else None,
             "disk_free_bytes": free_bytes,
             "backup_dir": str(backup_dir),
+            "storage_backend": (get_settings().STORAGE_BACKEND or "local"),
         },
     })
 

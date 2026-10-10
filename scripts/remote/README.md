@@ -40,17 +40,18 @@ chmod +x /home/ubuntu/apps/hj-spc/backup-db.sh
 ## 迁移新服务器 checklist
 
 1. 新服务器装 Docker（含 compose 插件），配置 SSH 密钥，开放 18084/18085 端口
-2. 建目录：`mkdir -p /home/ubuntu/apps/hj-spc/{data/uploads,data/wecom_verify,data/postgres,backups}`
+2. 建目录：`mkdir -p /home/ubuntu/apps/hj-spc/{data/uploads,data/wecom_verify,data/postgres,data/minio,backups}`
 3. 本机执行一次完整部署（自动拉起 postgres/redis/backend/frontend 并初始化版本管理）：
    `powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteractive`
 4. 上传本目录两个文件（见"同步命令"）+ `chmod +x`（不装 cron；定时备份由系统「备份管理」负责，迁库后登录确认其定时配置已启用）
 5. `.env`（**不在仓库，含密码**）：从旧服务器拷贝 `/home/ubuntu/apps/hj-spc/.env`，
    或参照 `docker-compose-prod.yml` 的 environment 字段手工创建；
-   必须包含 `POSTGRES_PASSWORD` / `REDIS_PASSWORD`（compose 变量替换用）
+    必须包含 `POSTGRES_PASSWORD` / `REDIS_PASSWORD`（compose 变量替换用）；
+    启用 MinIO 存储时还需 `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` 与 `STORAGE_S3_*`
 6. 数据迁移：
    - 旧服务器先 `bash backup-db.sh` 出最新备份，scp 到新服务器后：
      `docker exec -i hj-spc-postgres pg_restore -U root -d spc_db --clean --if-exists --no-owner < backups/<文件>.dump`
-   - 上传文件目录 `data/uploads` 用 scp/rsync 整体迁移
+   - 上传文件目录 `data/uploads` 用 scp/rsync 整体迁移（S3 模式则为 `data/minio` 整个数据卷）
 7. 验证：前端 `http://<ip>:18084/` 200；经 nginx 的 `/api/v1/common/ping` 401（进程活）；
    登录接口返回 `code:0`
 

@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteracti
 
 ## 新增一台纯应用服务器
 
-1. 在 `$DEPLOY_SERVERS` 加一个条目：`Role = "app"`、`EnvFile` 指向新建的 env 文件（如 `.env.app1`，**不进仓库**，参照 `.env` 修改）
+1. 在 `$DEPLOY_SERVERS` 加一个条目：`Role = "app"`、`EnvFile` 指向新建的 env 文件（复制仓库根 `.env.app1.example` 模板，填好后保存为 `.env.app1`，**不进仓库**）
 2. `.env.app1` 关键项：
    - `DATABASE_URL` / `DATABASE_URL_SYNC`：指向 full 服务器（postgres 端口 15432）
    - `REDIS_URL`：指向 full 服务器（redis 端口 16379，密码同 `REDIS_PASSWORD`）

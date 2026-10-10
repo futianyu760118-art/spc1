@@ -183,7 +183,7 @@ if (-not $SkipUpload) {
 set -e
 export PATH=/opt/homebrew/bin:/usr/local/bin:$PATH
 cd __P__
-mkdir -p data/uploads data/wecom_verify
+mkdir -p data/uploads data/wecom_verify data/minio
 gunzip -f images.tar.gz
 docker load -i images.tar
 docker tag "spc-v2-backend:__V__" spc-v2-backend:latest

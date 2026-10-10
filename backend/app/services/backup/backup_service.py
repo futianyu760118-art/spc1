@@ -40,7 +40,7 @@ MAINTENANCE_WHITELIST_PREFIXES = (
 @dataclass
 class JobStep:
     name: str
-    status: str = "pending"  # pending / running / ok / fail
+    status: str = "pending"  # pending / running / ok / fail / skipped
 
 
 @dataclass
@@ -106,6 +106,10 @@ def _uploads_root() -> Path:
     return Path(get_settings().STORAGE_LOCAL_ROOT)
 
 
+def _storage_is_s3() -> bool:
+    return (get_settings().STORAGE_BACKEND or "local").lower() == "s3"
+
+
 class BackupService:
     """进程内 job 管理器：同一时刻仅允许一个备份/恢复 job（互斥锁）"""
 
@@ -145,7 +149,8 @@ class BackupService:
                 stale = result.scalars().all()
                 for record in stale:
                     (_backup_dir() / record.db_file).unlink(missing_ok=True)
-                    (_backup_dir() / record.uploads_file).unlink(missing_ok=True)
+                    if record.uploads_file:
+                        (_backup_dir() / record.uploads_file).unlink(missing_ok=True)
                     record.status = "failed"
                     record.error_message = ((record.error_message or "") + " [服务重启，备份任务中断已自动标记为失败]")[:2000]
                 if stale:
@@ -262,13 +267,15 @@ class BackupService:
         """备份执行体（调用方保证已持有互斥锁；恢复流程内的 safety 快照复用此入口）"""
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         db_file = _backup_dir() / f"spc_db-{stamp}.dump"
-        uploads_file = _backup_dir() / f"uploads-{stamp}.tar.gz"
+        # S3 模式下附件存于 MinIO，备份仅含数据库，不生成附件包文件
+        uploads_file = None if _storage_is_s3() else _backup_dir() / f"uploads-{stamp}.tar.gz"
         started = time.time()
 
         record_id: int | None = None
         try:
             async with AsyncSessionLocal() as db:
-                record = BackupRecord(record_name=stamp, db_file=db_file.name, uploads_file=uploads_file.name,
+                record = BackupRecord(record_name=stamp, db_file=db_file.name,
+                                      uploads_file=uploads_file.name if uploads_file else "",
                                       source=source, status="running", created_by=user_id)
                 db.add(record)
                 await db.commit()
@@ -295,40 +302,47 @@ class BackupService:
             )
             if rc != 0 or not db_file.exists() or db_file.stat().st_size < MIN_DUMP_BYTES:
                 db_file.unlink(missing_ok=True)
-                uploads_file.unlink(missing_ok=True)
+                if uploads_file:
+                    uploads_file.unlink(missing_ok=True)
                 await self._fail(job, f"pg_dump 失败: {out.strip()[:800]}", record_id, 1)
                 return
             job.steps[1].status = "ok"
             db_size = db_file.stat().st_size
             self._log(job, f"数据库备份完成（{db_size >> 20}MB）")
 
-            # 步骤2 uploads 打包
+            # 步骤2 uploads 打包（S3 模式跳过：附件存于 MinIO，备份仅含数据库）
             job.steps[2].status = "running"
-            uploads_root = _uploads_root()
-            if not uploads_root.exists():
-                db_file.unlink(missing_ok=True)
-                await self._fail(job, f"uploads 目录不存在: {uploads_root}", record_id, 2)
-                return
-            rc, out = await _run_cmd(
-                ["tar", "czf", str(uploads_file), "-C", str(uploads_root.parent), uploads_root.name]
-            )
-            if rc != 0 or not uploads_file.exists():
-                db_file.unlink(missing_ok=True)
-                uploads_file.unlink(missing_ok=True)
-                await self._fail(job, f"uploads 打包失败: {out.strip()[:800]}", record_id, 2)
-                return
-            job.steps[2].status = "ok"
-            uploads_size = uploads_file.stat().st_size
-            self._log(job, f"附件打包完成（{uploads_size >> 20}MB）")
+            if _storage_is_s3():
+                job.steps[2].status = "skipped"
+                uploads_size = 0
+                self._log(job, "附件存储于 MinIO（S3 模式），本备份不包含附件包")
+            else:
+                uploads_root = _uploads_root()
+                if not uploads_root.exists():
+                    db_file.unlink(missing_ok=True)
+                    await self._fail(job, f"uploads 目录不存在: {uploads_root}", record_id, 2)
+                    return
+                rc, out = await _run_cmd(
+                    ["tar", "czf", str(uploads_file), "-C", str(uploads_root.parent), uploads_root.name]
+                )
+                if rc != 0 or not uploads_file.exists():
+                    db_file.unlink(missing_ok=True)
+                    uploads_file.unlink(missing_ok=True)
+                    await self._fail(job, f"uploads 打包失败: {out.strip()[:800]}", record_id, 2)
+                    return
+                job.steps[2].status = "ok"
+                uploads_size = uploads_file.stat().st_size
+                self._log(job, f"附件打包完成（{uploads_size >> 20}MB）")
 
             # 备份文件含全库数据与附件，收紧权限（设计 §6.5）
             os.chmod(db_file, 0o600)
-            os.chmod(uploads_file, 0o600)
+            if uploads_file:
+                os.chmod(uploads_file, 0o600)
 
             # 步骤3 sha256 校验并落库
             job.steps[3].status = "running"
             db_sha = _sha256_file(db_file)
-            uploads_sha = _sha256_file(uploads_file)
+            uploads_sha = _sha256_file(uploads_file) if uploads_file else None
             duration = int(time.time() - started)
             async with AsyncSessionLocal() as db:
                 record = await db.get(BackupRecord, record_id)
@@ -379,7 +393,8 @@ class BackupService:
                 stale = await db.get(BackupRecord, stale_id)
                 if stale:
                     (_backup_dir() / stale.db_file).unlink(missing_ok=True)
-                    (_backup_dir() / stale.uploads_file).unlink(missing_ok=True)
+                    if stale.uploads_file:
+                        (_backup_dir() / stale.uploads_file).unlink(missing_ok=True)
                     stale.status = "deleted"
                     removed += 1
             if removed:
@@ -400,13 +415,14 @@ class BackupService:
             db_file = _backup_dir() / info["db_file"]
             uploads_file = _backup_dir() / info["uploads_file"]
             try:
-                # 0 预检：文件存在 + sha256 匹配，失败则不动任何数据
+                # 0 预检：文件存在 + sha256 匹配，失败则不动任何数据（S3 模式只校验库文件）
                 job.steps[0].status = "running"
-                if not db_file.exists() or not uploads_file.exists():
+                if not db_file.exists() or (not _storage_is_s3() and not uploads_file.exists()):
                     await self._fail(job, f"备份文件缺失: {info['db_file']} / {info['uploads_file']}", step_index=0)
                     return
                 if (_sha256_file(db_file) != (info.get("db_sha256") or "")
-                        or _sha256_file(uploads_file) != (info.get("uploads_sha256") or "")):
+                        or (not _storage_is_s3()
+                            and _sha256_file(uploads_file) != (info.get("uploads_sha256") or ""))):
                     await self._fail(job, "备份文件校验失败（sha256 不匹配），文件可能已损坏", step_index=0)
                     return
                 job.steps[0].status = "ok"
@@ -456,27 +472,31 @@ class BackupService:
                 self._log(job, "数据库恢复完成")
 
                 # 4 附件恢复：清空挂载点内容后解包（/app/uploads 是 bind mount 挂载点，不能整目录 mv；
-                #    回退能力由步骤 1 的 safety 快照提供）
+                #    回退能力由步骤 1 的 safety 快照提供）。S3 模式跳过：附件存于 MinIO，不在备份包内
                 job.steps[4].status = "running"
-                uploads_root = _uploads_root()
-                if not uploads_root.exists():
-                    uploads_root.mkdir(parents=True, exist_ok=True)
+                if _storage_is_s3():
+                    job.steps[4].status = "skipped"
+                    self._log(job, "附件存储于 MinIO（S3 模式），仅恢复数据库")
                 else:
-                    for child in uploads_root.iterdir():
-                        if child.is_dir() and not child.is_symlink():
-                            shutil.rmtree(child)
-                        else:
-                            child.unlink(missing_ok=True)
-                self._log(job, "已清空现有附件目录内容")
-                rc, out = await _run_cmd(
-                    ["tar", "xzf", str(uploads_file), "-C", str(uploads_root), "--strip-components=1"]
-                )
-                if rc != 0 or not any(uploads_root.iterdir()):
-                    await self._fail(job, f"附件恢复失败: {out.strip()[:800]}", step_index=4)
-                    await self._best_effort_exit(job)
-                    return
-                job.steps[4].status = "ok"
-                self._log(job, "附件恢复完成")
+                    uploads_root = _uploads_root()
+                    if not uploads_root.exists():
+                        uploads_root.mkdir(parents=True, exist_ok=True)
+                    else:
+                        for child in uploads_root.iterdir():
+                            if child.is_dir() and not child.is_symlink():
+                                shutil.rmtree(child)
+                            else:
+                                child.unlink(missing_ok=True)
+                    self._log(job, "已清空现有附件目录内容")
+                    rc, out = await _run_cmd(
+                        ["tar", "xzf", str(uploads_file), "-C", str(uploads_root), "--strip-components=1"]
+                    )
+                    if rc != 0 or not any(uploads_root.iterdir()):
+                        await self._fail(job, f"附件恢复失败: {out.strip()[:800]}", step_index=4)
+                        await self._best_effort_exit(job)
+                        return
+                    job.steps[4].status = "ok"
+                    self._log(job, "附件恢复完成")
 
                 # 5 退出维护模式
                 job.steps[5].status = "running"
@@ -501,7 +521,8 @@ class BackupService:
     # ---------- 删除 ----------
     async def delete_backup_files(self, db_file: str, uploads_file: str) -> None:
         (_backup_dir() / db_file).unlink(missing_ok=True)
-        (_backup_dir() / uploads_file).unlink(missing_ok=True)
+        if uploads_file:
+            (_backup_dir() / uploads_file).unlink(missing_ok=True)
 
 
 backup_service = BackupService()

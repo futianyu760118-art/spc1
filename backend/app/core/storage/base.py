@@ -26,7 +26,10 @@ class StoredFile:
 
 
 class StorageBackend(ABC):
-    """所有存储后端共享接口"""
+    """所有存储后端共享接口
+
+    子类 __init__ 必须设置 self.url_prefix（get_url 依赖）。
+    """
 
     @abstractmethod
     def save(self, content: bytes, original_name: str, mime: str, namespace: str) -> StoredFile:
@@ -36,9 +39,9 @@ class StorageBackend(ABC):
     def delete(self, key: str) -> None:
         """按 key 删除文件，幂等（不存在不报错）"""
 
-    @abstractmethod
     def get_url(self, key: str) -> str:
-        """返回可访问 URL（本地直链 / S3 预签名）"""
+        """可访问 URL：{url_prefix}/{key}（本地直链 / S3 经代理路由转发）"""
+        return f"{self.url_prefix}/{key}"
 
     @abstractmethod
     def open(self, key: str) -> BinaryIO:
