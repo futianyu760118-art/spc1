@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Table, Input, Button, message, Row, Col, Card, DatePicker, Dropdown } from 'antd'
+import { Table, Input, Button, message, Row, Col, Card, DatePicker, Dropdown, Modal } from 'antd'
 import {
   SearchOutlined, ReloadOutlined, AccountBookOutlined,
   DollarOutlined, ExclamationCircleOutlined,
@@ -28,6 +28,11 @@ interface InvoiceDetail {
   paid_amount: number
 }
 
+interface OverdueMonthItem {
+  month: string
+  amount: number
+}
+
 interface SupplierPaymentRow {
   supplier_code: string
   supplier_name: string | null
@@ -39,6 +44,8 @@ interface SupplierPaymentRow {
   monthly_due: number | null
   payment_month: string | null
   invoices: InvoiceDetail[]
+  overdue_total: number | null
+  overdue_by_month: OverdueMonthItem[]
 }
 
 interface Summary {
@@ -70,6 +77,7 @@ export default function SupplierPayment() {
   const [sortOrder, setSortOrder] = useState<string>('')
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
   const [showCharts, setShowCharts] = useState(false)
+  const [overdueModal, setOverdueModal] = useState<{ supplierName: string; months: OverdueMonthItem[] } | null>(null)
   const { exporting, exportData } = useExport()
 
   const handleExport = (format: 'xlsx' | 'csv') => {
@@ -169,6 +177,27 @@ export default function SupplierPayment() {
           if (v == null) return <span style={{ color: '#cbd5e1' }}>-</span>
           const color = v > 0 ? '#e11d48' : '#16a34a'
           return <span style={{ fontFamily: 'monospace', fontWeight: 500, color }}>{v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+        },
+      },
+      {
+        title: '实际到期未付', dataIndex: 'overdue_total', width: 160, align: 'right' as const,
+        sorter: true, sortOrder: getSortOrder('overdue_total'),
+        render: (_: unknown, record: SupplierPaymentRow) => {
+          const v = record.overdue_total
+          if (!v) return <span style={{ color: '#cbd5e1' }}>0.00</span>
+          return (
+            <span>
+              <span style={{ fontFamily: 'monospace', fontWeight: 500, color: '#dc2626', marginRight: 8 }}>
+                {v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              <Button
+                size="small"
+                type="link"
+                style={{ padding: 0 }}
+                onClick={() => setOverdueModal({ supplierName: record.supplier_name || record.supplier_code, months: record.overdue_by_month || [] })}
+              >查看</Button>
+            </span>
+          )
         },
       },
     ]
@@ -354,7 +383,7 @@ export default function SupplierPayment() {
           columns={columns}
           loading={loading}
           size="small"
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1160 }}
           rowSelection={{
             selectedRowKeys,
             onChange: (keys: React.Key[]) => setSelectedRowKeys(keys as string[]),
@@ -405,6 +434,48 @@ export default function SupplierPayment() {
           }}
         />
       </div>
+
+      <Modal
+        open={!!overdueModal}
+        title={`实际到期未付明细 - ${overdueModal?.supplierName ?? ''}`}
+        footer={null}
+        onCancel={() => setOverdueModal(null)}
+        width={480}
+      >
+        <Table
+          rowKey="month"
+          dataSource={overdueModal?.months ?? []}
+          columns={[
+            {
+              title: '月份', dataIndex: 'month', width: 160,
+              render: (v: string) => {
+                const d = dayjs(v)
+                return d.isValid() ? d.format('YYYY年M月') : v
+              },
+            },
+            {
+              title: '金额', dataIndex: 'amount', align: 'right' as const,
+              render: (v: number) => (
+                <span style={{ fontFamily: 'monospace', fontWeight: 500, color: '#dc2626' }}>
+                  {v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              ),
+            },
+          ]}
+          size="small"
+          pagination={false}
+          summary={() => (
+            <Table.Summary.Row>
+              <Table.Summary.Cell index={0}><strong>合计</strong></Table.Summary.Cell>
+              <Table.Summary.Cell index={1} align="right">
+                <strong style={{ color: '#dc2626', fontFamily: 'monospace' }}>
+                  {(overdueModal?.months ?? []).reduce((s, m) => s + (m.amount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </strong>
+              </Table.Summary.Cell>
+            </Table.Summary.Row>
+          )}
+        />
+      </Modal>
     </div>
   )
 }
