@@ -73,6 +73,9 @@ docs/
 !README.md
 !backend/ERP_INTEGRATION.md
 
+# opencode 项目级技能（随仓库分发，供团队共用）
+!.opencode/skills/**
+
 # 临时压缩包
 *.tar
 
