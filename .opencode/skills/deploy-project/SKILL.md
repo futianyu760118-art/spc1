@@ -22,8 +22,9 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteracti
 ## 服务器拓扑与配置
 
 - 多台服务器配置在 `scripts/deploy-config.ps1` 的 `$DEPLOY_SERVERS` 数组（Name/Host/User/Pass/IdentityFile/Path/Role/EnvFile）。
-- `Role = full`：部署 postgres/redis/backend/frontend 全套（docker-compose-prod.yml，redis 发布 16379 供 app 服务器连接）。
+- `Role = full`：部署 postgres/redis/minio/backend/frontend 全套（docker-compose-prod.yml，redis 发布 16379、MinIO 发布 19000/19001 供 app 服务器连接）。
 - `Role = app`：只部署 backend/frontend（docker-compose-app.yml），`DATABASE_URL`/`REDIS_URL` 指向 full 服务器；每个 app 服务器必须有独立的 `EnvFile`（里面配置指向主库的连接串与不同的 `SERVER_ID`）。
+- 文件共享：所有服务器的 `STORAGE_BACKEND=s3`，上传文件统一存 full 服务器的 MinIO（app 服务器的 `STORAGE_S3_ENDPOINT` 填 `<主服务器IP>:19000`）。
 - 兼容旧单机配置：`$DEPLOY_SERVERS` 为空时回退 `$DEPLOY_REMOTE_HOST` 等旧变量，行为与旧版一致。
 - 默认部署数组中全部服务器；`-Servers main,app1` 只部署指定名称的服务器。
 
@@ -35,9 +36,11 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteracti
    - `REDIS_URL`：指向 full 服务器（redis 端口 16379，密码同 `REDIS_PASSWORD`）
    - `SERVER_ID`：每台唯一（如 `spc-app1`，记录在同步日志里）
    - `SECRET_KEY`：**与 full 服务器一致**（共库签发 JWT，不一致会导致跨实例 token 失效）
+   - `STORAGE_BACKEND=s3` + `STORAGE_S3_ENDPOINT=<主服务器IP>:19000`、`STORAGE_S3_ACCESS_KEY/SECRET_KEY` 与主服务器 `MINIO_ROOT_USER/PASSWORD` 一致（文件共享，否则跨服务器访问上传文件 404）
    - `ERP_SYNC_ENABLED=false`：ERP 同步只应在 full 服务器跑
    - `WRITEBACK_ENABLED` 留空：回写 Worker 只应在一台服务器开启
 3. 新服务器装 Docker、配置 SSH 密钥、开放 18084/18085，然后正常执行一键部署（bundle 已含 nginx.conf，首次部署自动写入）
+4. 主服务器从 `STORAGE_BACKEND=local` 切到 `s3` 时：主服务器 .env 只需填 `MINIO_ROOT_USER/PASSWORD` + `STORAGE_BACKEND=s3` + `STORAGE_S3_ENDPOINT=minio:9000`（S3 ACCESS/SECRET 留空自动复用 MinIO 凭据）；并把现有 `data/uploads` 存量文件迁移进 MinIO（`mc mirror`），否则旧文件 404
 
 ## 脚本行为（全自动，无需人工干预）
 
@@ -77,6 +80,7 @@ powershell -ExecutionPolicy Bypass -File scripts\manage-version.ps1 -Server app1
 
 ## 安全红线
 
-- `.env`（含数据库/Redis/ERP 密码）与 SSH 密钥**永不进仓库**、永不出现在汇报文本里。
+- `.env`（含数据库/Redis/ERP/MinIO 密码）与 SSH 密钥**永不进仓库**、永不出现在汇报文本里。
 - `deploy-config.ps1` 只填连接信息与文件路径；SSH 密码建议留空走密钥认证或手动输入。
+- 主服务器对公网暴露的 15432/16379/19000/19001 端口必须在云安全组限制来源（仅 app 服务器出口 IP）。
 - nginx.conf 权威源在 `scripts/remote/nginx.conf`（部署 bundle 只会在远程缺失时写入，不覆盖远程已手工配置的版本）。
