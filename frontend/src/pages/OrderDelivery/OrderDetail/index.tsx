@@ -58,6 +58,7 @@ interface BomDetailItem {
   invalid_date: string | null
   kit_flag: number | null
   req_qty: number | null
+  stock_qty: number | null
   level?: number
   bom_id?: string | null
   parent_material_id?: number | null
@@ -80,7 +81,7 @@ interface ProductMaterialGroup {
 
 const BOM_COLUMN_KEYS = [
   'line_no', 'material_code', 'material_name', 'spec_model', 'material_property', 'material_type',
-  'unit', 'standard_qty', 'req_qty', 'aux_qty', 'scrap_rate',
+  'unit', 'standard_qty', 'req_qty', 'stock_qty', 'aux_qty', 'scrap_rate',
   'config_type', 'lead_offset_days', 'back_flush', 'oper_sn', 'kit_flag',
   'valid_date', 'invalid_date',
 ] as const
@@ -95,6 +96,7 @@ const BOM_COLUMN_LABELS: Record<string, string> = {
   unit: '单位',
   standard_qty: '标准用量',
   req_qty: '需求量',
+  stock_qty: '即时库存',
   aux_qty: '辅助数量',
   scrap_rate: '损耗率',
   config_type: '配置类型',
@@ -433,6 +435,7 @@ export default function OrderDetail() {
     { title: '单位', dataIndex: 'unit', key: 'unit', width: 70 },
     { title: '标准用量', dataIndex: 'standard_qty', key: 'standard_qty', width: 100, render: (v: number | null) => v ?? '-' },
     { title: '需求量', dataIndex: 'req_qty', key: 'req_qty', width: 100, render: (v: number | null, r: BomDetailItem) => v != null ? `${v}${r.unit || ''}` : '-' },
+    { title: '即时库存', dataIndex: 'stock_qty', key: 'stock_qty', width: 90, render: (v: number | null) => v != null ? <span style={{ color: '#0ea5e9' }}>{v}</span> : <span style={{ color: '#cbd5e1' }}>-</span> },
     { title: '辅助数量', dataIndex: 'aux_qty', key: 'aux_qty', width: 90, render: (v: number | null) => v ?? '-' },
     { title: '损耗率', dataIndex: 'scrap_rate', key: 'scrap_rate', width: 90, render: (v: number | null) => v != null ? `${v}` : '-' },
     { title: '配置类型', dataIndex: 'config_type', key: 'config_type', width: 100, render: (v: string | null) => v || '-' },

@@ -6,11 +6,12 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.basicdata.bom import Bom
 from app.models.basicdata.bom_detail import BomDetail
+from app.models.basicdata.inventory import Inventory
 from app.models.basicdata.material import Material
 from app.models.material.binding import OrderMaterialPoBinding
 from app.models.material.material_demand import MaterialDemand
@@ -68,6 +69,13 @@ def _sort_bom_tree(nodes: list[BomDetailItemOut]) -> None:
     for n in nodes:
         if n.children:
             _sort_bom_tree(n.children)
+
+
+def _iter_bom_nodes(nodes: list[BomDetailItemOut]):
+    for node in nodes:
+        yield node
+        if node.children:
+            yield from _iter_bom_nodes(node.children)
 
 
 @dataclass
@@ -283,6 +291,21 @@ def _kit_met(status: str, material_property: Optional[int]) -> bool:
     return status in ("fully_received", "in_stock")
 
 
+async def _attach_stock_qty(db: AsyncSession, nodes: list[BomDetailItemOut]) -> None:
+    """给 BOM 树各节点挂即时库存：按物料跨仓合计 qty_on_hand，无库存记录保持 None。"""
+    codes = {n.material_code for n in _iter_bom_nodes(nodes) if n.material_code}
+    if not codes:
+        return
+    result = await db.execute(
+        select(Inventory.material_code, func.sum(Inventory.qty_on_hand))
+        .where(Inventory.material_code.in_(codes))
+        .group_by(Inventory.material_code)
+    )
+    stock_by_code = {code: _to_float(qty) for code, qty in result.fetchall()}
+    for node in _iter_bom_nodes(nodes):
+        node.stock_qty = stock_by_code.get(node.material_code)
+
+
 async def get_order_product_materials(
     db: AsyncSession,
     order_no: str,
@@ -340,6 +363,7 @@ async def get_order_product_materials(
                 promised = pd
         merged_bom_id = bom_id_key or None
         tree = await _expand_bom_tree(db, merged_bom_id, total_qty)
+        await _attach_stock_qty(db, tree)
         result.append(OrderProductMaterialsOut(
             line_no=",".join(line_nos) if line_nos else None,
             product_code=first.product_code,
