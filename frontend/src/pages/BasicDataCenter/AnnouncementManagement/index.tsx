@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Table, Button, Modal, Form, Input, Select, message, Progress, Typography } from 'antd'
+import { Table, Button, Modal, Form, Input, Select, message, Progress, Typography, Tabs } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SendOutlined,
   ReloadOutlined, SearchOutlined, FileTextOutlined,
@@ -54,10 +54,62 @@ interface AnnStats {
   recent30: { published: number; notified: number; read: number; avg_read_rate: number }
 }
 
+interface ReadUser {
+  user_id: number
+  username: string
+  display_name: string
+  read_at?: string | null
+}
+
+interface ReadStatusData {
+  announcement_id: number
+  title: string
+  is_published: boolean
+  total: number
+  read: ReadUser[]
+  unread: ReadUser[]
+}
+
 const EmptyStats: AnnStats = { total: 0, published: 0, draft: 0, by_type: {}, by_priority: {}, recent30: { published: 0, notified: 0, read: 0, avg_read_rate: 0 } }
 
 const readRate = (r: AnnouncementRow) =>
   r.notified_count ? Math.round(((r.read_count || 0) * 100) / r.notified_count) : 0
+
+const readUserColumns: any[] = [
+  {
+    title: '用户名', dataIndex: 'username', key: 'username', width: 180,
+    render: (v: string) => <span className="sc-mono">{v}</span>,
+  },
+  {
+    title: '姓名', dataIndex: 'display_name', key: 'display_name', width: 160,
+    render: (v: string) => v || '—',
+  },
+  {
+    title: '已读时间', dataIndex: 'read_at', key: 'read_at',
+    render: (v: string) => <span className="sc-mono" style={{ color: '#64748b' }}>{v || '—'}</span>,
+  },
+]
+
+const unreadUserColumns: any[] = [
+  {
+    title: '用户名', dataIndex: 'username', key: 'username', width: 180,
+    render: (v: string) => <span className="sc-mono">{v}</span>,
+  },
+  {
+    title: '姓名', dataIndex: 'display_name', key: 'display_name', width: 160,
+    render: (v: string) => v || '—',
+  },
+]
+
+const filterUsers = (list: ReadUser[], keyword: string) => {
+  const kw = keyword.trim().toLowerCase()
+  if (!kw) return list
+  return list.filter(
+    (u) =>
+      (u.username || '').toLowerCase().includes(kw) ||
+      (u.display_name || '').toLowerCase().includes(kw)
+  )
+}
 
 export default function AnnouncementManagement() {
   const hasPermission = useAuthStore((s: any) => s.hasPermission)
@@ -81,6 +133,10 @@ export default function AnnouncementManagement() {
   const [urgent, setUrgent] = useState<AnnouncementRow | null>(null)
 
   const [viewItem, setViewItem] = useState<AnnouncementRow | null>(null)
+  const [readItem, setReadItem] = useState<AnnouncementRow | null>(null)
+  const [readDetail, setReadDetail] = useState<ReadStatusData | null>(null)
+  const [readLoading, setReadLoading] = useState(false)
+  const [readFilter, setReadFilter] = useState('')
   const [publishItem, setPublishItem] = useState<AnnouncementRow | null>(null)
   const [publishing, setPublishing] = useState(false)
   const [deleteItem, setDeleteItem] = useState<AnnouncementRow | null>(null)
@@ -136,6 +192,20 @@ export default function AnnouncementManagement() {
   }, [kwInput])
 
   const refreshAll = useCallback(() => { fetchData(); fetchStats() }, [fetchData, fetchStats])
+
+  const openReadDetail = useCallback(async (r: AnnouncementRow) => {
+    setReadItem(r)
+    setReadLoading(true)
+    setReadFilter('')
+    try {
+      const res: any = await announcementApi.readStatus(r.id)
+      setReadDetail(res.data || { announcement_id: r.id, title: r.title, is_published: r.is_published, total: 0, read: [], unread: [] })
+    } catch {
+      setReadDetail(null)
+    } finally {
+      setReadLoading(false)
+    }
+  }, [])
 
   const handleTableChange = (pag: any, _filters: any, sorter: any) => {
     const sortField = sorter.field
@@ -221,7 +291,7 @@ export default function AnnouncementManagement() {
     if (!r.is_published) return <span className="sc-note">—</span>
     if (!r.notified_count) return <span className="sc-note">已发布（通知记录保留期内）</span>
     return (
-      <span className="sys-read-cell">
+      <span className="sys-read-cell" style={{ cursor: 'pointer' }} title="查看已读 / 未读明细" onClick={() => openReadDetail(r)}>
         <Progress percent={readRate(r)} size="small" strokeColor={readRate(r) >= 90 ? '#16a34a' : '#d97706'} />
         <span className="n">{r.read_count} / {r.notified_count}</span>
       </span>
@@ -377,7 +447,14 @@ export default function AnnouncementManagement() {
         title="公告详情"
         open={!!viewItem}
         onCancel={() => setViewItem(null)}
-        footer={<Button onClick={() => setViewItem(null)}>关闭</Button>}
+        footer={
+          <>
+            {viewItem?.is_published && (
+              <Button onClick={() => openReadDetail(viewItem!)}>已读详情</Button>
+            )}
+            <Button type="primary" onClick={() => setViewItem(null)}>关闭</Button>
+          </>
+        }
         width={680}
         rootClassName="sc-page"
       >
@@ -486,6 +563,69 @@ export default function AnnouncementManagement() {
             当前保存为草稿，可在列表「发布」；已发布公告不可再编辑。发布即推送全部用户站内通知。
           </div>
         </Form>
+      </Modal>
+
+      {/* 已读详情 */}
+      <Modal
+        title={`已读详情 · ${readDetail?.title || readItem?.title || ''}`}
+        open={!!readItem}
+        onCancel={() => setReadItem(null)}
+        footer={<Button type="primary" onClick={() => setReadItem(null)}>关闭</Button>}
+        width={760}
+        rootClassName="sc-page"
+      >
+        {readLoading ? (
+          <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>加载中…</div>
+        ) : !readDetail ? (
+          <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>暂无数据</div>
+        ) : (
+          <>
+            <div className="sys-pub-est" style={{ marginBottom: 14 }}>
+              <div className="pe"><div className="v">{readDetail.read.length}</div><div className="k">已读</div></div>
+              <div className="pe"><div className="v">{readDetail.unread.length}</div><div className="k">未读</div></div>
+              <div className="pe"><div className="v">{readDetail.total ? Math.round((readDetail.read.length * 100) / readDetail.total) : 0}%</div><div className="k">已读率</div></div>
+            </div>
+            <Input
+              allowClear
+              prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+              placeholder="按用户名 / 姓名筛选"
+              style={{ width: 260, marginBottom: 12 }}
+              value={readFilter}
+              onChange={(e) => setReadFilter(e.target.value)}
+            />
+            <Tabs
+              size="small"
+              items={[
+                {
+                  key: 'read',
+                  label: `已读 (${readDetail.read.length})`,
+                  children: (
+                    <Table
+                      rowKey="user_id"
+                      size="small"
+                      columns={readUserColumns}
+                      dataSource={filterUsers(readDetail.read, readFilter)}
+                      pagination={{ pageSize: 10, size: 'small', showTotal: (t: number) => `共 ${t} 人` }}
+                    />
+                  ),
+                },
+                {
+                  key: 'unread',
+                  label: `未读 (${readDetail.unread.length})`,
+                  children: (
+                    <Table
+                      rowKey="user_id"
+                      size="small"
+                      columns={unreadUserColumns}
+                      dataSource={filterUsers(readDetail.unread, readFilter)}
+                      pagination={{ pageSize: 10, size: 'small', showTotal: (t: number) => `共 ${t} 人` }}
+                    />
+                  ),
+                },
+              ]}
+            />
+          </>
+        )}
       </Modal>
     </div>
   )

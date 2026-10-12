@@ -372,6 +372,7 @@ class BomDetailItemOut(BaseModel):
     invalid_date: Optional[date] = None
     kit_flag: Optional[int] = None
     req_qty: Optional[float] = None
+    stock_qty: Optional[float] = None
     level: int = 1
     bom_id: Optional[str] = None
     parent_material_id: Optional[int] = None

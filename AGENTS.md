@@ -26,6 +26,16 @@ npm run build      # = tsc -b && vite build，唯一 typecheck，交付前必跑
 - 生产部署（部署脚本使用）：`docker compose -f docker-compose-prod.yml up -d` —— 自带 postgres/redis，backend :18085、frontend :18084。
 - backend 容器启动命令：生产为 `python init_database.py && uvicorn ...`（每次启动自动迁移）；本地 dev compose 只跑 uvicorn，需手动执行 `python init_database.py`。
 
+### 部署（Windows 本机，多服务器并行）
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteractive
+```
+
+- 服务器列表/角色（full=全套含 postgres/redis，app=仅应用连主库）/各台 .env 在 `scripts/deploy-config.ps1` 的 `$DEPLOY_SERVERS` 数组；`-Servers main,app1` 只部署部分，`-KeepRemoteEnv` 保留远程 .env。
+- 版本回退：`powershell -File scripts\manage-version.ps1 -Server <名称> list | rollback <版本名> | cleanup`。
+- `.env`（含数据库/Redis/ERP 密码）与 SSH 密钥永不进仓库。
+
 ### 默认账号
 
 密码均为 `admin123`：`admin`、`planner01`、`purchaser01`、`manager01`、`purchase_mgr01`。

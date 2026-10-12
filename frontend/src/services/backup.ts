@@ -42,6 +42,7 @@ export interface BackupStats {
   next_run: string | null
   disk_free_bytes: number | null
   backup_dir: string
+  storage_backend: string
 }
 
 async function unwrap<T>(p: Promise<any>): Promise<T> {

@@ -84,12 +84,13 @@ class Settings(BaseSettings):
         "text/plain",
         "text/csv",
     ]
-    # S3 / MinIO（占位）
-    STORAGE_S3_ENDPOINT: str = ""
-    STORAGE_S3_BUCKET: str = ""
+    # S3 / MinIO（STORAGE_BACKEND=s3 时生效）
+    STORAGE_S3_ENDPOINT: str = ""          # 不含协议头，例: minio:9000（compose 内）或 192.168.1.10:19000（跨机）
+    STORAGE_S3_BUCKET: str = "spc-files"
     STORAGE_S3_ACCESS_KEY: str = ""
     STORAGE_S3_SECRET_KEY: str = ""
     STORAGE_S3_REGION: str = ""
+    STORAGE_S3_SECURE: bool = False        # MinIO 内网 http 保持 False
 
     # AI Service
     AI_DEFAULT_PROVIDER: str = "rule_based"  # rule_based | openai | dashscope

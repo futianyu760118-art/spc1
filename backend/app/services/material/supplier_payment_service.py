@@ -115,9 +115,42 @@ def _compute_overdue_not_due(invoices: List[Dict[str, Any]]) -> Tuple[Decimal, D
     return overdue, not_due
 
 
+def _compute_overdue_by_month(invoices: List[Dict[str, Any]]) -> Tuple[Decimal, List[Dict[str, Any]]]:
+    """按排款月分组计算已到期未付金额（口径与汇总「到期未付」一致）。
+
+    返回 (合计金额, [{'month': 'YYYY-MM', 'amount': Decimal}, ...])，月份升序。
+    """
+    current_month = datetime.now().strftime('%Y-%m')
+    month_map: Dict[str, Decimal] = {}
+    for inv in invoices:
+        inv_date = inv.get('invoice_date')
+        if not inv_date:
+            continue
+        pm = _compute_payment_month(inv_date, inv.get('payment_term'))
+        if not pm or pm >= current_month:
+            continue
+        remain = _effective_payable(inv)
+        if remain > 0:
+            month_map[pm] = month_map.get(pm, Decimal('0')) + remain
+    total = sum(month_map.values(), Decimal('0'))
+    return total, [{'month': m, 'amount': month_map[m]} for m in sorted(month_map)]
+
+
+def _attach_overdue(
+    items: List[Dict[str, Any]],
+    all_invoices_map: Dict[str, List[Dict[str, Any]]],
+) -> None:
+    """为每个聚合行附上 overdue_total 与 overdue_by_month。"""
+    for it in items:
+        total, month_items = _compute_overdue_by_month(all_invoices_map.get(it['supplier_code'], []))
+        it['overdue_total'] = total
+        it['overdue_by_month'] = month_items
+
+
 SORT_LABELS = {
     'supplier_code', 'supplier_name', 'invoice_date',
     'payment_term', 'payment_method', 'total_payable', 'monthly_due', 'monthly_bill', 'payment_month',
+    'overdue_total',
 }
 
 
@@ -434,6 +467,11 @@ def _format_item(item: Dict[str, Any]) -> Dict[str, Any]:
         'payment_month': item.get('payment_month'),
         'schedule_month': item.get('schedule_month'),
         'invoices': item.get('invoices', []),
+        'overdue_total': float(item.get('overdue_total', Decimal('0')).quantize(Decimal('0.01'))),
+        'overdue_by_month': [
+            {'month': m['month'], 'amount': float(m['amount'].quantize(Decimal('0.01')))}
+            for m in item.get('overdue_by_month', [])
+        ],
     }
 
 
@@ -465,9 +503,9 @@ async def get_supplier_payment_list(
     # 创建月到期应付金额映射
     monthly_map = {it['supplier_code']: it for it in monthly_items}
 
-    # 获取不在当前排款月的供应商的全部发票明细
-    not_in_month_codes = [s['supplier_code'] for s in all_suppliers if s['supplier_code'] not in monthly_map]
-    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name, sync_filters)
+    # 获取所有供应商的全部发票明细（用于非当月供应商的行明细与已到期未付计算）
+    all_codes = [s['supplier_code'] for s in all_suppliers]
+    all_invoices_map = await _get_supplier_all_invoices(db, all_codes, supplier_name, exact_supplier_name, sync_filters)
 
     # 合并数据：所有供应商都要显示，月到期应付金额从映射中获取
     items = []
@@ -509,6 +547,9 @@ async def get_supplier_payment_list(
 
     # 回填总应付金额
     await _fill_total_payable(db, items, supplier_name, exact_supplier_name, sync_filters)
+
+    # 附上已到期未付合计与月度明细
+    _attach_overdue(items, all_invoices_map)
 
     items = [_format_item(it) for it in items]
 
@@ -623,6 +664,7 @@ EXPORT_COLUMNS = [
     ExportColumn('payment_month', '排款月', 12),
     ExportColumn('total_payable', '总应付金额', 14),
     ExportColumn('monthly_due', '月到期应付金额', 16),
+    ExportColumn('overdue_total', '实际到期未付', 14),
 ]
 
 
@@ -654,9 +696,9 @@ async def get_supplier_payment_export(
     # 创建月到期应付金额映射
     monthly_map = {it['supplier_code']: it for it in monthly_items}
 
-    # 获取不在当前排款月的供应商的全部发票明细
-    not_in_month_codes = [s['supplier_code'] for s in all_suppliers if s['supplier_code'] not in monthly_map]
-    all_invoices_map = await _get_supplier_all_invoices(db, not_in_month_codes, supplier_name, exact_supplier_name, sync_filters)
+    # 获取所有供应商的全部发票明细（用于非当月供应商的行明细与已到期未付计算）
+    all_codes = [s['supplier_code'] for s in all_suppliers]
+    all_invoices_map = await _get_supplier_all_invoices(db, all_codes, supplier_name, exact_supplier_name, sync_filters)
 
     # 合并数据：所有供应商都要显示，月到期应付金额从映射中获取
     items = []
@@ -699,6 +741,9 @@ async def get_supplier_payment_export(
     # 回填总应付金额
     await _fill_total_payable(db, items, supplier_name, exact_supplier_name, sync_filters)
 
+    # 附上已到期未付合计与月度明细
+    _attach_overdue(items, all_invoices_map)
+
     items = [_format_item(it) for it in items]
 
     # 排序
@@ -719,6 +764,7 @@ async def get_supplier_payment_export(
             'payment_month': it.get('payment_month') or '',
             'total_payable': it.get('total_payable', 0),
             'monthly_due': it.get('monthly_due', 0),
+            'overdue_total': it.get('overdue_total', 0),
         })
 
     svc = GenericExportService(EXPORT_COLUMNS, export_rows, sheet_name='供应商付款排程')

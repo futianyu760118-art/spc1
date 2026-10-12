@@ -18,6 +18,8 @@ class Inventory(Base):
     wh_name = Column(String(50), nullable=True, comment="仓库名称")
     location_id = Column(Integer, nullable=True, comment="库位ID(外部系统)")
     location_name = Column(String(100), nullable=True, comment="库位名称")
+    manual_location_id = Column(Integer, nullable=True, comment="手动库位ID(用户覆盖ERP库位)")
+    manual_location_name = Column(String(100), nullable=True, comment="手动库位名称")
     qty_on_hand = Column(Numeric(15, 2), nullable=False, default=0, comment="库存量")
     locked_qty = Column(Numeric(15, 2), nullable=False, default=0, comment="锁定数量")
     balance_qty = Column(Numeric(15, 2), nullable=False, default=0, comment="结存数量")

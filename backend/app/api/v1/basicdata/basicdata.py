@@ -21,7 +21,7 @@ from app.schemas.basicdata.schemas import (
     SKUCreate, SKUUpdate, SKUOut,
     ProductCreate, ProductUpdate, ProductOut,
     WarehouseCreate, WarehouseUpdate, WarehouseOut,
-    LocationCreate, LocationUpdate, LocationOut,
+    LocationCreate, LocationUpdate, LocationOut, InventoryLocationUpdate,
     ProcessCreate, ProcessUpdate, ProcessOut,
     OrganizationCreate, OrganizationUpdate, OrganizationOut, OrganizationTreeNode, OrganizationWithLeaderOut,
     PositionOut,
@@ -2191,8 +2191,10 @@ async def list_inventory(
             "wh_id": inv.wh_id,
             "wh_code": inv.wh_code,
             "wh_name": inv.wh_name,
-            "location_id": inv.location_id,
-            "location_name": inv.location_name,
+            "location_id": inv.manual_location_id if inv.manual_location_id is not None else inv.location_id,
+            "location_name": inv.manual_location_name or inv.location_name,
+            "erp_location_name": inv.location_name,
+            "is_location_manual": inv.manual_location_id is not None,
             "qty_on_hand": float(inv.qty_on_hand) if inv.qty_on_hand else 0,
             "locked_qty": float(inv.locked_qty) if inv.locked_qty else 0,
             "balance_qty": float(inv.balance_qty) if inv.balance_qty else 0,
@@ -2227,6 +2229,79 @@ async def list_inventory(
             "total_materials": int(total_materials or 0),
             "counted_materials": int(counted_materials or 0),
         },
+    })
+
+
+async def _resolve_inventory_manual_location(db: AsyncSession, location_id: Optional[int], location_name: Optional[str]) -> tuple[int, str]:
+    """解析库存行手动库位：按 ID 校验 / 按名称匹配现有库位 / 自动建档，返回 (location_id, location_name)。"""
+    if location_id is not None:
+        row = (await db.execute(
+            select(Location).where(Location.location_id == location_id, Location.is_deleted == 0)
+        )).scalar_one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="库位不存在")
+        return row.location_id, row.location_name or ""
+
+    name = (location_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="库位名称不能为空")
+    row = (await db.execute(
+        select(Location).where(
+            func.lower(Location.location_name) == name.lower(),
+            Location.is_deleted == 0,
+        ).limit(1)
+    )).scalars().first()
+    if row:
+        return row.location_id, row.location_name or ""
+
+    min_id = (await db.execute(select(func.min(Location.location_id)).where(Location.location_id < 0))).scalar()
+    new_id = -1 if min_id is None else min_id - 1
+    new_location = Location(
+        location_id=new_id,
+        location_code=name,
+        location_name=name,
+        location_full_name=name,
+        depth=0,
+        detail_flag=1,
+        parent_id=None,
+        is_deleted=0,
+        system_type=0,
+        data_source="manual",
+    )
+    db.add(new_location)
+    await db.flush()
+    return new_location.location_id, new_location.location_name
+
+
+@router.put("/inventory/{inventory_id}/location", response_model=ResponseModel[dict])
+async def update_inventory_location(
+    inventory_id: int,
+    payload: InventoryLocationUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(PermissionChecker("basicdata.data.inventory", "update")),
+):
+    """手动维护库存行库位：覆盖 ERP 库位显示；location_name 与 location_id 均为空时恢复 ERP 原库位。"""
+    result = await db.execute(select(Inventory).where(Inventory.id == inventory_id))
+    inv = result.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(status_code=404, detail="库存记录不存在")
+
+    if payload.location_name is None and payload.location_id is None:
+        manual_location_id, manual_location_name = None, None
+    else:
+        manual_location_id, manual_location_name = await _resolve_inventory_manual_location(
+            db, payload.location_id, payload.location_name
+        )
+    update_data = {"manual_location_id": manual_location_id, "manual_location_name": manual_location_name}
+    await log_audit(db, "inventory", inv.id, "update", old_obj=inv, update_data=update_data, operator=current_user["username"])
+    inv.manual_location_id = manual_location_id
+    inv.manual_location_name = manual_location_name
+    return ResponseModel(data={
+        "id": inv.id,
+        "location_id": inv.manual_location_id if inv.manual_location_id is not None else inv.location_id,
+        "location_name": inv.manual_location_name or inv.location_name,
+        "erp_location_name": inv.location_name,
+        "is_location_manual": inv.manual_location_id is not None,
     })
 
 
@@ -2544,7 +2619,7 @@ async def export_inventory(
             "unit_of_measure": unit_map.get(inv.material_id, ""),
             "wh_code": inv.wh_code or "",
             "wh_name": inv.wh_name or "",
-            "location_name": inv.location_name or "",
+            "location_name": (inv.manual_location_name or inv.location_name) or "",
             "qty_on_hand": float(inv.qty_on_hand) if inv.qty_on_hand else 0,
             "locked_qty": float(inv.locked_qty) if inv.locked_qty else 0,
             "balance_qty": float(inv.balance_qty) if inv.balance_qty else 0,

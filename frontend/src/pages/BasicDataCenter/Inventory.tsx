@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Table, Button, Input, InputNumber, message, Space, Tabs, Tag, Tooltip, Popover, Checkbox, Select, DatePicker, Segmented, Card } from 'antd'
+import { Table, Button, Input, InputNumber, message, Space, Tabs, Tag, Tooltip, Popover, Checkbox, Select, DatePicker, Segmented, Card, Modal } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, SettingOutlined, HolderOutlined,
   InfoCircleOutlined, DownloadOutlined,
@@ -12,6 +12,7 @@ import { useExport } from '../../hooks/useExport'
 import { useTableScrollY } from '../../hooks/useTableScrollY'
 import dayjs from 'dayjs'
 import ExportColumnSelector, { type ExportColumnOption } from '../../components/ExportColumnSelector'
+import PermButton from '../../components/PermButton'
 
 
 interface InventoryItem {
@@ -23,7 +24,9 @@ interface InventoryItem {
   wh_code: string
   wh_name: string
   location_id: number | null
-  location_name: string
+  location_name: string | null
+  erp_location_name?: string | null
+  is_location_manual?: boolean
   qty_on_hand: number
   locked_qty: number
   balance_qty: number
@@ -582,6 +585,125 @@ function useRecentDaysDebounce(days: number, reload: () => void) {
 }
 
 /** 库存明细：物料 x 仓库 x 库位 */
+const NEW_LOCATION_PREFIX = 'new:'
+
+/** 改库位弹窗：下拉搜索已有库位，输入新名称则自动建档；已手动改过的行可恢复 ERP 原库位 */
+function LocationEditModal({
+  row, onClose, onSaved,
+}: {
+  row: InventoryItem | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [options, setOptions] = useState<{ value: number; label: string }[]>([])
+  const [search, setSearch] = useState('')
+  const [value, setValue] = useState<string | number | undefined>(undefined)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!row) return
+    setOptions([])
+    setSearch('')
+    setValue(undefined)
+    setSaving(false)
+  }, [row])
+
+  useEffect(() => {
+    if (!row) return
+    const t = setTimeout(async () => {
+      try {
+        const res: any = await api.get('/basicdata/locations', { params: { keyword: search || undefined, page_size: 100 } })
+        setOptions((res.data?.items || []).map((l: any) => ({ value: l.location_id, label: l.location_name || String(l.location_id) })))
+      } catch { /* ignore */ }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [search, row]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const newName = search.trim()
+  const hasNewOption = !!newName && !options.some((o) => o.label === newName)
+
+  const handleSave = async () => {
+    if (!row || saving) return
+    let payload: Record<string, unknown>
+    if (typeof value === 'string' && value.startsWith(NEW_LOCATION_PREFIX)) {
+      payload = { location_name: value.slice(NEW_LOCATION_PREFIX.length) }
+    } else if (typeof value === 'number') {
+      payload = { location_id: value }
+    } else {
+      message.warning('请选择或输入库位名称')
+      return
+    }
+    setSaving(true)
+    try {
+      await api.put(`/basicdata/inventory/${row.id}/location`, payload)
+      message.success('库位已更新')
+      onSaved()
+    } catch { /* 错误已由全局拦截器提示 */ } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleRestore = async () => {
+    if (!row || saving) return
+    setSaving(true)
+    try {
+      await api.put(`/basicdata/inventory/${row.id}/location`, { location_name: null })
+      message.success('已恢复 ERP 原库位')
+      onSaved()
+    } catch { /* 错误已由全局拦截器提示 */ } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="改库位"
+      open={!!row}
+      onCancel={onClose}
+      onOk={handleSave}
+      confirmLoading={saving}
+      okText="保存"
+      width={440}
+    >
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px', marginBottom: 12, fontSize: 13 }}>
+        <span style={{ color: '#94a3b8' }}>物料</span>
+        <span>{row?.material_code} {row?.material_name}</span>
+        <span style={{ color: '#94a3b8' }}>仓库</span>
+        <span>{row?.wh_code} {row?.wh_name}</span>
+        <span style={{ color: '#94a3b8' }}>当前库位</span>
+        <span>
+          {row?.location_name || '-'}
+          {row?.is_location_manual && <Tag color="geekblue" style={{ marginInlineStart: 6 }}>已改</Tag>}
+        </span>
+      </div>
+      <Select
+        showSearch
+        style={{ width: '100%' }}
+        placeholder="选择已有库位，或输入新库位名称"
+        filterOption={false}
+        value={value}
+        onChange={setValue}
+        onSearch={setSearch}
+        notFoundContent="输入名称即可新建库位"
+        options={[
+          ...options.map((o) => ({ value: o.value, label: o.label })),
+          ...(hasNewOption ? [{ value: `${NEW_LOCATION_PREFIX}${newName}`, label: `新建库位「${newName}」` }] : []),
+        ]}
+      />
+      <div style={{ marginTop: 8, fontSize: 12, color: '#94a3b8' }}>
+        ERP 同步不会覆盖手工修改的库位；恢复后库位随 ERP 同步更新。
+      </div>
+      {row?.is_location_manual && (
+        <div style={{ marginTop: 8 }}>
+          <Button danger size="small" loading={saving} onClick={handleRestore}>
+            恢复 ERP 原库位（{row.erp_location_name || '-'}）
+          </Button>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
 function InventoryDetail() {
   const fontSizeScale = useThemeStore(s => s.fontSizeScale)
   const [data, setData] = useState<InventoryItem[]>([])
@@ -645,6 +767,7 @@ function InventoryDetail() {
   })
   const { exporting, exportData } = useExport()
   const [exportColumnModalOpen, setExportColumnModalOpen] = useState(false)
+  const [editRow, setEditRow] = useState<InventoryItem | null>(null)
   const tableWrapRef = useRef<HTMLDivElement | null>(null)
   const scrollY = useTableScrollY(tableWrapRef, [data.length, pagination.total])
 
@@ -759,7 +882,14 @@ function InventoryDetail() {
     { title: '单位', dataIndex: 'unit_of_measure', key: 'unit_of_measure', width: 60, align: 'center' as const },
     { title: '仓库编码', dataIndex: 'wh_code', key: 'wh_code', width: 100, sorter: true, filters: optList(filterOptions.wh_codes), filterSearch: true },
     { title: '仓库名称', dataIndex: 'wh_name', key: 'wh_name', width: 120, filters: optList(filterOptions.wh_names), filterSearch: true },
-    { title: '库位名称', dataIndex: 'location_name', key: 'location_name', width: 120, ellipsis: true },
+    {
+      title: '库位名称', dataIndex: 'location_name', key: 'location_name', width: 120, ellipsis: true,
+      render: (v: string | null, r: InventoryItem) => r.is_location_manual ? (
+        <Tooltip title={`ERP 原库位：${r.erp_location_name || '-'}`}>
+          <span>{v || '-'} <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>已改</Tag></span>
+        </Tooltip>
+      ) : (v || '-'),
+    },
     qtyColumn(qtyFilter ?? undefined, applyQtyFilter, 100),
     { title: '锁定数量', dataIndex: 'locked_qty', key: 'locked_qty', width: 100, align: 'right' as const, sorter: true, render: numFmt },
     { title: '结存数量', dataIndex: 'balance_qty', key: 'balance_qty', width: 100, align: 'right' as const, sorter: true, render: numFmt },
@@ -782,6 +912,20 @@ function InventoryDetail() {
     {
       title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 160, sorter: true,
       render: (v: string) => (v ? new Date(v).toLocaleString('zh-CN') : '-'),
+    },
+    {
+      title: '操作', key: 'action', width: 90, align: 'center' as const, fixed: 'right' as const,
+      render: (_: unknown, r: InventoryItem) => (
+        <PermButton
+          permResource="basicdata.data.inventory"
+          permAction="update"
+          type="link"
+          size="small"
+          onClick={() => setEditRow(r)}
+        >
+          改库位
+        </PermButton>
+      ),
     },
   ]
   const allKeys = allColumns.map(c => c.key)
@@ -813,7 +957,7 @@ function InventoryDetail() {
           columns={columns}
           dataSource={data}
           loading={loading}
-          scroll={{ x: 2150, y: scrollY }}
+          scroll={{ x: 2240, y: scrollY }}
           size="small"
           onChange={handleTableChange}
           pagination={{
@@ -830,6 +974,12 @@ function InventoryDetail() {
         columns={DETAIL_EXPORT_OPTIONS}
         onConfirm={handleExportConfirm}
         onCancel={() => setExportColumnModalOpen(false)}
+      />
+
+      <LocationEditModal
+        row={editRow}
+        onClose={() => setEditRow(null)}
+        onSaved={() => { setEditRow(null); fetchData(pagination.current, pagination.pageSize) }}
       />
     </div>
   )

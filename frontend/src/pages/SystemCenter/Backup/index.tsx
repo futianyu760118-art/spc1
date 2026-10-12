@@ -78,27 +78,32 @@ function explainFailure(raw: string): { summary: string; detail: string | null }
 }
 
 const STEP_STATUS_MAP: Record<string, 'wait' | 'process' | 'finish' | 'error'> = {
-  pending: 'wait', running: 'process', ok: 'finish', fail: 'error',
+  pending: 'wait', running: 'process', ok: 'finish', skipped: 'finish', fail: 'error',
 }
 
 const EMPTY_JOB: BackupJobVo = { job_id: '', type: 'backup', status: 'running', steps: [], logs: [], result: null }
 
-/** 备份范围说明（口径与 backup_service 实际行为一致：pg_dump 全库 + uploads 打包，其余不落备份） */
-const BACKUP_SCOPE_TIP = (
-  <div style={{ maxWidth: 320 }}>
-    <div><b>备份包含</b></div>
-    <ul style={{ paddingLeft: 18, margin: '4px 0 8px' }}>
-      <li>数据库：PostgreSQL 全库（业务数据、系统配置、账号与权限）</li>
-      <li>附件：uploads 目录全部上传文件（图纸、文档等）</li>
-      <li>每份备份 = 库 + 附件双文件，均记录 sha256 校验和，恢复前自动校验</li>
-    </ul>
-    <div><b>备份不包含</b></div>
-    <ul style={{ paddingLeft: 18, margin: '4px 0' }}>
-      <li>服务器环境与密钥配置（.env、部署文件），需另行在服务器侧备份</li>
-      <li>Redis 缓存数据（登录黑名单等临时数据，可自动重建）</li>
-    </ul>
-  </div>
-)
+/** 备份范围说明（口径与 backup_service 实际行为一致：pg_dump 全库 + uploads 打包（S3 模式无），其余不落备份） */
+function backupScopeTip(storageBackend: string | undefined) {
+  const isS3 = storageBackend === 's3'
+  return (
+    <div style={{ maxWidth: 320 }}>
+      <div><b>备份包含</b></div>
+      <ul style={{ paddingLeft: 18, margin: '4px 0 8px' }}>
+        <li>数据库：PostgreSQL 全库（业务数据、系统配置、账号与权限）</li>
+        {isS3
+          ? <li>附件：存储于 MinIO，备份仅含数据库（附件可靠性由 MinIO 保障）</li>
+          : <li>附件：uploads 目录全部上传文件（图纸、文档等）</li>}
+        <li>每份备份 = 库{isS3 ? '' : ' + 附件双'}文件，均记录 sha256 校验和，恢复前自动校验</li>
+      </ul>
+      <div><b>备份不包含</b></div>
+      <ul style={{ paddingLeft: 18, margin: '4px 0' }}>
+        <li>服务器环境与密钥配置（.env、部署文件），需另行在服务器侧备份</li>
+        <li>Redis 缓存数据（登录黑名单等临时数据，可自动重建）</li>
+      </ul>
+    </div>
+  )
+}
 
 export default function BackupPage() {
   const hasPermission = useAuthStore((s: any) => s.hasPermission) as (r: string, a: string) => boolean
@@ -300,8 +305,8 @@ export default function BackupPage() {
               <Button size="small" disabled={!ok} icon={<DatabaseOutlined />}
                 onClick={() => downloadBackup(r.id, 'db', r.db_file)} />
             </Tooltip>
-            <Tooltip title="下载附件包">
-              <Button size="small" disabled={!ok} icon={<FileZipOutlined />}
+            <Tooltip title={r.uploads_file ? '下载附件包' : '附件存于 MinIO，不在备份包内'}>
+              <Button size="small" disabled={!ok || !r.uploads_file} icon={<FileZipOutlined />}
                 onClick={() => downloadBackup(r.id, 'uploads', r.uploads_file)} />
             </Tooltip>
             <Tooltip title="恢复">
@@ -342,7 +347,7 @@ export default function BackupPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div style={{ color: 'var(--text-secondary, #888)', fontSize: 12 }}>
           数据库 + 附件双文件备份；恢复将回滚到所选时间点（自动先打安全快照）。
-          <Tooltip title={BACKUP_SCOPE_TIP}>
+          <Tooltip title={backupScopeTip(stats?.storage_backend)}>
             <span style={{ marginLeft: 6, color: '#1677ff', cursor: 'help' }}>
               <QuestionCircleOutlined /> 备份范围
             </span>
@@ -419,7 +424,7 @@ export default function BackupPage() {
             current={currentStep}
             items={job.steps.map((s) => ({
               title: s.name,
-              description: stepDesc[s.name],
+              description: s.status === 'skipped' ? '附件存储于 MinIO，本备份不包含附件包' : stepDesc[s.name],
               status: STEP_STATUS_MAP[s.status] || 'wait',
               icon: s.status === 'running' ? <LoadingOutlined /> : undefined,
             }))}

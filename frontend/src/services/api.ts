@@ -776,6 +776,7 @@ export const announcementApi = {
   update: (id: number, data: Record<string, any>) => api.put(`/basicdata/announcements/${id}`, data),
   remove: (id: number) => api.delete(`/basicdata/announcements/${id}`),
   publish: (id: number) => api.post(`/basicdata/announcements/${id}/publish`),
+  readStatus: (id: number) => api.get(`/basicdata/announcements/${id}/read-status`),
 }
 
 // ============ 通知中心 ============

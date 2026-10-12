@@ -21,6 +21,29 @@ services:
     image: redis:7-alpine
     container_name: hj-spc-redis
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    ports:
+      # 发布端口供纯应用服务器（docker-compose-app.yml）连接主服务器 Redis
+      - "16379:6379"
+
+  minio:
+    image: minio/minio:latest
+    container_name: hj-spc-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      TZ: Asia/Shanghai
+    ports:
+      # 9000 API 供纯应用服务器 backend 连接（内网需放行）；9001 控制台
+      - "19000:9000"
+      - "19001:9001"
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   backend:
     image: spc-v2-backend:latest
@@ -40,6 +63,13 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       STORAGE_BACKEND: ${STORAGE_BACKEND:-local}
       STORAGE_LOCAL_ROOT: ${STORAGE_LOCAL_ROOT:-/app/uploads}
+      STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-spc-files}
+      # 留空时自动复用 MinIO 容器凭据（MINIO_ROOT_USER/PASSWORD）
+      STORAGE_S3_ACCESS_KEY: ${STORAGE_S3_ACCESS_KEY:-${MINIO_ROOT_USER}}
+      STORAGE_S3_SECRET_KEY: ${STORAGE_S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD}}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION:-}
+      STORAGE_S3_SECURE: ${STORAGE_S3_SECURE:-false}
       # AI Service Configuration
       AI_DEFAULT_PROVIDER: ${AI_DEFAULT_PROVIDER:-rule_based}
       AI_OPENAI_API_KEY: ${AI_OPENAI_API_KEY}
@@ -67,6 +97,7 @@ services:
     depends_on:
       - postgres
       - redis
+      - minio
     command: >
       sh -c "python init_database.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
