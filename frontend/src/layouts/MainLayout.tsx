@@ -59,7 +59,6 @@ import { usePageTitle } from '../hooks'
 import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
 import AppTabs, { TabbedContent } from './AppTabs'
 import { useTabsStore } from '../store/tabs'
-import { appHistory } from '../utils/appHistory'
 import { contentRoutes } from '../router/contentRoutes'
 import { resolveCrumb, pathMatches, type PermissionAwareItem } from './navUtils'
 
@@ -757,16 +756,16 @@ export default function MainLayout() {
     if (bellOpen) fetchNotifList()
   }, [bellOpen, fetchNotifList])
 
+  // URL → 页签同步：每次 location 变化都跑一次（幂等）——
+  // 首次挂载（登录后 replace 进入时 navigationType 是 REPLACE 而非 POP）与
+  // 浏览器前进/后退（POP）都由它兜底；PUSH/REPLACE 场景下拦截层已完成
+  // openTab/replaceTo/syncActiveUrl，此处 key 相同会直接早退。
+  // 注意不能用 appHistory.listen：@remix-run/router 的 history 只允许一个监听器，
+  // 该席位已被 unstable_HistoryRouter 占用，再 listen 会抛 "A history only accepts one active listener"
   useEffect(() => {
     if (isShareUser()) return
-    const { syncFromUrl } = useTabsStore.getState()
-    syncFromUrl(appHistory.location.pathname, appHistory.location.search)
-    const unlisten = appHistory.listen(({ location: loc, action }) => {
-      if (action !== 'POP') return
-      useTabsStore.getState().syncFromUrl(loc.pathname, loc.search)
-    })
-    return unlisten
-  }, [isShareUser])
+    useTabsStore.getState().syncFromUrl(location.pathname, location.search)
+  }, [isShareUser, location])
 
   useEffect(() => {
     if (currentUser && 'is_default_password' in currentUser && currentUser.is_default_password) {
