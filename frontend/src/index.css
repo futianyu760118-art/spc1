@@ -309,6 +309,79 @@ body {
   .tbv2-avatar { padding: 3px; }
 }
 
+/* ===== 应用内页签栏 ===== */
+.app-tabs-bar {
+  height: 40px;
+  background: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  position: sticky;
+  top: 52px;
+  z-index: 8;
+}
+.app-tabs-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.app-tabs-scroll::-webkit-scrollbar { display: none; }
+.app-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px 0 12px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #64748b;
+  cursor: pointer;
+  flex-shrink: 0;
+  max-width: 200px;
+  font-size: calc(12px * var(--font-size-scale));
+  white-space: nowrap;
+}
+.app-tab:hover { background: #e2e8f0; }
+.app-tab.active {
+  background: #eef2ff;
+  color: #4f46e5;
+  font-weight: 600;
+}
+.app-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.app-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 10px;
+  color: #94a3b8;
+}
+.app-tab-close:hover { background: #cbd5e1; color: #0f172a; }
+.app-tabs-more {
+  width: 28px;
+  height: 28px;
+  margin-left: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.app-tabs-more:hover { background: #f1f5f9; }
+
 /* ===== 全局搜索 Command Palette 弹层 ===== */
 .gs-modal .ant-modal-wrap { overflow: hidden; }
 .gs-modal .ant-modal { padding-bottom: 0; }

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
-import { Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { Routes, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, List, Tag, Typography, notification as antNotification } from 'antd'
 import {
   DashboardOutlined,
@@ -57,16 +57,13 @@ import GlobalSearch from '../components/GlobalSearch/GlobalSearch'
 import FontSizeSetting from '../components/FontSizeSetting'
 import { usePageTitle } from '../hooks'
 import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
+import AppTabs, { TabbedContent } from './AppTabs'
+import { useTabsStore } from '../store/tabs'
+import { appHistory } from '../utils/appHistory'
+import { contentRoutes } from '../router/contentRoutes'
+import { resolveCrumb, pathMatches, type PermissionAwareItem } from './navUtils'
 
 const { Sider, Content } = Layout
-
-type PermissionAwareItem = {
-  key: string
-  icon?: React.ReactNode
-  label: string
-  permission?: string
-  children?: PermissionAwareItem[]
-}
 
 // 模块 code → 图标映射（数据库不存储图标，由前端约定）
 const MODULE_ICON_MAP: Record<string, React.ReactNode> = {
@@ -387,11 +384,6 @@ function toAntdItems(items: PermissionAwareItem[]): any[] {
   }))
 }
 
-// 当前路径是否命中菜单项（精确或子路径，如 /orders/SO-123 命中 /orders）
-function pathMatches(key: string, pathname: string): boolean {
-  return pathname === key || pathname.startsWith(key + '/')
-}
-
 // 菜单树中当前激活的叶子项 key
 function findActiveKey(items: PermissionAwareItem[], pathname: string): string | null {
   for (const item of items) {
@@ -400,20 +392,6 @@ function findActiveKey(items: PermissionAwareItem[], pathname: string): string |
       if (found) return found
     } else if (pathMatches(item.key, pathname)) {
       return item.key
-    }
-  }
-  return null
-}
-
-// 面包屑：一级分组名 + 当前页名（顶级页面 root 固定为「供应链中台」）
-type CrumbInfo = { root: string; page: string }
-function findCrumb(items: PermissionAwareItem[], pathname: string, rootLabel?: string): CrumbInfo | null {
-  for (const item of items) {
-    if (item.children && item.children.length > 0) {
-      const found = findCrumb(item.children, pathname, rootLabel || item.label)
-      if (found) return found
-    } else if (pathMatches(item.key, pathname)) {
-      return { root: rootLabel || '供应链中台', page: item.label }
     }
   }
   return null
@@ -780,6 +758,17 @@ export default function MainLayout() {
   }, [bellOpen, fetchNotifList])
 
   useEffect(() => {
+    if (isShareUser()) return
+    const { syncFromUrl } = useTabsStore.getState()
+    syncFromUrl(appHistory.location.pathname, appHistory.location.search)
+    const unlisten = appHistory.listen(({ location: loc, action }) => {
+      if (action !== 'POP') return
+      useTabsStore.getState().syncFromUrl(loc.pathname, loc.search)
+    })
+    return unlisten
+  }, [isShareUser])
+
+  useEffect(() => {
     if (currentUser && 'is_default_password' in currentUser && currentUser.is_default_password) {
       setForcePwdDismissable(false)
       setForcePwdModalOpen(true)
@@ -848,21 +837,7 @@ export default function MainLayout() {
     return gk ? [gk] : []
   }, [location.pathname, dynamicPathToGroupKey])
 
-  const crumb = useMemo(() => {
-    const extraPageNames: Record<string, string> = {
-      '/profile': '个人中心',
-    }
-    // 不在菜单叶子下的动态详情路由（标题与面包屑共用回退）
-    const extraPagePrefixes: Array<[string, string]> = [
-      ['/approvals/items/', '审批详情'],
-    ]
-    const matched = findCrumb(navTree, location.pathname)
-    if (matched) return matched
-    const exact = extraPageNames[location.pathname]
-    if (exact) return { root: '供应链中台', page: exact }
-    const prefixHit = extraPagePrefixes.find(([p]) => location.pathname.startsWith(p))
-    return { root: '供应链中台', page: prefixHit ? prefixHit[1] : '' }
-  }, [navTree, location.pathname])
+  const crumb = useMemo(() => resolveCrumb(navTree, location.pathname), [navTree, location.pathname])
 
   // 浏览器标签标题跟随当前页（菜单 label 为单一来源），新标签打开的页面可凭标题区分
   usePageTitle(crumb.page || crumb.root)
@@ -1050,6 +1025,8 @@ export default function MainLayout() {
           </div>
         </div>
 
+        {!isShareUser() && <AppTabs navTree={navTree} />}
+
         <Modal
           title="安全提醒 — 请修改默认密码"
           open={forcePwdModalOpen}
@@ -1093,7 +1070,11 @@ export default function MainLayout() {
 
         <Content style={{ padding: '20px 24px 32px' }}>
           {canViewCurrentPage ? (
-            <Outlet />
+            isShareUser() ? (
+              <Routes>{contentRoutes}</Routes>
+            ) : (
+              <TabbedContent />
+            )
           ) : (
             <Result
               status="403"

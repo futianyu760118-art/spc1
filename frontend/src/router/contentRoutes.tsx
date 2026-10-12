@@ -1,0 +1,207 @@
+import {Route, Navigate} from 'react-router-dom'
+import Dashboard from '../pages/Dashboard/index'
+import OrderList from '../pages/OrderDelivery/OrderList/index'
+import RunOrderList from '../pages/OrderDelivery/RunOrderList/index'
+import DomesticOrders from '../pages/OrderDelivery/DomesticOrders/index'
+import DomesticShipment from '../pages/OrderDelivery/DomesticShipment/index'
+import OrderRiskPool from '../pages/OrderDelivery/OrderRiskPool/index'
+import PurchasePlan from '../pages/MaterialCenter/PurchasePlan/index'
+import MaterialIssues from '../pages/MaterialCenter/MaterialIssues/index'
+import LongLeadMaterials from '../pages/MaterialCenter/LongLeadMaterials/index'
+import KitAnalysis from '../pages/MaterialCenter/KitAnalysis/index'
+import SupplierRisk from '../pages/MaterialCenter/SupplierRisk/index'
+import SupplierPayment from '../pages/MaterialCenter/SupplierPayment/index'
+import OrderDetail from '../pages/OrderDelivery/OrderDetail/index'
+import StockCheck from '../pages/MaterialCenter/StockCheck/index'
+import StockCheckWorkbench from '../pages/MaterialCenter/StockCheck/Workbench'
+import QuickCount from '../pages/MaterialCenter/StockCheck/QuickCount'
+import StockCheckAudit from '../pages/MaterialCenter/StockCheckAudit'
+import TaskStockCoverage from '../pages/MaterialCenter/TaskStockCoverage'
+import SubcontractOrders from '../pages/MaterialCenter/SubcontractOrders/index'
+import ScrapInventory from '../pages/MaterialCenter/ScrapInventory'
+import MaterialOccupancy from '../pages/MaterialCenter/MaterialOccupancy'
+import MrpWorkbench from '../pages/MaterialCenter/MrpWorkbench/index'
+import PurchaseRequisitionList from '../pages/MaterialCenter/PurchaseRequisition/index'
+import PurchaseRequisitionDetail from '../pages/MaterialCenter/PurchaseRequisition/detail'
+import ExceptionPool from '../pages/ExceptionCenter/ExceptionPool/index'
+import QualityIssues from '../pages/ExceptionCenter/QualityIssues/index'
+import ProductSamples from '../pages/ExceptionCenter/ProductSamples/index'
+import ClosureTracking from '../pages/ExceptionCenter/ClosureTracking/index'
+import DataImport from '../pages/BasicDataCenter/DataIntegration/index'
+import {
+    RiskRules,
+    NodeStandards,
+    OrderStandards,
+    WorkInstructions
+} from '../pages/RulesCenter'
+import {
+    UserManagement,
+    AuditLog,
+    SyncSqlConfig,
+    FeedbackManagement,
+    FileManagement,
+    AnnouncementManagement,
+    RoleManagement,
+    PermissionManagement,
+    DataSupply,
+    ShareManagement
+} from '../pages/BasicDataCenter'
+import WritebackConfig from '../pages/BasicDataCenter/WritebackConfig'
+import Backup from '../pages/SystemCenter/Backup'
+import WritebackMonitor from '../pages/WritebackMonitor/index'
+import Notifications from '../pages/Notifications'
+import Profile from '../pages/Profile'
+import Customers from '../pages/BasicDataCenter/Customers'
+import Suppliers from '../pages/BasicDataCenter/Suppliers'
+import SupplierMaterialMap from '../pages/BasicDataCenter/SupplierMaterialMap'
+import Materials from '../pages/BasicDataCenter/Materials'
+import SKUs from '../pages/BasicDataCenter/SKUs'
+import Products from '../pages/BasicDataCenter/Products'
+import Warehouses from '../pages/BasicDataCenter/Warehouses'
+import Processes from '../pages/BasicDataCenter/Processes'
+import Organizations from '../pages/BasicDataCenter/Organizations'
+import Positions from '../pages/BasicDataCenter/Positions'
+import Employees from '../pages/BasicDataCenter/Employees'
+import Locations from '../pages/BasicDataCenter/Locations'
+import Inventory from '../pages/BasicDataCenter/Inventory'
+import ProductionOverview from '../pages/ProductionCenter/ProductionOverview/index'
+import Dashboard372 from '../pages/ProductionCenter/Dashboard372/index'
+import SchedulePlans from '../pages/ProductionCenter/SchedulePlans/index'
+import TodoWorkbench from '../pages/ProductionCenter/TodoWorkbench/index'
+import ChangeEvents from '../pages/ProductionCenter/ChangeEvents/index'
+import ScheduleBoard from '../pages/ProductionCenter/ScheduleBoard/index'
+import FrontProcess from '../pages/ProductionCenter/FrontProcess/index'
+import SMT from '../pages/ProductionCenter/SMT/index'
+import Lean from '../pages/ProductionCenter/Lean/index'
+import LeanManagement from '../pages/ProductionCenter/Lean/management'
+import Assembly from '../pages/ProductionCenter/Assembly/index'
+import Packaging from '../pages/ProductionCenter/Packaging/index'
+import ProcessExceptions from '../pages/ProductionCenter/ProcessExceptions/index'
+import ProductProcessCapacity from '../pages/ProductionCenter/ProductProcessCapacity/index'
+import OrderWageLookup from '../pages/ProductionCenter/OrderWageLookup/index'
+import DailyReports from '../pages/ProductionCenter/DailyReports/index'
+import WorkshopDailyReportForm from '../pages/ProductionCenter/DailyReports/ReportForm'
+import ProductionReports from '../pages/ProductionCenter/ProductionReports/index'
+import PriceChangeList from '../pages/Purchase/PriceChange/list'
+import PriceChangeNew from '../pages/Purchase/PriceChange/new'
+import PriceChangeDetail from '../pages/Purchase/PriceChange/detail'
+import PriceChangePending from '../pages/Purchase/PriceChange/pending'
+import ApprovalConfig from '../pages/Purchase/PriceChange/config'
+import SupplierClaimList from '../pages/QualityCenter/SupplierClaims/list'
+import SupplierClaimNew from '../pages/QualityCenter/SupplierClaims/new'
+import SupplierClaimDetail from '../pages/QualityCenter/SupplierClaims/detail'
+import SupplierClaimPrint from '../pages/QualityCenter/SupplierClaims/print'
+import ApprovalPending from '../pages/ApprovalCenter/Pending'
+import ApprovalConfigs from '../pages/ApprovalCenter/Configs'
+import ApprovalItem from '../pages/ApprovalCenter/Item'
+import ApprovalCreate from '../pages/ApprovalCenter/Create'
+import ApprovalCreateForm from '../pages/ApprovalCenter/Create/FormPage'
+import SubjectBalances from '../pages/FinanceCenter/SubjectBalances/index'
+
+export const contentRoutes = (
+    <>
+        <Route index element={<Navigate to="/dashboard" replace/>}/>
+        <Route path="/profile" element={<Profile/>}/>
+        <Route path="/dashboard" element={<Dashboard/>}/>
+        <Route path="/orders" element={<OrderList/>}/>
+        <Route path="/run-orders" element={<RunOrderList/>}/>
+        <Route path="/domestic-orders" element={<DomesticOrders/>}/>
+        <Route path="/domestic-shipment" element={<DomesticShipment/>}/>
+        <Route path="/order-risk-pool" element={<OrderRiskPool/>}/>
+        <Route path="/purchase-plan" element={<PurchasePlan/>}/>
+        <Route path="/material-issues" element={<MaterialIssues/>}/>
+        <Route path="/long-lead-materials" element={<LongLeadMaterials/>}/>
+        <Route path="/stock-check" element={<StockCheck />} />
+        <Route path="/stock-check/:checkId" element={<StockCheckWorkbench />} />
+        <Route path="/stock-check-audit" element={<StockCheckAudit />} />
+        <Route path="/quick-stock-check" element={<QuickCount />} />
+        <Route path="/task-stock-check" element={<TaskStockCoverage />} />
+        <Route path="/subcontract-orders" element={<SubcontractOrders/>}/>
+        <Route path="/scrap-inventory" element={<ScrapInventory/>}/>
+        <Route path="/material-occupancy" element={<MaterialOccupancy/>}/>
+        <Route path="/mrp" element={<MrpWorkbench/>}/>
+        <Route path="/purchase-requisitions" element={<PurchaseRequisitionList/>}/>
+        <Route path="/purchase-requisitions/:id" element={<PurchaseRequisitionDetail/>}/>
+        <Route path="/kit-analysis" element={<KitAnalysis/>}/>
+        <Route path="/supplier-risk" element={<SupplierRisk/>}/>
+        <Route path="/supplier-payment" element={<SupplierPayment/>}/>
+        <Route path="/orders/:orderNo" element={<OrderDetail/>}/>
+        <Route path="/orders/:orderNo/lines/:lineNo" element={<OrderDetail/>}/>
+        <Route path="/issues" element={<ExceptionPool/>}/>
+        <Route path="/quality-issues" element={<QualityIssues/>}/>
+        <Route path="/product-samples" element={<ProductSamples/>}/>
+        <Route path="/closure-tracking" element={<ClosureTracking/>}/>
+        <Route path="/production" element={<Navigate to="/production-overview" replace/>}/>
+        <Route path="/production-overview" element={<ProductionOverview/>}/>
+        <Route path="/production-dashboard" element={<Dashboard372/>}/>
+        <Route path="/schedule-plans" element={<SchedulePlans/>}/>
+        <Route path="/todo-workbench" element={<TodoWorkbench/>}/>
+        <Route path="/change-events" element={<ChangeEvents/>}/>
+        <Route path="/schedule-board" element={<ScheduleBoard/>}/>
+        <Route path="/front-process" element={<FrontProcess/>}/>
+        <Route path="/smt" element={<SMT/>}/>
+        <Route path="/lean-today" element={<Lean/>}/>
+        <Route path="/lean" element={<Lean/>}/>
+        <Route path="/lean-management" element={<LeanManagement/>}/>
+        <Route path="/assembly" element={<Assembly/>}/>
+        <Route path="/packaging" element={<Packaging/>}/>
+        <Route path="/product-process-capacities" element={<ProductProcessCapacity/>}/>
+        <Route path="/order-wage-lookup" element={<OrderWageLookup/>}/>
+        <Route path="/process-exceptions" element={<ProcessExceptions/>}/>
+        <Route path="/daily-reports" element={<DailyReports/>}/>
+        <Route path="/production-reports" element={<ProductionReports/>}/>
+        <Route path="/daily-reports/new" element={<WorkshopDailyReportForm mode="create"/>}/>
+        <Route path="/daily-reports/:id/edit" element={<WorkshopDailyReportForm mode="edit"/>}/>
+        <Route path="/daily-reports/:id/view" element={<WorkshopDailyReportForm mode="view"/>}/>
+        <Route path="/import" element={<DataImport/>}/>
+        <Route path="/risk-rules" element={<RiskRules/>}/>
+        <Route path="/node-standards" element={<NodeStandards/>}/>
+        <Route path="/order-standards" element={<OrderStandards/>}/>
+        <Route path="/work-instructions" element={<WorkInstructions/>}/>
+        <Route path="/users" element={<UserManagement/>}/>
+        <Route path="/roles" element={<RoleManagement/>}/>
+        <Route path="/permissions" element={<PermissionManagement/>}/>
+        <Route path="/audit" element={<AuditLog/>}/>
+        <Route path="/backups" element={<Backup/>} key="backups"/>
+        <Route path="/share-management" element={<ShareManagement/>}/>
+        <Route path="/sync-config" element={<SyncSqlConfig/>}/>
+        <Route path="/writeback-config" element={<WritebackConfig/>}/>
+        <Route path="/writeback-monitor" element={<WritebackMonitor/>}/>
+        <Route path="/basicdata" element={<Navigate to="/basicdata/customers" replace/>}/>
+        <Route path="/masterdata" element={<Navigate to="/basicdata/customers" replace/>}/>
+        <Route path="/basicdata/customers" element={<Customers/>} key="customers"/>
+        <Route path="/basicdata/suppliers" element={<Suppliers/>} key="suppliers"/>
+        <Route path="/basicdata/supplier-material-map" element={<SupplierMaterialMap/>} key="supplier-material-map"/>
+        <Route path="/basicdata/materials" element={<Materials/>} key="materials"/>
+        <Route path="/basicdata/skus" element={<SKUs/>} key="skus"/>
+        <Route path="/basicdata/products" element={<Products/>} key="products"/>
+        <Route path="/basicdata/warehouses" element={<Warehouses/>} key="warehouses"/>
+        <Route path="/basicdata/processes" element={<Processes/>} key="processes"/>
+        <Route path="/basicdata/organizations" element={<Organizations/>} key="organizations"/>
+        <Route path="/basicdata/positions" element={<Positions/>} key="positions"/>
+        <Route path="/basicdata/employees" element={<Employees/>} key="employees"/>
+        <Route path="/basicdata/locations" element={<Locations />} key="locations" />
+        <Route path="/basicdata/inventory" element={<Inventory />} key="inventory" />
+        <Route path="/basicdata/feedback" element={<FeedbackManagement/>} key="feedback"/>
+        <Route path="/basicdata/files" element={<FileManagement/>} key="files"/>
+        <Route path="/basicdata/data-supply" element={<DataSupply/>} key="data-supply"/>
+        <Route path="/announcements" element={<AnnouncementManagement/>} key="announcements"/>
+        <Route path="/notifications" element={<Notifications/>} key="notifications"/>
+        <Route path="/purchase/price-change" element={<PriceChangeList/>}/>
+        <Route path="/purchase/price-change/new" element={<PriceChangeNew/>}/>
+        <Route path="/purchase/price-change/pending" element={<PriceChangePending/>}/>
+        <Route path="/purchase/price-change/config" element={<ApprovalConfig/>}/>
+        <Route path="/purchase/price-change/:id" element={<PriceChangeDetail/>}/>
+        <Route path="/quality/supplier-claims" element={<SupplierClaimList/>}/>
+        <Route path="/quality/supplier-claims/new" element={<SupplierClaimNew/>}/>
+        <Route path="/quality/supplier-claims/print/:id" element={<SupplierClaimPrint/>}/>
+        <Route path="/quality/supplier-claims/:id" element={<SupplierClaimDetail/>}/>
+        <Route path="/approvals/pending" element={<ApprovalPending/>}/>
+        <Route path="/approvals/configs" element={<ApprovalConfigs/>}/>
+        <Route path="/approvals/items/:bizType/:id" element={<ApprovalItem/>}/>
+        <Route path="/approvals/create" element={<ApprovalCreate/>}/>
+        <Route path="/approvals/create/:bizType" element={<ApprovalCreateForm/>}/>
+        <Route path="/approvals/create/:bizType/:id" element={<ApprovalCreateForm/>}/>
+        <Route path="/finance/subject-balances" element={<SubjectBalances/>} key="finance-subject-balances"/>
+    </>
+)

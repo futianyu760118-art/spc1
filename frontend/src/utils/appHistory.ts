@@ -1,7 +1,5 @@
 import { createBrowserHistory, parsePath, type BrowserHistory, type Path, type To } from '@remix-run/router'
-import { useUiPreferencesStore } from '../store/uiPreferences'
-
-export const NEW_TAB_NAV_FLAG = 'open_links_in_new_tab'
+import { useTabsStore } from '../store/tabs'
 
 function isLoginPath(pathname: string): boolean {
   return pathname === '/login' || pathname.startsWith('/login/')
@@ -17,8 +15,7 @@ function resolveTarget(to: To, currentPathname: string): Path {
   }
 }
 
-function shouldOpenInNewTab(target: Path, currentPathname: string): boolean {
-  if (!useUiPreferencesStore.getState().getFlag(NEW_TAB_NAV_FLAG, true)) return false
+function isCrossPage(target: Path, currentPathname: string): boolean {
   if (target.pathname === currentPathname) return false
   if (isLoginPath(currentPathname) || isLoginPath(target.pathname)) return false
   return true
@@ -31,21 +28,23 @@ export function createAppHistory(): BrowserHistory {
   const originalPush = history.push.bind(history)
   history.push = (to: To, state?: any) => {
     const target = resolveTarget(to, history.location.pathname)
-    if (shouldOpenInNewTab(target, history.location.pathname)) {
-      // 不能传 'noopener' 特性串：规范要求 noopener 时 window.open 恒返回 null，
-      // 会让弹窗拦截降级判断失效（新标签开了、本页也跟着跳）。
-      // 改为打开后手动置空 opener，同源下合法且安全等价
-      const win = window.open(
-        `${window.location.origin}${target.pathname}${target.search}${target.hash}`,
-        '_blank'
-      )
-      if (win) {
-        win.opener = null
-        return
-      }
-      // 弹窗拦截器可能拦掉非用户手势触发的 window.open（如异步保存后自动跳转），此时退回本页跳转保证不失效
+    if (isCrossPage(target, history.location.pathname)) {
+      useTabsStore.getState().openTab(target.pathname, target.search)
+    } else {
+      useTabsStore.getState().syncActiveUrl(target.pathname, target.search)
     }
     originalPush(to, state)
+  }
+  const originalReplace = history.replace.bind(history)
+  history.replace = (to: To, state?: any) => {
+    const target = resolveTarget(to, history.location.pathname)
+    const current = history.location
+    if (target.pathname !== current.pathname || target.search !== current.search) {
+      if (!isLoginPath(current.pathname) && !isLoginPath(target.pathname)) {
+        useTabsStore.getState().replaceTo(target.pathname, target.search)
+      }
+    }
+    originalReplace(to, state)
   }
   return history
 }
