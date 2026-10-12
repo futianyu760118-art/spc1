@@ -140,6 +140,54 @@ async def list_announcements(
     })
 
 
+# ---------- 公告已读明细 ----------
+@router.get("/{ann_id}/read-status", response_model=ResponseModel)
+async def announcement_read_status(
+    ann_id: int,
+    current_user: dict = Depends(PermissionChecker("announcements", "read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """公告阅读情况：通知到的人按 已读 / 未读 分组，附姓名与已读时间"""
+    result = await db.execute(select(Announcement).where(Announcement.id == ann_id))
+    ann = result.scalar_one_or_none()
+    if not ann:
+        raise HTTPException(status_code=404, detail="公告不存在")
+
+    rows = (await db.execute(
+        select(
+            Notification.user_id,
+            Notification.is_read,
+            Notification.read_at,
+            SysUser.username,
+            SysUser.display_name,
+        ).join(SysUser, SysUser.id == Notification.user_id)
+        .where(and_(Notification.ref_type == "announcement", Notification.ref_id == ann_id))
+        .order_by(Notification.id)
+    )).all()
+
+    read_list: list[dict] = []
+    unread_list: list[dict] = []
+    for uid, is_read, read_at, username, display_name in rows:
+        item = {"user_id": uid, "username": username, "display_name": display_name or username}
+        if is_read:
+            item["read_at"] = read_at.strftime("%Y-%m-%d %H:%M") if read_at else None
+            read_list.append(item)
+        else:
+            unread_list.append(item)
+
+    read_list.sort(key=lambda x: x.get("read_at") or "", reverse=True)
+    unread_list.sort(key=lambda x: x["username"] or "")
+
+    return ResponseModel(data={
+        "announcement_id": ann_id,
+        "title": ann.title,
+        "is_published": ann.is_published,
+        "total": len(rows),
+        "read": read_list,
+        "unread": unread_list,
+    })
+
+
 # ---------- 公告统计 ----------
 @router.get("/stats", response_model=ResponseModel[dict])
 async def announcement_stats(
