@@ -68,25 +68,26 @@ trap {
 $allServers = @(Get-DeployServers)
 
 # -Servers 筛选（按名称，默认全部）
-# 注意：PowerShell 变量不区分大小写，$Servers 参数先转存，避免与下方 $servers 数组同名互踩
+# 注意：PowerShell 变量不区分大小写，$Servers 参数有 [string] 类型约束，
+# 局部数组一律用 $targetServers，绝不能与参数同名（数组赋值会被强转成字符串）
 $serverFilter = $Servers
 if ($serverFilter) {
     $filterNames = @($serverFilter -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $available = (@($allServers | ForEach-Object { $_.Name }) -join ", ")
-    $servers = @()
+    $targetServers = @()
     foreach ($name in $filterNames) {
         $match = $allServers | Where-Object { $_.Name -eq $name }
         if (-not $match) { throw "找不到服务器: $name（可用: $available）" }
-        $servers += $match
+        $targetServers += $match
     }
 } else {
-    $servers = $allServers
+    $targetServers = $allServers
 }
 
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 
 # 每台服务器补全 EnvFile（空则用 -EnvFile 参数或仓库根 .env）
-foreach ($s in $servers) {
+foreach ($s in $targetServers) {
     if (-not $s.EnvFile) {
         $s.EnvFile = if ($EnvFile) { $EnvFile } else { Join-Path $RepoRoot ".env" }
     } elseif (-not [System.IO.Path]::IsPathRooted($s.EnvFile)) {
@@ -107,10 +108,10 @@ New-Item -ItemType Directory -Path (Join-Path $tmpDir "logs") | Out-Null
 $Version = ""
 $versionNum = 0
 if (-not $SkipUpload) {
-    $serverNames = (@($servers | ForEach-Object { $_.Name }) -join ", ")
+    $serverNames = (@($targetServers | ForEach-Object { $_.Name }) -join ", ")
     Write-Host "[1/6] 确定版本号（目标服务器: $serverNames）..."
     $lastNum = 0
-    foreach ($s in $servers) {
+    foreach ($s in $targetServers) {
         Initialize-DeploySsh -TempDir $tmpDir -Server $s
         Invoke-Remote "echo SSH-OK" | Out-Null
         $raw = Invoke-RemoteCapture "cat $($s.Path)/last_version.txt 2>/dev/null || echo EMPTY"
@@ -215,6 +216,7 @@ docker logs --tail 50 $(docker compose -f "$COMPOSE_FILE" ps -q backend 2>/dev/n
 exit 1)
 # 远程侧前端权威检查（不依赖操作者本机网络/代理）
 fcode=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:18084/ || echo 000)
+if [ "$fcode" != "200" ]; then fcode=$(curl -sk -o /dev/null -w '%{http_code}' https://localhost:18084/ || echo 000); fi
 if [ "$fcode" = "200" ]; then echo FRONTEND-OK; else echo "FRONTEND-BAD:$fcode"; docker compose -f "$COMPOSE_FILE" logs --tail 20 frontend; exit 1; fi
 # 清理旧版本：按目录名序号降序保留最近 5 个，当前运行版本不清理
 cur=$(cat current.txt 2>/dev/null || echo '')
@@ -231,7 +233,7 @@ echo DEPLOY-VERSIONED __V__
 
     $bundleFiles = @{}
     $remoteScripts = @{}
-    foreach ($s in $servers) {
+    foreach ($s in $targetServers) {
         $compose = Get-ComposeFileForRole -Role $s.Role
         $keepEnv = if ($KeepRemoteEnv) { "1" } else { "0" }
 
@@ -253,9 +255,9 @@ echo DEPLOY-VERSIONED __V__
     }
     Show-StepElapsed "3/6"
 
-    Write-Host "[4/6] 并行上传并部署到 $($servers.Count) 台服务器 ..."
+    Write-Host "[4/6] 并行上传并部署到 $($targetServers.Count) 台服务器 ..."
     $script:jobs = @()
-    foreach ($s in $servers) {
+    foreach ($s in $targetServers) {
         $jobTmp = Join-Path $tmpDir "jobs\$($s.Name)"
         New-Item -ItemType Directory -Path $jobTmp -Force | Out-Null
         $logFile = Join-Path $tmpDir "logs\$($s.Name).log"
@@ -348,12 +350,12 @@ echo DEPLOY-VERSIONED __V__
     Write-Host "[3/6] 跳过打包（SkipUpload 不上传，无需打包）"
     Write-Host "[4/6] 跳过上传 (SkipUpload=$SkipUpload) ..."
     Write-Host "[5/6] 仅远程启动 ..."
-    foreach ($s in $servers) {
+    foreach ($s in $targetServers) {
         $compose = Get-ComposeFileForRole -Role $s.Role
         Initialize-DeploySsh -TempDir $tmpDir -Server $s
         Invoke-Remote "export PATH=/opt/homebrew/bin:/usr/local/bin:`$PATH; cd $($s.Path) && docker compose -f $compose down && docker compose -f $compose up -d && docker compose -f $compose ps"
     }
-    $results = foreach ($s in $servers) {
+    $results = foreach ($s in $targetServers) {
         [pscustomobject]@{ Name = $s.Name; Role = $s.Role; Success = $true; Message = "已重启"; ElapsedSec = 0 }
     }
     Show-StepElapsed "5/6"
@@ -363,7 +365,7 @@ if (-not $SkipVerify) {
     Write-Host "[6/6] 验证 ..."
     foreach ($r in $results) {
         if (-not $r.Success) { continue }
-        $srv = $servers | Where-Object { $_.Name -eq $r.Name } | Select-Object -First 1
+        $srv = $targetServers | Where-Object { $_.Name -eq $r.Name } | Select-Object -First 1
         if (-not $srv) { continue }
         try {
             $resp = Invoke-WebRequest -UseBasicParsing -Uri "http://$($srv.Host):18084/" -TimeoutSec 10
@@ -385,7 +387,7 @@ if ($Version) { Write-Host "已部署版本: $Version（所有目标服务器）
 Write-Host ""
 Write-Host "===== 部署结果汇总 ====="
 $summaryTable = foreach ($r in $results) {
-    $srv = $servers | Where-Object { $_.Name -eq $r.Name } | Select-Object -First 1
+    $srv = $targetServers | Where-Object { $_.Name -eq $r.Name } | Select-Object -First 1
     [pscustomobject]@{
         服务器 = $r.Name
         角色   = if ($srv) { if ($srv.Role -eq "app") { "纯应用" } else { "全套" } } else { "-" }

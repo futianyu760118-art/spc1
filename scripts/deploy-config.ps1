@@ -84,7 +84,9 @@ function Get-DeployServers {
         if ($names.ContainsKey($s.Name)) { throw "服务器 Name 重复: $($s.Name)" }
         $names[$s.Name] = $true
     }
-    return ,$servers
+    # 注意：直接输出数组即可，管道枚举会自动展平一层；
+    # 不要用 `return ,$servers`（逗号包裹层会被管道剥掉，调用方拿到数组套数组）
+    return $servers
 }
 
 # 返回服务器角色对应的 compose 文件名
@@ -129,9 +131,17 @@ function Initialize-DeploySsh {
 }
 
 # 执行远程命令，退出码非 0 时抛错（需先 Initialize-DeploySsh 指定服务器）
+# 注意：native 命令的 stderr 在 EAP=Stop 下会变成终止错误（compose 进度输出也走 stderr），
+# 必须临时降级 EAP，否则输出流会被第一条 stderr 掐断
 function Invoke-Remote {
     param([Parameter(Mandatory = $true)][string]$Command)
-    & ssh @($script:DeploySshOpts + $script:DeployTarget + $Command)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & ssh @($script:DeploySshOpts + $script:DeployTarget + $Command) 2>&1
+    } finally {
+        $ErrorActionPreference = $prev
+    }
     if ($LASTEXITCODE -ne 0) { throw "远程命令失败 (exit=$LASTEXITCODE): $Command" }
 }
 
@@ -148,11 +158,17 @@ function Invoke-RemoteCapture {
     return $out
 }
 
-# 上传本地文件到远程
+# 上传本地文件到远程（stderr 并入 stdout，失败信息可见；EAP 降级防 stderr 掐断流）
 function Copy-ToRemote {
     param([Parameter(Mandatory = $true)][string]$LocalFile,
           [Parameter(Mandatory = $true)][string]$RemoteDest)
-    & scp @($script:DeploySshOpts + $LocalFile + "${script:DeployTarget}:${RemoteDest}")
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & scp @($script:DeploySshOpts + $LocalFile + "${script:DeployTarget}:${RemoteDest}") 2>&1
+    } finally {
+        $ErrorActionPreference = $prev
+    }
     if ($LASTEXITCODE -ne 0) { throw "scp 失败: $LocalFile -> ${script:DeployTarget}:${RemoteDest}" }
 }
 
@@ -180,6 +196,13 @@ function Invoke-RemoteScript {
         }
         return $out
     }
-    & ssh @($script:DeploySshOpts + $script:DeployTarget + $runCmd)
+    # 非 Capture 路径同样临时降级 EAP，防止 native stderr（compose 进度）掐断输出流
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & ssh @($script:DeploySshOpts + $script:DeployTarget + $runCmd) 2>&1
+    } finally {
+        $ErrorActionPreference = $prev
+    }
     if ($LASTEXITCODE -ne 0) { throw "远程脚本执行失败 (exit=$LASTEXITCODE)" }
 }
