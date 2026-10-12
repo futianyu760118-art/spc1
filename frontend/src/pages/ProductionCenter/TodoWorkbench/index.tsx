@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Col, DatePicker, Input, Row, Select, Space, Statistic, Table, Tag, Tooltip, message } from 'antd'
+import { Button, Col, DatePicker, Input, InputNumber, Row, Select, Space, Statistic, Table, Tag, Tooltip, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { ReloadOutlined, SearchOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { productionApi } from '../../../services/api'
 import { formatDate } from '../../../utils'
@@ -76,6 +76,23 @@ export default function TodoWorkbench() {
   const [todoStatusFilter, setTodoStatusFilter] = useState('all')
   const [bucketFilter, setBucketFilter] = useState('all')
   const [kitRiskFilter, setKitRiskFilter] = useState('all')
+  const [snapshotRefreshing, setSnapshotRefreshing] = useState(false)
+  // 表头列筛选
+  const [fOrderNo, setFOrderNo] = useState('')
+  const [fProductCode, setFProductCode] = useState('')
+  const [fBomNo, setFBomNo] = useState('')
+  const [fQtyMin, setFQtyMin] = useState<number | null>(null)
+  const [fQtyMax, setFQtyMax] = useState<number | null>(null)
+  const [fPromisedRange, setFPromisedRange] = useState<any>(null)
+  const [fEtaRange, setFEtaRange] = useState<any>(null)
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const setDebounced = (key: string, fn: (v: string) => void, value: string) => {
+    if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key])
+    debounceTimers.current[key] = setTimeout(() => { fn(value); setPage(1) }, 300)
+  }
+  useEffect(() => () => {
+    Object.values(debounceTimers.current).forEach((t) => clearTimeout(t))
+  }, [])
   const [stats, setStats] = useState<{ ready: number; pending: number; reschedule: number; missing_upph: number; bucket_counts?: Record<string, number> }>({ ready: 0, pending: 0, reschedule: 0, missing_upph: 0 })
 
   const load = useCallback(async () => {
@@ -91,6 +108,19 @@ export default function TodoWorkbench() {
       if (todoStatusFilter !== 'all') params.todo_status = todoStatusFilter
       if (bucketFilter !== 'all') params.schedule_bucket = bucketFilter
       if (kitRiskFilter !== 'all') params.kit_risk_level = kitRiskFilter
+      if (fOrderNo.trim()) params.order_no = fOrderNo.trim()
+      if (fProductCode.trim()) params.product_code = fProductCode.trim()
+      if (fBomNo.trim()) params.bom_no = fBomNo.trim()
+      if (fQtyMin != null) params.qty_min = fQtyMin
+      if (fQtyMax != null) params.qty_max = fQtyMax
+      if (fPromisedRange?.[0] && fPromisedRange?.[1]) {
+        params.promised_from = fPromisedRange[0].format('YYYY-MM-DD')
+        params.promised_to = fPromisedRange[1].format('YYYY-MM-DD')
+      }
+      if (fEtaRange?.[0] && fEtaRange?.[1]) {
+        params.eta_from = fEtaRange[0].format('YYYY-MM-DD')
+        params.eta_to = fEtaRange[1].format('YYYY-MM-DD')
+      }
 
       const res: any = await productionApi.getTodoWorkbench(params)
       setData(res.data?.items || [])
@@ -107,7 +137,22 @@ export default function TodoWorkbench() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, keyword, year, month, todoStatusFilter, bucketFilter, kitRiskFilter])
+  }, [page, pageSize, keyword, year, month, todoStatusFilter, bucketFilter, kitRiskFilter, fOrderNo, fProductCode, fBomNo, fQtyMin, fQtyMax, fPromisedRange, fEtaRange])
+
+  // 刷新快照: 按当月重新生成待排快照(补齐新进订单)。列表读的是快照表, 不刷新则新订单不出现。
+  const handleRefreshSnapshots = useCallback(async () => {
+    setSnapshotRefreshing(true)
+    try {
+      const res: any = await productionApi.refreshTodoSnapshots({ year, month, limit: 500 })
+      const d = res.data || {}
+      message.success(`快照已刷新：扫描 ${d.matched_total ?? 0} 条，更新 ${d.refreshed_total ?? 0} 条`)
+      await load()
+    } catch (error: any) {
+      // 错误已由全局拦截器提示
+    } finally {
+      setSnapshotRefreshing(false)
+    }
+  }, [year, month, load])
 
   useEffect(() => { load() }, [load])
 
@@ -124,19 +169,64 @@ export default function TodoWorkbench() {
     packaging: stats.bucket_counts?.packaging || 0,
   }), [stats])
 
+  const filterTitle = (text: string, control: any) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '2px 0' }}>
+      <span>{text}</span>
+      {control}
+    </div>
+  )
+
   const columns: ColumnsType<TodoRow> = useMemo(() => [
     {
-      title: '订单号',
+      title: filterTitle('订单号', (
+        <Input size="small" placeholder="订单号" value={fOrderNo} allowClear
+          onChange={(e) => { setFOrderNo(e.target.value); setDebounced('order_no', setFOrderNo, e.target.value) }} />
+      )),
       dataIndex: 'order_no',
       width: 150,
       fixed: 'left',
       render: (v: string) => renderCopyableText(v, '订单号'),
     },
     { title: '行号', dataIndex: 'line_no', width: 90, render: (v: string) => renderCopyableText(v, '行号') },
-    { title: '产品编码', dataIndex: 'product_code', width: 220, render: (v: string) => renderCopyableText(v, '产品编码') },
-    { title: 'BOM编码', dataIndex: 'bom_no', width: 160, ellipsis: true, render: (v: string) => renderCopyableText(v, 'BOM编码') },
-    { title: '数量', width: 90, render: (_: any, row: TodoRow) => row.order_qty ?? row.quantity ?? '-' },
-    { title: '出货计划', width: 110, render: (_: any, row: TodoRow) => formatDate(row.promised_date || row.source_promised_date) },
+    {
+      title: filterTitle('产品编码', (
+        <Input size="small" placeholder="产品编码" value={fProductCode} allowClear
+          onChange={(e) => { setFProductCode(e.target.value); setDebounced('product_code', setFProductCode, e.target.value) }} />
+      )),
+      dataIndex: 'product_code',
+      width: 220,
+      render: (v: string) => renderCopyableText(v, '产品编码'),
+    },
+    {
+      title: filterTitle('BOM编码', (
+        <Input size="small" placeholder="BOM编码" value={fBomNo} allowClear
+          onChange={(e) => { setFBomNo(e.target.value); setDebounced('bom_no', setFBomNo, e.target.value) }} />
+      )),
+      dataIndex: 'bom_no',
+      width: 170,
+      ellipsis: true,
+      render: (v: string) => renderCopyableText(v, 'BOM编码'),
+    },
+    {
+      title: filterTitle('数量', (
+        <div style={{ display: 'flex', gap: 4 }}>
+          <InputNumber size="small" placeholder="≥" value={fQtyMin} style={{ width: '50%' }}
+            onChange={(v) => { setFQtyMin(v as number | null); setPage(1) }} />
+          <InputNumber size="small" placeholder="≤" value={fQtyMax} style={{ width: '50%' }}
+            onChange={(v) => { setFQtyMax(v as number | null); setPage(1) }} />
+        </div>
+      )),
+      width: 130,
+      render: (_: any, row: TodoRow) => row.order_qty ?? row.quantity ?? '-',
+    },
+    {
+      title: filterTitle('出货计划', (
+        <DatePicker.RangePicker size="small" value={fPromisedRange} style={{ width: '100%' }}
+          onChange={(v) => { setFPromisedRange(v); setPage(1) }} />
+      )),
+      width: 140,
+      render: (_: any, row: TodoRow) => formatDate(row.promised_date || row.source_promised_date),
+    },
     {
       title: '齐套',
       width: 110,
@@ -154,7 +244,14 @@ export default function TodoWorkbench() {
         )
       },
     },
-    { title: '最晚ETA', width: 100, render: (_: any, row: TodoRow) => row.latest_material_eta ? formatDate(row.latest_material_eta) : '-' },
+    {
+      title: filterTitle('最晚ETA', (
+        <DatePicker.RangePicker size="small" value={fEtaRange} style={{ width: '100%' }}
+          onChange={(v) => { setFEtaRange(v); setPage(1) }} />
+      )),
+      width: 140,
+      render: (_: any, row: TodoRow) => row.latest_material_eta ? formatDate(row.latest_material_eta) : '-',
+    },
     { title: '排产段', width: 110, render: (_: any, row: TodoRow) => renderBucketTag(row) },
     {
       title: '状态',
@@ -313,6 +410,9 @@ export default function TodoWorkbench() {
                 </span>
                 <Button onClick={() => setBaseConditionOpen(true)}>基础条件</Button>
                 <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+                <Tooltip title="按当前月份重新生成待排快照（新进来的订单需刷新后才会出现）">
+                  <Button icon={<SyncOutlined />} loading={snapshotRefreshing} onClick={handleRefreshSnapshots}>刷新快照</Button>
+                </Tooltip>
                 <Tooltip title={selectedRows.filter(r => r.todo_kind === 'ready').length > 0 ? `批量排产 ${selectedRows.filter(r => r.todo_kind === 'ready').length} 条` : '请先勾选待排产订单'}>
                   <Button type="primary" icon={<ThunderboltOutlined />} disabled={selectedRows.filter(r => r.todo_kind === 'ready').length === 0} onClick={openBatchSchedule}>
                     批量排产

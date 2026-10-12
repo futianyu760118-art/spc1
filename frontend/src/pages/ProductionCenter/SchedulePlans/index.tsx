@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Alert, Badge, Button, Col, DatePicker, Descriptions, Drawer, Empty, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tabs, Tag, Tooltip, message, notification } from 'antd'
-import { ArrowUpOutlined, CheckCircleOutlined, ClockCircleOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { ArrowUpOutlined, CheckCircleOutlined, ClockCircleOutlined, DeleteOutlined, EditOutlined, ExclamationCircleOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { productionApi } from '../../../services/api'
 import { formatDate, formatDateTime } from '../../../utils'
@@ -2074,6 +2074,7 @@ export default function SchedulePlans() {
                 <Button onClick={openLeanPlanBoard}>只看精益计划</Button>
                 <Button onClick={openLeanRescheduleBoard}>只看精益待重排</Button>
                 <Button onClick={() => openOperationLogs()}>操作日志</Button>
+                <Button icon={<SyncOutlined />} onClick={handleDetectChanges}>检测变更</Button>
                 <Button icon={<ReloadOutlined />} onClick={() => { loadPlanBoard(true) }}>刷新</Button>
                 <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增计划</Button>
               </Space>
