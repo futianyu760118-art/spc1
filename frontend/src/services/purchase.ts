@@ -22,6 +22,7 @@ export const purchaseApi = {
   // 查询
   pending: () => api.get('/purchase/price-change/pending'),
   myApproved: (params?: Record<string, any>) => api.get('/purchase/price-change/my-approved', { params }),
+  syncK3Quote: (id: number) => api.post(`/purchase/price-change/${id}/sync-k3-quote`),
   lastPrice: (materialCode: string, supplierCode: string) =>
     api.get('/purchase/price-change/supplier-last-price', {
       params: { material_code: materialCode, supplier_code: supplierCode },

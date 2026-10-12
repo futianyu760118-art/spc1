@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Alert, Button, Input, Modal, Space, Table, Tabs, Tag, message } from 'antd'
+import { Alert, Button, Input, Modal, Space, Table, Tabs, Tag, message, Image } from 'antd'
 import { ReloadOutlined, DownloadOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons'
 import { purchaseApi } from '../../../services/purchase'
 import { useAuthStore } from '../../../store/auth'
@@ -351,7 +351,7 @@ export default function PriceChangePending() {
             <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
           ) : (
             <div style={{ textAlign: 'center' }}>
-              <img src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
+              <Image src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
             </div>
           )
         })()}
