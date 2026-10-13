@@ -32,15 +32,13 @@ export function createAppHistory(): BrowserHistory {
   history.push = (to: To, state?: any) => {
     const target = resolveTarget(to, history.location.pathname)
     if (shouldOpenInNewTab(target, history.location.pathname)) {
-      // 不能传 'noopener' 特性串：规范要求 noopener 时 window.open 恒返回 null，
-      // 会让弹窗拦截降级判断失效（新标签开了、本页也跟着跳）。
-      // 改为打开后手动置空 opener，同源下合法且安全等价
+      // 保留 opener: 置空 opener 会导致浏览器禁止该标签自我关闭
+      // (如审批完成后需要 window.close() 关掉页签)。同源自建应用, 保留 opener 可接受。
       const win = window.open(
         `${window.location.origin}${target.pathname}${target.search}${target.hash}`,
         '_blank'
       )
       if (win) {
-        win.opener = null
         return
       }
       // 弹窗拦截器可能拦掉非用户手势触发的 window.open（如异步保存后自动跳转），此时退回本页跳转保证不失效

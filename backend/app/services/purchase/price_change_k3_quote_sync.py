@@ -6,7 +6,7 @@
 
 字段映射(中台 -> K3):
   supplier_code -> t_Supplier.FNumber -> FSupID
-  material_code -> t_ICItem.FNumber   -> FItemID (FUnitID 取自 t_ICItem)
+  material_code -> t_ICItem.FNumber   -> FItemID (FUnitID 取采购单位 FOrderUnitID, 缺省回退基本单位 FUnitID)
   change_date   -> FQuoteTime / FLastModifiedDate
   new_price     -> FPrice
   order_qty / delivery_qty -> FStartQty / FEndQty
@@ -80,13 +80,15 @@ def _sync_quotes_sync(change: dict) -> dict:
             if not mc:
                 continue
             k3item = conn.execute(text(
-                "SELECT FItemID, FUnitID FROM k3sv.[AIS20161019115614].dbo.t_ICItem "
+                "SELECT FItemID, FUnitID, FOrderUnitID FROM k3sv.[AIS20161019115614].dbo.t_ICItem "
                 "WHERE FNumber = :mc AND FDeleted = 0"
             ), {"mc": mc}).first()
             if not k3item:
                 stats["missing_lookup"].append(mc)
                 continue
-            fitem, funit = int(k3item[0]), int(k3item[1] or 0)
+            # 报价单位取「采购单位」FOrderUnitID（与历史报价一致）；缺省回退「基本单位」FUnitID
+            fitem = int(k3item[0])
+            funit = int(k3item[2] or k3item[1] or 0)
 
             # 1) 供应商-物料关系(链接服务器远程表 INSERT 要求 XACT_ABORT ON)
             conn.execute(text(

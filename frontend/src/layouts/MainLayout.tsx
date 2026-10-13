@@ -393,30 +393,41 @@ function pathMatches(key: string, pathname: string): boolean {
 }
 
 // 菜单树中当前激活的叶子项 key
+// 注意: 命中多个时取“最长(最具体)”的 key, 否则父级前缀(如 /purchase/price-change)
+// 会盖过更具体的子项(如 /purchase/price-change/pending)
 function findActiveKey(items: PermissionAwareItem[], pathname: string): string | null {
-  for (const item of items) {
-    if (item.children && item.children.length > 0) {
-      const found = findActiveKey(item.children, pathname)
-      if (found) return found
-    } else if (pathMatches(item.key, pathname)) {
-      return item.key
+  let best: string | null = null
+  const walk = (list: PermissionAwareItem[]) => {
+    for (const item of list) {
+      if (item.children && item.children.length > 0) {
+        walk(item.children)
+      } else if (pathMatches(item.key, pathname)) {
+        if (!best || item.key.length > best.length) best = item.key
+      }
     }
   }
-  return null
+  walk(items)
+  return best
 }
 
 // 面包屑：一级分组名 + 当前页名（顶级页面 root 固定为「供应链中台」）
 type CrumbInfo = { root: string; page: string }
 function findCrumb(items: PermissionAwareItem[], pathname: string, rootLabel?: string): CrumbInfo | null {
-  for (const item of items) {
-    if (item.children && item.children.length > 0) {
-      const found = findCrumb(item.children, pathname, rootLabel || item.label)
-      if (found) return found
-    } else if (pathMatches(item.key, pathname)) {
-      return { root: rootLabel || '供应链中台', page: item.label }
+  let best: (CrumbInfo & { keyLen: number }) | null = null
+  const walk = (list: PermissionAwareItem[], root: string) => {
+    for (const item of list) {
+      if (item.children && item.children.length > 0) {
+        walk(item.children, root || item.label)
+      } else if (pathMatches(item.key, pathname)) {
+        if (!best || item.key.length > best.keyLen) {
+          best = { root: root || '供应链中台', page: item.label, keyLen: item.key.length }
+        }
+      }
     }
   }
-  return null
+  walk(items, rootLabel || '')
+  const hit = best as (CrumbInfo & { keyLen: number }) | null
+  return hit ? { root: hit.root, page: hit.page } : null
 }
 
 function findPurchase(menuItems: PermissionAwareItem[]): PermissionAwareItem | undefined {

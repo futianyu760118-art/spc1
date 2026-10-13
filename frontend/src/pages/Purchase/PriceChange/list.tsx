@@ -19,6 +19,8 @@ export default function PriceChangeList() {
   const actionRef = useRef<ActionType>()
   const isAdmin = useAuthStore.getState().isAdmin()
   const canArchiveDelete = isAdmin || useAuthStore.getState().hasPermission('purchase.price_change.archive_delete', 'delete')
+  const currentUsername = (useAuthStore.getState().currentUser as any)?.username
+  const canDeleteOthers = useAuthStore.getState().hasPermission('purchase.price_change', 'delete')
 
   const columns: ProColumns<any>[] = [
     { title: '调价单号', dataIndex: 'change_no', width: 180, fixed: 'left',
@@ -48,16 +50,20 @@ export default function PriceChangeList() {
     { title: '创建时间', dataIndex: 'created_at', width: 150, search: false,
       render: (_, r) => r.created_at ? dayjs(r.created_at).format('YYYY-MM-DD HH:mm') : '-' },
     { title: '操作', width: 120, fixed: 'right', search: false,
-      render: (_, r) => (
+      render: (_, r) => {
+        const deletable = r.approval_status === 'draft' || r.approval_status === 'rejected' || r.approval_status === 'recalled'
+        const canDel = (deletable && (r.applicant === currentUsername || canDeleteOthers)) || (r.approval_status === 'approved' && canArchiveDelete)
+        return (
         <Space>
           <Button size="small" type="link" icon={<EyeOutlined />} onClick={() => navigate(`/purchase/price-change/${r.id}`)}>查看</Button>
-          {(r.approval_status === 'draft' || r.approval_status === 'rejected' || r.approval_status === 'recalled' || (r.approval_status === 'approved' && canArchiveDelete)) && (
+          {canDel && (
             <Popconfirm title="确认删除？" onConfirm={async () => { try { await purchaseApi.delete(r.id); message.success('已删除'); actionRef.current?.reload() } catch (e: any) { /* 错误已由全局拦截器提示 */ } }}>
               <Button size="small" type="link" danger icon={<DeleteOutlined />} />
             </Popconfirm>
           )}
         </Space>
-      ) },
+        )
+      } },
   ]
 
   return (

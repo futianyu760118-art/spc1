@@ -39,6 +39,23 @@ def _rule_float(rules: dict, key: str, default: float) -> float:
         return default
 
 
+# 创建幂等窗口（秒）：同人+同供应商+同明细+同提交态，在此窗口内视为重复提交，返回已有单
+DUPLICATE_WINDOW_SECONDS = 60
+
+
+def _items_signature(items: list) -> tuple:
+    """明细业务签名（物料+原价+新价），用于识别重复提交；价格归一成 4 位小数比较。"""
+    def _p(v: Any) -> str:
+        try:
+            return f"{float(v):.4f}"
+        except (TypeError, ValueError):
+            return str(v)
+    return tuple(sorted(
+        ((it.get("material_code") or "").strip(), _p(it.get("old_price")), _p(it.get("new_price")))
+        for it in (items or [])
+    ))
+
+
 class PriceChangeService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -143,7 +160,34 @@ class PriceChangeService:
             record["ai_analysis"] = None
         return record
 
+    async def _find_recent_duplicate(self, applicant: str, supplier_code: str, submit: bool, signature: tuple, has_evidence: bool) -> Optional[int]:
+        """在幂等窗口内查找 同人+同供应商+同提交态+同明细+同凭证有无 的已存在单据，命中返回其 id。"""
+        status = "pending" if submit else "draft"
+        candidates = (await self.db.execute(text(
+            "SELECT id FROM purchase_price_change "
+            "WHERE applicant = :ap AND COALESCE(supplier_code, '') = :sc AND approval_status = :st "
+            "AND (COALESCE(jsonb_array_length(self_check_evidence), 0) > 0) = :he "
+            f"AND created_at >= now() - interval '{int(DUPLICATE_WINDOW_SECONDS)} seconds' "
+            "ORDER BY id DESC LIMIT 5"
+        ), {"ap": applicant, "sc": supplier_code or "", "st": status, "he": bool(has_evidence)})).scalars().all()
+        for cid in candidates:
+            rows = (await self.db.execute(text(
+                "SELECT material_code, old_price, new_price FROM purchase_price_change_item WHERE change_id = :c ORDER BY seq"
+            ), {"c": cid})).mappings().all()
+            if _items_signature(rows) == signature:
+                return cid
+        return None
+
     async def create_price_change(self, data: dict, items_data: list, *, submit=False, applicant="", self_check_evidence: list | None = None, action_note: str = ""):
+        # 幂等：短窗口内 同人+同供应商+同明细+同提交态(+凭证有无) 的重复创建，直接返回已有单，避免重复落库
+        signature = _items_signature(items_data)
+        if applicant and signature:
+            dup_id = await self._find_recent_duplicate(
+                applicant, data.get("supplier_code") or "", submit, signature, bool(self_check_evidence)
+            )
+            if dup_id:
+                logger.info(f"[调价单] 幂等命中重复提交: applicant={applicant} -> 返回已有 change_id={dup_id}")
+                return await self.get_price_change(dup_id)
         change_no = await self._gen_change_no()
         current = datetime.now()
         await self.db.execute(
@@ -191,11 +235,13 @@ class PriceChangeService:
             # 2. 校验凭证 + 行动项说明（高风险强制）
             ev_res = await self._validate_and_store_evidence(cid, self_check_evidence, action_note)
             if not ev_res["success"]:
-                record = await self.get_price_change(cid)
-                record["_self_check_required"] = True
-                record["_self_check_result"] = check_result
-                record["_message"] = ev_res["message"]
-                return record
+                # 提交因缺凭证/说明被拦：回滚本次插入，不落库，避免留下无凭证的悬空 pending 单
+                await self.db.rollback()
+                return {
+                    "_self_check_required": True,
+                    "_self_check_result": check_result,
+                    "_message": ev_res["message"],
+                }
 
             await self._add_approval_log(cid, None, "submit", applicant, "提交审批")
             await self._init_approval_snapshot(cid)
@@ -473,7 +519,8 @@ class PriceChangeService:
         await self._add_approval_log(change_id, record.get("approval_level"), "recall", applicant or record.get("applicant", ""), "申请人撤回")
         return True
 
-    async def delete(self, change_id: int, *, can_archive_delete: bool = False):
+    async def delete(self, change_id: int, *, can_archive_delete: bool = False,
+                     requester: str = "", can_delete_others: bool = False):
         record = await self.get_price_change(change_id)
         if not record:
             return {"success": False, "message": "调价单不存在"}
@@ -482,6 +529,10 @@ class PriceChangeService:
             return {"success": False, "message": "审批中的调价单不可删除，请先撤回"}
         if status == "approved" and not can_archive_delete:
             return {"success": False, "message": "已归档的调价单需「调价单归档删除」权限（当前仅管理员可删）"}
+        # 归属校验：本人只能删自己创建的单据；删他人单据需「purchase.price_change.delete」权限
+        is_owner = bool(requester) and record.get("applicant") == requester
+        if not is_owner and not can_delete_others:
+            return {"success": False, "message": "只能删除自己创建的单据"}
         await self.db.execute(text("DELETE FROM purchase_price_change_item WHERE change_id = :cid"), {"cid": change_id})
         await self.db.execute(text("DELETE FROM purchase_price_change_approval_log WHERE change_id = :cid"), {"cid": change_id})
         await self.db.execute(text("DELETE FROM purchase_price_change_ai_analysis WHERE change_id = :cid"), {"cid": change_id})
