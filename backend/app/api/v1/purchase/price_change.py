@@ -423,7 +423,7 @@ async def search_materials(
 
         with erp_engine.connect() as conn:
             base_sql = """SELECT rowid AS id, [物料代码] AS material_code, [物料名称] AS material_name,
-                [规格型号] AS spec, [单位] AS unit, [采购报价] AS purchase_price, [供应商] AS supplier
+                [规格型号] AS spec, [单位] AS unit, [单位内码] AS unit_id, [采购报价] AS purchase_price, [供应商] AS supplier
                 FROM k3sv.AIS20161019115614.dbo.h_v_K3_WGICItem"""
             count_sql = "SELECT COUNT(*) FROM k3sv.AIS20161019115614.dbo.h_v_K3_WGICItem"
 
@@ -450,8 +450,9 @@ async def search_materials(
                     "material_name": r[2] or "",
                     "spec": r[3] or "",
                     "unit": r[4] or "",
-                    "purchase_price": float(r[5]) if r[5] else None,
-                    "supplier": r[6] or "",
+                    "unit_id": r[5],
+                    "purchase_price": float(r[6]) if r[6] else None,
+                    "supplier": r[7] or "",
                 })
         erp_engine.dispose()
         return ResponseModel(data={"items": items, "total": int(total)})
