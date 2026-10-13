@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     STORAGE_LOCAL_ROOT: str = "/app/uploads"
     BACKUP_DIR: str = "/app/backups"
     STORAGE_LOCAL_URL_PREFIX: str = "/uploads"
-    STORAGE_MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
+    STORAGE_MAX_FILE_SIZE: int = 100 * 1024 * 1024  # 100MB
     STORAGE_ALLOWED_MIMES: list[str] = [
         "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp",
         "application/pdf",

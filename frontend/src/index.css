@@ -214,34 +214,11 @@ body {
   border-radius: 4px; padding: 0 5px; line-height: 16px; color: #94a3b8;
 }
 
-/* 顶部栏中部全局搜索入口（占中、可点击唤起 Command Palette） */
+/* 顶部栏全局搜索入口（图标按钮，点击唤起 Command Palette） */
 .tbv2-gsearch {
-  flex: 1;
-  max-width: 480px;
-  margin: 0 auto;
-  height: 30px;
-  background: #f1f5f9;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  display: flex; align-items: center; gap: 8px;
-  padding: 0 10px;
-  color: #94a3b8; font-size: calc(12px * var(--font-size-scale));
-  cursor: pointer;
-  white-space: nowrap;
-  min-width: 0;
-  outline: none;
-  transition: border-color .15s, box-shadow .15s;
-}
-.tbv2-gsearch:hover, .tbv2-gsearch:focus-visible { border-color: #e2e8f0; box-shadow: 0 1px 4px rgba(0,0,0,.04); }
-.tbv2-gsearch .tbv2-gsearch-icon { font-size: 14px; flex-shrink: 0; }
-.tbv2-gsearch .tbv2-gsearch-text { overflow: hidden; text-overflow: ellipsis; flex: 1; }
-.tbv2-gsearch .tbv2-gsearch-kbd {
-  margin-left: auto;
-  font-family: inherit; font-size: 10px;
-  background: #fff; border: 1px solid #e2e8f0;
-  border-radius: 4px; padding: 0 5px; line-height: 16px; color: #94a3b8;
   flex-shrink: 0;
 }
+.tbv2-gsearch .anticon { font-size: 16px; }
 
 .tbv2-avatar {
   display: flex; align-items: center; gap: 8px;
@@ -291,8 +268,6 @@ body {
 @media (max-width: 1100px) {
   .tbv2-search { width: 150px; }
   .tbv2-search kbd { display: none; }
-  .tbv2-gsearch { max-width: 220px; }
-  .tbv2-gsearch .tbv2-gsearch-kbd { display: none; }
   .tbv2-avatar-name { display: none; }
   .tbv2-avatar { padding: 3px; }
 }
