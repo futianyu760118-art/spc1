@@ -53,6 +53,26 @@ settings = get_settings()
 ACTIVE_EMPLOYEE_STATUSES = {0, 1, 2, 3}
 
 
+def _coerce_in_value(in_col, value):
+    """把业务键值转换为列原生 Python 类型，供 IN 查询使用。
+
+    业务键在上游统一转为 str 用于去重；但 IN 查询的值必须匹配列的
+    原生 Python 类型，否则 PostgreSQL 会报
+    "operator does not exist: integer = character varying"
+    （如 MrpPlanOrder.sale_order_id 是 Integer 列）。
+    """
+    try:
+        in_python_type = in_col.type.python_type
+    except (AttributeError, NotImplementedError):
+        in_python_type = str
+    if in_python_type is str or isinstance(value, in_python_type):
+        return value
+    try:
+        return in_python_type(value)
+    except (ValueError, TypeError):
+        return value
+
+
 class ERPConnectionError(Exception):
     """ERP 连接异常"""
     pass
@@ -393,6 +413,26 @@ class ERPSyncService:
             except Exception:
                 pass
 
+    async def _preload_existing(self, model_class, key_fields, keys):
+        """按业务键分块 IN 预加载已有记录，返回 key -> ORM 对象映射。"""
+        in_col = getattr(model_class, key_fields[0])
+        in_values = list(dict.fromkeys(key[0] for key in keys))
+        existing_map: dict[tuple, object] = {}
+        chunk = 1000
+        for i in range(0, len(in_values), chunk):
+            chunk_vals = [_coerce_in_value(in_col, v) for v in in_values[i:i + chunk]]
+            res = await self.spc_db.execute(
+                select(model_class).where(in_col.in_(chunk_vals))
+            )
+            for obj in res.scalars():
+                k = tuple(
+                    None if getattr(obj, f, None) is None
+                    else str(getattr(obj, f, "")).strip()
+                    for f in key_fields
+                )
+                existing_map[k] = obj
+        return existing_map
+
     async def _bulk_upsert(
         self,
         model_class,
@@ -502,45 +542,9 @@ class ERPSyncService:
 
         # 2) 一次性预加载已有记录（按第一个业务键分块 IN 查询，避免超大 IN）
         in_col = getattr(model_class, key_fields[0])
-        # 业务键在上方统一转为 str 用于去重；但 IN 查询的值必须匹配列的
-        # 原生 Python 类型，否则 PostgreSQL 会报
-        # "operator does not exist: integer = character varying"
-        # （如 MrpPlanOrder.sale_order_id 是 Integer 列）
-        try:
-            in_python_type = in_col.type.python_type
-        except (AttributeError, NotImplementedError):
-            in_python_type = str
-
-        def _coerce_in_value(v):
-            if in_python_type is str or isinstance(v, in_python_type):
-                return v
-            try:
-                return in_python_type(v)
-            except (ValueError, TypeError):
-                return v
-
-        in_values: list = []
-        seen = set()
-        for key in deduped.keys():
-            v = key[0]
-            if v not in seen:
-                seen.add(v)
-                in_values.append(v)
-
-        existing_map: dict[tuple, object] = {}
-        chunk = 1000
-        for i in range(0, len(in_values), chunk):
-            chunk_vals = [_coerce_in_value(v) for v in in_values[i:i + chunk]]
-            res = await self.spc_db.execute(
-                select(model_class).where(in_col.in_(chunk_vals))
-            )
-            for obj in res.scalars():
-                k = tuple(
-                    None if getattr(obj, f, None) is None
-                    else str(getattr(obj, f, "")).strip()
-                    for f in key_fields
-                )
-                existing_map[k] = obj
+        existing_map = await self._preload_existing(
+            model_class, key_fields, list(deduped.keys())
+        )
         logger.info(f"{label}: 预加载 {len(existing_map)} 条已有记录")
 
         # 3) 处理单行：更新或新增（纯内存操作，无 DB 往返）
@@ -632,7 +636,9 @@ class ERPSyncService:
                                 for f in key_fields
                             )
                             if fkey not in created_keys:
-                                fv = _coerce_in_value(str(row_dict.get(key_fields[0])).strip())
+                                fv = _coerce_in_value(
+                                    in_col, str(row_dict.get(key_fields[0])).strip()
+                                )
                                 r = await self.spc_db.execute(
                                     select(model_class).where(in_col == fv)
                                 )
@@ -659,6 +665,19 @@ class ERPSyncService:
                         stats["errors"].append(
                             f"{label} {row_dict.get(key_fields[0])}: {e2}"
                         )
+                # rollback 已把 session 内所有对象置为 expired（含预加载缓存）。
+                # 后续批次 _process_row 若读取这些对象，会在同步函数中触发
+                # async 懒加载 → "greenlet_spawn has not been called"，令每个
+                # 批次都退化到逐行处理。这里重建预加载缓存，恢复批次路径。
+                try:
+                    existing_map = await self._preload_existing(
+                        model_class, key_fields, list(deduped.keys())
+                    )
+                except Exception as reload_err:
+                    logger.warning(
+                        f"{label} 批次失败后重建预加载缓存失败，后续批次回退逐行处理: {reload_err}"
+                    )
+                    existing_map = {}
             idx += batch_size
             if idx % progress_step == 0 or idx >= n:
                 logger.info(

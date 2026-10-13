@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 from typing import BinaryIO
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -48,7 +49,10 @@ class S3StorageBackend(StorageBackend):
             data,
             length=len(content),
             content_type=mime or "application/octet-stream",
-            metadata={"original-name": (original_name or "unnamed")[:128]},
+            # S3 用户元数据经 HTTP 头传输，只允许 US-ASCII；原始文件名可能含
+            # 中文等非 ASCII 字符（如"屏幕截图 xxx.png"），直接传会抛
+            # ValueError: unsupported metadata value ...；百分号编码后恒为 ASCII。
+            metadata={"original-name": quote(original_name or "unnamed", safe="")[:256]},
         )
         return StoredFile(
             key=key,
