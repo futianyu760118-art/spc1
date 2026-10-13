@@ -93,6 +93,15 @@ export default function PriceChangeDetail() {
       else if (action === 'recall') await purchaseApi.recall(cid)
       else if (action === 'revoke') await purchaseApi.revokeApproval(cid)
       message.success('操作成功')
+      // 审批类操作完成后自动关闭当前页签(仅当该页签由系统“新标签”方式打开, 即有 opener);
+      // 若为普通标签无法脚本关闭, 则退回调价单列表
+      if (action === 'approve' || action === 'reject') {
+        if (window.opener) {
+          window.close()
+        }
+        navigate('/purchase/price-change')
+        return
+      }
       setComment('')
       load()
     } catch (e: any) {
@@ -243,6 +252,11 @@ export default function PriceChangeDetail() {
   const approvalRound = Math.max(_roundCounter, 1)
   const curLogs = logs.filter((l: any) => l.round === approvalRound)
   const s = r?.approval_status
+  // 删除按钮显隐：本人可删自己未提交的单据(draft/rejected/recalled)；有 delete 权限可删他人；已归档另需 archive_delete
+  const currentUsername = (useAuthStore.getState().currentUser as any)?.username
+  const canDeleteOthers = useAuthStore.getState().hasPermission('purchase.price_change', 'delete')
+  const deletableStatus = s === 'draft' || s === 'rejected' || s === 'recalled'
+  const showDelete = (deletableStatus && (r?.applicant === currentUsername || canDeleteOthers)) || (s === 'approved' && canArchiveDelete)
   const snap = r?.approval_snapshot || []
   const currentLevel = r?.approval_level || 1
 
@@ -362,12 +376,17 @@ export default function PriceChangeDetail() {
             <div style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', marginBottom: 4 }}>
               <CheckCircleOutlined style={{ fontSize: 12, marginRight: 4 }} />已上传支撑凭证（{evidence.length} 个）
             </div>
-            {evidence.map((ev: any, ei: number) => (
-              <div key={ei} style={{ fontSize: 12, color: '#334155', padding: '2px 0' }}>
-                • {ev.name || '凭证文件'}
-                {ev.key && <a onClick={(e) => { e.preventDefault(); downloadAtt(ev.key, ev.name || '凭证') }} style={{ color: '#2563eb', marginLeft: 8, cursor: 'pointer' }}>下载</a>}
-              </div>
-            ))}
+            {evidence.map((ev: any, ei: number) => {
+              const isImg = (ev.name || '').match(/\.(png|jpg|jpeg|gif|webp)$/i)
+              const isPdf = /\.pdf$/i.test(ev.name || '')
+              return (
+                <div key={ei} style={{ fontSize: 12, color: '#334155', padding: '2px 0' }}>
+                  • {ev.name || '凭证文件'}
+                  {(isImg || isPdf) && ev.key && <a onClick={(e) => { e.preventDefault(); openPreview(ev) }} style={{ color: '#2563eb', marginLeft: 8, cursor: 'pointer' }}>预览</a>}
+                  {ev.key && <a onClick={(e) => { e.preventDefault(); downloadAtt(ev.key, ev.name || '凭证') }} style={{ color: '#2563eb', marginLeft: 8, cursor: 'pointer' }}>下载</a>}
+                </div>
+              )
+            })}
           </div>
         )}
         {record.self_check_action_note && (
@@ -412,7 +431,7 @@ export default function PriceChangeDetail() {
             </div>
           </div>
           <Space>
-            {(s === 'draft' || s === 'rejected' || s === 'recalled' || (s === 'approved' && canArchiveDelete)) && <Button danger icon={<DeleteOutlined />} onClick={del}>删除</Button>}
+            {showDelete && <Button danger icon={<DeleteOutlined />} onClick={del}>删除</Button>}
             {s === 'draft' && (
               <>
                 <Button onClick={() => navigate(`/purchase/price-change/new?edit=${id}`)}>编辑</Button>
@@ -798,18 +817,21 @@ export default function PriceChangeDetail() {
         </div>
       </Modal>
 
-      {/* 凭证预览弹窗 */}
-      <Modal title={previewFile?.name || '预览'} open={!!previewFile} onCancel={() => setPreviewFile(null)} width={800} footer={null}>
-        {previewFile?.url && (() => {
-          const isPdf = /\.pdf$/i.test(previewFile.name || '')
-          return isPdf ? (
-            <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
-          ) : (
-            <div style={{ textAlign: 'center' }}>
-              <Image src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
-            </div>
-          )
-        })()}
+      {/* 图片附件: 点“预览”直接弹出全屏查看器(缩放/旋转), 无需再点一次 */}
+      {previewFile?.url && !/\.pdf$/i.test(previewFile.name || '') && (
+        <Image
+          src={previewFile.url}
+          alt={previewFile.name}
+          style={{ display: 'none' }}
+          preview={{ visible: true, zIndex: 2100, onVisibleChange: (v: boolean) => { if (!v) setPreviewFile(null) } }}
+        />
+      )}
+
+      {/* PDF 预览弹窗 */}
+      <Modal title={previewFile?.name || '预览'} open={!!previewFile && /\.pdf$/i.test(previewFile.name || '')} onCancel={() => setPreviewFile(null)} width={800} footer={null}>
+        {previewFile?.url && (
+          <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
+        )}
       </Modal>
     </div>
   )

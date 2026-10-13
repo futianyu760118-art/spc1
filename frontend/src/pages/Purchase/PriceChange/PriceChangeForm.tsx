@@ -30,6 +30,7 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
   const itemsRef = useRef<any[]>([])
   itemsRef.current = items
   const [saving, setSaving] = useState(false)
+  const submittingRef = useRef(false)  // 防重复提交：进入提交即上锁，结束才释放
   const [loadingData, setLoadingData] = useState(false)
 
   const [formKey, setFormKey] = useState(0)
@@ -229,9 +230,11 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
   }
 
   const save = async (submit: boolean) => {
+    if (submittingRef.current) return
     try {
       const v = await form.validateFields()
       if (!supName && !v.supplier_name && !v.supplier_code) { message.error('请选择供应商'); return }
+      submittingRef.current = true
       setSaving(true)
 
       // 如果是要提交审批，先运行自检预览
@@ -262,15 +265,37 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
         }
       }
 
-      // 上传新添加的文件
+      // 附件/凭证至少提供一个（提交审批时）：普通单需附件，高风险单在凭证弹窗里上传凭证
+      if (submit) {
+        const pendingCount = fileList.filter((f: any) => !f.url).length
+        const hasAttachment = uploadedFiles.length + pendingCount > 0
+        const hasEvidence = scEvidence.length > 0 || scEvidenceFiles.length > 0
+        if (!hasAttachment && !hasEvidence) {
+          message.error('请上传附件或自检凭证后再提交')
+          setSaving(false)
+          return
+        }
+      }
+
+      // 上传新添加的文件（失败即中止提交，避免生成 0 附件的重复单）
       const newUploads: any[] = []
+      const failedUploads: string[] = []
       const pendingFiles = fileList.filter((f: any) => !f.url && (f.originFileObj || f))
       for (const f of pendingFiles) {
         try {
           const rawFile = f.originFileObj || f
           const upRes: any = await fileApi.upload(rawFile, 'purchase-price-change')
           newUploads.push({ id: upRes.data.id, key: upRes.data.key, name: upRes.data.name, url: upRes.data.url })
-        } catch (err: any) { console.error('upload error details:', err?.response?.data || err); message.warning(`上传失败: ${f.name || f.originFileObj?.name}: ${err?.message || err}`) }
+        } catch (err: any) { console.error('upload error details:', err?.response?.data || err); failedUploads.push(f.name || f.originFileObj?.name || '未知文件') }
+      }
+      if (failedUploads.length) {
+        // 提交审批：附件没传成功就中止，避免生成 0 附件的重复单
+        if (submit) {
+          message.error(`附件上传失败：${failedUploads.join('、')}，已中止提交，请重试`)
+          return
+        }
+        // 保存草稿：附件未传成功则不带入（草稿照常保存，可稍后补传）
+        message.warning(`附件上传失败：${failedUploads.join('、')}（草稿已保存，可稍后补传）`)
       }
       const allAttachments = [...uploadedFiles, ...newUploads]
 
@@ -311,7 +336,7 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
         return
       }
       // 错误已由全局拦截器提示
-    } finally { setSaving(false) }
+    } finally { setSaving(false); submittingRef.current = false }
   }
 
   const totalItems = items.length
@@ -422,23 +447,26 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
   }
 
   const submitWithEvidence = async () => {
+    if (submittingRef.current) return
+    submittingRef.current = true
     setScSaving(true)
     try {
       const v = await form.validateFields()
       if (!supName && !v.supplier_name && !v.supplier_code) { message.error('请选择供应商'); setScSaving(false); return }
-      // 上传凭证文件（并行）
+      const failedUploads: string[] = []
+      // 上传凭证文件（并行；失败则记录并中止提交）
       const evidenceItems: any[] = []
       const uploadTasks = scEvidenceFiles.map(async (ef) => {
         const rawFile = ef.originFileObj || ef
         const uploaded = await uploadScEvidence(rawFile)
         if (uploaded) evidenceItems.push(uploaded)
+        else failedUploads.push(ef.name || '凭证文件')
       })
       await Promise.all(uploadTasks)
       for (const existing of scEvidence) {
         if (existing.id) evidenceItems.push(existing)
       }
 
-      const allAttachments = [...uploadedFiles, ...fileList.map((f: any) => f.originFileObj || f).filter(Boolean).map((f: any) => f)]
       const pendingFiles = fileList.filter((f: any) => !f.url && (f.originFileObj || f))
       const newUploads: any[] = []
       const attachTasks = pendingFiles.map(async (f) => {
@@ -446,9 +474,14 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
           const rawFile = f.originFileObj || f
           const upRes: any = await fileApi.upload(rawFile, 'purchase-price-change')
           newUploads.push({ id: upRes.data.id, key: upRes.data.key, name: upRes.data.name, url: upRes.data.url })
-        } catch (err: any) { message.warning(`上传失败: ${f.name}: ${err?.message || err}`) }
+        } catch (err: any) { console.error('upload error details:', err?.response?.data || err); failedUploads.push(f.name || '未知文件') }
       })
       await Promise.all(attachTasks)
+      if (failedUploads.length) {
+        setScSaving(false)
+        message.error(`上传失败：${failedUploads.join('、')}，已中止提交，请重试`)
+        return
+      }
       const finalAttachments = [...uploadedFiles, ...newUploads]
 
       const payload = {
@@ -495,7 +528,8 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
       }
       // 错误已由全局拦截器提示
     } finally {
-      if (!document.querySelector('.ant-modal-open')) setScSaving(false)
+      setScSaving(false)
+      submittingRef.current = false
     }
   }
 
@@ -652,7 +686,9 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
       {/* 附件 + 备注（和详情页风格一致） */}
       <div style={{ ...sectionStyle, marginTop: 12 }}>
         <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#334155' }}>附件</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#334155' }}>
+            附件 <span style={{ color: '#ff4d4f', fontWeight: 400, fontSize: 12 }}>* 提交时必填（高风险单已传自检凭证可不传附件）</span>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Upload fileList={fileList} onChange={({fileList:fl}) => setFileList(fl)}
               beforeUpload={() => false} multiple
@@ -862,18 +898,21 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
         </div>
       </Modal>
 
-      {/* 凭证预览弹窗 */}
-      <Modal title={previewFile?.name || '预览'} open={!!previewFile} onCancel={() => setPreviewFile(null)} width={800} footer={null}>
-        {previewFile?.url && (() => {
-          const isPdf = /\.pdf$/i.test(previewFile.name || '')
-          return isPdf ? (
-            <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
-          ) : (
-            <div style={{ textAlign: 'center' }}>
-              <Image src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
-            </div>
-          )
-        })()}
+      {/* 图片附件: 点“预览”直接弹出全屏查看器(缩放/旋转), 无需再点一次 */}
+      {previewFile?.url && !/\.pdf$/i.test(previewFile.name || '') && (
+        <Image
+          src={previewFile.url}
+          alt={previewFile.name}
+          style={{ display: 'none' }}
+          preview={{ visible: true, zIndex: 2100, onVisibleChange: (v: boolean) => { if (!v) setPreviewFile(null) } }}
+        />
+      )}
+
+      {/* PDF 预览弹窗 */}
+      <Modal title={previewFile?.name || '预览'} open={!!previewFile && /\.pdf$/i.test(previewFile.name || '')} onCancel={() => setPreviewFile(null)} width={800} footer={null}>
+        {previewFile?.url && (
+          <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
+        )}
       </Modal>
 
       {/* 物料选择弹窗 */}

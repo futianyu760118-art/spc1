@@ -174,6 +174,7 @@ const SPECIAL_ACTION_LABELS: Record<string, string> = {
   review: '审核',
   convert: '转单',
   param: '参数',
+  read_all: '查看全部',
 }
 
 // 节点声明的专属动作（非通用列动作）
