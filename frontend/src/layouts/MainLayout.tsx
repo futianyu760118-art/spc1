@@ -900,15 +900,7 @@ export default function MainLayout() {
               {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             </div>
           )}
-          <div className="tbv2-crumb">
-            {crumb.root !== crumb.page && (
-              <>
-                <span className="tbv2-crumb-root">{crumb.root}</span>
-                <span>/</span>
-              </>
-            )}
-            <b>{crumb.page || crumb.root}</b>
-          </div>
+          {!isShareUser() && <AppTabs navTree={navTree} />}
           {!isShareUser() && <GlobalSearch items={navTree} />}
           <div className="tbv2-actions">
             {!isShareUser() && !isSupplierUser() && canUseTopbar.share && <ShareButton />}
@@ -1023,8 +1015,6 @@ export default function MainLayout() {
             )}
           </div>
         </div>
-
-        {!isShareUser() && <AppTabs navTree={navTree} />}
 
         <Modal
           title="安全提醒 — 请修改默认密码"
