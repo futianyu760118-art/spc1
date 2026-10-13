@@ -3,6 +3,7 @@ import { useThemeStore } from './theme'
 import { usePermissionStore } from './permission'
 import { useUiPreferencesStore } from './uiPreferences'
 import { useStockCheckPoolStore } from './stockCheckPool'
+import { useTabsStore } from './tabs'
 
 interface UserInfo {
   id: number
@@ -235,6 +236,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
       localStorage.removeItem('shareToken')
       localStorage.removeItem('shareUser')
       useStockCheckPoolStore.getState().loadForUser(null)
+      useTabsStore.getState().reset()
       set({
         originalToken: null,
         originalUser: null,
