@@ -157,7 +157,7 @@ const GlobalSearch: React.FC<{ items: SearchableMenu[] }> = ({ items }) => {
   return (
     <>
       <div
-        className="tbv2-gsearch"
+        className="tbv2-icon-btn tbv2-gsearch"
         onClick={() => setOpen(true)}
         title="搜索页面（Ctrl+K）"
         role="button"
@@ -169,9 +169,7 @@ const GlobalSearch: React.FC<{ items: SearchableMenu[] }> = ({ items }) => {
           }
         }}
       >
-        <SearchOutlined className="tbv2-gsearch-icon" />
-        <span className="tbv2-gsearch-text">搜索页面…</span>
-        <kbd className="tbv2-gsearch-kbd">Ctrl K</kbd>
+        <SearchOutlined />
       </div>
 
       <Modal

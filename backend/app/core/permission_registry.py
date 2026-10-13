@@ -127,6 +127,14 @@ DEPRECATED_PERMISSION_CODES = (
 # 幂等:每次启动执行,已迁移的行不再变化。
 MIGRATE_AUDIT_ACTIONS = ("materials.stock_check_audit",)
 
+# 代码侧给既有权限新增的动作 —— sync_permissions_to_db 只首次插入不覆盖既有行,
+# 故需在此显式把新增动作追加进 sys_permission.actions,否则「权限管理」界面勾不出来。
+# 只追加、不删除既有动作,幂等。
+ADDED_PERMISSION_ACTIONS = {
+    # 调价单「查看全部」:采购员只看自己,管理者/审批人凭此动作看全部
+    "purchase.price_change": ["read_all"],
+}
+
 # 一次性改名迁移：DB 是权限定义的真相源，sync_permissions_to_db 只首次插入不覆盖既有行，
 # 故代码侧改名需在此显式回灌。仅当 DB 仍为旧名时更新——管理员在「权限管理」页自定义的名字不被覆盖。
 RENAME_PERMISSION_NAMES = {
@@ -190,6 +198,38 @@ async def migrate_permission_actions(db: AsyncSession) -> int:
     await db.commit()
     if changed:
         logger.info(f"[权限注册] 迁移盘点抽检动作 manage→update,涉及 {changed} 个角色")
+    return changed
+
+
+async def migrate_added_permission_actions(db: AsyncSession) -> int:
+    """把代码侧新增的权限动作追加进 sys_permission.actions（幂等，每次启动执行）。
+
+    DB 是权限定义的真相源，sync_permissions_to_db 对既有 code 不覆盖，
+    故代码侧新增动作必须在此回灌，否则「权限管理」页看不到该动作、无法授权。
+    """
+    from sqlalchemy import text
+
+    changed = 0
+    for code, extra in ADDED_PERMISSION_ACTIONS.items():
+        result = await db.execute(
+            text(
+                "UPDATE sys_permission SET actions = ( "
+                "  SELECT COALESCE(jsonb_agg(DISTINCT a ORDER BY a), '[]'::jsonb) "
+                "  FROM ( "
+                "    SELECT jsonb_array_elements_text(actions) AS a "
+                "    UNION "
+                "    SELECT unnest(CAST(:extra AS text[])) "
+                "  ) t "
+                ") "
+                "WHERE code = CAST(:code AS text) "
+                "  AND NOT (actions ?& CAST(:extra AS text[]))"
+            ),
+            {"code": code, "extra": extra},
+        )
+        changed += result.rowcount or 0
+    await db.commit()
+    if changed:
+        logger.info(f"[权限注册] 追加权限动作 {changed} 项")
     return changed
 
 
@@ -351,7 +391,9 @@ declare_permission(
 
 # 采购中心
 declare_permission("purchase", "采购中心", module="purchase", sort_order=11)
-declare_permission("purchase.price_change", "调价单管理", module="purchase", parent_code="purchase", route_path="/purchase/price-change", sort_order=1)
+declare_permission("purchase.price_change", "调价单管理", module="purchase", parent_code="purchase",
+                   actions=["create", "read", "update", "delete", "read_all"],
+                   route_path="/purchase/price-change", sort_order=1)
 declare_permission("purchase.price_change.pending", "待我审批", module="purchase", parent_code="purchase", route_path="/purchase/price-change/pending", sort_order=2)
 declare_permission("purchase.price_change.config", "审批配置", module="purchase", parent_code="purchase", route_path="/purchase/price-change/config", sort_order=3)
 declare_permission("purchase.price_change.archive_delete", "调价单归档删除", module="purchase", parent_code="purchase", actions=["delete"], sort_order=4)

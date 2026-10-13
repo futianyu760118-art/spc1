@@ -105,6 +105,12 @@ export default function PriceChangePending() {
 
   useEffect(() => { load() }, [tab])
 
+  // 详情/审批强制用新标签打开(仅新标签可被脚本关闭, 审批完成后自动关页签)
+  const openDetail = (id: number) => {
+    const win = window.open(`/purchase/price-change/${id}`, '_blank')
+    if (!win) navigate(`/purchase/price-change/${id}`)
+  }
+
   const pendingCount = data.length
   const getRowStatus = (row: any): string => {
     let st = 'low'
@@ -299,7 +305,7 @@ export default function PriceChangePending() {
               title: '操作', width: 180, fixed: 'right',
               render: (_: any, row: any) => (
                 <Space size={2}>
-                  <Button size="small" onClick={() => navigate(`/purchase/price-change/${row.id}`)}>查看</Button>
+                  <Button size="small" onClick={() => openDetail(row.id)}>查看</Button>
                   {tab === 'pending' && canApproveRow(row) && (
                     <>
                       <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => actInline(row, 'approve')}>通过</Button>
@@ -307,7 +313,7 @@ export default function PriceChangePending() {
                     </>
                   )}
                   {tab === 'pending' && !canApproveRow(row) && (
-                    <Button size="small" type="primary" onClick={() => navigate(`/purchase/price-change/${row.id}`)}>审批</Button>
+                    <Button size="small" type="primary" onClick={() => openDetail(row.id)}>审批</Button>
                   )}
                 </Space>
               ),
@@ -343,18 +349,21 @@ export default function PriceChangePending() {
         />
       </div>
 
-      {/* 凭证预览 */}
-      <Modal title={previewFile?.name || '凭证预览'} open={!!previewFile} onCancel={() => setPreviewFile(null)} width={800} footer={null}>
-        {previewFile?.url && (() => {
-          const isPdf = /\.pdf$/i.test(previewFile.name || '')
-          return isPdf ? (
-            <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
-          ) : (
-            <div style={{ textAlign: 'center' }}>
-              <Image src={previewFile.url} alt={previewFile.name} style={{ maxWidth: '100%', maxHeight: '70vh' }} />
-            </div>
-          )
-        })()}
+      {/* 图片附件: 点“预览”直接弹出全屏查看器(缩放/旋转), 无需再点一次 */}
+      {previewFile?.url && !/\.pdf$/i.test(previewFile.name || '') && (
+        <Image
+          src={previewFile.url}
+          alt={previewFile.name}
+          style={{ display: 'none' }}
+          preview={{ visible: true, zIndex: 2100, onVisibleChange: (v: boolean) => { if (!v) setPreviewFile(null) } }}
+        />
+      )}
+
+      {/* PDF 预览 */}
+      <Modal title={previewFile?.name || '凭证预览'} open={!!previewFile && /\.pdf$/i.test(previewFile.name || '')} onCancel={() => setPreviewFile(null)} width={800} footer={null}>
+        {previewFile?.url && (
+          <iframe src={previewFile.url} title={previewFile.name} style={{ width: '100%', height: '70vh', border: 'none' }} />
+        )}
       </Modal>
       <style>{`.pc-pending-risk-high > td{background:#fef2f2 !important}.pc-pending-risk-high:hover > td{background:#fee2e2 !important}`}</style>
     </div>

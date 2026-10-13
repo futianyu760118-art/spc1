@@ -101,6 +101,7 @@ async def lifespan(app: FastAPI):
         from app.core.permission_registry import (
             sync_permissions_to_db, cleanup_deprecated_permissions,
             migrate_permission_actions, migrate_permission_names,
+            migrate_added_permission_actions,
         )
         from app.core.database import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
@@ -115,6 +116,11 @@ async def lifespan(app: FastAPI):
                 await migrate_permission_actions(db)
             except Exception as e:
                 logger.warning(f"[权限注册] 盘点抽检动作迁移失败: {e}")
+            # 代码侧给既有权限新增动作的回灌（如 purchase.price_change 增 read_all），幂等
+            try:
+                await migrate_added_permission_actions(db)
+            except Exception as e:
+                logger.warning(f"[权限注册] 权限动作新增回灌失败: {e}")
             # 权限改名回灌（如 approval.pending 待我审批 → 待办工作台），仅旧名时更新,幂等
             try:
                 await migrate_permission_names(db)

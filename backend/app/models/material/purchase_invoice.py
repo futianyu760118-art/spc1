@@ -26,5 +26,6 @@ class PurchaseInvoice(Base):
     payment_apply_amount = Column(Numeric(15, 2), comment="付款申请金额")
     paid_amount = Column(Numeric(15, 2), comment="已付款金额")
     payment_order_id = Column(Integer, nullable=True, comment="付款单ID")
+    payment_apply_date = Column(Date, nullable=True, comment="付款申请日期")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

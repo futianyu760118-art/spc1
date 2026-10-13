@@ -384,16 +384,21 @@ function toAntdItems(items: PermissionAwareItem[]): any[] {
 }
 
 // 菜单树中当前激活的叶子项 key
+// 注意: 命中多个时取“最长(最具体)”的 key, 否则父级前缀(如 /purchase/price-change)
+// 会盖过更具体的子项(如 /purchase/price-change/pending)
 function findActiveKey(items: PermissionAwareItem[], pathname: string): string | null {
-  for (const item of items) {
-    if (item.children && item.children.length > 0) {
-      const found = findActiveKey(item.children, pathname)
-      if (found) return found
-    } else if (pathMatches(item.key, pathname)) {
-      return item.key
+  let best: string | null = null
+  const walk = (list: PermissionAwareItem[]) => {
+    for (const item of list) {
+      if (item.children && item.children.length > 0) {
+        walk(item.children)
+      } else if (pathMatches(item.key, pathname)) {
+        if (!best || item.key.length > best.length) best = item.key
+      }
     }
   }
-  return null
+  walk(items)
+  return best
 }
 
 function findPurchase(menuItems: PermissionAwareItem[]): PermissionAwareItem | undefined {

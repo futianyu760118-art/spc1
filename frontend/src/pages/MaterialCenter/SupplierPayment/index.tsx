@@ -46,6 +46,8 @@ interface SupplierPaymentRow {
   invoices: InvoiceDetail[]
   overdue_total: number | null
   overdue_by_month: OverdueMonthItem[]
+  next_month: string | null
+  next_month_due: number | null
 }
 
 interface Summary {
@@ -197,6 +199,23 @@ export default function SupplierPayment() {
                 onClick={() => setOverdueModal({ supplierName: record.supplier_name || record.supplier_code, months: record.overdue_by_month || [] })}
               >查看</Button>
             </span>
+          )
+        },
+      },
+      {
+        title: '下月应付金额', dataIndex: 'next_month_due', width: 160, align: 'right' as const,
+        sorter: true, sortOrder: getSortOrder('next_month_due'),
+        render: (_: unknown, record: SupplierPaymentRow) => {
+          const v = record.next_month_due
+          if (v == null) return <span style={{ color: '#cbd5e1' }}>-</span>
+          const monthLabel = record.next_month
+            ? dayjs(record.next_month).isValid() ? dayjs(record.next_month).format('YYYY年M月') : record.next_month
+            : ''
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontFamily: 'monospace', fontWeight: 500 }}>{v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+              <div style={{ fontSize: '11px', color: '#94a3b8' }}>{monthLabel}</div>
+            </div>
           )
         },
       },
@@ -383,7 +402,7 @@ export default function SupplierPayment() {
           columns={columns}
           loading={loading}
           size="small"
-          scroll={{ x: 1160 }}
+          scroll={{ x: 1320 }}
           rowSelection={{
             selectedRowKeys,
             onChange: (keys: React.Key[]) => setSelectedRowKeys(keys as string[]),

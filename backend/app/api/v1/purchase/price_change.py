@@ -11,9 +11,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker, oauth2_scheme, decode_access_token
+from app.core.dependencies import get_current_user
 from app.core.audit import log_audit
 from app.schemas.common import ResponseModel
 from app.services.purchase.price_change_service import PriceChangeService
+
+
+def _can_view_all(user: dict) -> bool:
+    """是否可查看全部调价单：管理员，或持有「查看全部」专属动作 read_all。
+
+    无此权限者（如普通采购员）只能查看/导出自己创建的单据。
+    """
+    if user.get("role") == "admin":
+        return True
+    perms = user.get("permissions") or {}
+    return "read_all" in (perms.get("purchase.price_change") or [])
 
 
 async def get_current_username(token: str = Depends(oauth2_scheme)) -> str:
@@ -52,16 +64,18 @@ async def list_price_changes(
     date_start: str = Query(""),
     date_end: str = Query(""),
     applicant: str = Query(""),
-    username: str = Depends(get_current_username),
+    user: dict = Depends(get_current_user),
     _: dict = Depends(PermissionChecker("purchase.price_change", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     service = PriceChangeService(db)
+    # 无「查看全部」权者（普通采购员）只能看自己创建的单据；有权限者保留申请人筛选
+    effective_applicant = (applicant or None) if _can_view_all(user) else user["username"]
     items, total = await service.list_price_changes(
         page=page, page_size=page_size,
         keyword=keyword or None, status=status or None,
         date_start=date_start or None, date_end=date_end or None,
-        applicant=applicant or None,
+        applicant=effective_applicant,
     )
     return ResponseModel(data={"total": total, "page": page, "page_size": page_size, "items": items})
 
@@ -409,7 +423,7 @@ async def search_materials(
 
         with erp_engine.connect() as conn:
             base_sql = """SELECT rowid AS id, [物料代码] AS material_code, [物料名称] AS material_name,
-                [规格型号] AS spec, [单位] AS unit, [采购报价] AS purchase_price, [供应商] AS supplier
+                [规格型号] AS spec, [单位] AS unit, [单位内码] AS unit_id, [采购报价] AS purchase_price, [供应商] AS supplier
                 FROM k3sv.AIS20161019115614.dbo.h_v_K3_WGICItem"""
             count_sql = "SELECT COUNT(*) FROM k3sv.AIS20161019115614.dbo.h_v_K3_WGICItem"
 
@@ -436,8 +450,9 @@ async def search_materials(
                     "material_name": r[2] or "",
                     "spec": r[3] or "",
                     "unit": r[4] or "",
-                    "purchase_price": float(r[5]) if r[5] else None,
-                    "supplier": r[6] or "",
+                    "unit_id": r[5],
+                    "purchase_price": float(r[6]) if r[6] else None,
+                    "supplier": r[7] or "",
                 })
         erp_engine.dispose()
         return ResponseModel(data={"items": items, "total": int(total)})
@@ -452,14 +467,16 @@ async def export_price_changes(
     date_start: str = Query(""),
     date_end: str = Query(""),
     applicant: str = Query(""),
-    username: str = Depends(get_current_username),
+    user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("purchase.price_change", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     service = PriceChangeService(db)
+    effective_applicant = (applicant or None) if _can_view_all(user) else user["username"]
     items = await service.export_list(
         keyword=keyword or None, status=status or None,
         date_start=date_start or None, date_end=date_end or None,
-        applicant=applicant or None,
+        applicant=effective_applicant,
     )
     output = io.StringIO()
     writer = csv.writer(output)
@@ -484,7 +501,7 @@ async def export_price_changes(
 @router.get("/{change_id}", response_model=ResponseModel)
 async def get_price_change(
     change_id: int,
-    username: str = Depends(get_current_username),
+    user: dict = Depends(get_current_user),
     _: dict = Depends(PermissionChecker("purchase.price_change", "read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -492,6 +509,9 @@ async def get_price_change(
     record = await service.get_price_change(change_id)
     if not record:
         raise HTTPException(status_code=404, detail="调价单不存在")
+    # 无「查看全部」权者只能看自己创建的单据
+    if not _can_view_all(user) and record.get("applicant") != user["username"]:
+        raise HTTPException(status_code=403, detail="无权查看他人创建的调价单")
     return ResponseModel(data=record)
 
 
@@ -513,6 +533,9 @@ async def create_price_change(
         except Exception:
             pass
     items_data = data.get("items", [])
+    # 附件必填：提交审批时至少一个附件（高风险单可改用自查凭证）
+    if submit and not (main_data.get("attachments") or []) and not (evidence or []):
+        raise HTTPException(status_code=400, detail="请上传附件或自检凭证后再提交")
     record = await service.create_price_change(main_data, items_data, submit=submit, applicant=user["username"], self_check_evidence=evidence, action_note=action_note)
     await db.commit()
     if isinstance(record, dict) and record.get("_self_check_required"):
@@ -596,6 +619,15 @@ async def submit_for_approval(
     service = PriceChangeService(db)
     evidence = data.get("self_check_evidence") if isinstance(data, dict) else None
     action_note = data.get("self_check_action_note") or data.get("action_note") if isinstance(data, dict) else ""
+    # 附件必填：提交审批时至少一个附件
+    att_row = await db.execute(text("SELECT attachments FROM purchase_price_change WHERE id=:c"), {"c": change_id})
+    atts = att_row.scalar()
+    try:
+        atts = json.loads(atts) if isinstance(atts, str) else (atts or [])
+    except Exception:
+        atts = []
+    if not atts and not (evidence or []):
+        raise HTTPException(status_code=400, detail="请上传附件或自检凭证后再提交")
     record = await service.submit_for_approval(change_id, applicant=user["username"], self_check_evidence=evidence, action_note=action_note or "")
     if record is None:
         raise HTTPException(status_code=400, detail="仅草稿/已驳回/已撤回状态可提交")
@@ -757,28 +789,26 @@ async def revoke_approval(
 @router.delete("/{change_id}", response_model=ResponseModel)
 async def delete_price_change(
     change_id: int,
-    user: dict = Depends(get_current_user_payload),
-    _: dict = Depends(PermissionChecker("purchase.price_change", "delete")),
+    user: dict = Depends(get_current_user),
+    _: dict = Depends(PermissionChecker("purchase.price_change", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    # 已归档单删除：admin 或持有「调价单归档删除」权限者才可（实时查库，避免依赖 JWT 旧权限）
-    can_archive_delete = user["role"] == "admin"
-    if not can_archive_delete:
-        row = await db.execute(
-            text("""SELECT r.role_code, r.permissions
-                    FROM sys_role r JOIN sys_user u ON u.role_id = r.id
-                    WHERE u.username = :un LIMIT 1"""),
-            {"un": user["username"]},
-        )
-        r = row.fetchone()
-        if r:
-            perms = r[1] if isinstance(r[1], dict) else {}
-            from app.core.permissions import merge_role_permission_additions
-            perms = merge_role_permission_additions(r[0], perms)
-            can_archive_delete = "delete" in (perms.get("purchase.price_change.archive_delete") or [])
+    # 删除权限分两层：
+    #   本人可删自己创建的 draft/rejected/recalled（无需全局 delete 权限）；
+    #   「purchase.price_change.delete」可删他人单据；已归档单另需「archive_delete」（实时权限，admin 天然可删）。
+    perms = user.get("permissions") or {}
+    can_delete_others = "delete" in (perms.get("purchase.price_change") or [])
+    can_archive_delete = user.get("role") == "admin" or "delete" in (
+        perms.get("purchase.price_change.archive_delete") or []
+    )
 
     service = PriceChangeService(db)
-    result = await service.delete(change_id, can_archive_delete=can_archive_delete)
+    result = await service.delete(
+        change_id,
+        can_archive_delete=can_archive_delete,
+        requester=user["username"],
+        can_delete_others=can_delete_others,
+    )
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
     await db.commit()

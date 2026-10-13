@@ -147,10 +147,62 @@ def _attach_overdue(
         it['overdue_by_month'] = month_items
 
 
+def _compute_next_month_due(invoices: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[Decimal]]:
+    """计算下月应付金额与所属月份。
+
+    付款进度月 = 最晚付款申请日期所在月；
+    下月应付 = 进度月之后第一个有效应付>0的排款月合计；
+    无付款申请记录时取最早应付月；找不到返回 (None, None)。
+    """
+    month_map: Dict[str, Decimal] = {}
+    progress_month: Optional[str] = None
+    for inv in invoices:
+        inv_date = inv.get('invoice_date')
+        if not inv_date:
+            continue
+        pm = _compute_payment_month(inv_date, inv.get('payment_term'))
+        if not pm:
+            continue
+        remain = _effective_payable(inv)
+        if remain > 0:
+            month_map[pm] = month_map.get(pm, Decimal('0')) + remain
+        apply_date = inv.get('payment_apply_date')
+        if apply_date:
+            if isinstance(apply_date, str):
+                try:
+                    apply_date = datetime.strptime(apply_date, '%Y-%m-%d').date()
+                except (ValueError, TypeError):
+                    apply_date = None
+            if apply_date:
+                am = apply_date.strftime('%Y-%m')
+                if progress_month is None or am > progress_month:
+                    progress_month = am
+    if not month_map:
+        return None, None
+    months = sorted(month_map)
+    if progress_month:
+        for m in months:
+            if m > progress_month:
+                return m, month_map[m]
+        return None, None
+    return months[0], month_map[months[0]]
+
+
+def _attach_next_month_due(
+    items: List[Dict[str, Any]],
+    all_invoices_map: Dict[str, List[Dict[str, Any]]],
+) -> None:
+    """为每个聚合行附上 next_month 与 next_month_due。"""
+    for it in items:
+        next_month, next_due = _compute_next_month_due(all_invoices_map.get(it['supplier_code'], []))
+        it['next_month'] = next_month
+        it['next_month_due'] = next_due
+
+
 SORT_LABELS = {
     'supplier_code', 'supplier_name', 'invoice_date',
     'payment_term', 'payment_method', 'total_payable', 'monthly_due', 'monthly_bill', 'payment_month',
-    'overdue_total',
+    'overdue_total', 'next_month', 'next_month_due',
 }
 
 
@@ -358,6 +410,7 @@ async def _get_supplier_all_invoices(
         PurchaseInvoice.payment_apply_amount,
         PurchaseInvoice.paid_amount,
         PurchaseInvoice.payment_order_id,
+        PurchaseInvoice.payment_apply_date,
     ).where(
         PurchaseInvoice.supplier_code.in_(supplier_codes),
         _not_paid_clause(),
@@ -391,6 +444,7 @@ async def _get_supplier_all_invoices(
             'payment_apply_amount': float(r['payment_apply_amount'].quantize(Decimal('0.01'))) if r['payment_apply_amount'] is not None else 0.0,
             'paid_amount': float(r['paid_amount'].quantize(Decimal('0.01'))) if r['paid_amount'] is not None else 0.0,
             'payment_order_id': r.get('payment_order_id'),
+            'payment_apply_date': r.get('payment_apply_date'),
         })
 
     return invoice_map
@@ -472,6 +526,8 @@ def _format_item(item: Dict[str, Any]) -> Dict[str, Any]:
             {'month': m['month'], 'amount': float(m['amount'].quantize(Decimal('0.01')))}
             for m in item.get('overdue_by_month', [])
         ],
+        'next_month': item.get('next_month'),
+        'next_month_due': float(item['next_month_due'].quantize(Decimal('0.01'))) if item.get('next_month_due') is not None else None,
     }
 
 
@@ -550,6 +606,9 @@ async def get_supplier_payment_list(
 
     # 附上已到期未付合计与月度明细
     _attach_overdue(items, all_invoices_map)
+
+    # 附上下月应付金额与月份
+    _attach_next_month_due(items, all_invoices_map)
 
     items = [_format_item(it) for it in items]
 
@@ -665,6 +724,8 @@ EXPORT_COLUMNS = [
     ExportColumn('total_payable', '总应付金额', 14),
     ExportColumn('monthly_due', '月到期应付金额', 16),
     ExportColumn('overdue_total', '实际到期未付', 14),
+    ExportColumn('next_month', '下月应付月份', 12),
+    ExportColumn('next_month_due', '下月应付金额', 14),
 ]
 
 
@@ -744,6 +805,9 @@ async def get_supplier_payment_export(
     # 附上已到期未付合计与月度明细
     _attach_overdue(items, all_invoices_map)
 
+    # 附上下月应付金额与月份
+    _attach_next_month_due(items, all_invoices_map)
+
     items = [_format_item(it) for it in items]
 
     # 排序
@@ -765,6 +829,8 @@ async def get_supplier_payment_export(
             'total_payable': it.get('total_payable', 0),
             'monthly_due': it.get('monthly_due', 0),
             'overdue_total': it.get('overdue_total', 0),
+            'next_month': it.get('next_month') or '',
+            'next_month_due': it.get('next_month_due', 0),
         })
 
     svc = GenericExportService(EXPORT_COLUMNS, export_rows, sheet_name='供应商付款排程')

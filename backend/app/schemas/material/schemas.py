@@ -430,6 +430,8 @@ class SupplierPaymentOut(BaseModel):
     invoices: List[InvoiceDetail] = []
     overdue_total: Optional[float] = None
     overdue_by_month: List[OverdueMonthItem] = []
+    next_month: Optional[str] = None
+    next_month_due: Optional[float] = None
 
     model_config = {"from_attributes": True}
 
