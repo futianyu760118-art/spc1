@@ -222,9 +222,9 @@ class PriceChangeService:
             # old_price_date 列为 varchar(16), 只保留日期部分, 防止带时分秒的字符串超长
             old_price_date = (item.get("old_price_date") or "")[:10] or None
             await self.db.execute(
-                text("INSERT INTO purchase_price_change_item (change_id, seq, material_code, material_name, spec, unit, order_qty, delivery_qty, old_price, old_price_date, new_price, price_change_pct, remark) VALUES (:cid, :seq, :mc, :mn, :sp, :un, :oq, :dq, :op, :opd, :np, :pct, :rm)"),
+                text("INSERT INTO purchase_price_change_item (change_id, seq, material_code, material_name, spec, unit, unit_id, order_qty, delivery_qty, old_price, old_price_date, new_price, price_change_pct, remark) VALUES (:cid, :seq, :mc, :mn, :sp, :un, :uid, :oq, :dq, :op, :opd, :np, :pct, :rm)"),
                 {"cid": cid, "seq": idx + 1, "mc": item.get("material_code"), "mn": item.get("material_name"),
-                 "sp": item.get("spec"), "un": item.get("unit"), "oq": item.get("order_qty"),
+                 "sp": item.get("spec"), "un": item.get("unit"), "uid": item.get("unit_id"), "oq": item.get("order_qty"),
                  "dq": item.get("delivery_qty"), "op": old, "opd": old_price_date,
                  "np": new, "pct": pct, "rm": item.get("remark")},
             )
@@ -283,9 +283,9 @@ class PriceChangeService:
             # old_price_date 列为 varchar(16), 只保留日期部分
             old_price_date = (item.get("old_price_date") or "")[:10] or None
             await self.db.execute(
-                text("INSERT INTO purchase_price_change_item (change_id, seq, material_code, material_name, spec, unit, order_qty, delivery_qty, old_price, old_price_date, new_price, price_change_pct, remark) VALUES (:cid, :seq, :mc, :mn, :sp, :un, :oq, :dq, :op, :opd, :np, :pct, :rm)"),
+                text("INSERT INTO purchase_price_change_item (change_id, seq, material_code, material_name, spec, unit, unit_id, order_qty, delivery_qty, old_price, old_price_date, new_price, price_change_pct, remark) VALUES (:cid, :seq, :mc, :mn, :sp, :un, :uid, :oq, :dq, :op, :opd, :np, :pct, :rm)"),
                 {"cid": change_id, "seq": idx + 1, "mc": item.get("material_code"), "mn": item.get("material_name"),
-                 "sp": item.get("spec"), "un": item.get("unit"), "oq": item.get("order_qty"),
+                 "sp": item.get("spec"), "un": item.get("unit"), "uid": item.get("unit_id"), "oq": item.get("order_qty"),
                  "dq": item.get("delivery_qty"), "op": old, "opd": old_price_date,
                  "np": new, "pct": pct, "rm": item.get("remark")},
             )

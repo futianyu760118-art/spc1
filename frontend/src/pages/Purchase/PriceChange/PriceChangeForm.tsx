@@ -142,7 +142,7 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
   }
 
   // 物料行
-  const addItem = () => setItems(prev => [...prev, { key: Date.now(), unit: '个' }])
+  const addItem = () => setItems(prev => [...prev, { key: Date.now(), unit: '个', unit_id: null }])
   const rmItem = (k: number) => setItems(prev => prev.filter(i => i.key !== k))
   const upItem = (k: number, f: string, v: any) => setItems(prev => prev.map(i => i.key === k ? { ...i, [f]: v } : i))
   const lookPrice = async (key: number, mc: string) => {
@@ -177,6 +177,7 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
     upItem(key, 'material_name', m.material_name || '')
     upItem(key, 'spec', m.spec || '')
     upItem(key, 'unit', m.unit || '个')
+    upItem(key, 'unit_id', m.unit_id ?? null)
     // ERP报价直接填入原价
     if (m.purchase_price) {
       upItem(key, 'old_price', m.purchase_price)
@@ -306,7 +307,7 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
         erp_price_snapshot: items.flatMap(i => i._otherPrices || []).filter((p: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.supplier_code === p.supplier_code && x.price === p.price) === idx),
         submit,
         items: items.map(i => ({
-          material_code: i.material_code, material_name: i.material_name, spec: i.spec, unit: i.unit,
+          material_code: i.material_code, material_name: i.material_name, spec: i.spec, unit: i.unit, unit_id: i.unit_id,
           order_qty: i.order_qty, delivery_qty: i.delivery_qty,
           old_price: i.old_price, old_price_date: i.old_price_date,
           new_price: i.new_price, remark: i.remark,
@@ -493,7 +494,7 @@ export default function PriceChangeForm({ editId, variant = 'business' }: PriceC
         self_check_evidence: evidenceItems,
         self_check_action_note: scActionNote,
         items: items.map(i => ({
-          material_code: i.material_code, material_name: i.material_name, spec: i.spec, unit: i.unit,
+          material_code: i.material_code, material_name: i.material_name, spec: i.spec, unit: i.unit, unit_id: i.unit_id,
           order_qty: i.order_qty, delivery_qty: i.delivery_qty,
           old_price: i.old_price, old_price_date: i.old_price_date,
           new_price: i.new_price, remark: i.remark,

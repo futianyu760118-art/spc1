@@ -341,6 +341,9 @@ class DatabaseInitializer:
                 "self_check_evidence": "JSONB",
                 "self_check_action_note": "TEXT",
             },
+            "purchase_price_change_item": {
+                "unit_id": "INTEGER",
+            },
             "mrp_plan_order": {
                 "stock_qty": "NUMERIC(15,2)",
                 "audit_date": "DATE",

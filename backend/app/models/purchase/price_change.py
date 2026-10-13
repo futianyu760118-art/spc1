@@ -72,6 +72,7 @@ class PurchasePriceChangeItem(Base):
     material_name = Column(String(256))
     spec = Column(String(256))
     unit = Column(String(16))
+    unit_id = Column(Integer, nullable=True, comment="单位内码(对应 K3 计量单位 FMeasureUnitID)")
 
     order_qty = Column(Numeric(15, 4))
     delivery_qty = Column(Numeric(15, 4))

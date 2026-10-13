@@ -38,7 +38,7 @@ async def _fetch_change(db: AsyncSession, change_id: int) -> dict | None:
     if not row:
         return None
     items = (await db.execute(text(
-        "SELECT material_code, material_name, new_price, order_qty, delivery_qty, remark "
+        "SELECT material_code, material_name, new_price, order_qty, delivery_qty, remark, unit_id "
         "FROM purchase_price_change_item WHERE change_id = :c ORDER BY seq"
     ), {"c": change_id})).mappings().all()
     return {**row, "items": [dict(i) for i in items]}
@@ -86,9 +86,10 @@ def _sync_quotes_sync(change: dict) -> dict:
             if not k3item:
                 stats["missing_lookup"].append(mc)
                 continue
-            # 报价单位取「采购单位」FOrderUnitID（与历史报价一致）；缺省回退「基本单位」FUnitID
+            # 报价单位优先取「调价单明细上的单位内码」(与原 OA 一致: field7076);
+            # 缺省回退 K3 物料的采购单位 FOrderUnitID, 再回退基本单位 FUnitID
             fitem = int(k3item[0])
-            funit = int(k3item[2] or k3item[1] or 0)
+            funit = int(item.get("unit_id") or k3item[2] or k3item[1] or 0)
 
             # 1) 供应商-物料关系(链接服务器远程表 INSERT 要求 XACT_ABORT ON)
             conn.execute(text(
