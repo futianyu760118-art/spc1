@@ -207,6 +207,9 @@ class DatabaseInitializer:
                 "last_writeback_at": "TIMESTAMP",
                 "last_writeback_status": "VARCHAR(16)",
             },
+            "purchase_invoice": {
+                "payment_apply_date": "DATE",
+            },
             "production_task_order": {
                 "sale_order_id": "INTEGER",
                 "bom_id": "INTEGER",
@@ -2221,7 +2224,7 @@ ORDER BY FModifyDate DESC
                     SyncSqlConfig(
                         sync_type="purchase_invoices",
                         description="采购开票 — 从ERP采购发票表拉取（幂等键: invoice_no+line_no）",
-                        sql_text="-- TODO: 配置 ERP 采购开票查询 SQL，返回字段需包含: invoice_no, line_no, invoice_date, supplier_id, supplier_code, supplier_name, payment_term, settlement_method, invoice_amount, remain_payable\nSELECT NULL AS invoice_no, NULL AS line_no, NULL AS invoice_date, NULL AS supplier_id, NULL AS supplier_code, NULL AS supplier_name, NULL AS payment_term, NULL AS settlement_method, NULL AS invoice_amount, NULL AS remain_payable WHERE 1 = 0 AND :since IS NOT NULL",
+                        sql_text="-- TODO: 配置 ERP 采购开票查询 SQL，返回字段需包含: invoice_no, line_no, invoice_date, supplier_id, supplier_code, supplier_name, payment_term, settlement_method, invoice_amount, remain_payable, paid_amount, payment_order_id, payment_apply_date\nSELECT NULL AS invoice_no, NULL AS line_no, NULL AS invoice_date, NULL AS supplier_id, NULL AS supplier_code, NULL AS supplier_name, NULL AS payment_term, NULL AS settlement_method, NULL AS invoice_amount, NULL AS remain_payable, NULL AS paid_amount, NULL AS payment_order_id, NULL AS payment_apply_date WHERE 1 = 0 AND :since IS NOT NULL",
                         field_mapping_json=None,
                         is_active=False,
                         sync_enabled=False,
