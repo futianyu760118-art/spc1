@@ -1,7 +1,9 @@
 FROM node:20-alpine
 
-RUN apk add --no-cache python3 py3-pip \
-    && pip3 install --no-cache-dir --break-system-packages httpx python-dotenv
+# 国内镜像源加速 apk/pip（构建环境网络受限）
+RUN sed -i 's#https://dl-cdn.alpinelinux.org#https://mirrors.aliyun.com#g' /etc/apk/repositories \
+    && apk add --no-cache python3 py3-pip \
+    && pip3 install --no-cache-dir --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple httpx python-dotenv
 
 WORKDIR /app
 

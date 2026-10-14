@@ -61,3 +61,21 @@ services:
       - "3000:80"
     depends_on:
       - backend
+
+  # 执行面智能体（反向连 AEOS Hub）：默认不启动，需 `docker compose --profile agent up -d`
+  # 且 .env 中已配置 EXECUTION_WS_URL / EXECUTION_PLANE_TOKEN / CONTROL_PLATFORM_* 才有意义
+  execution-agent:
+    build:
+      context: .
+      dockerfile: execution-agent/Dockerfile
+    image: spc-execution-agent
+    profiles: ["agent"]
+    environment:
+      TZ: Asia/Shanghai
+      EXECUTION_WS_URL: ${EXECUTION_WS_URL:-ws://127.0.0.1:8788/execution-agent}
+      EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
+      EXECUTION_AGENT_ID: ${EXECUTION_AGENT_ID:-runtime-execution-query}
+      QUERY_TIMEOUT_MS: ${QUERY_TIMEOUT_MS:-30000}
+      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
+      CONTROL_PLATFORM_APP_KEY: ${CONTROL_PLATFORM_APP_KEY:-}
+      CONTROL_PLATFORM_APP_SECRET: ${CONTROL_PLATFORM_APP_SECRET:-}

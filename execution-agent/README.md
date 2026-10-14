@@ -71,14 +71,26 @@ npm test    # 11 个 e2e 场景：注册/心跳/成功/上游失败/非法路径
 
 ## Docker
 
-构建上下文为**仓库根**（需 COPY mcp-company-control 的 upstream_client.py）：
+已接入根 `docker-compose.yml`（`execution-agent` 服务，profile `agent`），默认 `docker compose up -d`
+不会启动它；配置好根 `.env` 的 `EXECUTION_WS_URL` / `EXECUTION_PLANE_TOKEN` /
+`CONTROL_PLATFORM_*` 后：
+
+```powershell
+docker compose --profile agent up -d execution-agent   # 首次会自动构建镜像
+docker compose logs -f execution-agent
+docker compose --profile agent stop execution-agent
+```
+
+或单独构建/运行（构建上下文为**仓库根**，需 COPY mcp-company-control 的 upstream_client.py）：
 
 ```powershell
 docker build -f execution-agent/Dockerfile -t spc-execution-agent .
 docker run --rm -e EXECUTION_WS_URL=... -e EXECUTION_PLANE_TOKEN=... -e CONTROL_PLATFORM_APP_KEY=... spc-execution-agent
 ```
 
-镜像 `node:20-alpine` + python3（httpx/python-dotenv），HEALTHCHECK 走 `/healthz`。
+镜像 `node:20-alpine` + python3（httpx/python-dotenv，apk/pip 走国内镜像源）；
+HEALTHCHECK 走容器内 `/healthz`（200=已注册在线，503=未连上 Hub）。健康检查仅绑容器内
+127.0.0.1，不对宿主机暴露。
 
 ## 维护注意
 
