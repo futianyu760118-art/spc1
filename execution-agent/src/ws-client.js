@@ -2,8 +2,8 @@ import WebSocket from 'ws';
 import { CAPABILITY_NAME } from './config.js';
 import { createRunner } from './runner.js';
 
-const RECONNECT_BASE_MS = 1000;
-const RECONNECT_MAX_MS = 30000;
+/** 重连退避阶梯（秒级递增至 30s 封顶），每次叠加 ±20% 随机抖动（交接单要求 1/2/5/10/30） */
+const RECONNECT_LADDER_MS = [1000, 2000, 5000, 10000, 30000];
 const DEFAULT_HEARTBEAT_MS = 5000;
 
 /** WS 状态机：register → registered → 心跳；断线杀 run、指数退避重连后重新 register（契约 §5） */
@@ -13,7 +13,7 @@ export function createWsClient(config, log) {
   let heartbeatTimer = null;
   let heartbeatIntervalMs = DEFAULT_HEARTBEAT_MS;
   let registered = false;
-  let reconnectDelay = RECONNECT_BASE_MS;
+  let reconnectStep = 0;
   let reconnectTimer = null;
   let stopped = false;
 
@@ -45,7 +45,7 @@ export function createWsClient(config, log) {
         const interval = Number(message.heartbeatIntervalMs);
         heartbeatIntervalMs = Number.isFinite(interval) && interval > 0 ? interval : DEFAULT_HEARTBEAT_MS;
         registered = true;
-        reconnectDelay = RECONNECT_BASE_MS;
+        reconnectStep = 0;
         startHeartbeat();
         log.info('registered', { agentId: message.agentId, heartbeatIntervalMs });
         break;
@@ -75,8 +75,9 @@ export function createWsClient(config, log) {
   }
 
   function scheduleReconnect() {
-    const delay = Math.round(Math.min(reconnectDelay, RECONNECT_MAX_MS) * (0.5 + Math.random() * 0.5));
-    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+    const base = RECONNECT_LADDER_MS[Math.min(reconnectStep, RECONNECT_LADDER_MS.length - 1)];
+    reconnectStep = Math.min(reconnectStep + 1, RECONNECT_LADDER_MS.length - 1);
+    const delay = Math.round(base * (0.8 + Math.random() * 0.4));
     log.info('reconnecting', { delayMs: delay });
     reconnectTimer = setTimeout(connect, delay);
   }
@@ -91,6 +92,7 @@ export function createWsClient(config, log) {
         agentId: config.agentId,
         name: config.agentName,
         version: config.agentVersion,
+        ...(config.sourceSystem ? { sourceSystem: config.sourceSystem } : {}),
         capabilities: [{ name: CAPABILITY_NAME, description: '中台只读查询' }],
       });
     });

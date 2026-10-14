@@ -70,11 +70,13 @@ services:
       dockerfile: execution-agent/Dockerfile
     image: spc-execution-agent
     profiles: ["agent"]
+    restart: unless-stopped
     environment:
       TZ: Asia/Shanghai
       EXECUTION_WS_URL: ${EXECUTION_WS_URL:-ws://127.0.0.1:8788/execution-agent}
       EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
       EXECUTION_AGENT_ID: ${EXECUTION_AGENT_ID:-runtime-execution-query}
+      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-}
       QUERY_TIMEOUT_MS: ${QUERY_TIMEOUT_MS:-30000}
       CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
       CONTROL_PLATFORM_APP_KEY: ${CONTROL_PLATFORM_APP_KEY:-}

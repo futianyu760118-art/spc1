@@ -49,6 +49,7 @@ export function loadConfig(env = process.env) {
     token: env.EXECUTION_PLANE_TOKEN || '',
     agentId: env.EXECUTION_AGENT_ID || 'runtime-execution-query',
     agentName: env.AGENT_NAME || 'execution-query-agent',
+    sourceSystem: env.EXECUTION_SOURCE_SYSTEM || '',
     agentVersion: env.AGENT_VERSION || readAgentVersion(),
     pythonBin: env.PYTHON_BIN || 'python',
     queryScript: env.QUERY_SCRIPT || path.join(AGENT_DIR, 'query', 'company-control-query.py'),

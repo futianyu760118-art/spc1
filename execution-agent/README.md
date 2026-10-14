@@ -40,6 +40,7 @@ node --env-file=.env src/agent.js
 | `EXECUTION_WS_URL` | `ws://127.0.0.1:8788/execution-agent` | 管理面控制通道 |
 | `EXECUTION_PLANE_TOKEN` | （必填） | 握手头 `x-aeos-execution-token` |
 | `EXECUTION_AGENT_ID` | `runtime-execution-query` | 须等于管理面 AI 港湾 Runtime id（§4.5 桥接约定） |
+| `EXECUTION_SOURCE_SYSTEM` | （空=不下发该字段） | 注册来源标识（Hub 仪表盘「来源」列，如 `公司中控平台（UAT）`） |
 | `AGENT_NAME` / `AGENT_VERSION` | `execution-query-agent` / package.json | 注册信息 |
 | `PYTHON_BIN` | `python` | 查询子进程解释器（Windows 可配 `py` 或绝对路径） |
 | `QUERY_SCRIPT` | `<本目录>/query/company-control-query.py` | 查询 CLI 路径 |

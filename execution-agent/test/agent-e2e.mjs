@@ -66,9 +66,12 @@ async function main() {
   await runScenario('register_and_heartbeat', async (ctx) => {
     ctx.hub = startMockHub();
     await ctx.hub.ready;
-    ctx.agents.push(spawnAgent(`ws://127.0.0.1:${ctx.hub.port}/execution-agent`));
+    ctx.agents.push(
+      spawnAgent(`ws://127.0.0.1:${ctx.hub.port}/execution-agent`, { EXECUTION_SOURCE_SYSTEM: '测试中控' })
+    );
     const register = await waitUntil(() => ofType(ctx.hub.received, 'register')[0]);
     if (register.agentId !== 'runtime-execution-query') throw new Error(`agentId=${register.agentId}`);
+    if (register.sourceSystem !== '测试中控') throw new Error(`sourceSystem=${register.sourceSystem}`);
     if (!register.capabilities?.some((c) => c.name === CAP)) throw new Error('capabilities 缺 query_control_platform');
     await waitUntil(() => ofType(ctx.hub.received, 'heartbeat').filter((m) => m.status === 'idle').length >= 2);
   });
