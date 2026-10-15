@@ -1,5 +1,6 @@
 """智能助手 API 路由 — Agent + SSE 流式 + 日志查询"""
 
+import asyncio
 import json
 import logging
 import time
@@ -44,6 +45,7 @@ async def _record_run(
     error_message: Optional[str],
 ) -> None:
     """用量审计落库；失败仅告警不影响对话主流程"""
+    intent = (intent or "").lower() or None
     try:
         db.add(AssistantRun(
             trace_id=trace_id or "",
@@ -106,18 +108,27 @@ async def chat(
             except Exception:
                 pass
 
-        import asyncio
         disconnect_task = asyncio.create_task(_watch_disconnect())
 
     try:
-        reply = await agent.run(
-            message=body.message,
-            db=db,
-            session_id=session_id,
-            conversation_history=body.conversation_history,
-            trace_id=trace_id,
-            user_id=str(user_id) if user_id else "",
-        )
+        try:
+            reply = await agent.run(
+                message=body.message,
+                db=db,
+                session_id=session_id,
+                conversation_history=body.conversation_history,
+                trace_id=trace_id,
+                user_id=str(user_id) if user_id else "",
+            )
+        except Exception as e:
+            await _record_run(
+                db,
+                trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
+                intent=None, tools_called=[], tool_rounds=None, total_tokens=None,
+                duration_ms=round((time.perf_counter() - request_start) * 1000, 2),
+                is_success=False, error_message=str(e),
+            )
+            raise
 
         total_duration_ms = round((time.perf_counter() - request_start) * 1000, 2)
         if reply.diagnostics:
@@ -199,7 +210,8 @@ async def chat_stream(
         finally:
             stats = run_info["stats"] or {}
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
-            await _record_run(
+            # shield：生成器被二次取消（客户端断开）时保证落库任务不被连带取消
+            await asyncio.shield(_record_run(
                 db,
                 trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
                 intent=run_info["intent"],
@@ -209,7 +221,7 @@ async def chat_stream(
                 duration_ms=duration_ms,
                 is_success=run_info["done"] and not run_info["error"],
                 error_message=run_info["error"] or (None if run_info["done"] else "stream_interrupted"),
-            )
+            ))
 
     return StreamingResponse(
         event_generator(),
