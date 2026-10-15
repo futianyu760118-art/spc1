@@ -48,6 +48,9 @@ services:
       WRITEBACK_POLL_INTERVAL: ${WRITEBACK_POLL_INTERVAL:-}
       WRITEBACK_BATCH_SIZE: ${WRITEBACK_BATCH_SIZE:-}
       WRITEBACK_CLAIM_TIMEOUT: ${WRITEBACK_CLAIM_TIMEOUT:-}
+      # 执行面智能体管理（状态/配置/重启代理到 aeos-execution-agent 的 admin 面）
+      EXECUTION_AGENT_BASE_URL: ${EXECUTION_AGENT_BASE_URL:-http://aeos-execution-agent:8790}
+      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
       - ./data/backups:/app/backups
