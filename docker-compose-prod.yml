@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:15
     container_name: hj-spc-postgres
+    # wal_level=logical 供 EDP 数据平台 CDC 逻辑复制（2026-10）；max_slot_wal_keep_size 为复制槽 WAL 保留设上限防磁盘涨满
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_slot_wal_keep_size=20GB"]
     environment:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -91,6 +93,9 @@ services:
       WRITEBACK_POLL_INTERVAL: ${WRITEBACK_POLL_INTERVAL:-}
       WRITEBACK_BATCH_SIZE: ${WRITEBACK_BATCH_SIZE:-}
       WRITEBACK_CLAIM_TIMEOUT: ${WRITEBACK_CLAIM_TIMEOUT:-}
+      # 执行面智能体管理（状态/配置/重启代理；AGENT_ADMIN_TOKEN 需与 aeos-execution-agent 容器一致）
+      EXECUTION_AGENT_BASE_URL: ${EXECUTION_AGENT_BASE_URL:-}
+      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
       - ./data/backups:/app/backups
