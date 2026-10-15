@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.security import PermissionChecker
+from app.models.basicdata.ai_agent import AssistantRun
 from app.schemas.assistant.schemas import ChatMessageIn, AssistantReply, ToolInfo
 
 import app.services.assistant.tools  # noqa: F401
@@ -25,6 +26,52 @@ from app.services.assistant.cancellation import CancellationRegistry
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _record_run(
+    db: AsyncSession,
+    *,
+    trace_id: str,
+    session_id: str,
+    user_id: str,
+    message: str,
+    intent: Optional[str],
+    tools_called: list,
+    tool_rounds: Optional[int],
+    total_tokens: Optional[int],
+    duration_ms: Optional[float],
+    is_success: bool,
+    error_message: Optional[str],
+) -> None:
+    """用量审计落库；失败仅告警不影响对话主流程"""
+    try:
+        db.add(AssistantRun(
+            trace_id=trace_id or "",
+            session_id=session_id or None,
+            user_id=user_id or None,
+            user_message=(message or "")[:500],
+            intent=intent,
+            tools_called=tools_called or None,
+            tool_rounds=tool_rounds,
+            total_tokens=total_tokens,
+            duration_ms=duration_ms,
+            is_success=is_success,
+            error_message=error_message,
+        ))
+        await db.flush()
+    except Exception as exc:
+        logger.warning(f"[assistant] 用量落库失败 trace={trace_id}: {exc}")
+
+
+def _diag_tools(diagnostics: Optional[dict]) -> list:
+    if not diagnostics:
+        return []
+    names: list = []
+    for item in diagnostics.get("tools") or []:
+        name = item.get("name")
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 @router.post("/chat", response_model=dict)
@@ -77,6 +124,18 @@ async def chat(
             reply.diagnostics["total_duration_ms"] = total_duration_ms
         reply.session_id = session_id
         reply.trace_id = trace_id
+        errors = (reply.diagnostics or {}).get("errors") or []
+        await _record_run(
+            db,
+            trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
+            intent=(reply.diagnostics or {}).get("intent"),
+            tools_called=_diag_tools(reply.diagnostics),
+            tool_rounds=len((reply.diagnostics or {}).get("llm_rounds") or []),
+            total_tokens=(reply.diagnostics or {}).get("total_tokens"),
+            duration_ms=total_duration_ms,
+            is_success=not errors,
+            error_message=errors[0].get("message") if errors else None,
+        )
         return {"code": 0, "data": reply.model_dump()}
     finally:
         if disconnect_task is not None:
@@ -100,17 +159,57 @@ async def chat_stream(
         user_id = str(user_id)
 
     async def event_generator():
-        yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
-        async for event in agent_stream.run_stream(
-            message=body.message,
-            db=db,
-            session_id=session_id,
-            conversation_history=body.conversation_history,
-            trace_id=trace_id,
-            user_id=str(user_id) if user_id else "",
-            request=request,
-        ):
-            yield event
+        started = time.perf_counter()
+        run_info: Dict[str, Any] = {"tools": [], "stats": None, "intent": None, "error": None, "done": False}
+
+        def _track(raw_event: str) -> None:
+            lines = raw_event.split("\n")
+            event_name = next((l[7:] for l in lines if l.startswith("event: ")), "")
+            data_line = next((l[6:] for l in lines if l.startswith("data: ")), None)
+            if not data_line:
+                return
+            try:
+                payload = json.loads(data_line)
+            except Exception:
+                return
+            if event_name == "tool_start":
+                name = payload.get("name")
+                if name and name not in run_info["tools"]:
+                    run_info["tools"].append(name)
+            elif event_name == "done":
+                run_info["done"] = True
+                run_info["intent"] = payload.get("intent")
+                run_info["stats"] = payload.get("stats")
+            elif event_name == "error":
+                run_info["error"] = payload.get("message")
+
+        try:
+            yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
+            async for event in agent_stream.run_stream(
+                message=body.message,
+                db=db,
+                session_id=session_id,
+                conversation_history=body.conversation_history,
+                trace_id=trace_id,
+                user_id=str(user_id) if user_id else "",
+                request=request,
+            ):
+                _track(event)
+                yield event
+        finally:
+            stats = run_info["stats"] or {}
+            duration_ms = round((time.perf_counter() - started) * 1000, 2)
+            await _record_run(
+                db,
+                trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
+                intent=run_info["intent"],
+                tools_called=run_info["tools"],
+                tool_rounds=stats.get("tool_rounds"),
+                total_tokens=stats.get("total_tokens"),
+                duration_ms=duration_ms,
+                is_success=run_info["done"] and not run_info["error"],
+                error_message=run_info["error"] or (None if run_info["done"] else "stream_interrupted"),
+            )
 
     return StreamingResponse(
         event_generator(),
