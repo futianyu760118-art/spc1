@@ -56,6 +56,10 @@ const config = {
   reasoningTimeoutMs: toInt(fileVars, "CONTROL_PLATFORM_REASONING_TIMEOUT_MS", 180000),
   healthCheckPort: toInt(fileVars, "HEALTH_CHECK_PORT", 8790),
   logLevel: fromEnv(fileVars, "LOG_LEVEL", "info"),
+  // 管理台 admin 面令牌（backend 代理调 /admin/* 时携带；空=禁用 admin 面）
+  adminToken: process.env.AGENT_ADMIN_TOKEN ?? fileVars.AGENT_ADMIN_TOKEN ?? "",
+  // 远程配置版本（成功拉取 DB 配置后写入；/admin/status 上报）
+  configVersion: 0,
 };
 
 module.exports = config;
