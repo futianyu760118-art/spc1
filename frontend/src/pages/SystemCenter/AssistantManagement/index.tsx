@@ -23,7 +23,7 @@ interface StatsData {
 }
 
 const INTENT_LABELS: Record<string, string> = {
-  query_data: '查数据', analyze_history: '析历史', general_chat: '闲聊', agent: '工具链', unknown: '未知',
+  query_data: '查数据', analyze_history: '分析历史', general_chat: '闲聊', agent: '工具链', unknown: '未知',
 }
 
 function OverviewTab({ days }: { days: number }) {
@@ -255,7 +255,7 @@ function ConfigTab() {
 export default function AssistantManagement() {
   const hasPermission = useAuthStore((s: any) => s.hasPermission) as (r: string, a: string) => boolean
   const canConfig = hasPermission('ai.assistant_config', 'update')
-  const [days] = useState(30)
+  const days = 30
 
   const tabs = [
     { key: 'overview', label: '概览', children: <OverviewTab days={days}/> },

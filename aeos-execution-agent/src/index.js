@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const http = require("node:http");
 const config = require("./config");
 const { log } = require("./lib/http-client");
@@ -65,7 +66,13 @@ function startHealthServer(connection) {
     } else if (pathname.startsWith("/admin/")) {
       if (!config.adminToken) return send(503, { status: "admin_disabled" });
       const token = req.headers["x-admin-token"];
-      if (token !== config.adminToken) return send(401, { status: "unauthorized" });
+      if (
+        typeof token !== "string" ||
+        token.length !== config.adminToken.length ||
+        !crypto.timingSafeEqual(Buffer.from(token), Buffer.from(config.adminToken))
+      ) {
+        return send(401, { status: "unauthorized" });
+      }
       if (pathname === "/admin/status" && req.method === "GET") {
         send(200, {
           registered: connection.isRegistered(),

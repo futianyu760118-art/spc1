@@ -21,7 +21,7 @@ async function applyRemoteConfig() {
     const value = remote[key];
     if (value === undefined || value === null || value === "") continue;
     if (String(config[prop]) === String(value)) continue;
-    config[prop] = prop.endsWith("_ms") ? Number(value) : value;
+    config[prop] = key.endsWith("_ms") ? Number(value) : value;
     applied.push(key);
   }
   config.configVersion = (payload && payload.version) || 0;
