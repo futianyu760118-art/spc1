@@ -10,6 +10,14 @@ from app.services.ai.base import LLMProvider, ChatMessage, ChatOptions, ChatWith
 
 logger = logging.getLogger(__name__)
 
+
+def _unexpected_response_error(response) -> RuntimeError:
+    # 部分 OpenAI 兼容网关（如 bigmodel.cn）在令牌失效/配额不足时返回 HTTP 200 + 错误 JSON，
+    # SDK 解析后 choices 为 None，这里还原原始错误体避免 'NoneType' is not subscriptable
+    extra = getattr(response, "model_extra", None) or {}
+    detail = extra.get("msg") or extra.get("error") or str(extra) if extra else str(response)
+    return RuntimeError(f"上游返回异常响应（choices 为空，常见于令牌失效/配额不足）: {detail}")
+
 try:
     from openai import AsyncOpenAI
     _HAS_OPENAI = True
@@ -62,6 +70,8 @@ class OpenAIProvider(LLMProvider):
             ),
             timeout=request_timeout,
         )
+        if not response.choices:
+            raise _unexpected_response_error(response)
         content = response.choices[0].message.content or ""
         logger.info(f"[OpenAI] model={self._model} tokens={response.usage.total_tokens if response.usage else '?'}")
         return content
@@ -132,6 +142,8 @@ class OpenAIProvider(LLMProvider):
                     timeout=request_timeout,
                 )
                 # Success
+                if not response.choices:
+                    raise _unexpected_response_error(response)
                 choice = response.choices[0]
                 logger.info(f"[OpenAI tools] model={self._model} finish={choice.finish_reason} tokens={response.usage.total_tokens if response.usage else '?'}")
                 break
