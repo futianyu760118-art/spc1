@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.services.ai import ai_service, ChatMessage, ChatOptions
+from app.services.ai_config import render_system_prompt
 from app.services.assistant.tool_registry import get_openai_tools_schema
 from app.services.assistant.card_builder import build_cards_from_tool_results
 from app.services.assistant import session_store
@@ -35,6 +36,7 @@ from app.services.assistant.agent import (
     _execute_tool_with_retry,
     _strip_think_tags,
     _extract_thinking,
+    _load_runtime_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,6 +225,13 @@ async def run_stream(
     settings = get_settings()
     provider_name = ai_service.current_provider()
 
+    rt = await _load_runtime_config(db)
+    disabled = set(rt.get("disabled_tools") or [])
+    system_prompt = render_system_prompt(rt.get("system_prompt") or SYSTEM_PROMPT, disabled)
+    intent_prompt = (rt.get("intent_prompt") or "").strip() or None
+
+    stats: Dict[str, Any] = {"tools_called": [], "tool_rounds": 0, "total_tokens": None}
+
     run_logger: Optional[RunLogger] = None
     if trace_id:
         try:
@@ -266,7 +275,7 @@ async def run_stream(
 
         yield _sse_event("thinking", {"stage": "intent", "message": "正在理解您的问题..."})
 
-        intent = await _recognize_intent(message, history)
+        intent = await _recognize_intent(message, history, intent_prompt)
         logger.info(f"[stream:{trace_id}] 意图: {intent}")
 
         if run_logger:
@@ -275,7 +284,7 @@ async def run_stream(
         if intent in ("ANALYZE_HISTORY", "GENERAL_CHAT"):
             yield _sse_event("thinking", {"stage": "generating", "message": "正在生成回复..."})
 
-            messages: List[Any] = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
+            messages: List[Any] = [ChatMessage(role="system", content=system_prompt)]
             for msg in history[-10:]:
                 role = msg.get("role")
                 content = msg.get("content", "")
@@ -290,7 +299,7 @@ async def run_stream(
             try:
                 @async_retry(LLM_RETRY_CONFIG)
                 async def _stream_call():
-                    options = ChatOptions(temperature=0.3, max_tokens=4096, timeout=60)
+                    options = ChatOptions(temperature=rt.get("temperature", 0.1), max_tokens=rt.get("max_tokens", 4096), model=(rt.get("model_name") or "").strip() or None, timeout=60)
                     think_filter = ThinkTagFilter()
 
                     def _on_thinking(text: str):
@@ -318,7 +327,7 @@ async def run_stream(
                 if run_logger:
                     await run_logger.log("error", {"stage": "llm_retry_exhausted", "message": str(e)})
                 yield _sse_event("error", {"message": "AI 服务调用失败，请稍后重试。"})
-                yield _sse_event("done", {"provider": provider_name})
+                yield _sse_event("done", {"provider": provider_name, "stats": stats})
                 return
             except asyncio.CancelledError:
                 yield _sse_event("cancelled", {"reason": "client_disconnected"})
@@ -328,7 +337,7 @@ async def run_stream(
                 if run_logger:
                     await run_logger.log("error", {"stage": "llm", "message": str(e)})
                 yield _sse_event("error", {"message": "AI 服务调用失败，请稍后重试。"})
-                yield _sse_event("done", {"provider": provider_name})
+                yield _sse_event("done", {"provider": provider_name, "stats": stats})
                 return
 
             if CancellationRegistry.is_cancelled(session_id):
@@ -342,16 +351,16 @@ async def run_stream(
                     "text_length": len(full_text),
                     "thinking_length": len(full_thinking),
                 })
-            yield _sse_event("done", {"provider": provider_name, "intent": intent.lower()})
+            yield _sse_event("done", {"provider": provider_name, "intent": intent.lower(), "stats": stats})
             return
 
-        tools_schema = get_openai_tools_schema()
+        tools_schema = get_openai_tools_schema(exclude=disabled)
         if not tools_schema:
             yield _sse_event("error", {"message": "系统未注册任何工具，请联系管理员。"})
             yield _sse_event("done", {"provider": provider_name})
             return
 
-        messages = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
+        messages = [ChatMessage(role="system", content=system_prompt)]
         for msg in history[-10:]:
             role = msg.get("role")
             content = msg.get("content", "")
@@ -362,9 +371,9 @@ async def run_stream(
         messages = await _maybe_summarize_stream(messages, run_logger)
 
         all_tool_results: List[Dict[str, Any]] = []
-        options = ChatOptions(temperature=0.1, max_tokens=4096, timeout=120)
+        options = ChatOptions(temperature=rt.get("temperature", 0.1), max_tokens=rt.get("max_tokens", 4096), model=(rt.get("model_name") or "").strip() or None, timeout=120)
 
-        for round_idx in range(MAX_TOOL_ROUNDS):
+        for round_idx in range(rt.get("max_tool_rounds", MAX_TOOL_ROUNDS)):
             if CancellationRegistry.is_cancelled(session_id):
                 yield _sse_event("cancelled", {"reason": CancellationRegistry.reason(session_id)})
                 return
@@ -386,15 +395,18 @@ async def run_stream(
                 if run_logger:
                     await run_logger.log("error", {"stage": "llm_retry_exhausted", "round": round_idx + 1})
                 yield _sse_event("error", {"message": "AI 服务调用失败，请稍后重试。"})
-                yield _sse_event("done", {"provider": provider_name})
+                yield _sse_event("done", {"provider": provider_name, "stats": stats})
                 return
             except Exception as e:
                 logger.error(f"[stream:{trace_id}] LLM 调用失败 (round {round_idx + 1}): {e}")
                 if run_logger:
                     await run_logger.log("error", {"stage": "llm", "round": round_idx + 1, "message": str(e)})
                 yield _sse_event("error", {"message": "AI 服务调用失败，请稍后重试。"})
-                yield _sse_event("done", {"provider": provider_name})
+                yield _sse_event("done", {"provider": provider_name, "stats": stats})
                 return
+
+            if result.usage and result.usage.total_tokens:
+                stats["total_tokens"] = result.usage.total_tokens
 
             if run_logger:
                 await run_logger.log("llm_response", {
@@ -435,17 +447,20 @@ async def run_stream(
                         "text_length": len(text),
                         "tool_count": len(all_tool_results),
                     })
-                yield _sse_event("done", {"provider": provider_name, "intent": "agent"})
+                yield _sse_event("done", {"provider": provider_name, "intent": "agent", "stats": stats})
                 return
 
             tool_messages = []
             for tc in result.tool_calls:
+                if tc.name not in stats["tools_called"]:
+                    stats["tools_called"].append(tc.name)
+                stats["tool_rounds"] = round_idx + 1
                 yield _sse_event("tool_start", {
                     "name": tc.name,
                     "arguments": tc.arguments,
                 })
 
-                data = await _execute_tool_with_retry(db, tc.name, tc.arguments)
+                data = await _execute_tool_with_retry(db, tc.name, tc.arguments, timeout=rt.get("tool_execute_timeout", TOOL_EXECUTE_TIMEOUT), disabled_tools=disabled)
                 has_error = "error" in data
 
                 yield _sse_event("tool_done", {
@@ -526,7 +541,7 @@ async def run_stream(
                 "tool_count": len(all_tool_results),
                 "max_rounds_reached": True,
             })
-        yield _sse_event("done", {"provider": provider_name, "intent": "agent"})
+        yield _sse_event("done", {"provider": provider_name, "intent": "agent", "stats": stats})
 
     except asyncio.CancelledError:
         yield _sse_event("cancelled", {"reason": "client_disconnected"})
