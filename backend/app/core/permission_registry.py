@@ -389,6 +389,26 @@ declare_permission(
     route_path="/backups", sort_order=12,
 )
 
+# 智能体管理台（2026-10-15）— 智能助手监控/配置 + 执行面智能体管理
+declare_permission(
+    "ai.assistant_monitor", "智能助手管理",
+    module="basicdata", parent_code="basicdata",
+    actions=["read"],
+    route_path="/ai-assistant", sort_order=13,
+)
+# Tab 级权限（页内二次校验，同 approval.business 模式；无独立路由）
+declare_permission(
+    "ai.assistant_config", "助手配置",
+    module="basicdata", parent_code="ai.assistant_monitor",
+    actions=["read", "update"], sort_order=1,
+)
+declare_permission(
+    "ai.execution_agent", "执行面智能体",
+    module="basicdata", parent_code="basicdata",
+    actions=["read", "update"],
+    route_path="/execution-agent", sort_order=14,
+)
+
 # 采购中心
 declare_permission("purchase", "采购中心", module="purchase", sort_order=11)
 declare_permission("purchase.price_change", "调价单管理", module="purchase", parent_code="purchase",

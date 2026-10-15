@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     REASONING_MAX_EVIDENCE_ITEMS: int = 50  # 单次任务证据条数上限
     REASONING_MAX_CONCLUSIONS: int = 20     # 单次任务结论条数上限
 
+    # 智能体管理台（backend 代理访问执行面 agent 的 admin 面；两者留空则 status/restart 返回下线态）
+    EXECUTION_AGENT_BASE_URL: str = ""   # 如 http://aeos-execution-agent:8790
+    AGENT_ADMIN_TOKEN: str = ""          # 与 agent .env 的 AGENT_ADMIN_TOKEN 一致
+
     # 物料盘点
     STOCK_CHECK_RECENT_SKIP_DAYS: int = 7  # 订单盘点建单/刷新BOM时，近 N 天内已盘过的(物料×仓库)行仅标记"近期已盘"免盘(不预填盘点数据)
 

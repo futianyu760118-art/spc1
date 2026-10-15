@@ -28,6 +28,9 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "materials.mrp": ["read", "run", "review", "convert", "param"],
         "materials.purchase_requisition": ["read", "create", "update", "convert"],
         "backup": ["read", "manage"],
+        "ai.assistant_monitor": ["read"],
+        "ai.assistant_config": ["read", "update"],
+        "ai.execution_agent": ["read", "update"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],
