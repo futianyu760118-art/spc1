@@ -44,8 +44,9 @@ const fileVars = loadEnvFile();
 const config = {
   wsUrl: fromEnv(fileVars, "EXECUTION_WS_URL", "ws://127.0.0.1:8788/execution-agent"),
   token: fromEnv(fileVars, "EXECUTION_PLANE_TOKEN"),
-  agentId: fromEnv(fileVars, "EXECUTION_AGENT_ID", "spc-execution-agent"),
-  agentName: fromEnv(fileVars, "AGENT_NAME", "aeos-execution-agent"),
+  // 管理面 127b013 起约定的身份（原 spc-execution-agent / aeos-execution-agent 已废弃）
+  agentId: fromEnv(fileVars, "EXECUTION_AGENT_ID", "runtime-control-platform-agent"),
+  agentName: fromEnv(fileVars, "EXECUTION_AGENT_NAME", fromEnv(fileVars, "AGENT_NAME", "公司中台执行面智能体")),
   agentVersion: fromEnv(fileVars, "AGENT_VERSION", readAgentVersion()),
   sourceSystem: process.env.EXECUTION_SOURCE_SYSTEM ?? fileVars.EXECUTION_SOURCE_SYSTEM ?? "",
   platformBaseUrl: fromEnv(fileVars, "CONTROL_PLATFORM_BASE_URL").replace(/\/+$/, ""),

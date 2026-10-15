@@ -8,9 +8,26 @@ const queryAdapter = require("./adapters/query-adapter");
 const reasoningAdapter = require("./adapters/reasoning-adapter");
 
 const handlers = {
+  // 能力自描述（管理面 127b013 起强校验）：readOnly 只读约束 + constraints 行为保证 +
+  // JSON Schema 输入输出声明，缺失会被派单校验拒绝（WRITE_FORBIDDEN）；
+  // reasoning 的 requireEvidence=true：结论缺证据引用时降级低置信度（管理面补充要求）
   capabilities: [
-    { name: "query_control_platform", description: "中台只读查询（契约 §4.2 冻结白名单）" },
-    { name: "reason_control_platform", description: "中台只读推理（大模型分析，结论带 evidence_refs）" },
+    {
+      name: "query_control_platform",
+      description: "中台只读查询（契约 §4.2 冻结白名单）",
+      readOnly: true,
+      constraints: { readOnly: true },
+      inputSchema: queryAdapter.inputSchema,
+      outputSchema: queryAdapter.outputSchema,
+    },
+    {
+      name: "reason_control_platform",
+      description: "中台只读推理（大模型分析，结论带 evidence_refs）",
+      readOnly: true,
+      constraints: { readOnly: true, requireEvidence: true },
+      inputSchema: reasoningAdapter.inputSchema,
+      outputSchema: reasoningAdapter.outputSchema,
+    },
   ],
 
   /** dispatch 路由；run.controller.signal 透传给上游请求，召回/断线即中止 */

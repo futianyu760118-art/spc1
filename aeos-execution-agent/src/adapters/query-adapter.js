@@ -30,6 +30,18 @@ const PATH_ENDPOINT_CODES = Object.freeze({
   "/external/production/capacity/list": "production.capacity.list",
 });
 
+/** 能力自描述（管理面 127b013 起 register 必带）：输入 {path, params}，输出为中台信封 data（逐端点形状不同，仅约束为对象）。 */
+const inputSchema = Object.freeze({
+  type: "object",
+  properties: {
+    path: { type: "string", enum: Object.keys(PATH_ENDPOINT_CODES) },
+    params: { type: "object", description: "查询参数（分页/筛选），缺省为空对象" },
+  },
+  required: ["path"],
+});
+
+const outputSchema = Object.freeze({ type: "object", description: "中台 {code,message,data} 信封的 data（逐端点结构不同）" });
+
 function invoke(input) {
   const path = input && input.path;
   const endpointCode = PATH_ENDPOINT_CODES[path];
@@ -47,4 +59,4 @@ function invoke(input) {
   });
 }
 
-module.exports = { invoke, PATH_ENDPOINT_CODES };
+module.exports = { invoke, PATH_ENDPOINT_CODES, inputSchema, outputSchema };

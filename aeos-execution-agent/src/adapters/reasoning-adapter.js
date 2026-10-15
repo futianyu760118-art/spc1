@@ -15,6 +15,62 @@ const { log, UpstreamError, mapCode, signedPostEnvelope } = require("../lib/http
 const ANALYZE_PATH = "/external/reasoning/analyze";
 const TASKS_PATH = "/external/reasoning/tasks";
 
+/** 能力自描述（管理面 127b013 起 register 必带）：结构对齐契约 §3.1 / §3.2。 */
+const inputSchema = Object.freeze({
+  type: "object",
+  properties: {
+    prompt: { type: "string", maxLength: 2000, description: "分析问题（必填非空）" },
+    task_type: {
+      type: "string",
+      enum: ["order_delivery_analysis", "material_kitting_analysis", "quality_analysis", "production_analysis"],
+    },
+    context: {
+      type: "object",
+      properties: { businessObjectRef: { type: "string", description: "业务锚点 business://<order|product|batch>/<键>" } },
+      required: ["businessObjectRef"],
+    },
+    constraints: {
+      type: "object",
+      properties: { read_only: { type: "boolean" }, require_evidence: { type: "boolean" } },
+      description: "read_only 必须为 true（缺省视为 true）",
+    },
+    request_id: { type: "string", maxLength: 128 },
+  },
+  required: ["prompt", "task_type", "context"],
+});
+
+const outputSchema = Object.freeze({
+  type: "object",
+  properties: {
+    task_id: { type: "string" },
+    task_type: { type: "string" },
+    status: { type: "string" },
+    summary: { type: "string" },
+    conclusions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          matter: { type: "string" },
+          evidence_refs: { type: "array", items: { type: "string" } },
+          risk: { type: "string" },
+          recommendation: { type: "string" },
+          confidence: { type: "string" },
+        },
+      },
+    },
+    dropped_conclusions: { type: "integer" },
+    evidence_refs: { type: "array", items: { type: "string" } },
+    data_as_of: { type: "string" },
+    data_confidence: { type: "string" },
+    stale: { type: "boolean" },
+    warnings: { type: "array", items: { type: "string" } },
+    duration_ms: { type: "integer" },
+    request_id: { type: "string" },
+  },
+  required: ["task_id", "task_type", "status", "summary"],
+});
+
 async function invoke(runId, input, signal) {
   if (!input || typeof input.prompt !== "string" || !input.prompt.trim()) {
     throw new UpstreamError("INVALID_ARGUMENT", "input.prompt 不能为空");
@@ -55,4 +111,4 @@ async function cancel(runId) {
   }
 }
 
-module.exports = { invoke, cancel };
+module.exports = { invoke, cancel, inputSchema, outputSchema };

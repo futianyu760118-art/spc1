@@ -13,8 +13,12 @@ WS 信封、握手头、心跳、召回语义、重连阶梯均对齐 `execution
 
 ## 协议要点（对齐真实契约）
 
-- 连接握手头 `x-aeos-execution-token`；`register`（agentId/name/version/sourceSystem/capabilities）
-  → Hub 回 `registered{heartbeatIntervalMs}` → 周期 `heartbeat{status: working|idle, currentRunId?}`
+- 连接握手头 `x-aeos-execution-token`；`register`（agentId/name/version/sourceSystem/capabilities）。
+  管理面 127b013 起强校验**能力自描述**：每个 capability 必带 `readOnly: true`、
+  `constraints`（query `{readOnly:true}` / reasoning `{readOnly:true, requireEvidence:true}`）与
+  `inputSchema`/`outputSchema`（JSON Schema，随适配器维护），缺失时派单被拒（`WRITE_FORBIDDEN`）；
+  身份对齐：`EXECUTION_AGENT_ID=runtime-control-platform-agent`、`EXECUTION_AGENT_NAME=公司中台执行面智能体`。
+- Hub 回 `registered{heartbeatIntervalMs}` → 周期 `heartbeat{status: working|idle, currentRunId?}`
 - `dispatch{runId, capability, input}` → 回 `run_update{running}` → `run_complete{result}` / `run_failed{error{code,message}}`
 - `recall{runId}` → 中止本地请求 + 调中台 cancel（推理任务同步取消），**不回报**
 - 断线杀活动 run（不回报），1/2/5/10/30s 阶梯 + ±20% 抖动重连后重新 register
