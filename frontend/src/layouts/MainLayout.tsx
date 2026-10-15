@@ -45,6 +45,7 @@ import {
   ScheduleOutlined,
   AlertOutlined,
   HomeOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { usePermissionStore, PermNode } from '../store/permission'
@@ -293,6 +294,8 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/share-management', icon: <SendOutlined />, label: '分享管理', permission: 'basicdata.share_management' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
       { key: '/backups', icon: <DatabaseOutlined />, label: '备份管理', permission: 'backup' },
+      { key: '/ai-assistant', icon: <RobotOutlined />, label: '智能助手管理', permission: 'ai.assistant_monitor' },
+      { key: '/execution-agent', icon: <ApiOutlined />, label: '执行面智能体', permission: 'ai.execution_agent' },
       { key: '/basicdata/data-supply', icon: <ApiOutlined />, label: '数据供给', permission: 'basicdata.data_supply' },
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
       { key: '/basicdata/files', icon: <FolderOpenOutlined />, label: '文件管理', permission: 'basicdata.files' },
@@ -480,6 +483,8 @@ const pathToGroupKey: Record<string, string> = {
   '/share-management': 'basicdata-center',
   '/sync-config': 'basicdata-center',
   '/backups': 'basicdata-center',
+  '/ai-assistant': 'basicdata-center',
+  '/execution-agent': 'basicdata-center',
   '/basicdata/feedback': 'basicdata-center',
   '/basicdata/files': 'basicdata-center',
   '/basicdata/data-supply': 'basicdata-center',
@@ -540,6 +545,8 @@ const pathToPermission: Record<string, string> = {
   '/share-management': 'basicdata.share_management',
   '/sync-config': 'settings',
   '/backups': 'backup',
+  '/ai-assistant': 'ai.assistant_monitor',
+  '/execution-agent': 'ai.execution_agent',
   '/permissions': 'permissions',
   '/basicdata/customers': 'basicdata.data',
   '/basicdata/suppliers': 'basicdata.data',

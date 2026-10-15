@@ -48,6 +48,8 @@ import {
 } from '../pages/BasicDataCenter'
 import WritebackConfig from '../pages/BasicDataCenter/WritebackConfig'
 import Backup from '../pages/SystemCenter/Backup'
+import AssistantManagement from '../pages/SystemCenter/AssistantManagement'
+import ExecutionAgentManagement from '../pages/SystemCenter/ExecutionAgentManagement'
 import WritebackMonitor from '../pages/WritebackMonitor/index'
 import Notifications from '../pages/Notifications'
 import Profile from '../pages/Profile'
@@ -163,6 +165,8 @@ export const contentRoutes = (
         <Route path="/permissions" element={<PermissionManagement/>}/>
         <Route path="/audit" element={<AuditLog/>}/>
         <Route path="/backups" element={<Backup/>} key="backups"/>
+        <Route path="/ai-assistant" element={<AssistantManagement/>} key="ai-assistant"/>
+        <Route path="/execution-agent" element={<ExecutionAgentManagement/>} key="execution-agent"/>
         <Route path="/share-management" element={<ShareManagement/>}/>
         <Route path="/sync-config" element={<SyncSqlConfig/>}/>
         <Route path="/writeback-config" element={<WritebackConfig/>}/>
