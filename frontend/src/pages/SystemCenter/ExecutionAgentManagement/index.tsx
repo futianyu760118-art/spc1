@@ -4,7 +4,7 @@ import {
   Spin, Table, Tag, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { api } from '../../../services/api'
+import api from '../../../services/api'
 import { useAuthStore } from '../../../store/auth'
 
 interface AgentStatus {

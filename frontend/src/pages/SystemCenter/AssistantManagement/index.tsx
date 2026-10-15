@@ -5,7 +5,7 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { Column } from '@ant-design/charts'
-import { api } from '../../../services/api'
+import api from '../../../services/api'
 import { useAuthStore } from '../../../store/auth'
 
 interface ToolItem { name: string; display_name: string; description: string; disabled: boolean }
@@ -189,7 +189,7 @@ function ConfigTab() {
         <Card size="small" title="提示词">
           <Form form={form} layout="vertical">
             <Form.Item name="system_prompt" label="系统提示词">
-              <Input.TextArea rows={12} showCount={{ show: false }}/>
+              <Input.TextArea rows={12}/>
             </Form.Item>
             <Form.Item name="intent_prompt" label="意图识别提示词">
               <Input.TextArea rows={8}/>
