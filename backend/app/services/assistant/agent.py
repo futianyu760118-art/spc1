@@ -11,6 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.services.ai import ai_service, ChatMessage, ChatOptions, NotSupportedError
+from app.services.ai_config import (
+    ASSISTANT_SCOPE,
+    get_scope_config,
+    render_system_prompt,
+)
 from app.services.assistant.tool_registry import get_openai_tools_schema
 from app.services.assistant.card_builder import build_cards_from_tool_results
 from app.services.assistant import session_store
@@ -53,6 +58,15 @@ TOOL_RETRY_CONFIG = RetryConfig(
     max_delay=2.0,
     retryable_exceptions=(asyncio.TimeoutError, ConnectionError),
 )
+
+async def _load_runtime_config(db: AsyncSession) -> Dict[str, Any]:
+    """每次请求读 DB 配置（无缓存，多实例强一致）；读失败回退默认值不阻断对话"""
+    from app.services.ai_config import ASSISTANT_CONFIG_DEFS
+    try:
+        return await get_scope_config(db, ASSISTANT_SCOPE)
+    except Exception as e:
+        logger.warning(f"[agent] 读取运行时配置失败，使用默认值: {e}")
+        return {k: d.default for k, d in ASSISTANT_CONFIG_DEFS.items()}
 
 INTENT_RECOGNITION_PROMPT = """你是一个意图识别助手。分析用户的消息，判断用户的意图类型。
 
@@ -201,9 +215,10 @@ async def _llm_tools_with_retry(messages: List[ChatMessage], tools: List[dict], 
 async def _recognize_intent(
     message: str,
     history: List[Dict[str, Any]],
+    intent_prompt: Optional[str] = None,
 ) -> str:
     try:
-        messages = [ChatMessage(role="system", content=INTENT_RECOGNITION_PROMPT)]
+        messages = [ChatMessage(role="system", content=intent_prompt or INTENT_RECOGNITION_PROMPT)]
         recent_history = history[-6:] if len(history) > 6 else history
         for msg in recent_history:
             role = msg.get("role")
@@ -232,9 +247,13 @@ async def _execute_tool_with_retry(
     db: AsyncSession,
     tool_name: str,
     params: Dict[str, Any],
+    timeout: int = TOOL_EXECUTE_TIMEOUT,
+    disabled_tools: Optional[set] = None,
 ) -> Dict[str, Any]:
     from app.services.assistant.tool_registry import get_tool
 
+    if disabled_tools and tool_name in disabled_tools:
+        return {"error": f"工具 {tool_name} 已被管理员禁用"}
     tool_def = get_tool(tool_name)
     if not tool_def:
         return {"error": f"工具 {tool_name} 不存在"}
@@ -244,7 +263,7 @@ async def _execute_tool_with_retry(
         try:
             data = await asyncio.wait_for(
                 tool_def.execute(db, params),
-                timeout=TOOL_EXECUTE_TIMEOUT,
+                timeout=timeout,
             )
             return data
         except asyncio.TimeoutError as e:
@@ -346,6 +365,16 @@ async def run(
     settings = get_settings()
     provider_name = ai_service.current_provider()
 
+    rt = await _load_runtime_config(db)
+    disabled = set(rt.get("disabled_tools") or [])
+    system_prompt = render_system_prompt(rt.get("system_prompt") or SYSTEM_PROMPT, disabled)
+    intent_prompt = (rt.get("intent_prompt") or "").strip() or None
+    main_options = ChatOptions(
+        temperature=rt.get("temperature", 0.1),
+        max_tokens=rt.get("max_tokens", 4096),
+        model=(rt.get("model_name") or "").strip() or None,
+    )
+
     diagnostics: Dict[str, Any] = {
         "provider": provider_name,
         "path": "agent",
@@ -400,7 +429,7 @@ async def run(
         if run_logger:
             await run_logger.log("intent_start", {"message_preview": message[:200]})
 
-        intent = await _recognize_intent(message, history)
+        intent = await _recognize_intent(message, history, intent_prompt)
         diagnostics["intent"] = intent
         logger.info(f"[agent:{trace_id}] 意图识别结果: {intent}")
 
@@ -408,7 +437,7 @@ async def run(
             await run_logger.log("intent_done", {"intent": intent})
 
         if intent in ("ANALYZE_HISTORY", "GENERAL_CHAT"):
-            messages: List[Any] = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
+            messages: List[Any] = [ChatMessage(role="system", content=system_prompt)]
             for msg in history[-10:]:
                 role = msg.get("role")
                 content = msg.get("content", "")
@@ -419,7 +448,7 @@ async def run(
             messages = await _maybe_summarize(messages, run_logger, session_id)
 
             try:
-                options = ChatOptions(temperature=0.3, max_tokens=4096, timeout=60)
+                options = ChatOptions(temperature=main_options.temperature, max_tokens=main_options.max_tokens, model=main_options.model, timeout=60)
                 result = await _llm_chat_with_retry(messages, options)
                 raw_text = result if isinstance(result, str) else (result.text or "")
                 thinking = _extract_thinking(raw_text)
@@ -456,11 +485,11 @@ async def run(
                     provider=provider_name,
                 )
 
-        tools_schema = get_openai_tools_schema()
+        tools_schema = get_openai_tools_schema(exclude=disabled)
         if not tools_schema:
             return AssistantReply(text="系统未注册任何工具，请联系管理员。")
 
-        messages = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
+        messages = [ChatMessage(role="system", content=system_prompt)]
         for msg in history[-10:]:
             role = msg.get("role")
             content = msg.get("content", "")
@@ -471,10 +500,10 @@ async def run(
         messages = await _maybe_summarize(messages, run_logger, session_id)
 
         all_tool_results: List[Dict[str, Any]] = []
-        options = ChatOptions(temperature=0.1, max_tokens=4096, timeout=120)
+        options = ChatOptions(temperature=main_options.temperature, max_tokens=main_options.max_tokens, model=main_options.model, timeout=120)
         last_api_total_tokens: Optional[int] = None
 
-        for round_idx in range(MAX_TOOL_ROUNDS):
+        for round_idx in range(rt.get("max_tool_rounds", MAX_TOOL_ROUNDS)):
             if _check_cancelled(session_id, run_logger):
                 return AssistantReply(
                     text="对话已取消。",
@@ -527,6 +556,7 @@ async def run(
 
             if result.usage and result.usage.total_tokens:
                 last_api_total_tokens = result.usage.total_tokens
+                diagnostics["total_tokens"] = last_api_total_tokens
 
             if run_logger:
                 await run_logger.log("llm_response", {
@@ -559,7 +589,7 @@ async def run(
             tool_messages = []
             for tc in result.tool_calls:
                 tool_start = time.perf_counter()
-                data = await _execute_tool_with_retry(db, tc.name, tc.arguments)
+                data = await _execute_tool_with_retry(db, tc.name, tc.arguments, timeout=rt.get("tool_execute_timeout", TOOL_EXECUTE_TIMEOUT), disabled_tools=disabled)
                 tool_duration = round((time.perf_counter() - tool_start) * 1000, 2)
 
                 has_error = "error" in data
