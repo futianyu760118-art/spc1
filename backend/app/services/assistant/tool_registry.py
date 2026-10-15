@@ -56,10 +56,13 @@ def get_all_tools() -> List[ToolDef]:
     return list(TOOL_REGISTRY.values())
 
 
-def get_openai_tools_schema() -> List[Dict[str, Any]]:
-    """将注册表转为 OpenAI function calling 的 tools 格式"""
+def get_openai_tools_schema(exclude: Optional[set] = None) -> List[Dict[str, Any]]:
+    """将注册表转为 OpenAI function calling 的 tools 格式；exclude 为运行时禁用的工具名集合"""
+    excluded = exclude or set()
     tools = []
     for tool in TOOL_REGISTRY.values():
+        if tool.name in excluded:
+            continue
         tools.append({
             "type": "function",
             "function": {
