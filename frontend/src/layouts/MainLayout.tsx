@@ -171,6 +171,8 @@ function buildMenuItemsFromTree(nodes: PermNode[]): PermissionAwareItem[] {
         icon,
         label: node.name,
         permission: node.code,
+        // 页面子权限（Tab 级，无独立路由）任一授予时，页面本身也应可见/可进
+        anyOfPermissions: (node.children || []).filter(c => !c.route_path).map(c => c.code),
       }
     })
     .filter(Boolean) as PermissionAwareItem[]
@@ -294,7 +296,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/share-management', icon: <SendOutlined />, label: '分享管理', permission: 'basicdata.share_management' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
       { key: '/backups', icon: <DatabaseOutlined />, label: '备份管理', permission: 'backup' },
-      { key: '/ai-assistant', icon: <RobotOutlined />, label: '智能助手管理', permission: 'ai.assistant_monitor' },
+      { key: '/ai-assistant', icon: <RobotOutlined />, label: '智能助手管理', permission: 'ai.assistant_monitor', anyOfPermissions: ['ai.assistant_config'] },
       { key: '/execution-agent', icon: <ApiOutlined />, label: '执行面智能体', permission: 'ai.execution_agent' },
       { key: '/basicdata/data-supply', icon: <ApiOutlined />, label: '数据供给', permission: 'basicdata.data_supply' },
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
@@ -335,6 +337,12 @@ const allMenuItems: PermissionAwareItem[] = [
   },
 ]
 
+function itemAllowed(item: PermissionAwareItem, hasPermission: (resource: string, action: string) => boolean): boolean {
+  if (!item.permission) return true
+  if (hasPermission(item.permission, 'read')) return true
+  return (item.anyOfPermissions || []).some(p => hasPermission(p, 'read'))
+}
+
 function filterMenuByPermission(items: PermissionAwareItem[], hasPermission: (resource: string, action: string) => boolean): PermissionAwareItem[] {
   return items
     .map(item => {
@@ -343,7 +351,7 @@ function filterMenuByPermission(items: PermissionAwareItem[], hasPermission: (re
         if (filtered.length > 0) return { ...item, children: filtered }
         return null
       }
-      if (!item.permission || hasPermission(item.permission, 'read')) return item
+      if (itemAllowed(item, hasPermission)) return item
       return null
     })
     .filter(Boolean) as PermissionAwareItem[]
@@ -357,7 +365,7 @@ function filterMenuByPath(items: PermissionAwareItem[], targetPath: string, hasP
         if (filtered.length > 0) return { ...item, children: filtered }
         return null
       }
-      if (item.key === targetPath && (!item.permission || hasPermission(item.permission, 'read'))) return item
+      if (item.key === targetPath && itemAllowed(item, hasPermission)) return item
       return null
     })
     .filter(Boolean) as PermissionAwareItem[]
@@ -837,7 +845,24 @@ export default function MainLayout() {
   }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
-  const canViewCurrentPage = !requiredPermission || hasPermission(requiredPermission, 'read')
+  // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（如仅授 ai.assistant_config 也能进 /ai-assistant）
+  const pathAnyOfMap = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    const walk = (nodes: PermNode[]) => {
+      for (const n of nodes) {
+        if (n.route_path) {
+          const anyOf = [n.code, ...(n.children || []).filter(c => !c.route_path).map(c => c.code)]
+          if (anyOf.length > 1) map[n.route_path] = anyOf
+        }
+        if (n.children?.length) walk(n.children)
+      }
+    }
+    walk(permTree)
+    return map
+  }, [permTree])
+  const canViewCurrentPage = !requiredPermission
+    || hasPermission(requiredPermission, 'read')
+    || (pathAnyOfMap[location.pathname] || []).some(p => hasPermission(p, 'read'))
 
   const menuItems = toAntdItems(navTree)
 

@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Spin, Switch,
-  Table, Tabs, Tag, message,
+  Button, Col, Form, Input, InputNumber, Modal, Row, Spin, Switch,
+  Table, Tabs, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import {
+  CheckCircleOutlined, ClockCircleOutlined, MessageOutlined,
+  ReloadOutlined, ThunderboltOutlined, UserOutlined,
+} from '@ant-design/icons'
 import { Column } from '@ant-design/charts'
 import api from '../../../services/api'
 import { useAuthStore } from '../../../store/auth'
@@ -26,6 +30,28 @@ const INTENT_LABELS: Record<string, string> = {
   query_data: '查数据', analyze_history: '分析历史', general_chat: '闲聊', agent: '工具链', unknown: '未知',
 }
 
+function fmtNum(n: number): string {
+  return n.toLocaleString('zh-CN')
+}
+
+function StatCard(props: {
+  icon: React.ReactNode; label: string; value: string; unit?: string
+  accent: string; accentBg: string; delta?: React.ReactNode
+}) {
+  return (
+    <Col span={props.unit === '%' ? 4 : 5} key={props.label}>
+      <div className="sc-card sc-stat-card" style={{ ['--accent' as any]: props.accent, ['--accent-bg' as any]: props.accentBg, height: '100%' }}>
+        <div className="sc-stat-icon">{props.icon}</div>
+        <div className="sc-stat-main" style={{ minWidth: 0 }}>
+          <div className="sc-stat-label">{props.label}</div>
+          <div className="sc-stat-value">{props.value}{props.unit && <small>{props.unit}</small>}</div>
+          {props.delta}
+        </div>
+      </div>
+    </Col>
+  )
+}
+
 function OverviewTab({ days }: { days: number }) {
   const [stats, setStats] = useState<StatsData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -43,27 +69,42 @@ function OverviewTab({ days }: { days: number }) {
   }, [days])
 
   useEffect(() => { refresh() }, [refresh])
-  if (loading || !stats) return <Spin/>
+  if (loading || !stats) return <div className="sc-card" style={{ padding: 48, textAlign: 'center' }}><Spin /></div>
+
+  const fail = stats.total - stats.success
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Row gutter={16}>
-        {[
-          ['总对话', stats.total], ['成功率', stats.success_rate == null ? '-' : `${(stats.success_rate * 100).toFixed(1)}%`],
-          ['平均耗时', `${(stats.avg_duration_ms / 1000).toFixed(1)}s`], ['累计 token', stats.total_tokens],
-          ['活跃用户', stats.active_users],
-        ].map(([label, value]) => (
-          <Col key={String(label)} span={4}><Card size="small"><div style={{ opacity: 0.65 }}>{label}</div>
-            <div style={{ fontSize: 22, fontWeight: 600 }}>{value}</div></Card></Col>
-        ))}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <Row gutter={[12, 12]}>
+        <StatCard icon={<MessageOutlined />} label="总对话" value={fmtNum(stats.total)} unit="次"
+          accent="#5b5bd6" accentBg="#eef0fe" />
+        <StatCard icon={<CheckCircleOutlined />} label="成功率"
+          value={stats.success_rate == null ? '-' : (stats.success_rate * 100).toFixed(1)} unit="%"
+          accent="#16a34a" accentBg="#f0fdf4" />
+        <StatCard icon={<ClockCircleOutlined />} label="平均耗时"
+          value={(stats.avg_duration_ms / 1000).toFixed(1)} unit="s"
+          accent="#0284c7" accentBg="#f0f9ff" />
+        <StatCard icon={<ThunderboltOutlined />} label="累计 token" value={fmtNum(stats.total_tokens)}
+          accent="#8b5cf6" accentBg="#f5f3ff" />
+        <StatCard icon={<UserOutlined />} label="活跃用户" value={fmtNum(stats.active_users)} unit="人"
+          accent="#d97706" accentBg="#fffbeb" />
       </Row>
-      <Card size="small" title={`每日趋势（近 ${days} 天）`}>
-        <Column height={220} data={stats.trend} xField="day" yField="total"
-                 colorField="#1677ff" label={{ text: (d: any) => d.total }}/>
-      </Card>
-      <Card size="small" title="工具命中 Top10">
-        <Column height={220} data={stats.top_tools} xField="tool" yField="hits"
-                 colorField="#52c41a" label={{ text: (d: any) => d.hits }}/>
-      </Card>
+
+      <div className="sc-card" style={{ padding: '14px 16px' }}>
+        <div className="sc-card-head" style={{ padding: '0 0 10px' }}>
+          <h3>每日对话趋势</h3>
+          <span className="sc-hint">近 {days} 天 · 成功 <b className="sc-mono">{fmtNum(stats.success)}</b> / 失败 <b className="sc-mono">{fmtNum(fail)}</b></span>
+        </div>
+        <Column height={220} data={stats.trend} xField="day" yField="total" colorField="#5b5bd6"
+          axis={{ y: { labelFormatter: (v: number) => String(v) } }} />
+      </div>
+
+      <div className="sc-card" style={{ padding: '14px 16px' }}>
+        <div className="sc-card-head" style={{ padding: '0 0 10px' }}>
+          <h3>工具命中 Top10</h3>
+          <span className="sc-hint">统计窗口同上</span>
+        </div>
+        <Column height={220} data={stats.top_tools} xField="tool" yField="hits" colorField="#0ea5e9" />
+      </div>
     </div>
   )
 }
@@ -103,30 +144,48 @@ function RunsTab({ days }: { days: number }) {
   }
 
   const columns: ColumnsType<RunRow> = [
-    { title: '时间', dataIndex: 'created_at', width: 170, render: (v: string) => new Date(v).toLocaleString() },
-    { title: '用户', dataIndex: 'user_id', width: 90 },
-    { title: '意图', dataIndex: 'intent', width: 90, render: (v: string) => INTENT_LABELS[v] || v || '-' },
+    { title: '时间', dataIndex: 'created_at', width: 150, render: (v: string) => <span className="sc-mono">{new Date(v).toLocaleString()}</span> },
+    { title: '用户', dataIndex: 'user_id', width: 90, ellipsis: true },
+    {
+      title: '意图', dataIndex: 'intent', width: 86,
+      render: (v: string) => v ? <span className="sc-tag sc-tag-plain">{INTENT_LABELS[v] || v}</span> : '-',
+    },
     { title: '提问', dataIndex: 'user_message', ellipsis: true },
     {
       title: '工具', dataIndex: 'tools_called', width: 200,
-      render: (v: string[]) => v?.length ? v.map((t) => <Tag key={t} style={{ marginInlineEnd: 4 }}>{t}</Tag>) : '-',
+      render: (v: string[]) => v?.length
+        ? v.map((t) => <span key={t} className="sc-tag sc-tag-plain" style={{ marginInlineEnd: 4 }}>{t}</span>)
+        : <span className="sc-sub">-</span>,
     },
-    { title: '轮数', dataIndex: 'tool_rounds', width: 60, align: 'center' },
-    { title: 'token', dataIndex: 'total_tokens', width: 80, align: 'right' },
-    { title: '耗时', dataIndex: 'duration_ms', width: 80, align: 'right', render: (v: number) => v != null ? `${(v / 1000).toFixed(1)}s` : '-' },
+    { title: '轮数', dataIndex: 'tool_rounds', width: 60, align: 'right', render: (v: number) => <span className="sc-mono">{v ?? '-'}</span> },
+    { title: 'token', dataIndex: 'total_tokens', width: 80, align: 'right', render: (v: number) => <span className="sc-mono">{v != null ? fmtNum(v) : '-'}</span> },
     {
-      title: '状态', dataIndex: 'is_success', width: 80,
-      render: (v: boolean, row) => v ? <Tag color="success">成功</Tag> :
-        <Tag color="error" title={row.error_message || ''}>失败</Tag>,
+      title: '耗时', dataIndex: 'duration_ms', width: 76, align: 'right',
+      render: (v: number) => <span className="sc-mono">{v != null ? `${(v / 1000).toFixed(1)}s` : '-'}</span>,
     },
-    { title: '', width: 70, render: (_v, row) => <a onClick={() => openDetail(row.trace_id)}>trace</a> },
+    {
+      title: '状态', dataIndex: 'is_success', width: 76,
+      render: (v: boolean, row) => v
+        ? <span className="sc-tag sc-tag-done">成功</span>
+        : <span className="sc-tag sc-tag-danger" title={row.error_message || ''}>失败</span>,
+    },
+    {
+      title: '', width: 64,
+      render: (_v, row) => <div className="sc-row-actions"><a onClick={() => openDetail(row.trace_id)}>trace</a></div>,
+    },
   ]
 
   return (
     <>
-      <Table rowKey="id" size="small" columns={columns} dataSource={rows} loading={loading}
-             pagination={{ current: page, pageSize, total, showSizeChanger: true,
-                           onChange: (p, s) => { setPage(p); setPageSize(s) } }}/>
+      <div className="sc-card" style={{ padding: '0 0 4px' }}>
+        <div className="sc-card-head" style={{ padding: '12px 16px' }}>
+          <h3>运行记录</h3>
+          <span className="sc-hint">近 {days} 天 · 共 <b className="sc-mono">{fmtNum(total)}</b> 条 · 点击 trace 查看完整调用链</span>
+        </div>
+        <Table rowKey="id" size="small" columns={columns} dataSource={rows} loading={loading}
+          pagination={{ current: page, pageSize, total, showSizeChanger: true,
+                        onChange: (p, s) => { setPage(p); setPageSize(s) } }}/>
+      </div>
       <Modal open={!!detail} title={`Trace 详情 ${detail?.trace_id || ''}`} footer={null}
              width={860} onCancel={() => setDetail(null)} destroyOnClose>
         <div style={{ maxHeight: 480, overflow: 'auto', fontFamily: 'monospace', fontSize: 12 }}>
@@ -181,26 +240,39 @@ function ConfigTab() {
     }
   }
 
+  const enabledCount = tools.filter((t) => !t.disabled).length
+
   return (
     <Spin spinning={loading}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 960 }}>
-        <Alert type="info" showIcon
-               message={'系统提示词支持 {{TOOLS}} 占位符：构建对话时自动注入当前启用工具清单；两段提示词留空即恢复内置默认。'}/>
-        <Card size="small" title="提示词">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 960 }}>
+        <div style={{ padding: '10px 14px', background: '#eef0fe', borderRadius: 10, color: '#4c4dc2', fontSize: 13 }}>
+          系统提示词支持 <code>{'{{TOOLS}}'}</code> 占位符：构建对话时自动注入当前启用工具清单；两段提示词留空即恢复内置默认。
+        </div>
+
+        <div className="sc-card" style={{ padding: '0 16px 16px' }}>
+          <div className="sc-card-head" style={{ padding: '14px 0 4px' }}>
+            <h3>提示词</h3>
+            <span className="sc-hint">留空 = 恢复内置默认</span>
+          </div>
           <Form form={form} layout="vertical">
             <Form.Item name="system_prompt" label="系统提示词">
               <Input.TextArea rows={12}/>
             </Form.Item>
-            <Form.Item name="intent_prompt" label="意图识别提示词">
+            <Form.Item name="intent_prompt" label="意图识别提示词" style={{ marginBottom: 0 }}>
               <Input.TextArea rows={8}/>
             </Form.Item>
           </Form>
-        </Card>
-        <Card size="small" title="模型参数">
+        </div>
+
+        <div className="sc-card" style={{ padding: '0 16px 16px' }}>
+          <div className="sc-card-head" style={{ padding: '14px 0 4px' }}>
+            <h3>模型参数</h3>
+            <span className="sc-hint">模型名留空则沿用 .env 默认</span>
+          </div>
           <Form form={form} layout="vertical">
             <Row gutter={16}>
               <Col span={8}>
-                <Form.Item name="model_name" label="模型名（留空用 .env 默认）">
+                <Form.Item name="model_name" label="模型名">
                   <Input allowClear placeholder="如 glm-4.6 / gpt-4o-mini"/>
                 </Form.Item>
               </Col>
@@ -220,14 +292,19 @@ function ConfigTab() {
                 </Form.Item>
               </Col>
               <Col span={8}>
-                <Form.Item name="tool_execute_timeout" label="工具执行超时（秒）" initialValue={30}>
+                <Form.Item name="tool_execute_timeout" label="工具执行超时（秒）" initialValue={30} style={{ marginBottom: 0 }}>
                   <InputNumber min={5} max={300} style={{ width: '100%' }}/>
                 </Form.Item>
               </Col>
             </Row>
           </Form>
-        </Card>
-        <Card size="small" title={`工具启停（${tools.filter((t) => !t.disabled).length}/${tools.length} 启用）`}>
+        </div>
+
+        <div className="sc-card" style={{ padding: '0 0 4px' }}>
+          <div className="sc-card-head" style={{ padding: '12px 16px' }}>
+            <h3>工具启停</h3>
+            <span className="sc-hint sc-mono">{enabledCount}/{tools.length} 启用</span>
+          </div>
           <Table rowKey="name" size="small" pagination={false}
                  dataSource={tools}
                  columns={[
@@ -243,7 +320,8 @@ function ConfigTab() {
                      ),
                    },
                  ]}/>
-        </Card>
+        </div>
+
         <div>
           <Button type="primary" loading={saving} onClick={save}>保存配置</Button>
         </div>
@@ -264,7 +342,7 @@ export default function AssistantManagement() {
   if (canConfig) tabs.push({ key: 'config', label: '配置', children: <ConfigTab/> })
 
   return (
-    <div style={{ padding: 16 }}>
+    <div className="sc-page" style={{ padding: 20 }}>
       <Tabs defaultActiveKey="overview" items={tabs}/>
     </div>
   )

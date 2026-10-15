@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Badge, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space,
-  Spin, Table, Tag, message,
+  Button, Col, Form, Input, InputNumber, Modal, Row, Select, Space,
+  Spin, Table, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import {
+  ApiOutlined, ClockCircleOutlined, FieldTimeOutlined, PlayCircleOutlined,
+  ReloadOutlined, SafetyOutlined, SendOutlined,
+} from '@ant-design/icons'
 import api from '../../../services/api'
 import { useAuthStore } from '../../../store/auth'
 
@@ -19,12 +23,37 @@ interface AgentStatus {
   }[]
 }
 
-const STATUS_TAG: Record<string, { color: string; label: string }> = {
-  running: { color: 'processing', label: '运行中' },
-  succeeded: { color: 'success', label: '成功' },
-  failed: { color: 'error', label: '失败' },
-  cancelled: { color: 'default', label: '已取消' },
-  timeout: { color: 'warning', label: '超时' },
+const STATUS_TAG: Record<string, { cls: string; label: string }> = {
+  running: { cls: 'sc-tag-kit', label: '运行中' },
+  succeeded: { cls: 'sc-tag-done', label: '成功' },
+  failed: { cls: 'sc-tag-danger', label: '失败' },
+  cancelled: { cls: 'sc-tag-plain', label: '已取消' },
+  timeout: { cls: 'sc-tag-warn', label: '超时' },
+}
+
+function fmtUptime(s: number | undefined | null): string {
+  if (s == null) return '-'
+  if (s < 60) return `${s} 秒`
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟`
+  return `${Math.floor(s / 3600)} 小时 ${Math.floor((s % 3600) / 60)} 分`
+}
+
+function StatusStat(props: {
+  icon: React.ReactNode; label: string; value: React.ReactNode
+  accent: string; accentBg: string; delta?: React.ReactNode
+}) {
+  return (
+    <Col span={6}>
+      <div className="sc-card sc-stat-card slim" style={{ ['--accent' as any]: props.accent, ['--accent-bg' as any]: props.accentBg, height: '100%' }}>
+        <div className="sc-stat-icon">{props.icon}</div>
+        <div className="sc-stat-main" style={{ minWidth: 0 }}>
+          <div className="sc-stat-label">{props.label}</div>
+          <div className="sc-stat-value" style={{ fontSize: 18 }}>{props.value}</div>
+          {props.delta && <span className="sc-stat-delta flat">{props.delta}</span>}
+        </div>
+      </div>
+    </Col>
+  )
 }
 
 export default function ExecutionAgentManagement() {
@@ -111,50 +140,87 @@ export default function ExecutionAgentManagement() {
     })
   }
 
-  if (loading && !status) return <Spin style={{ padding: 48 }}/>
+  if (loading && !status) return <div className="sc-page" style={{ padding: 48, textAlign: 'center' }}><Spin /></div>
   const agent = status?.agent
   const pending = status?.config_pending_restart
 
   const taskColumns: ColumnsType<AgentStatus['recent_reasoning_tasks'][number]> = [
-    { title: 'runId / task_id', dataIndex: 'task_id', width: 200, ellipsis: true },
-    { title: '类型', dataIndex: 'task_type', width: 180, ellipsis: true },
+    { title: 'runId / task_id', dataIndex: 'task_id', width: 200, ellipsis: true, render: (v: string) => <span className="sc-mono">{v}</span> },
+    { title: '类型', dataIndex: 'task_type', width: 180, ellipsis: true, render: (v: string | null) => v || <span className="sc-sub">-</span> },
     {
       title: '状态', dataIndex: 'status', width: 90,
-      render: (v: string) => <Tag color={STATUS_TAG[v]?.color || 'default'}>{STATUS_TAG[v]?.label || v}</Tag>,
+      render: (v: string) => {
+        const t = STATUS_TAG[v]
+        return t ? <span className={`sc-tag ${t.cls}`}>{t.label}</span> : <span className="sc-tag sc-tag-plain">{v}</span>
+      },
     },
-    { title: '真实 LLM', dataIndex: 'llm_called', width: 90, render: (v: number) => v ? <Tag color="green">是</Tag> : <Tag>否</Tag> },
-    { title: '耗时', dataIndex: 'duration_ms', width: 90, align: 'right', render: (v: string | null) => v ? `${(Number(v) / 1000).toFixed(1)}s` : '-' },
-    { title: '时间', dataIndex: 'created_at', width: 170, render: (v: string) => new Date(v).toLocaleString() },
+    {
+      title: '真实 LLM', dataIndex: 'llm_called', width: 90,
+      render: (v: number) => v ? <span className="sc-tag sc-tag-done">是</span> : <span className="sc-tag sc-tag-plain">否</span>,
+    },
+    {
+      title: '耗时', dataIndex: 'duration_ms', width: 90, align: 'right',
+      render: (v: string | null) => <span className="sc-mono">{v ? `${(Number(v) / 1000).toFixed(1)}s` : '-'}</span>,
+    },
+    { title: '时间', dataIndex: 'created_at', width: 160, render: (v: string) => <span className="sc-mono">{new Date(v).toLocaleString()}</span> },
   ]
 
   return (
-    <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Card size="small" title="状态">
-        <Row gutter={16}>
-          <Col span={4}>
-            <Badge status={agent?.online ? 'success' : 'error'}
-                   text={agent?.online ? (agent.registered ? '已注册在线' : '在线未注册') : '不可达'}/>
-          </Col>
-          <Col span={4}>AgentID：{agent?.agentId || '-'}</Col>
-          <Col span={4}>当前 run：{agent?.currentRunId || '-'}</Col>
-          <Col span={4}>uptime：{agent?.uptimeS != null ? `${Math.floor(agent.uptimeS / 60)} 分钟` : '-'}</Col>
-          <Col span={4}>
-            配置版本：
-            <Tag color={pending ? 'orange' : 'green'}>
-              v{agent?.configVersion ?? '-'}{pending ? ` ≠ v${status?.db_version}，需重启` : ''}
-            </Tag>
-          </Col>
-          {canManage && (
-            <Col span={2} offset={0}>
-              <Button danger loading={restarting} onClick={restart}>远程重启</Button>
-            </Col>
-          )}
-        </Row>
-        {!agent?.online && <div style={{ marginTop: 8, opacity: 0.65, fontSize: 12 }}>{agent?.reason || ''}</div>}
-      </Card>
+    <div className="sc-page" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="sc-card">
+        <div className="sc-card-head" style={{ padding: '14px 16px 10px' }}>
+          <h3>运行状态</h3>
+          <span className="sc-hint">经 backend 代理访问 agent admin 面</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <Button size="small" icon={<ReloadOutlined/>} onClick={() => refresh()}>刷新</Button>
+            {canManage && (
+              <Button size="small" danger icon={<SendOutlined/>} loading={restarting} onClick={restart}>
+                远程重启
+              </Button>
+            )}
+          </div>
+        </div>
+        <div style={{ padding: '0 16px 14px' }}>
+          <Row gutter={[12, 12]}>
+            <StatusStat
+              icon={<ApiOutlined/>} label="连接状态"
+              accent={agent?.online ? '#16a34a' : '#dc2626'}
+              accentBg={agent?.online ? '#f0fdf4' : '#fef2f2'}
+              value={agent?.online ? (agent.registered ? '在线' : '在线未注册') : '不可达'}
+              delta={agent?.online
+                ? (agent.agentId || '')
+                : (agent?.reason || '')}
+            />
+            <StatusStat
+              icon={<SafetyOutlined/>} label="配置版本"
+              accent={pending ? '#d97706' : '#5b5bd6'}
+              accentBg={pending ? '#fffbeb' : '#eef0fe'}
+              value={<span className="sc-mono">v{agent?.configVersion ?? '-'}</span>}
+              delta={pending
+                ? <span style={{ color: '#d97706' }}>≠ 库内 v{status?.db_version}，需重启生效</span>
+                : '与库内一致'}
+            />
+            <StatusStat
+              icon={<FieldTimeOutlined/>} label="运行时长"
+              accent="#0284c7" accentBg="#f0f9ff"
+              value={fmtUptime(agent?.uptimeS)}
+              delta={agent?.capabilities?.length ? `能力 ${agent.capabilities.length} 项` : ''}
+            />
+            <StatusStat
+              icon={<PlayCircleOutlined/>} label="当前任务"
+              accent="#8b5cf6" accentBg="#f5f3ff"
+              value={agent?.currentRunId ? <span className="sc-mono" style={{ fontSize: 13 }}>{agent.currentRunId}</span> : '空闲'}
+            />
+          </Row>
+        </div>
+      </div>
 
-      <Card size="small" title="配置（保存后 agent 重启生效；留空项沿用 .env）">
-        <Form form={form} layout="vertical" style={{ maxWidth: 860 }}>
+      <div className="sc-card" style={{ padding: '0 16px 16px' }}>
+        <div className="sc-card-head" style={{ padding: '14px 0 4px' }}>
+          <h3>配置</h3>
+          <span className="sc-hint">留空项沿用 agent 容器 .env；保存后重启生效</span>
+        </div>
+        <Form form={form} layout="vertical" style={{ maxWidth: 960 }}>
           <Row gutter={16}>
             <Col span={12}><Form.Item name="agent_name" label="注册显示名"><Input allowClear placeholder="留空用 env"/></Form.Item></Col>
             <Col span={12}><Form.Item name="agent_id" label="Agent ID"><Input allowClear placeholder="留空用 env"/></Form.Item></Col>
@@ -171,15 +237,19 @@ export default function ExecutionAgentManagement() {
         {canManage && (
           <Space>
             <Button type="primary" loading={saving} onClick={save}>保存配置</Button>
-            {pending && <Button danger onClick={restart}>配置未生效，立即重启</Button>}
+            {pending && <Button danger icon={<ClockCircleOutlined/>} onClick={restart}>配置未生效，立即重启</Button>}
           </Space>
         )}
-      </Card>
+      </div>
 
-      <Card size="small" title="最近推理任务（reasoning_task 审计）">
+      <div className="sc-card" style={{ padding: '0 0 4px' }}>
+        <div className="sc-card-head" style={{ padding: '12px 16px' }}>
+          <h3>最近推理任务</h3>
+          <span className="sc-hint">reasoning_task 审计 · 最近 10 条</span>
+        </div>
         <Table rowKey="task_id" size="small" columns={taskColumns}
                dataSource={status?.recent_reasoning_tasks || []} pagination={false}/>
-      </Card>
+      </div>
     </div>
   )
 }
