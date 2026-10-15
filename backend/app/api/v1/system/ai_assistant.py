@@ -48,7 +48,7 @@ async def assistant_stats(
         f"jsonb_array_elements_text(tools_called) AS tool "
         f"WHERE created_at >= {since} GROUP BY tool ORDER BY hits DESC LIMIT 10"
     ))).mappings().all()
-    return {
+    return ResponseModel(data={
         "total": total_row["total"],
         "success": total_row["ok"],
         "success_rate": round(total_row["ok"] / total_row["total"], 4) if total_row["total"] else None,
@@ -57,7 +57,7 @@ async def assistant_stats(
         "active_users": total_row["active_users"],
         "trend": [dict(r) for r in trend],
         "top_tools": [dict(r) for r in top_tools],
-    }
+    })
 
 
 @router.get("/runs", response_model=ResponseModel[dict])
@@ -79,13 +79,13 @@ async def assistant_runs(
         conds.append("is_success = :is_success")
         params["is_success"] = is_success
     where = " AND ".join(conds)
-    total = (await db.execute(text(f"SELECT COUNT(*) FROM assistant_run WHERE {where}"))).scalar()
+    total = (await db.execute(text(f"SELECT COUNT(*) FROM assistant_run WHERE {where}"), params)).scalar()
     rows = (await db.execute(text(
         f"SELECT id, trace_id, session_id, user_id, user_message, intent, tools_called, "
         f"tool_rounds, total_tokens, duration_ms, is_success, error_message, created_at "
         f"FROM assistant_run WHERE {where} ORDER BY id DESC LIMIT :limit OFFSET :offset"
     ), params)).mappings().all()
-    return {"total": total, "page": page, "page_size": page_size, "items": [dict(r) for r in rows]}
+    return ResponseModel(data={"total": total, "page": page, "page_size": page_size, "items": [dict(r) for r in rows]})
 
 
 @router.get("/config", response_model=ResponseModel[dict])
@@ -101,7 +101,7 @@ async def get_assistant_config(
     config["intent_prompt"] = config["intent_prompt"] or INTENT_RECOGNITION_PROMPT
     config["model_name"] = config["model_name"] or get_settings().AI_OPENAI_MODEL
     disabled = set(config.get("disabled_tools") or [])
-    return {
+    return ResponseModel(data={
         "version": await get_scope_version(db, ASSISTANT_SCOPE),
         "config": config,
         "tools": [
@@ -114,7 +114,7 @@ async def get_assistant_config(
             for t in get_all_tools()
         ],
         "defs": {k: {"label": d.label, "description": d.description} for k, d in SCOPE_DEFS[ASSISTANT_SCOPE].items()},
-    }
+    })
 
 
 @router.put("/config", response_model=ResponseModel[dict])
@@ -132,5 +132,6 @@ async def update_assistant_config(
     if body.config.get("disabled_tools") is not None:
         known = {t.name for t in get_all_tools()}
         if known and known.issubset(set(body.config["disabled_tools"])):
-            return {"version": version, "warning": "全部工具已禁用，助手将无法查询业务数据"}
-    return {"version": version}
+            return ResponseModel(
+                data={"version": version, "warning": "全部工具已禁用，助手将无法查询业务数据"})
+    return ResponseModel(data={"version": version})

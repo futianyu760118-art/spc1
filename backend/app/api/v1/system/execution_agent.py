@@ -52,7 +52,7 @@ async def agent_status(
         "SELECT task_id, task_type, status, llm_called, error_code, duration_ms, created_at "
         "FROM reasoning_task ORDER BY id DESC LIMIT 10"
     ))).mappings().all()
-    return {
+    return ResponseModel(data={
         "agent": agent,
         "db_version": await get_scope_version(db, EXECUTION_AGENT_SCOPE),
         "config_pending_restart": (
@@ -60,7 +60,7 @@ async def agent_status(
             and int(agent["configVersion"]) != await get_scope_version(db, EXECUTION_AGENT_SCOPE)
         ),
         "recent_reasoning_tasks": [dict(r) for r in recent],
-    }
+    })
 
 
 @router.get("/config", response_model=ResponseModel[dict])
@@ -69,11 +69,11 @@ async def get_agent_config(
     current_user=Depends(PermissionChecker("ai.execution_agent", "read")),
 ):
     from app.services.ai_config import SCOPE_DEFS
-    return {
+    return ResponseModel(data={
         "version": await get_scope_version(db, EXECUTION_AGENT_SCOPE),
         "config": await get_scope_config(db, EXECUTION_AGENT_SCOPE),
         "defs": {k: {"label": d.label, "description": d.description} for k, d in SCOPE_DEFS[EXECUTION_AGENT_SCOPE].items()},
-    }
+    })
 
 
 @router.put("/config", response_model=ResponseModel[dict])
@@ -88,7 +88,7 @@ async def update_agent_config(
         version = await save_scope_config(db, EXECUTION_AGENT_SCOPE, body.config, operator)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"version": version, "message": "已保存；agent 重启后生效"}
+    return ResponseModel(message="已保存；agent 重启后生效", data={"version": version})
 
 
 @router.post("/restart", response_model=ResponseModel[dict])
@@ -98,4 +98,4 @@ async def restart_agent(
     result = await _call_agent("/admin/restart", method="POST", timeout=5.0)
     if not result.get("online"):
         raise HTTPException(status_code=503, detail=f"无法重启：{result.get('reason')}")
-    return {"message": "重启指令已下发，容器 restart 策略将自动拉起"}
+    return ResponseModel(message="重启指令已下发，容器 restart 策略将自动拉起")

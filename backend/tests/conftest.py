@@ -95,6 +95,7 @@ async def _test_db():
     # 2) 只建本套件所需的最小表集合——全量 create_all 会被遗留模型的
     #    order_material_po_binding 非法外键（po_no 无唯一约束）卡死，且与本功能无关
     from app.models.basicdata.announcement import Notification
+    from app.models.basicdata.ai_agent import AiAgentConfig, AssistantRun
     from app.models.basicdata.audit_log import AuditLog
     from app.models.basicdata.backup import BackupConfig, BackupRecord
     from app.models.basicdata.bom import Bom
@@ -151,6 +152,7 @@ async def _test_db():
         Inventory.__table__, Location.__table__,
         StockCheck.__table__, StockCheckItem.__table__,
         ReasoningTask.__table__, KittingResult.__table__, KittingShortage.__table__,
+        AiAgentConfig.__table__, AssistantRun.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -229,7 +231,8 @@ async def client(_test_db):
             "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, feedback, "
             "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
             "purchase_order, approval_instance, approval_task, approval_record, "
-            "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item "
+            "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item, "
+            "ai_agent_config, assistant_run "
             "RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
@@ -256,6 +259,7 @@ EXTERNAL_QUALITY_KEY = {"app_key": "ak_pytest_quality", "app_secret": "sk_pytest
 EXTERNAL_ORDERS_KEY = {"app_key": "ak_pytest_orders", "app_secret": "sk_pytest_orders"}
 EXTERNAL_PRODUCTION_KEY = {"app_key": "ak_pytest_production", "app_secret": "sk_pytest_production"}
 EXTERNAL_REASONING_KEY = {"app_key": "ak_pytest_reasoning", "app_secret": "sk_pytest_reasoning"}
+EXTERNAL_AGENT_KEY = {"app_key": "ak_pytest_agent", "app_secret": "sk_pytest_agent"}
 
 PRODUCTION_ENDPOINT_CODES = [
     "production.work_orders.list",
@@ -294,12 +298,15 @@ async def external_keys(_test_db):
                  CAST(:pcodes AS jsonb), 0, :pak, :pas, NULL, 'pytest'),
                 ('pytest-reasoning', 'ak_pytest_reasoning', TRUE,
                  '["reasoning.analyze", "reasoning.cancel", "reasoning.task"]',
-                 0, :rak, :ras, NULL, 'pytest')
+                 0, :rak, :ras, NULL, 'pytest'),
+                ('pytest-agent', 'ak_pytest_agent', TRUE,
+                 '["agent.config"]', 0, :gak, :gas, NULL, 'pytest')
         """), {
             "qak": EXTERNAL_QUALITY_KEY["app_key"], "qas": EXTERNAL_QUALITY_KEY["app_secret"],
             "oak": EXTERNAL_ORDERS_KEY["app_key"], "oas": EXTERNAL_ORDERS_KEY["app_secret"],
             "pak": EXTERNAL_PRODUCTION_KEY["app_key"], "pas": EXTERNAL_PRODUCTION_KEY["app_secret"],
             "rak": EXTERNAL_REASONING_KEY["app_key"], "ras": EXTERNAL_REASONING_KEY["app_secret"],
+            "gak": EXTERNAL_AGENT_KEY["app_key"], "gas": EXTERNAL_AGENT_KEY["app_secret"],
             "pcodes": json.dumps(PRODUCTION_ENDPOINT_CODES),
         })
     yield {
@@ -307,6 +314,7 @@ async def external_keys(_test_db):
         "orders": EXTERNAL_ORDERS_KEY,
         "production": EXTERNAL_PRODUCTION_KEY,
         "reasoning": EXTERNAL_REASONING_KEY,
+        "agent": EXTERNAL_AGENT_KEY,
     }
 
 
