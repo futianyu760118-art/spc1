@@ -194,7 +194,7 @@ tar -xzf bundle.tar.gz -C .bundle-new
 cp -f .bundle-new/docker-compose-prod.yml ./docker-compose-prod.yml
 cp -f .bundle-new/docker-compose-app.yml ./docker-compose-app.yml
 if [ "__KEEP_ENV__" = "1" ] && [ -f .env ]; then echo ENV-KEPT; else cp -f .bundle-new/.env ./.env; fi
-if [ ! -f nginx.conf ] || ! cmp -s .bundle-new/nginx.conf ./nginx.conf; then cp -f .bundle-new/nginx.conf ./nginx.conf; NGINX_UPDATED=1; echo NGINX-UPDATED; else echo NGINX-KEPT; fi
+if [ ! -f nginx.conf ]; then cp -f .bundle-new/nginx.conf ./nginx.conf; else echo NGINX-KEPT; fi
 rm -rf .bundle-new
 COMPOSE_FILE='__COMPOSE__'
 mkdir -p "versions/__V__"
@@ -203,8 +203,6 @@ printf 'version=%s\ncreated=%s\ngit=%s\nnote=%s\ncompose=%s\n' '__V__' '__CREATE
 echo __N__ > last_version.txt
 echo '__V__' > current.txt
 docker compose -f "$COMPOSE_FILE" up -d
-# nginx.conf 本次有更新时，重启前端容器让新配置生效（bind mount 变更 nginx 不会自动 reload）
-if [ "${NGINX_UPDATED:-0}" = "1" ]; then docker compose -f "$COMPOSE_FILE" restart frontend >/dev/null 2>&1 && echo FRONTEND-RESTARTED-FOR-NGINX; fi
 docker compose -f "$COMPOSE_FILE" ps
 (for i in {1..20}; do
   if curl -s -o /dev/null http://localhost:18085/api/v1/common/ping; then echo BACKEND-OK; exit 0; fi
