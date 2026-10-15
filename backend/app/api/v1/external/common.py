@@ -8,6 +8,15 @@ from typing_extensions import Annotated
 T = TypeVar("T")
 
 
+class ExternalEnvelopeError(Exception):
+    """对外接口信封级结构化错误：handler 抛出，由 log_external_call 转 ResponseModel(code=...)"""
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 class ExternalPage(BaseModel, Generic[T]):
     """对外分页响应（与现有 data 结构逐字段一致；不得用 PageResult，它多一个 stats 字段）"""
     items: List[T] = Field(..., description="当前页数据")

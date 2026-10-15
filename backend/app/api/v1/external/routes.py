@@ -9,7 +9,7 @@ from .endpoints import (
     bom, bom_detail, bom_tree, human_resources, inventory, inventory_availability,
     masterdata, material_kitting, material_supplies, orders, production,
     production_task_orders, production_coordination, process_data, purchase,
-    quality, warehouse,
+    quality, reasoning, warehouse,
 )
 
 external_router = APIRouter()
@@ -25,6 +25,7 @@ for r in (
     material_kitting.router, material_supplies.router,
     quality.router, quality.router_trace,
     warehouse.wh_router, warehouse.loc_router,
+    reasoning.router,
 ):
     external_router.include_router(r)
 

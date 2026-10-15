@@ -81,3 +81,26 @@ services:
       CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
       CONTROL_PLATFORM_APP_KEY: ${CONTROL_PLATFORM_APP_KEY:-}
       CONTROL_PLATFORM_APP_SECRET: ${CONTROL_PLATFORM_APP_SECRET:-}
+
+  # AEOS Hub 执行面智能体（查询 + 推理，任务书 2026-10 接入）：
+  # 默认不启动，需 `docker compose --profile aeos up -d`，
+  # 并在根 .env 配置 EXECUTION_PLANE_TOKEN / CONTROL_PLATFORM_*（见 aeos-execution-agent/.env.example）
+  aeos-execution-agent:
+    build: ./aeos-execution-agent
+    image: aeos-execution-agent:latest
+    profiles: ["aeos"]
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      EXECUTION_WS_URL: ${EXECUTION_WS_URL:-ws://127.0.0.1:8788/execution-agent}
+      EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
+      EXECUTION_AGENT_ID: ${EXECUTION_AGENT_ID:-spc-execution-agent}
+      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-}
+      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
+      CONTROL_PLATFORM_APP_KEY: ${CONTROL_PLATFORM_APP_KEY:-}
+      CONTROL_PLATFORM_APP_SECRET: ${CONTROL_PLATFORM_APP_SECRET:-}
+      CONTROL_PLATFORM_TIMEOUT_MS: ${CONTROL_PLATFORM_TIMEOUT_MS:-15000}
+      CONTROL_PLATFORM_REASONING_TIMEOUT_MS: ${CONTROL_PLATFORM_REASONING_TIMEOUT_MS:-180000}
+      HEALTH_CHECK_PORT: ${AEOS_HEALTH_CHECK_PORT:-8790}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    stop_grace_period: 30s

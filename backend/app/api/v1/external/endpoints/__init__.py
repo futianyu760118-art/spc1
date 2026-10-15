@@ -23,4 +23,5 @@ from . import process_data  # noqa: F401
 from . import material_kitting  # noqa: F401
 from . import inventory_availability  # noqa: F401
 from . import material_supplies  # noqa: F401
+from . import reasoning  # noqa: F401
 

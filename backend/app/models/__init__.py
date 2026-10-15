@@ -62,6 +62,7 @@ from app.models.basicdata.feedback import Feedback  # noqa: F401
 from app.models.basicdata.permission import SysPermission  # noqa: F401
 from app.models.basicdata.announcement import Announcement, Notification  # noqa: F401
 from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog  # noqa: F401
+from app.models.basicdata.reasoning import ReasoningTask  # noqa: F401
 from app.models.basicdata.share_link import ShareLink  # noqa: F401
 from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa: F401
 from app.models.basicdata.backup import BackupConfig, BackupRecord  # noqa: F401
@@ -110,6 +111,7 @@ __all__ = [
     "SysPermission",
     "DataSupplyApiKey",
     "DataSupplyCallLog",
+    "ReasoningTask",
     "ShareLink",
     "ShareLinkRecipient",
     # 品质管理

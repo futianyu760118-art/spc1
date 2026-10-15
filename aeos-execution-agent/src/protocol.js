@@ -1,0 +1,218 @@
+"use strict";
+
+const WebSocket = require("ws");
+const config = require("./config");
+const { log } = require("./lib/http-client");
+
+/**
+ * AEOS Hub 执行面 WS 协议状态机 —— 信封对齐 execution-agent/src/ws-client.js
+ * （真实契约联调过的参照实现），字段如有出入以 Hub 契约文档为准、只改本文件。
+ *
+ * 连接：握手头 x-aeos-execution-token → register {agentId,name,version,sourceSystem?,capabilities}
+ * Hub：registered {agentId,heartbeatIntervalMs} → 周期 heartbeat {status,currentRunId?}
+ * 派单：dispatch {runId,capability,input} → run_update{running} → run_complete|run_failed
+ * 召回：recall {runId} → 中止活动 run（含平台侧推理取消），不回报（契约 §5）
+ * 断线：杀活动 run（不回报）→ 1/2/5/10/30s 阶梯 + ±20% 抖动重连后重新 register
+ * 单活动 run：忙时新 dispatch 回 run_failed(INTERNAL_ERROR 'agent busy')（设计 §3 边界决策）
+ */
+const RECONNECT_LADDER_MS = [1000, 2000, 5000, 10000, 30000];
+const DEFAULT_HEARTBEAT_MS = 5000;
+
+class HubConnection {
+  constructor(handlers) {
+    this.handlers = handlers;
+    this.socket = null;
+    this.heartbeatTimer = null;
+    this.heartbeatIntervalMs = DEFAULT_HEARTBEAT_MS;
+    this.registered = false;
+    this.reconnectStep = 0;
+    this.reconnectTimer = null;
+    this.stopped = false;
+    this.activeRun = null;
+  }
+
+  start() {
+    this.stopped = false;
+    this.connect();
+  }
+
+  stop() {
+    this.stopped = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.stopHeartbeat();
+    this.abortActive("agent shutdown");
+    if (this.socket) {
+      try {
+        this.socket.close(1000, "agent shutdown");
+      } catch {
+        /* 已关闭 */
+      }
+    }
+  }
+
+  isRegistered() {
+    return this.registered;
+  }
+
+  connect() {
+    if (this.stopped) return;
+    const socket = new WebSocket(config.wsUrl, { headers: { "x-aeos-execution-token": config.token } });
+    this.socket = socket;
+
+    socket.on("open", () => {
+      log("info", "hub_connected", { wsUrl: config.wsUrl });
+      this.send({
+        type: "register",
+        agentId: config.agentId,
+        name: config.agentName,
+        version: config.agentVersion,
+        ...(config.sourceSystem ? { sourceSystem: config.sourceSystem } : {}),
+        capabilities: this.handlers.capabilities,
+      });
+    });
+
+    socket.on("message", (raw) => {
+      let message;
+      try {
+        message = JSON.parse(raw.toString());
+      } catch {
+        log("warn", "hub_bad_message", { raw: String(raw).slice(0, 200) });
+        return;
+      }
+      if (message && typeof message === "object") this.handleMessage(message);
+    });
+
+    socket.on("error", (e) => log("warn", "hub_socket_error", { message: e.message }));
+
+    socket.on("close", () => {
+      const wasRegistered = this.registered;
+      this.registered = false;
+      this.stopHeartbeat();
+      this.abortActive("disconnected");
+      if (this.stopped) return;
+      log("warn", "hub_disconnected", { wasRegistered });
+      this.scheduleReconnect();
+    });
+  }
+
+  handleMessage(message) {
+    switch (message.type) {
+      case "registered": {
+        const interval = Number(message.heartbeatIntervalMs);
+        this.heartbeatIntervalMs = Number.isFinite(interval) && interval > 0 ? interval : DEFAULT_HEARTBEAT_MS;
+        this.registered = true;
+        this.reconnectStep = 0;
+        this.startHeartbeat();
+        log("info", "hub_registered", { agentId: message.agentId, heartbeatIntervalMs: this.heartbeatIntervalMs });
+        break;
+      }
+      case "dispatch":
+        this.onDispatch(message);
+        break;
+      case "recall":
+        this.onRecall(message.runId);
+        break;
+      case "error":
+        log("warn", "hub_protocol_error", { message: message.message });
+        break;
+      default:
+        log("warn", "hub_unknown_message_type", { type: message.type });
+    }
+  }
+
+  onDispatch(dispatch) {
+    const { runId, capability } = dispatch ?? {};
+    if (!runId) return;
+    if (this.activeRun) {
+      this.send({ type: "run_failed", runId, error: { code: "INTERNAL_ERROR", message: "agent busy" } });
+      return;
+    }
+    if (!this.handlers.capabilities.some((c) => c.name === capability)) {
+      this.send({ type: "run_failed", runId, error: { code: "INVALID_ARGUMENT", message: `未知 capability: ${capability}` } });
+      return;
+    }
+
+    const run = { runId, capability, recalled: false, controller: new AbortController() };
+    this.activeRun = run;
+    this.send({ type: "run_update", runId, state: "running" });
+    log("info", "run_started", { runId, capability });
+
+    Promise.resolve()
+      .then(() => this.handlers.onDispatch(run, dispatch.input))
+      .then((result) => {
+        // null = 推理任务被召回/取消（契约 §5：召回不回报）；recalled 同样跳过
+        if (run.recalled || result === null || result === undefined) return;
+        this.send({ type: "run_complete", runId, result });
+        log("info", "run_complete", { runId });
+      })
+      .catch((e) => {
+        if (run.recalled) return;
+        this.send({ type: "run_failed", runId, error: { code: e.code || "INTERNAL_ERROR", message: e.message } });
+        log("info", "run_failed", { runId, code: e.code || "INTERNAL_ERROR" });
+      })
+      .finally(() => {
+        if (this.activeRun === run) this.activeRun = null;
+      });
+  }
+
+  onRecall(runId) {
+    const run = this.activeRun;
+    if (!run) {
+      log("warn", "recall_ignored_no_active_run", { runId: runId ?? null });
+      return;
+    }
+    if (runId && run.runId !== runId) {
+      log("warn", "recall_ignored_run_mismatch", { runId, currentRunId: run.runId });
+      return;
+    }
+    run.recalled = true;
+    log("info", "run_recalled", { runId: run.runId });
+    run.controller.abort();
+    this.handlers.onRecall(run.runId);
+  }
+
+  abortActive(reason) {
+    const run = this.activeRun;
+    if (!run) return;
+    run.recalled = true;
+    log("info", "run_aborted", { runId: run.runId, reason });
+    run.controller.abort();
+    this.handlers.onRecall(run.runId);
+  }
+
+  send(payload) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(payload));
+    else log("warn", "send_skipped_not_open", { type: payload.type });
+  }
+
+  startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      const message = {
+        type: "heartbeat",
+        status: this.activeRun ? "working" : "idle",
+      };
+      if (this.activeRun) message.currentRunId = this.activeRun.runId;
+      this.send(message);
+    }, this.heartbeatIntervalMs);
+  }
+
+  stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  scheduleReconnect() {
+    const base = RECONNECT_LADDER_MS[Math.min(this.reconnectStep, RECONNECT_LADDER_MS.length - 1)];
+    this.reconnectStep = Math.min(this.reconnectStep + 1, RECONNECT_LADDER_MS.length - 1);
+    const delay = Math.round(base * (0.8 + Math.random() * 0.4));
+    log("info", "hub_reconnect_scheduled", { attempt: this.reconnectStep + 1, delayMs: delay });
+    this.reconnectTimer = setTimeout(() => {
+      if (!this.stopped) this.connect();
+    }, delay);
+  }
+}
+
+module.exports = { HubConnection };

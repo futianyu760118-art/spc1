@@ -110,8 +110,10 @@ async def _test_db():
     from app.models.basicdata.user import SysRole, SysUser
     from app.models.basicdata.supplier import Supplier
     from app.models.basicdata.user_org_scope import UserOrgScope
+    from app.models.basicdata.reasoning import ReasoningTask
     from app.models.exception.quality_issue import QualityIssue
     from app.models.material.inventory_check import StockCheck, StockCheckItem
+    from app.models.material.kitting import KittingResult, KittingShortage
     from app.models.material.purchase_order import PurchaseOrder
     from app.models.material.purchase_requisition import (
         PurchaseRequisition,
@@ -148,6 +150,7 @@ async def _test_db():
         PurchaseRequisitionApprovalLog.__table__,
         Inventory.__table__, Location.__table__,
         StockCheck.__table__, StockCheckItem.__table__,
+        ReasoningTask.__table__, KittingResult.__table__, KittingShortage.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -252,6 +255,7 @@ async def db(_test_db):
 EXTERNAL_QUALITY_KEY = {"app_key": "ak_pytest_quality", "app_secret": "sk_pytest_quality"}
 EXTERNAL_ORDERS_KEY = {"app_key": "ak_pytest_orders", "app_secret": "sk_pytest_orders"}
 EXTERNAL_PRODUCTION_KEY = {"app_key": "ak_pytest_production", "app_secret": "sk_pytest_production"}
+EXTERNAL_REASONING_KEY = {"app_key": "ak_pytest_reasoning", "app_secret": "sk_pytest_reasoning"}
 
 PRODUCTION_ENDPOINT_CODES = [
     "production.work_orders.list",
@@ -264,7 +268,7 @@ PRODUCTION_ENDPOINT_CODES = [
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def external_keys(_test_db):
-    """清空质量/生产/数据供给表并种入三把 HMAC Key：quality / orders（未授权对照）/ production。"""
+    """清空质量/生产/数据供给表并种入四把 HMAC Key：quality / orders（未授权对照）/ production / reasoning。"""
     from app.core.database import engine
 
     async with engine.begin() as conn:
@@ -273,7 +277,8 @@ async def external_keys(_test_db):
             "scm_material, scm_supplier, production_task_order, process_progress, "
             "production_order_schedule_snapshot, production_daily_report, "
             "production_capacity_slot, production_base_condition, "
-            "data_supply_api_key, data_supply_call_log RESTART IDENTITY CASCADE"
+            "data_supply_api_key, data_supply_call_log, "
+            "reasoning_task, kitting_result, kitting_shortage RESTART IDENTITY CASCADE"
         ))
         await conn.execute(text("""
             INSERT INTO data_supply_api_key
@@ -286,17 +291,22 @@ async def external_keys(_test_db):
                  '["orders.list", "order_details.list", "boms.tree", "materials.list", "suppliers.list"]',
                  0, :oak, :oas, NULL, 'pytest'),
                 ('pytest-production', 'ak_pytest_production', TRUE,
-                 CAST(:pcodes AS jsonb), 0, :pak, :pas, NULL, 'pytest')
+                 CAST(:pcodes AS jsonb), 0, :pak, :pas, NULL, 'pytest'),
+                ('pytest-reasoning', 'ak_pytest_reasoning', TRUE,
+                 '["reasoning.analyze", "reasoning.cancel", "reasoning.task"]',
+                 0, :rak, :ras, NULL, 'pytest')
         """), {
             "qak": EXTERNAL_QUALITY_KEY["app_key"], "qas": EXTERNAL_QUALITY_KEY["app_secret"],
             "oak": EXTERNAL_ORDERS_KEY["app_key"], "oas": EXTERNAL_ORDERS_KEY["app_secret"],
             "pak": EXTERNAL_PRODUCTION_KEY["app_key"], "pas": EXTERNAL_PRODUCTION_KEY["app_secret"],
+            "rak": EXTERNAL_REASONING_KEY["app_key"], "ras": EXTERNAL_REASONING_KEY["app_secret"],
             "pcodes": json.dumps(PRODUCTION_ENDPOINT_CODES),
         })
     yield {
         "quality": EXTERNAL_QUALITY_KEY,
         "orders": EXTERNAL_ORDERS_KEY,
         "production": EXTERNAL_PRODUCTION_KEY,
+        "reasoning": EXTERNAL_REASONING_KEY,
     }
 
 
