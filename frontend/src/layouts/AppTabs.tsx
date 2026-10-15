@@ -166,6 +166,7 @@ export default function AppTabs({ navTree }: AppTabsProps) {
             <div
               className={`app-tab${t.key === activeKey ? ' active' : ''}`}
               data-tab-key={t.key}
+              title={titles[t.key]}
               onClick={() => activateTab(t)}
             >
               <span className="app-tab-title">{titles[t.key]}</span>
