@@ -83,4 +83,4 @@ powershell -ExecutionPolicy Bypass -File scripts\manage-version.ps1 -Server app1
 - `.env`（含数据库/Redis/ERP/MinIO 密码）与 SSH 密钥**永不进仓库**、永不出现在汇报文本里。
 - `deploy-config.ps1` 只填连接信息与文件路径；SSH 密码建议留空走密钥认证或手动输入。
 - 主服务器对公网暴露的 15432/16379/19000/19001 端口必须在云安全组限制来源（仅 app 服务器出口 IP）。
-- nginx.conf 权威源在 `scripts/remote/nginx.conf`（部署 bundle 只会在远程缺失时写入，不覆盖远程已手工配置的版本）。
+- nginx.conf 权威源在 `scripts/remote/nginx.conf`（部署 bundle 与远程内容比对，不同则覆盖并自动重启前端容器；相同则保留远程版本）。

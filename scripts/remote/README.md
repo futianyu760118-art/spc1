@@ -58,5 +58,5 @@ chmod +x /home/ubuntu/apps/hj-spc/backup-db.sh
 ## 注意
 
 - `.env`、SSH 密钥、备份文件**永远不进仓库**
-- 一键部署的 bundle 含镜像 + compose + .env + `scripts/remote/nginx.conf`；其中 nginx.conf 只在远程**不存在**时写入（已存在则保留远程版本），迁移新服务器无需手工同步 nginx.conf，但 `backup-db.sh` 仍按第 4 步手工上传
+- 一键部署的 bundle 含镜像 + compose + .env + `scripts/remote/nginx.conf`；nginx.conf 与远程**内容比对**，不同则覆盖并自动重启前端容器（NGINX-UPDATED / FRONTEND-RESTARTED-FOR-NGINX），相同则保留（NGINX-KEPT）；迁移新服务器无需手工同步 nginx.conf，但 `backup-db.sh` 仍按第 4 步手工上传
 - 数据库版本镜像 `postgres:15`（与内网原库 15.x 对齐），升级前先出备份
