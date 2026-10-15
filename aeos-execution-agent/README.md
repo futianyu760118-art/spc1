@@ -45,6 +45,7 @@ src/
 
 1. **中台凭据**：SPC 管理端「基础数据 → 数据供给」新建 API Key，勾选：
    - `reasoning.analyze` / `reasoning.cancel`（推理）
+   - `agent.config`（运行时配置拉取，管理台对接用）
    - 契约 §4.2 查询端点（orders.list、kitting.results、quality_issues.list 等 18 项 + `int:health.ping`）
    记录 AppKey/AppSecret，必要时配 IP 白名单（Sidecar 出口 IP）。
 
@@ -72,6 +73,10 @@ src/
    - Hub 派 `reason_control_platform` 单后，中台 `reasoning_task` 表出现以 `runId` 为 `task_id`
      的记录且 `llm_called=1`（证明真实调用大模型，非直查 REST 伪装）；
    - Hub 召回后中台任务终态应为 `cancelled`（本地不回报，符合契约 §5）。
+
+5. **管理台对接**：根 `.env` 同步配 `AGENT_ADMIN_TOKEN`（与 backend 侧一致）；
+   backend 配 `EXECUTION_AGENT_BASE_URL=http://aeos-execution-agent:8790` 后，
+   系统管理「执行面智能体」页可看状态/改配置（重启后生效）/远程重启。
 
 ## 维护注意
 

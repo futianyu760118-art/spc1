@@ -9,6 +9,8 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
     # 推理同步调用最长约 REASONING_TIMEOUT_S(120s)，容器级超时留余量
     stop_grace_period: 30s
     logging:
