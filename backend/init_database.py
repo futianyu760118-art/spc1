@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.database import engine, Base, AsyncSessionLocal
 from app.core.config import get_settings
 from app.core.security import get_password_hash
+import app.models  # noqa: F401  经包 __init__ 注册全部模型到 Base.metadata，create_all 才能看到所有表
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.order.eta_update import ETAUpdate
 from app.models.order.run_order import RunOrder
@@ -759,6 +760,16 @@ class DatabaseInitializer:
                 print("  feedback.ai_status index ensured")
             except Exception as e:
                 print(f"  feedback.ai_status index skipped: {e}")
+        # 单独事务：po_no 唯一索引是 order_material_po_binding 外键前提（对齐 alembic），
+        # 半建库（create_all 中途失败留下无唯一索引的 purchase_order）靠此收敛；有重复数据时失败不影响上面已确保的索引
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_purchase_order_po_no ON purchase_order (po_no)"
+                ))
+                print("  purchase_order.po_no unique index ensured")
+            except Exception as e:
+                print(f"  purchase_order.po_no unique index skipped: {e}")
 
     async def migrate_production_daily_report_index(self):
         """将 production_daily_report 的唯一索引由 (oa_id) 改为 (oa_id, oa_detail_id)，

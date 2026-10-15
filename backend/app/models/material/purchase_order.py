@@ -1,6 +1,6 @@
 """物料齐套中心 — 采购订单/采购到料计划统一模型"""
 
-from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, Text, ForeignKey, UniqueConstraint
+from sqlalchemy import text, Column, Integer, String, Numeric, Date, DateTime, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -11,8 +11,8 @@ class PurchaseOrder(Base):
     __tablename__ = "purchase_order"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    po_no = Column(String(64), nullable=False, index=True)
-    detail_id = Column(Integer, nullable=False, default=1)
+    po_no = Column(String(64), nullable=False, unique=True, index=True)  # unique 为 order_material_po_binding 外键前提（对齐 alembic ix_purchase_order_po_no）
+    detail_id = Column(Integer, nullable=False, default=1, server_default=text('1'))
     material_code = Column(String(64), nullable=False, index=True)
     supplier_code = Column(String(64))
     supplier_name = Column(String(256))

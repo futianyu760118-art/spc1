@@ -20,7 +20,7 @@ class BusinessDocument(Base):
     applicable_process = Column(String(128), nullable=True)
     current_version = Column(String(32), nullable=True)
     status = Column(String(32), nullable=False, default="draft", index=True)
-    is_deleted = Column(Integer, nullable=False, default=0, index=True, comment="是否删除 0否1是")
+    is_deleted = Column(Integer, nullable=False, default=0, server_default=text("0"), index=True, comment="是否删除 0否1是")  # server_default 对齐 migrate 路径的 DEFAULT 0，否则新库 seed 插入未带列值会 NOT NULL 失败
     created_by = Column(String(64), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

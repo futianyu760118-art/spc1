@@ -1,6 +1,6 @@
 """物料齐套中心 — 订单-物料-PO绑定模型"""
 
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey
+from sqlalchemy import text, Column, Integer, String, Numeric, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 

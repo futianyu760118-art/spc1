@@ -1,5 +1,5 @@
 """问题反馈模型"""
-from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy import text, Column, Integer, String, Text, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
@@ -31,7 +31,7 @@ class Feedback(Base):
     submitter_name = Column(String(64), nullable=False)
 
     # AI 自动实现
-    ai_status = Column(String(16), nullable=False, default="none", index=True,
+    ai_status = Column(String(16), nullable=False, default="none", server_default=text("'none'"), index=True,
                        comment="none/queued/running/done/failed")
     ai_branch = Column(String(128), nullable=True, comment="runner 产出的本地分支名")
     ai_note = Column(Text, nullable=True, comment="runner 结果摘要/失败原因")
