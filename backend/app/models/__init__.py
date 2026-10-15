@@ -66,6 +66,7 @@ from app.models.basicdata.reasoning import ReasoningTask  # noqa: F401
 from app.models.basicdata.share_link import ShareLink  # noqa: F401
 from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa: F401
 from app.models.basicdata.backup import BackupConfig, BackupRecord  # noqa: F401
+from app.models.basicdata.ai_agent import AiAgentConfig, AssistantRun  # noqa: F401
 
 __all__ = [
     # 订单交付中心
@@ -119,4 +120,6 @@ __all__ = [
     "SupplierClaimApprovalLog",
     "BackupConfig",
     "BackupRecord",
+    "AiAgentConfig",
+    "AssistantRun",
 ]
