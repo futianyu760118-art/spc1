@@ -3,6 +3,7 @@
 const http = require("node:http");
 const config = require("./config");
 const { log } = require("./lib/http-client");
+const { applyRemoteConfigWithRetry } = require("./lib/remote-config");
 const { HubConnection } = require("./protocol");
 const queryAdapter = require("./adapters/query-adapter");
 const reasoningAdapter = require("./adapters/reasoning-adapter");
@@ -53,28 +54,54 @@ const handlers = {
 function startHealthServer(connection) {
   if (config.healthCheckPort <= 0) return null;
   const server = http.createServer((req, res) => {
-    if (req.url && req.url.split("?")[0] === "/healthz") {
+    const pathname = req.url ? req.url.split("?")[0] : "";
+    const send = (status, body) => {
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (pathname === "/healthz") {
       const ok = connection.isRegistered();
-      res.writeHead(ok ? 200 : 503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: ok ? "ok" : "not_registered" }));
+      send(ok ? 200 : 503, { status: ok ? "ok" : "not_registered" });
+    } else if (pathname.startsWith("/admin/")) {
+      if (!config.adminToken) return send(503, { status: "admin_disabled" });
+      const token = req.headers["x-admin-token"];
+      if (token !== config.adminToken) return send(401, { status: "unauthorized" });
+      if (pathname === "/admin/status" && req.method === "GET") {
+        send(200, {
+          registered: connection.isRegistered(),
+          currentRunId: connection.activeRun ? connection.activeRun.runId : null,
+          configVersion: config.configVersion,
+          uptimeS: Math.floor(process.uptime()),
+          agentId: config.agentId,
+          capabilities: handlers.capabilities.map((c) => c.name),
+        });
+      } else if (pathname === "/admin/restart" && req.method === "POST") {
+        send(200, { status: "restarting" });
+        log("info", "admin_restart_requested", {});
+        setTimeout(() => process.exit(0), 150);
+      } else {
+        send(404, { status: "not_found" });
+      }
     } else {
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "not_found" }));
+      send(404, { status: "not_found" });
     }
   });
   server.on("error", (err) => log("error", "health_server_error", { message: err.message }));
-  server.listen(config.healthCheckPort, "127.0.0.1");
-  log("info", "health_server_listening", { port: config.healthCheckPort });
+  // 0.0.0.0：backend 容器经 compose 网络访问（此前仅 127.0.0.1 本机可达）
+  server.listen(config.healthCheckPort, "0.0.0.0");
+  log("info", "health_server_listening", { port: config.healthCheckPort, bind: "0.0.0.0" });
   return server;
 }
 
-function main() {
+async function main() {
   log("info", "agent_starting", {
     agentId: config.agentId,
     hub: config.wsUrl,
     platform: config.platformBaseUrl,
     query_paths: Object.keys(queryAdapter.PATH_ENDPOINT_CODES).length,
   });
+  // DB 运行时配置：启动即拉一次（失败用 env 继续 + 后台重试），须在建连前完成
+  await applyRemoteConfigWithRetry();
   const connection = new HubConnection(handlers);
   const healthServer = startHealthServer(connection);
   connection.start();
