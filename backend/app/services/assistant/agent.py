@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.services.ai import ai_service, ChatMessage, ChatOptions, NotSupportedError
 from app.services.ai_config import (
+    ASSISTANT_CONFIG_DEFS,
     ASSISTANT_SCOPE,
     get_scope_config,
     render_system_prompt,
@@ -61,7 +62,6 @@ TOOL_RETRY_CONFIG = RetryConfig(
 
 async def _load_runtime_config(db: AsyncSession) -> Dict[str, Any]:
     """每次请求读 DB 配置（无缓存，多实例强一致）；读失败回退默认值不阻断对话"""
-    from app.services.ai_config import ASSISTANT_CONFIG_DEFS
     try:
         return await get_scope_config(db, ASSISTANT_SCOPE)
     except Exception as e:

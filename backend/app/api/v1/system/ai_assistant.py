@@ -15,6 +15,7 @@ from app.services.ai_config import (
     SCOPE_DEFS,
     get_scope_config,
     get_scope_version,
+    operator_name,
     save_scope_config,
 )
 from app.services.assistant.tool_registry import get_all_tools
@@ -123,10 +124,8 @@ async def update_assistant_config(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(PermissionChecker("ai.assistant_config", "update")),
 ):
-    operator = getattr(current_user, "username", None) or str(
-        getattr(current_user, "user_id", "") or getattr(current_user, "id", ""))
     try:
-        version = await save_scope_config(db, ASSISTANT_SCOPE, body.config, operator)
+        version = await save_scope_config(db, ASSISTANT_SCOPE, body.config, operator_name(current_user))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if body.config.get("disabled_tools") is not None:

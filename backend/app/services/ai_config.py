@@ -92,6 +92,10 @@ def _validate(def_: ConfigDef, value: Any) -> Any:
             raise ValueError(f"未知工具: {unknown}")
     if def_.key == "log_level" and value not in ("debug", "info", "warn", "error"):
         raise ValueError("log_level 必须是 debug|info|warn|error")
+    if def_.value_type == "string":
+        limit = 20000 if def_.key in ("system_prompt", "intent_prompt") else 500
+        if len(value) > limit:
+            raise ValueError(f"配置 {def_.key} 超长：{len(value)} 字符 > 上限 {limit}")
     return value
 
 
@@ -128,6 +132,30 @@ async def get_scope_version(db: AsyncSession, scope: str) -> int:
         return 0
 
 
+def operator_name(current_user) -> str:
+    """审计操作人：username 优先，回退 user_id/id"""
+    username = getattr(current_user, "username", None)
+    if username:
+        return str(username)
+    user_id = getattr(current_user, "user_id", None) or getattr(current_user, "id", None)
+    return str(user_id) if user_id is not None else ""
+
+
+async def _upsert_config_row(
+    db: AsyncSession, scope: str, key: str, stored: str, value_type: str, updated_by: str
+) -> None:
+    await db.execute(
+        pg_insert(AiAgentConfig)
+        .values(scope=scope, config_key=key, config_value=stored,
+                value_type=value_type, updated_by=updated_by)
+        .on_conflict_do_update(
+            constraint="uq_ai_agent_config_scope_key",
+            set_={"config_value": stored, "value_type": value_type,
+                  "updated_by": updated_by, "updated_at": func.now()},
+        )
+    )
+
+
 async def save_scope_config(db: AsyncSession, scope: str, values: Dict[str, Any], updated_by: str) -> int:
     """白名单校验 + 类型校正 + 逐键 upsert + 审计 + 版本 +1；异常抛 ValueError 由端点转信封"""
     defs = SCOPE_DEFS[scope]
@@ -139,29 +167,12 @@ async def save_scope_config(db: AsyncSession, scope: str, values: Dict[str, Any]
         def_ = defs[key]
         value = _validate(def_, raw)
         stored = _to_stored(def_, value)
-        await db.execute(
-            pg_insert(AiAgentConfig)
-            .values(scope=scope, config_key=key, config_value=stored,
-                    value_type=def_.value_type, updated_by=updated_by)
-            .on_conflict_do_update(
-                constraint="uq_ai_agent_config_scope_key",
-                set_={"config_value": stored, "value_type": def_.value_type,
-                      "updated_by": updated_by, "updated_at": func.now()},
-            )
-        )
+        await _upsert_config_row(db, scope, key, stored, def_.value_type, updated_by)
         await log_audit(db, "ai_agent_config", 0, "update", field_name=f"{scope}.{key}",
                         new_value=stored[:500] if stored else None, operator=updated_by)
 
     version = await get_scope_version(db, scope) + 1
-    await db.execute(
-        pg_insert(AiAgentConfig)
-        .values(scope=scope, config_key=VERSION_KEY, config_value=str(version),
-                value_type="int", updated_by=updated_by)
-        .on_conflict_do_update(
-            constraint="uq_ai_agent_config_scope_key",
-            set_={"config_value": str(version), "updated_by": updated_by, "updated_at": func.now()},
-        )
-    )
+    await _upsert_config_row(db, scope, VERSION_KEY, str(version), "int", updated_by)
     return version
 
 

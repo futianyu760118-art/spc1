@@ -12,7 +12,14 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
-from app.services.ai_config import EXECUTION_AGENT_SCOPE, get_scope_config, get_scope_version, save_scope_config
+from app.services.ai_config import (
+    EXECUTION_AGENT_SCOPE,
+    SCOPE_DEFS,
+    get_scope_config,
+    get_scope_version,
+    operator_name,
+    save_scope_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +44,11 @@ async def _call_agent(path: str, *, timeout: float = 10.0, method: str = "GET") 
         if resp.status_code == 401:
             return {"online": False, "reason": "admin token 不匹配"}
         resp.raise_for_status()
-        return {"online": True, **resp.json()}
+        try:
+            body = resp.json()
+        except ValueError:
+            return {"online": False, "reason": "响应非 JSON"}
+        return {"online": True, **body}
     except httpx.HTTPError as e:
         return {"online": False, "reason": f"agent 不可达: {e.__class__.__name__}"}
 
@@ -48,17 +59,21 @@ async def agent_status(
     current_user=Depends(PermissionChecker("ai.execution_agent", "read")),
 ):
     agent = await _call_agent("/admin/status")
+    db_version = await get_scope_version(db, EXECUTION_AGENT_SCOPE)
     recent = (await db.execute(text(
         "SELECT task_id, task_type, status, llm_called, error_code, duration_ms, created_at "
         "FROM reasoning_task ORDER BY id DESC LIMIT 10"
     ))).mappings().all()
+    config_pending_restart = False
+    if agent.get("online") and agent.get("configVersion") is not None:
+        try:
+            config_pending_restart = int(agent["configVersion"]) != db_version
+        except (TypeError, ValueError):
+            config_pending_restart = False
     return ResponseModel(data={
         "agent": agent,
-        "db_version": await get_scope_version(db, EXECUTION_AGENT_SCOPE),
-        "config_pending_restart": (
-            agent.get("online") and agent.get("configVersion") is not None
-            and int(agent["configVersion"]) != await get_scope_version(db, EXECUTION_AGENT_SCOPE)
-        ),
+        "db_version": db_version,
+        "config_pending_restart": config_pending_restart,
         "recent_reasoning_tasks": [dict(r) for r in recent],
     })
 
@@ -68,7 +83,6 @@ async def get_agent_config(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(PermissionChecker("ai.execution_agent", "read")),
 ):
-    from app.services.ai_config import SCOPE_DEFS
     return ResponseModel(data={
         "version": await get_scope_version(db, EXECUTION_AGENT_SCOPE),
         "config": await get_scope_config(db, EXECUTION_AGENT_SCOPE),
@@ -82,10 +96,8 @@ async def update_agent_config(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(PermissionChecker("ai.execution_agent", "update")),
 ):
-    operator = getattr(current_user, "username", None) or str(
-        getattr(current_user, "user_id", "") or getattr(current_user, "id", ""))
     try:
-        version = await save_scope_config(db, EXECUTION_AGENT_SCOPE, body.config, operator)
+        version = await save_scope_config(db, EXECUTION_AGENT_SCOPE, body.config, operator_name(current_user))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return ResponseModel(message="已保存；agent 重启后生效", data={"version": version})
