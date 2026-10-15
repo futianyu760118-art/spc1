@@ -846,8 +846,12 @@ export default function MainLayout() {
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
   // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（如仅授 ai.assistant_config 也能进 /ai-assistant）
+  // 静态兜底：权限树未加载（接口失败/竞态）时动态映射为空，用静态映射保证放行逻辑不缺位
+  const STATIC_PATH_ANY_OF: Record<string, string[]> = {
+    '/ai-assistant': ['ai.assistant_monitor', 'ai.assistant_config'],
+  }
   const pathAnyOfMap = useMemo(() => {
-    const map: Record<string, string[]> = {}
+    const map: Record<string, string[]> = { ...STATIC_PATH_ANY_OF }
     const walk = (nodes: PermNode[]) => {
       for (const n of nodes) {
         if (n.route_path) {
@@ -859,6 +863,7 @@ export default function MainLayout() {
     }
     walk(permTree)
     return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [permTree])
   const canViewCurrentPage = !requiredPermission
     || hasPermission(requiredPermission, 'read')
