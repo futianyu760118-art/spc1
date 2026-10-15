@@ -63,7 +63,7 @@ class OpenAIProvider(LLMProvider):
         request_timeout = opts.timeout or self._timeout
         response = await asyncio.wait_for(
             self._client.chat.completions.create(
-                model=self._model,
+                model=opts.model or self._model,
                 messages=[{"role": m.role, "content": m.content} for m in messages],
                 temperature=opts.temperature,
                 max_tokens=opts.max_tokens,
@@ -83,7 +83,7 @@ class OpenAIProvider(LLMProvider):
 
         opts = options or ChatOptions()
         stream = await self._client.chat.completions.create(
-            model=self._model,
+            model=opts.model or self._model,
             messages=[{"role": m.role, "content": m.content} for m in messages],
             temperature=opts.temperature,
             max_tokens=opts.max_tokens,
@@ -120,7 +120,7 @@ class OpenAIProvider(LLMProvider):
 
         # Build request kwargs - only include parameters the model supports
         create_kwargs: dict = {
-            "model": self._model,
+            "model": opts.model or self._model,
             "messages": formatted_msgs,
         }
         if tools:

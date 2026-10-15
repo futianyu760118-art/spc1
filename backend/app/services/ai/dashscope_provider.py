@@ -48,7 +48,7 @@ class DashscopeProvider(LLMProvider):
         response = await loop.run_in_executor(
             None,
             lambda: Generation.call(
-                model=self._model,
+                model=(opts.model if opts and opts.model else self._model),
                 messages=formatted,
                 temperature=opts.temperature,
                 max_tokens=opts.max_tokens,
@@ -78,7 +78,7 @@ class DashscopeProvider(LLMProvider):
         responses = await loop.run_in_executor(
             None,
             lambda: Generation.call(
-                model=self._model,
+                model=(opts.model if opts and opts.model else self._model),
                 messages=formatted,
                 temperature=opts.temperature,
                 max_tokens=opts.max_tokens,
@@ -123,7 +123,7 @@ class DashscopeProvider(LLMProvider):
         response = await loop.run_in_executor(
             None,
             lambda: Generation.call(
-                model=self._model,
+                model=(opts.model if opts and opts.model else self._model),
                 messages=formatted,
                 tools=tools if tools else None,
                 temperature=opts.temperature,

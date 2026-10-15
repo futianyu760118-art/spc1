@@ -21,6 +21,7 @@ class ChatOptions:
     temperature: float = 0.7
     max_tokens: int = 2048
     timeout: int = 30
+    model: Optional[str] = None  # 运行时配置覆盖；None=用 provider 构造时的 env 模型
 
 
 @dataclass
