@@ -42,7 +42,13 @@ async def _call_agent(path: str, *, timeout: float = 10.0, method: str = "GET") 
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.request(method, f"{base}{path}", headers=_admin_headers())
         if resp.status_code == 401:
-            return {"online": False, "reason": "admin token 不匹配"}
+            return {"online": False, "reason": "admin token 不匹配（backend 与 agent 容器的 AGENT_ADMIN_TOKEN 不一致）"}
+        if resp.status_code == 503:
+            try:
+                if resp.json().get("status") == "admin_disabled":
+                    return {"online": False, "reason": "agent 未配置 AGENT_ADMIN_TOKEN（admin 面禁用）"}
+            except ValueError:
+                pass
         resp.raise_for_status()
         try:
             body = resp.json()
