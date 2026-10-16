@@ -34,15 +34,18 @@ interface PermTreeNode {
   key: string
   label: string
   actions?: string[]
+  /** 有 route_path 的父节点是「页面 + Tab 子权限」结构（如 智能助手管理+助手配置），勾选须写自身 key，而非纯分组只写子节点 */
+  routePath?: string | null
   children?: PermTreeNode[]
 }
 
-// 将 API 返回的 PermNode 转换为 PermTreeNode
+// 把 API 返回的 PermNode 转换为 PermTreeNode
 function permNodeToTreeNode(nodes: PermNode[]): PermTreeNode[] {
   return nodes.map(node => ({
     key: node.code,
     label: node.name,
     actions: node.actions?.length ? [...node.actions] : undefined,
+    routePath: node.route_path,
     children: node.children?.length ? permNodeToTreeNode(node.children) : undefined,
   }))
 }
@@ -234,6 +237,8 @@ function PermissionMatrix({ value, onChange, permissionTree }: { value: Record<s
   const isOwnActionParent = (node: PermTreeNode): boolean => {
     const kids = node.children
     if (!kids || kids.length === 0) return false
+    // 带 route_path 的父节点是「页面 + Tab 子权限」（如 ai.assistant_monitor）：自身可勾选
+    if (node.routePath) return true
     if ((value[node.key] || []).length > 0) return true
     return kids.every(c => (c.actions || []).some(a => !PERMISSION_ACTION_KEYS.includes(a)))
   }
