@@ -47,7 +47,10 @@ async def assistant_stats(
     top_tools = (await db.execute(text(
         f"SELECT tool, COUNT(*) AS hits FROM assistant_run, "
         f"jsonb_array_elements_text(tools_called) AS tool "
-        f"WHERE created_at >= {since} GROUP BY tool ORDER BY hits DESC LIMIT 10"
+        # ORM 写入的 Python None 会落成 jsonb 标量 null（非 SQL NULL），
+        # 无 jsonb_typeof 守卫时 jsonb_array_elements_text 遇标量直接报错
+        f"WHERE created_at >= {since} AND jsonb_typeof(tools_called) = 'array' "
+        f"GROUP BY tool ORDER BY hits DESC LIMIT 10"
     ))).mappings().all()
     return ResponseModel(data={
         "total": total_row["total"],

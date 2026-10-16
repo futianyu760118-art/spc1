@@ -133,11 +133,15 @@ async def get_scope_version(db: AsyncSession, scope: str) -> int:
 
 
 def operator_name(current_user) -> str:
-    """审计操作人：username 优先，回退 user_id/id"""
-    username = getattr(current_user, "username", None)
+    """审计操作人：username 优先，回退 user_id/sub（current_user 为 JWT payload dict）"""
+    username = current_user.get("username") if isinstance(current_user, dict) else getattr(current_user, "username", None)
     if username:
         return str(username)
-    user_id = getattr(current_user, "user_id", None) or getattr(current_user, "id", None)
+    user_id = (
+        current_user.get("user_id") or current_user.get("sub")
+        if isinstance(current_user, dict)
+        else (getattr(current_user, "user_id", None) or getattr(current_user, "id", None))
+    )
     return str(user_id) if user_id is not None else ""
 
 

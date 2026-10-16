@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import AsyncSessionLocal, get_db
 from app.core.security import PermissionChecker
 from app.models.basicdata.ai_agent import AssistantRun
 from app.schemas.assistant.schemas import ChatMessageIn, AssistantReply, ToolInfo
@@ -30,7 +30,6 @@ router = APIRouter()
 
 
 async def _record_run(
-    db: AsyncSession,
     *,
     trace_id: str,
     session_id: str,
@@ -44,25 +43,36 @@ async def _record_run(
     is_success: bool,
     error_message: Optional[str],
 ) -> None:
-    """用量审计落库；失败仅告警不影响对话主流程"""
+    """用量审计落库；失败仅告警不影响对话主流程。
+
+    独立 session + 显式 commit：StreamingResponse 的 body generator 在 get_db 的
+    teardown(commit) 之后才被 Starlette 迭代，借请求级 session 写入的行会随隐式回滚丢失。
+    """
     intent = (intent or "").lower() or None
     try:
-        db.add(AssistantRun(
-            trace_id=trace_id or "",
-            session_id=session_id or None,
-            user_id=user_id or None,
-            user_message=(message or "")[:500],
-            intent=intent,
-            tools_called=tools_called or None,
-            tool_rounds=tool_rounds,
-            total_tokens=total_tokens,
-            duration_ms=duration_ms,
-            is_success=is_success,
-            error_message=error_message,
-        ))
-        await db.flush()
+        async with AsyncSessionLocal() as session:
+            session.add(AssistantRun(
+                trace_id=trace_id or "",
+                session_id=session_id or None,
+                user_id=user_id or None,
+                user_message=(message or "")[:500],
+                intent=intent,
+                tools_called=tools_called or None,
+                tool_rounds=tool_rounds,
+                total_tokens=total_tokens,
+                duration_ms=duration_ms,
+                is_success=is_success,
+                error_message=error_message,
+            ))
+            await session.commit()
     except Exception as exc:
         logger.warning(f"[assistant] 用量落库失败 trace={trace_id}: {exc}")
+
+
+def _current_user_id(current_user: Any) -> str:
+    """PermissionChecker 返回 dict（JWT payload），user id 在 sub/user_id 键"""
+    user_id = current_user.get("sub") or current_user.get("user_id") or ""
+    return str(user_id)
 
 
 def _diag_tools(diagnostics: Optional[dict]) -> list:
@@ -86,9 +96,7 @@ async def chat(
     """接收用户消息，运行 Agent"""
     trace_id = str(uuid.uuid4())
     session_id = body.session_id or str(uuid.uuid4())
-    user_id = getattr(current_user, "user_id", "") or getattr(current_user, "id", "")
-    if hasattr(user_id, "__int__"):
-        user_id = str(user_id)
+    user_id = _current_user_id(current_user)
 
     request_start = time.perf_counter()
 
@@ -122,7 +130,6 @@ async def chat(
             )
         except Exception as e:
             await _record_run(
-                db,
                 trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
                 intent=None, tools_called=[], tool_rounds=None, total_tokens=None,
                 duration_ms=round((time.perf_counter() - request_start) * 1000, 2),
@@ -137,7 +144,6 @@ async def chat(
         reply.trace_id = trace_id
         errors = (reply.diagnostics or {}).get("errors") or []
         await _record_run(
-            db,
             trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
             intent=(reply.diagnostics or {}).get("intent"),
             tools_called=_diag_tools(reply.diagnostics),
@@ -165,9 +171,7 @@ async def chat_stream(
     """SSE 流式对话接口"""
     trace_id = str(uuid.uuid4())
     session_id = body.session_id or str(uuid.uuid4())
-    user_id = getattr(current_user, "user_id", "") or getattr(current_user, "id", "")
-    if hasattr(user_id, "__int__"):
-        user_id = str(user_id)
+    user_id = _current_user_id(current_user)
 
     async def event_generator():
         started = time.perf_counter()
@@ -212,7 +216,6 @@ async def chat_stream(
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             # shield：生成器被二次取消（客户端断开）时保证落库任务不被连带取消
             await asyncio.shield(_record_run(
-                db,
                 trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
                 intent=run_info["intent"],
                 tools_called=run_info["tools"],
