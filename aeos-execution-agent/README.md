@@ -1,5 +1,7 @@
 # aeos-execution-agent — AEOS Hub 执行面智能体（查询 + 推理）
 
+> 已被 `agents/query-agent` + `agents/reasoning-agent` 取代，保留用于切换回退；验收后删除。
+
 独立 Sidecar，把中台（SPC）的两类只读能力经 AEOS 执行面 WebSocket 协议暴露给 AEOS Hub：
 
 | 能力名 | 适配器 | 状态 |

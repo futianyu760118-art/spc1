@@ -1,11 +1,10 @@
-"""系统管理 — 执行面智能体管理端点（状态代理 / 配置 / 远程自重启，设计文档 2026-10-15）"""
+"""系统管理 — 执行面智能体管理端点（状态代理 / 配置 / 远程自重启，设计文档 2026-10-15）
+(legacy，单 Agent；多智能体见 execution_agents.py)"""
 
 import logging
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -20,6 +19,11 @@ from app.services.ai_config import (
     operator_name,
     save_scope_config,
 )
+from app.services.execution_agents import (
+    call_agent,
+    config_pending_restart,
+    fetch_recent_reasoning_tasks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,33 +34,11 @@ class AgentConfigIn(BaseModel):
     config: dict
 
 
-def _admin_headers() -> dict:
-    return {"x-admin-token": get_settings().AGENT_ADMIN_TOKEN}
-
-
 async def _call_agent(path: str, *, timeout: float = 10.0, method: str = "GET") -> dict:
     base = get_settings().EXECUTION_AGENT_BASE_URL.rstrip("/")
     if not base:
         return {"online": False, "reason": "EXECUTION_AGENT_BASE_URL 未配置"}
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(method, f"{base}{path}", headers=_admin_headers())
-        if resp.status_code == 401:
-            return {"online": False, "reason": "admin token 不匹配（backend 与 agent 容器的 AGENT_ADMIN_TOKEN 不一致）"}
-        if resp.status_code == 503:
-            try:
-                if resp.json().get("status") == "admin_disabled":
-                    return {"online": False, "reason": "agent 未配置 AGENT_ADMIN_TOKEN（admin 面禁用）"}
-            except ValueError:
-                pass
-        resp.raise_for_status()
-        try:
-            body = resp.json()
-        except ValueError:
-            return {"online": False, "reason": "响应非 JSON"}
-        return {"online": True, **body}
-    except httpx.HTTPError as e:
-        return {"online": False, "reason": f"agent 不可达: {e.__class__.__name__}"}
+    return await call_agent(base, path, timeout=timeout, method=method)
 
 
 @router.get("/status", response_model=ResponseModel[dict])
@@ -66,21 +48,12 @@ async def agent_status(
 ):
     agent = await _call_agent("/admin/status")
     db_version = await get_scope_version(db, EXECUTION_AGENT_SCOPE)
-    recent = (await db.execute(text(
-        "SELECT task_id, task_type, status, llm_called, error_code, duration_ms, created_at "
-        "FROM reasoning_task ORDER BY id DESC LIMIT 10"
-    ))).mappings().all()
-    config_pending_restart = False
-    if agent.get("online") and agent.get("configVersion") is not None:
-        try:
-            config_pending_restart = int(agent["configVersion"]) != db_version
-        except (TypeError, ValueError):
-            config_pending_restart = False
+    recent = await fetch_recent_reasoning_tasks(db)
     return ResponseModel(data={
         "agent": agent,
         "db_version": db_version,
-        "config_pending_restart": config_pending_restart,
-        "recent_reasoning_tasks": [dict(r) for r in recent],
+        "config_pending_restart": config_pending_restart(agent, db_version),
+        "recent_reasoning_tasks": recent,
     })
 
 

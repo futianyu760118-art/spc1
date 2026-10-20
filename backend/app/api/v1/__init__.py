@@ -105,3 +105,8 @@ api_router.include_router(approval.approvals_router, prefix="/approvals", tags=[
 api_router.include_router(system.backups_router, prefix="/system/backups", tags=["系统管理-备份管理"])
 api_router.include_router(system.ai_assistant_router, prefix="/system/ai-assistant", tags=["系统管理-智能助手"])
 api_router.include_router(system.execution_agent_router, prefix="/system/execution-agent", tags=["系统管理-执行面智能体"])
+api_router.include_router(
+    system.execution_agents_router,
+    prefix="/system/execution-agents",
+    tags=["系统管理-执行面智能体"],
+)

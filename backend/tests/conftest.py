@@ -261,6 +261,7 @@ EXTERNAL_ORDERS_KEY = {"app_key": "ak_pytest_orders", "app_secret": "sk_pytest_o
 EXTERNAL_PRODUCTION_KEY = {"app_key": "ak_pytest_production", "app_secret": "sk_pytest_production"}
 EXTERNAL_REASONING_KEY = {"app_key": "ak_pytest_reasoning", "app_secret": "sk_pytest_reasoning"}
 EXTERNAL_AGENT_KEY = {"app_key": "ak_pytest_agent", "app_secret": "sk_pytest_agent"}
+EXTERNAL_ORDER_AGENT_KEY = {"app_key": "ak_pytest_order_agent", "app_secret": "sk_pytest_order_agent"}
 
 PRODUCTION_ENDPOINT_CODES = [
     "production.work_orders.list",
@@ -301,13 +302,16 @@ async def external_keys(_test_db):
                  '["reasoning.analyze", "reasoning.cancel", "reasoning.task"]',
                  0, :rak, :ras, NULL, 'pytest'),
                 ('pytest-agent', 'ak_pytest_agent', TRUE,
-                 '["agent.config"]', 0, :gak, :gas, NULL, 'pytest')
+                 '["agent.config"]', 0, :gak, :gas, NULL, 'pytest'),
+                ('pytest-order-agent', 'ak_pytest_order_agent', TRUE,
+                 '["orders.schedule.update"]', 0, :oak2, :oas2, NULL, 'pytest')
         """), {
             "qak": EXTERNAL_QUALITY_KEY["app_key"], "qas": EXTERNAL_QUALITY_KEY["app_secret"],
             "oak": EXTERNAL_ORDERS_KEY["app_key"], "oas": EXTERNAL_ORDERS_KEY["app_secret"],
             "pak": EXTERNAL_PRODUCTION_KEY["app_key"], "pas": EXTERNAL_PRODUCTION_KEY["app_secret"],
             "rak": EXTERNAL_REASONING_KEY["app_key"], "ras": EXTERNAL_REASONING_KEY["app_secret"],
             "gak": EXTERNAL_AGENT_KEY["app_key"], "gas": EXTERNAL_AGENT_KEY["app_secret"],
+            "oak2": EXTERNAL_ORDER_AGENT_KEY["app_key"], "oas2": EXTERNAL_ORDER_AGENT_KEY["app_secret"],
             "pcodes": json.dumps(PRODUCTION_ENDPOINT_CODES),
         })
     yield {
@@ -316,6 +320,7 @@ async def external_keys(_test_db):
         "production": EXTERNAL_PRODUCTION_KEY,
         "reasoning": EXTERNAL_REASONING_KEY,
         "agent": EXTERNAL_AGENT_KEY,
+        "order_agent": EXTERNAL_ORDER_AGENT_KEY,
     }
 
 

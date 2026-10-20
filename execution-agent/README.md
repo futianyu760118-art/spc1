@@ -1,5 +1,7 @@
 # execution-agent — 执行面智能体
 
+> 已被 `agents/query-agent` 取代，保留用于切换回退；验收后删除。
+
 按《执行面智能体接入契约》开发的执行面查询智能体：反向 WebSocket 连接管理面（AEOS Hub），
 对外提供唯一能力 `query_control_platform`（中台只读查询，契约 §4）。设计文档见
 `docs/执行面智能体-开发设计.md`。

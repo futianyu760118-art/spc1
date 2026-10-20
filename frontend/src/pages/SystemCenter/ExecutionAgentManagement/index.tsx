@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Col, Form, Input, InputNumber, Modal, Row, Select, Space,
-  Spin, Table, message,
+  Badge, Button, Col, Form, Input, InputNumber, Modal, Row, Select, Space,
+  Spin, Table, Tabs, message,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
@@ -11,16 +11,56 @@ import {
 import api from '../../../services/api'
 import { useAuthStore } from '../../../store/auth'
 
+type AgentKey = 'query' | 'reasoning' | 'order'
+
+interface AgentSummary {
+  key: AgentKey
+  label: string
+  scope: string
+  capability: string
+  online: boolean
+  registered?: boolean
+  agentId?: string
+  configVersion?: number
+  currentRunId?: string | null
+  uptimeS?: number
+  capabilities?: string[]
+  reason?: string
+  db_version: number
+  config_pending_restart: boolean
+}
+
 interface AgentStatus {
-  agent: { online: boolean; registered?: boolean; currentRunId?: string | null
-           configVersion?: number; uptimeS?: number; agentId?: string; reason?: string
-           capabilities?: string[] }
+  agent: AgentSummary
   db_version: number
   config_pending_restart: boolean
   recent_reasoning_tasks: {
     task_id: string; task_type: string | null; status: string; llm_called: number
     error_code: number | null; duration_ms: string | null; created_at: string
   }[]
+}
+
+interface ConfigDef {
+  label: string
+  description?: string
+  value_type: 'string' | 'int' | 'float' | 'bool' | 'json'
+}
+
+interface AgentConfigResponse {
+  version: number
+  config: Record<string, unknown>
+  defs: Record<string, ConfigDef>
+}
+
+const AGENT_TABS: { key: AgentKey; label: string }[] = [
+  { key: 'query', label: '查询智能体' },
+  { key: 'reasoning', label: '推理智能体' },
+  { key: 'order', label: '订单智能体' },
+]
+
+const NUMBER_PROPS: Record<string, { min: number; max: number; step: number }> = {
+  query_timeout_ms: { min: 1000, max: 120000, step: 1000 },
+  reasoning_timeout_ms: { min: 10000, max: 600000, step: 10000 },
 }
 
 const STATUS_TAG: Record<string, { cls: string; label: string }> = {
@@ -60,15 +100,28 @@ export default function ExecutionAgentManagement() {
   const hasPermission = useAuthStore((s: any) => s.hasPermission) as (r: string, a: string) => boolean
   const canManage = hasPermission('ai.execution_agent', 'update')
   const [form] = Form.useForm()
+  const [activeKey, setActiveKey] = useState<AgentKey>('query')
+  const [agents, setAgents] = useState<AgentSummary[]>([])
   const [status, setStatus] = useState<AgentStatus | null>(null)
+  const [configDefs, setConfigDefs] = useState<Record<string, ConfigDef>>({})
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const pollRef = useRef<number | null>(null)
+  const activeKeyRef = useRef<AgentKey>('query')
 
-  const refresh = useCallback(async (): Promise<AgentStatus | null> => {
+  const loadAgents = useCallback(async () => {
     try {
-      const res: any = await api.get('/system/execution-agent/status')
+      const res: any = await api.get('/system/execution-agents')
+      setAgents(res.data || [])
+    } catch (e: any) {
+      message.error(String(e?.message || e))
+    }
+  }, [])
+
+  const refresh = useCallback(async (key: AgentKey = activeKey): Promise<AgentStatus | null> => {
+    try {
+      const res: any = await api.get(`/system/execution-agents/${key}/status`)
       const data = res.data as AgentStatus
       setStatus(data)
       return data
@@ -76,33 +129,49 @@ export default function ExecutionAgentManagement() {
       message.error(String(e?.message || e))
       return null
     }
-  }, [])
+  }, [activeKey])
 
-  const loadConfig = useCallback(async () => {
+  const loadCurrent = useCallback(async (key: AgentKey) => {
     setLoading(true)
     try {
-      await refresh()
-      const res: any = await api.get('/system/execution-agent/config')
-      form.setFieldsValue(res.data.config)
+      const [statusRes, configRes]: any[] = await Promise.all([
+        api.get(`/system/execution-agents/${key}/status`),
+        api.get(`/system/execution-agents/${key}/config`),
+      ])
+      setStatus(statusRes.data)
+      const configData = configRes.data as AgentConfigResponse
+      setConfigDefs(configData.defs || {})
+      form.resetFields()
+      form.setFieldsValue(configData.config)
+      await loadAgents()
     } catch (e: any) {
       message.error(String(e?.message || e))
     } finally {
       setLoading(false)
     }
-  }, [form, refresh])
+  }, [form, loadAgents])
 
-  useEffect(() => { loadConfig() }, [loadConfig])
-  useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current) }, [])
+  useEffect(() => {
+    activeKeyRef.current = activeKey
+    loadCurrent(activeKey)
+    return () => {
+      if (pollRef.current) {
+        window.clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+      setRestarting(false)
+    }
+  }, [activeKey, loadCurrent])
 
   const save = async () => {
     const values = await form.validateFields()
     setSaving(true)
     try {
-      const res: any = await api.put('/system/execution-agent/config', {
-        config: Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v ?? ''])),
-      })
+      const config = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, v ?? '']))
+      const res: any = await api.put(`/system/execution-agents/${activeKey}/config`, { config })
       message.success(`已保存 v${res.data.version}，agent 重启后生效`)
-      refresh()
+      await refresh(activeKey)
+      await loadAgents()
     } catch (e: any) {
       message.error(String(e?.message || e))
     } finally {
@@ -116,15 +185,22 @@ export default function ExecutionAgentManagement() {
       content: '重启期间 Hub 派单会被忙拒/重连，约持续数秒。',
       okText: '重启', okButtonProps: { danger: true },
       onOk: async () => {
+        const key = activeKey
         setRestarting(true)
         try {
-          await api.post('/system/execution-agent/restart')
+          await api.post(`/system/execution-agents/${key}/restart`)
           message.success('重启指令已下发')
           let ticks = 0
           if (pollRef.current) window.clearInterval(pollRef.current)
           pollRef.current = window.setInterval(async () => {
+            if (activeKeyRef.current !== key) {
+              window.clearInterval(pollRef.current!)
+              pollRef.current = null
+              setRestarting(false)
+              return
+            }
             ticks += 1
-            const latest = await refresh()
+            const latest = await refresh(key)
             if (latest?.agent.online || ticks > 20) {
               window.clearInterval(pollRef.current!)
               pollRef.current = null
@@ -142,7 +218,7 @@ export default function ExecutionAgentManagement() {
 
   if (loading && !status) return <div className="sc-page" style={{ padding: 48, textAlign: 'center' }}><Spin /></div>
   const agent = status?.agent
-  const pending = status?.config_pending_restart
+  const pending = status?.config_pending_restart ?? agent?.config_pending_restart
 
   const taskColumns: ColumnsType<AgentStatus['recent_reasoning_tasks'][number]> = [
     { title: 'runId / task_id', dataIndex: 'task_id', width: 200, ellipsis: true, render: (v: string) => <span className="sc-mono">{v}</span> },
@@ -167,6 +243,23 @@ export default function ExecutionAgentManagement() {
 
   return (
     <div className="sc-page" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <Tabs
+        activeKey={activeKey}
+        onChange={(key) => setActiveKey(key as AgentKey)}
+        items={AGENT_TABS.map((tab) => ({
+          key: tab.key,
+          label: (
+            <span>
+              {tab.label}
+              <Badge
+                status={agents.find((a) => a.key === tab.key)?.online ? 'success' : 'default'}
+                style={{ marginLeft: 6 }}
+              />
+            </span>
+          ),
+        }))}
+      />
+
       <div className="sc-card">
         <div className="sc-card-head" style={{ padding: '14px 16px 10px' }}>
           <h3>运行状态</h3>
@@ -187,9 +280,7 @@ export default function ExecutionAgentManagement() {
               accent={agent?.online ? '#16a34a' : '#dc2626'}
               accentBg={agent?.online ? '#f0fdf4' : '#fef2f2'}
               value={agent?.online ? (agent.registered ? '在线' : '在线未注册') : '不可达'}
-              delta={agent?.online
-                ? (agent.agentId || '')
-                : (agent?.reason || '')}
+              delta={agent?.online ? (agent.agentId || '') : (agent?.reason || '')}
             />
             <StatusStat
               icon={<SafetyOutlined/>} label="配置版本"
@@ -222,16 +313,24 @@ export default function ExecutionAgentManagement() {
         </div>
         <Form form={form} layout="vertical" style={{ maxWidth: 960 }}>
           <Row gutter={16}>
-            <Col span={12}><Form.Item name="agent_name" label="注册显示名"><Input allowClear placeholder="留空用 env"/></Form.Item></Col>
-            <Col span={12}><Form.Item name="agent_id" label="Agent ID"><Input allowClear placeholder="留空用 env"/></Form.Item></Col>
-            <Col span={12}><Form.Item name="ws_url" label="Hub WebSocket 地址"><Input allowClear placeholder="留空用 env"/></Form.Item></Col>
-            <Col span={4}><Form.Item name="query_timeout_ms" label="查询超时(ms)"><InputNumber min={1000} max={120000} step={1000} style={{ width: '100%' }}/></Form.Item></Col>
-            <Col span={4}><Form.Item name="reasoning_timeout_ms" label="推理超时(ms)"><InputNumber min={10000} max={600000} step={10000} style={{ width: '100%' }}/></Form.Item></Col>
-            <Col span={4}>
-              <Form.Item name="log_level" label="日志级别">
-                <Select options={['debug', 'info', 'warn', 'error'].map((v) => ({ value: v, label: v }))}/>
-              </Form.Item>
-            </Col>
+            {Object.entries(configDefs).map(([key, def]) => (
+              <Col span={key.endsWith('_timeout_ms') ? 6 : 12} key={key}>
+                <Form.Item name={key} label={def.label} tooltip={def.description}>
+                  {key === 'log_level' ? (
+                    <Select options={['debug', 'info', 'warn', 'error'].map((v) => ({ value: v, label: v }))}/>
+                  ) : def.value_type === 'int' ? (
+                    <InputNumber
+                      min={NUMBER_PROPS[key]?.min ?? 0}
+                      max={NUMBER_PROPS[key]?.max}
+                      step={NUMBER_PROPS[key]?.step ?? 1}
+                      style={{ width: '100%' }}
+                    />
+                  ) : (
+                    <Input allowClear/>
+                  )}
+                </Form.Item>
+              </Col>
+            ))}
           </Row>
         </Form>
         {canManage && (
@@ -242,14 +341,16 @@ export default function ExecutionAgentManagement() {
         )}
       </div>
 
-      <div className="sc-card" style={{ padding: '0 0 4px' }}>
-        <div className="sc-card-head" style={{ padding: '12px 16px' }}>
-          <h3>最近推理任务</h3>
-          <span className="sc-hint">reasoning_task 审计 · 最近 10 条</span>
+      {activeKey === 'reasoning' && (
+        <div className="sc-card" style={{ padding: '0 0 4px' }}>
+          <div className="sc-card-head" style={{ padding: '12px 16px' }}>
+            <h3>最近推理任务</h3>
+            <span className="sc-hint">reasoning_task 审计 · 最近 10 条</span>
+          </div>
+          <Table rowKey="task_id" size="small" columns={taskColumns}
+                 dataSource={status?.recent_reasoning_tasks || []} pagination={false}/>
         </div>
-        <Table rowKey="task_id" size="small" columns={taskColumns}
-               dataSource={status?.recent_reasoning_tasks || []} pagination={false}/>
-      </div>
+      )}
     </div>
   )
 }

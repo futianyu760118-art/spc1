@@ -16,7 +16,7 @@ class AiAgentConfig(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    scope = Column(String(32), nullable=False, comment="assistant | execution_agent")
+    scope = Column(String(32), nullable=False, comment="assistant | execution_agent | execution_query | execution_reasoning | execution_order")
     config_key = Column(String(64), nullable=False, comment="配置键（白名单校验）")
     config_value = Column(Text, nullable=True, comment="配置值（空=回退代码默认）")
     value_type = Column(String(8), nullable=False, default="string", comment="string|int|float|bool|json")

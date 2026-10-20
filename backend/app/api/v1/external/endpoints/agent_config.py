@@ -1,10 +1,15 @@
 """执行面智能体配置拉取对外接口（endpoint_code: agent.config）
 
-agent 启动/自重启时经 HMAC 拉取 DB 配置（scope=execution_agent），空值不下发（agent 继续用 env）。
-签名串 = timestamp + app_key + endpoint_code + query_string（GET 无查询参数时 query_string 为空串）。
+agent 启动/自重启时经 HMAC 拉取 DB 配置：
+- `agent=query` → scope=execution_query
+- `agent=reasoning` → scope=execution_reasoning
+- 缺省 → scope=execution_agent（旧合并 Agent 兼容）
+空值不下发（agent 继续用 env）。签名串包含完整 query string。
 """
 
-from fastapi import APIRouter, Depends, Request
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -29,7 +34,11 @@ router = APIRouter(prefix="/agent", tags=["智能体管理"])
 @log_external_call("agent.config")
 async def agent_config(
     request: Request,
+    agent: Optional[str] = Query(None, description="query | reasoning；缺省=旧合并 Agent"),
     db: AsyncSession = Depends(get_db),
     key: DataSupplyApiKey = Depends(external_auth("agent.config")),
 ):
-    return await get_agent_external_config(db)
+    try:
+        return await get_agent_external_config(db, agent)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

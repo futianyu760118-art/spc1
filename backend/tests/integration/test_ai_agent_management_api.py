@@ -80,3 +80,74 @@ async def test_execution_agent_status_offline(client):
     headers = await login(client, "admin")
     r = await client.get("/api/v1/system/execution-agent/status", headers=headers)
     assert r.json()["data"]["agent"]["online"] is False
+
+
+async def test_execution_agents_config_scope_isolation(client):
+    headers = await login(client, "admin")
+
+    r = await client.put("/api/v1/system/execution-agents/query/config",
+                         json={"config": {"query_timeout_ms": 21000, "log_level": "debug"}},
+                         headers=headers)
+    assert r.json()["code"] == 0
+    assert r.json()["data"]["version"] == 1
+
+    r = await client.put("/api/v1/system/execution-agents/reasoning/config",
+                         json={"config": {"reasoning_timeout_ms": 240000}},
+                         headers=headers)
+    assert r.json()["code"] == 0
+    assert r.json()["data"]["version"] == 1
+
+    r = await client.get("/api/v1/system/execution-agents/query/config", headers=headers)
+    data = r.json()["data"]
+    assert data["config"]["query_timeout_ms"] == 21000
+    assert "reasoning_timeout_ms" not in data["config"]
+    assert data["defs"]["query_timeout_ms"]["value_type"] == "int"
+
+    r = await client.get("/api/v1/system/execution-agents/reasoning/config", headers=headers)
+    assert r.json()["data"]["config"]["reasoning_timeout_ms"] == 240000
+
+    r = await client.put("/api/v1/system/execution-agents/query/config",
+                         json={"config": {"reasoning_timeout_ms": 1}}, headers=headers)
+    assert r.json().get("code") != 0
+
+    r = await client.get("/api/v1/system/execution-agents/unknown/status", headers=headers)
+    assert r.status_code == 404
+
+
+async def test_external_agent_config_by_agent(ext_client, client):
+    headers = await login(client, "admin")
+
+    await client.put("/api/v1/system/execution-agents/query/config",
+                     json={"config": {"query_timeout_ms": 22000}}, headers=headers)
+    await client.put("/api/v1/system/execution-agents/reasoning/config",
+                     json={"config": {"reasoning_timeout_ms": 250000}}, headers=headers)
+
+    key = {"app_key": "ak_pytest_agent", "app_secret": "sk_pytest_agent"}
+
+    ts = int(time.time())
+    _, sig = generate_signature(ts, key["app_key"], key["app_secret"], "agent.config", "agent=query")
+    r = await ext_client.get("/api/v1/external/agent/config?agent=query",
+                             headers=build_headers(key["app_key"], sig, ts))
+    data = r.json()["data"]
+    assert data["config"]["query_timeout_ms"] == 22000
+    assert "reasoning_timeout_ms" not in data["config"]
+
+    ts = int(time.time())
+    _, sig = generate_signature(ts, key["app_key"], key["app_secret"], "agent.config", "agent=reasoning")
+    r = await ext_client.get("/api/v1/external/agent/config?agent=reasoning",
+                             headers=build_headers(key["app_key"], sig, ts))
+    assert r.json()["data"]["config"]["reasoning_timeout_ms"] == 250000
+
+    ts = int(time.time())
+    _, sig = generate_signature(ts, key["app_key"], key["app_secret"], "agent.config", "agent=unknown")
+    r = await ext_client.get("/api/v1/external/agent/config?agent=unknown",
+                             headers=build_headers(key["app_key"], sig, ts))
+    assert r.status_code == 400
+
+
+async def test_execution_agents_status_offline(client):
+    headers = await login(client, "admin")
+    r = await client.get("/api/v1/system/execution-agents", headers=headers)
+    agents = r.json()["data"]
+    assert {a["key"] for a in agents} == {"query", "reasoning", "order"}
+    assert all(a["online"] is False for a in agents)

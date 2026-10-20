@@ -116,6 +116,9 @@ class Settings(BaseSettings):
 
     # 智能体管理台（backend 代理访问执行面 agent 的 admin 面；两者留空则 status/restart 返回下线态）
     EXECUTION_AGENT_BASE_URL: str = ""   # 如 http://aeos-execution-agent:8790
+    EXECUTION_QUERY_AGENT_BASE_URL: str = ""
+    EXECUTION_REASONING_AGENT_BASE_URL: str = ""
+    EXECUTION_ORDER_AGENT_BASE_URL: str = ""
     AGENT_ADMIN_TOKEN: str = ""          # 与 agent .env 的 AGENT_ADMIN_TOKEN 一致
 
     # AEOS Hub 助手观测上报（assistant-events，中台助手调用留痕；三项任一缺失即停用）
