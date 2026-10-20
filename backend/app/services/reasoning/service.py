@@ -515,11 +515,11 @@ def build_analysis_prompt(prompt: str, task_type: str, evidence: list[dict]) -> 
     ]
     for ev in evidence:
         data_text = json.dumps(ev["data"], ensure_ascii=False, default=str)
-        if len(data_text) > 1200:
-            data_text = data_text[:1200] + "…"
+        if len(data_text) > 800:
+            data_text = data_text[:800] + "…"
         lines.append(f"- ref: {ev['ref']}\n  摘要: {ev['summary']}\n  数据: {data_text}")
     lines.append("")
-    lines.append("请输出 JSON：summary（总体结论，≤300字）与 conclusions[]（matter / evidence_refs / risk / recommendation / confidence）。")
+    lines.append("请输出 JSON：summary（总体结论，≤300字）与 conclusions[]（最多 6 条，matter / evidence_refs / risk / recommendation / confidence）。")
     return "\n".join(lines)
 
 
@@ -534,7 +534,7 @@ async def _invoke_reasoning_llm(prompt: str, timeout_s: int) -> tuple[ReasoningA
     try:
         analysis = await ai_service.structured_output(
             prompt, ReasoningAnalysis,
-            options=ChatOptions(temperature=0.2, max_tokens=3000, timeout=timeout_s, usage_out=usage_out),
+            options=ChatOptions(temperature=0.2, max_tokens=8000, timeout=timeout_s, usage_out=usage_out),
         )
         return analysis, usage_out
     except ReasoningError:
@@ -693,6 +693,10 @@ async def run_reasoning_task(
         _check_cancelled(handle)
         remaining = max(settings.REASONING_TIMEOUT_S - (time.time() - started), 1)
         prompt_text = build_analysis_prompt(prompt, task_type, evidence)
+        logger.info(
+            "reasoning_prompt_built task=%s task_type=%s evidence=%d prompt_chars=%d",
+            task_id, task_type, len(evidence), len(prompt_text),
+        )
         llm_started = time.time()
         llm_task = asyncio.create_task(_invoke_reasoning_llm(prompt_text, int(remaining)))
         cancel_wait = asyncio.create_task(handle.cancel_event.wait())

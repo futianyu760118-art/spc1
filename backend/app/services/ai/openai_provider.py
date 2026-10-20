@@ -93,10 +93,20 @@ class OpenAIProvider(LLMProvider):
         )
         if not response.choices:
             raise _unexpected_response_error(response)
-        content = response.choices[0].message.content or ""
+        choice = response.choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason == "length":
+            logger.warning(
+                f"[OpenAI] 输出被 max_tokens 截断 model={opts.model or self._model} "
+                f"max_tokens={opts.max_tokens}（推理模型需为 reasoning_content 预留 token）"
+            )
+        content = choice.message.content or ""
         if opts.usage_out is not None:
             opts.usage_out.update(_usage_dict(response.usage))
-        logger.info(f"[OpenAI] model={self._model} tokens={response.usage.total_tokens if response.usage else '?'}")
+        logger.info(
+            f"[OpenAI] model={self._model} finish={finish_reason} "
+            f"tokens={response.usage.total_tokens if response.usage else '?'}"
+        )
         return content
 
     async def chat_stream(self, messages: List[ChatMessage], options: Optional[ChatOptions] = None) -> AsyncIterator[str]:
