@@ -346,7 +346,7 @@ async def _run_routing(
     duration_ms = round((time.perf_counter() - routing_start) * 1000, 2)
     if route:
         report_assistant_event(
-            session_id, "task_route", "任务路由",
+            session_id, "note", "任务路由",
             "completed" if route.get("executed") else "info",
             f"decision={route.get('decision')} capability={route.get('capability') or '-'} executed={route.get('executed')}",
             diagnostics["routing"], started_at=now_iso(), duration_ms=duration_ms,

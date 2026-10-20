@@ -282,15 +282,37 @@ async def route_task(
     return outcome
 
 
-_RENDER_ROUTE_RESULT_PROMPT = """你是供应链与生产协同中台的智能决策助手。执行面智能体（{agent_label}）已为用户完成任务，请把执行结果整理成简洁的 Markdown 回复：
+_RENDER_ROUTE_RESULT_PROMPT = """你是供应链与生产协同中台的智能决策助手。执行面智能体（{agent_label}）已为用户完成任务，请根据执行结果整理 Markdown 回复：
+- 结果含 items 列表时：必须用 Markdown 表格逐条列出所有给到的数据行（订单号、客户、产品、数量、状态、风险、交期等关键字段），不得省略、不得只写条数
+- 结果不含 items（单对象/结论）时：用要点列出关键信息
 - 用 **加粗** 标注关键信息（订单号、数量、日期、风险等级、结论）
-- 数据多时用有序列表或表格呈现
-- 控制在 500 字以内，不要输出 <think> 标签，不要重复原始 JSON
+- 结果标注 _items_truncated=true 时，表格后注明"仅展示前 N 条，共 total 条"
+- 控制在 800 字以内；不要输出 <think> 标签；不要臆造结果中不存在的数据
 
 用户原始请求：{message}
 
-执行结果：
+执行结果（JSON）：
 {result_json}"""
+
+
+def _trim_result_for_render(
+    result: Dict[str, Any], max_items: int = 20, max_chars: int = 8000
+) -> Dict[str, Any]:
+    """结构化裁剪执行结果：保留元数据、items 取前 N 条并按序列化长度收缩，保证 JSON 合法。"""
+    if not isinstance(result, dict):
+        return result
+    items = result.get("items")
+    if not isinstance(items, list) or not items:
+        return result
+    trimmed_items = items[:max_items]
+    trimmed = {**result, "items": trimmed_items}
+    if len(items) > len(trimmed_items):
+        trimmed["_items_truncated"] = True
+        trimmed["_items_shown"] = len(trimmed_items)
+    while trimmed_items and len(json.dumps(trimmed, ensure_ascii=False, default=str)) > max_chars:
+        trimmed_items = trimmed_items[:-1]
+        trimmed = {**trimmed, "items": trimmed_items, "_items_truncated": True, "_items_shown": len(trimmed_items)}
+    return trimmed
 
 
 async def render_route_result(
@@ -303,10 +325,10 @@ async def render_route_result(
     prompt = _RENDER_ROUTE_RESULT_PROMPT.format(
         agent_label=agent_label,
         message=message,
-        result_json=json.dumps(result, ensure_ascii=False, default=str)[:4000],
+        result_json=json.dumps(_trim_result_for_render(result), ensure_ascii=False, default=str),
     )
     try:
-        options = ChatOptions(temperature=0.1, max_tokens=1500, model=model_override, timeout=60)
+        options = ChatOptions(temperature=0.1, max_tokens=2500, model=model_override, timeout=90)
         raw = await ai_service.chat([ChatMessage(role="user", content=prompt)], options)
         text = raw if isinstance(raw, str) else (raw.text or "")
         return text.strip() or "任务已完成，但结果整理失败。"

@@ -1,7 +1,13 @@
 """任务路由单测 — 入参校验与路由决策分支（不依赖 DB / 真实 LLM）"""
 
+import json
+
 from app.services.assistant import task_router
-from app.services.assistant.task_router import RoutingClassification, validate_task_input
+from app.services.assistant.task_router import (
+    RoutingClassification,
+    _trim_result_for_render,
+    validate_task_input,
+)
 
 
 class TestValidateTaskInput:
@@ -76,6 +82,32 @@ class TestValidateTaskInput:
 
     def test_unknown_capability(self):
         assert validate_task_input("fly_to_moon", {}) is not None
+
+
+class TestTrimResultForRender:
+    def test_items_within_limit_untouched(self):
+        result = {"total": 2, "items": [{"order_no": "A"}, {"order_no": "B"}]}
+        assert _trim_result_for_render(result) == result
+
+    def test_too_many_items_truncated(self):
+        result = {"total": 30, "items": [{"order_no": f"O{i}"} for i in range(30)]}
+        trimmed = _trim_result_for_render(result, max_items=20)
+        assert len(trimmed["items"]) == 20
+        assert trimmed["_items_truncated"] is True
+        assert trimmed["_items_shown"] == 20
+        assert trimmed["total"] == 30
+
+    def test_oversized_items_shrink_but_json_stays_valid(self):
+        big_item = {"order_no": "X" * 500, "customer": "Y" * 500}
+        result = {"total": 50, "items": [dict(big_item) for _ in range(50)]}
+        trimmed = _trim_result_for_render(result, max_items=50, max_chars=3000)
+        assert len(json.dumps(trimmed, ensure_ascii=False)) <= 3000
+        assert trimmed["_items_truncated"] is True
+        assert trimmed["items"]
+
+    def test_non_items_result_untouched(self):
+        result = {"task_id": "t1", "summary": "ok"}
+        assert _trim_result_for_render(result) == result
 
 
 class TestRouteTask:
