@@ -38,7 +38,9 @@ from app.services.assistant.agent import (
     _strip_think_tags,
     _extract_thinking,
     _load_runtime_config,
+    _run_routing,
 )
+from app.services.assistant.task_router import render_route_result
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +292,41 @@ async def run_stream(
         if run_logger:
             await run_logger.log("intent_done", {"intent": intent})
 
+        routing_info = None
+        local_result = None
+        if intent != "ANALYZE_HISTORY":
+            yield _sse_event("thinking", {"stage": "routing", "message": "正在判断任务路由..."})
+            routing_info, local_result = await _run_routing(
+                message, history,
+                enabled=bool(rt.get("routing_enabled", True)),
+                model_override=model_override,
+                session_id=session_id, trace_id=trace_id,
+                run_logger=run_logger, diagnostics=stats,
+            )
+            if routing_info:
+                yield _sse_event("routing", routing_info.model_dump())
+            if local_result is not None and routing_info is not None:
+                if CancellationRegistry.is_cancelled(session_id):
+                    yield _sse_event("cancelled", {"reason": CancellationRegistry.reason(session_id)})
+                    return
+                yield _sse_event("thinking", {"stage": "generating", "message": "正在整理执行结果..."})
+                text = await render_route_result(
+                    message, routing_info.agent_label or routing_info.agent_key or "执行面智能体",
+                    local_result, model_override=model_override,
+                )
+                if text:
+                    yield _sse_event("delta", {"text": text})
+                await _save_conversation(session_id, message, text)
+                if run_logger:
+                    await run_logger.log("done", {
+                        "intent": "agent", "route": "local_execution", "text_length": len(text),
+                    })
+                yield _sse_event("done", {
+                    "provider": provider_name, "intent": "agent", "stats": stats,
+                    "routing": routing_info.model_dump(),
+                })
+                return
+
         if intent in ("ANALYZE_HISTORY", "GENERAL_CHAT"):
             yield _sse_event("thinking", {"stage": "generating", "message": "正在生成回复..."})
 
@@ -366,7 +403,7 @@ async def run_stream(
                     "text_length": len(full_text),
                     "thinking_length": len(full_thinking),
                 })
-            yield _sse_event("done", {"provider": provider_name, "intent": intent.lower(), "stats": stats})
+            yield _sse_event("done", {"provider": provider_name, "intent": intent.lower(), "stats": stats, "routing": routing_info.model_dump() if routing_info else None})
             return
 
         tools_schema = get_openai_tools_schema(exclude=disabled)
@@ -469,7 +506,7 @@ async def run_stream(
                         "text_length": len(text),
                         "tool_count": len(all_tool_results),
                     })
-                yield _sse_event("done", {"provider": provider_name, "intent": "agent", "stats": stats})
+                yield _sse_event("done", {"provider": provider_name, "intent": "agent", "stats": stats, "routing": routing_info.model_dump() if routing_info else None})
                 return
 
             tool_messages = []
@@ -569,7 +606,7 @@ async def run_stream(
                 "tool_count": len(all_tool_results),
                 "max_rounds_reached": True,
             })
-        yield _sse_event("done", {"provider": provider_name, "intent": "agent", "stats": stats})
+        yield _sse_event("done", {"provider": provider_name, "intent": "agent", "stats": stats, "routing": routing_info.model_dump() if routing_info else None})
 
     except asyncio.CancelledError:
         yield _sse_event("cancelled", {"reason": "client_disconnected"})

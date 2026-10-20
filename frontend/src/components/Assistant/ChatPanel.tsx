@@ -122,6 +122,31 @@ const ToolCallIndicator: React.FC<{ toolCalls: ToolCallStatus[] }> = ({ toolCall
   )
 }
 
+// 任务路由徽标：本地派单成功(绿) / 本地不可用降级(橙) / Hub 预览(灰)
+const RoutingBadge: React.FC<{ routing: any }> = ({ routing }) => {
+  if (!routing || routing.decision === 'none') return null
+
+  if (routing.decision === 'local' && routing.executed) {
+    return (
+      <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+        本地执行面·{routing.agent_label || routing.agent_key || '智能体'}
+      </Tag>
+    )
+  }
+  if (routing.capability && routing.dispatch_error) {
+    return (
+      <Tag color="orange" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+        本地执行面不可用 → AEOS Hub（预览）
+      </Tag>
+    )
+  }
+  return (
+    <Tag color="default" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+      AEOS Hub（预览，未发布）
+    </Tag>
+  )
+}
+
 const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear, onStop }) => {
   const [inputValue, setInputValue] = useState('')
   const shouldAutoScrollRef = useRef(true)
@@ -329,6 +354,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                       {providerLabel}
                     </Tag>
                   )}
+                  <RoutingBadge routing={msg.routing} />
                 </div>
               )}
 
@@ -424,6 +450,16 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                                   [{e.stage}] {e.message}
                                 </div>
                               ))}
+                            </Descriptions.Item>
+                          )}
+                          {msg.diagnostics.routing && (
+                            <Descriptions.Item label="任务路由">
+                              <div style={{ fontSize: 10, lineHeight: '16px' }}>
+                                decision={msg.diagnostics.routing.decision} capability={msg.diagnostics.routing.capability || '-'}
+                                executed={msg.diagnostics.routing.executed ? '是' : '否'}
+                                {msg.diagnostics.routing.reason && <div>reason: {msg.diagnostics.routing.reason}</div>}
+                                {msg.diagnostics.routing.dispatch_error && <div>error: {msg.diagnostics.routing.dispatch_error}</div>}
+                              </div>
                             </Descriptions.Item>
                           )}
                         </Descriptions>

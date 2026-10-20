@@ -12,6 +12,7 @@ export interface ChatMessage {
   timestamp: number
   traceId?: string
   diagnostics?: any
+  routing?: RoutingInfo
   // 流式状态
   streaming?: boolean
   thinkingStage?: string
@@ -28,6 +29,16 @@ export interface ToolCallStatus {
   name: string
   status: 'running' | 'done' | 'error'
   itemCount?: number
+}
+
+export interface RoutingInfo {
+  decision: 'local' | 'hub' | 'none'
+  capability?: string
+  agent_key?: string
+  agent_label?: string
+  reason?: string
+  executed?: boolean
+  dispatch_error?: string
 }
 
 export interface Skill {
@@ -160,6 +171,7 @@ export function useAssistantChat() {
                   thinkingStage: undefined,
                   traceId: data.trace_id,
                   diagnostics: data.diagnostics,
+                  routing: data.routing,
                 }
               : m
           )
@@ -193,6 +205,9 @@ export function useAssistantChat() {
           case 'session':
             sessionIdRef.current = data.session_id || ''
             return m
+
+          case 'routing':
+            return { ...m, routing: data, thinkingStage: undefined }
 
           case 'thinking':
             return { ...m, thinkingStage: data.message || '思考中...' }
@@ -244,6 +259,7 @@ export function useAssistantChat() {
               thinkingStage: undefined,
               provider: data.provider,
               intent: data.intent,
+              routing: data.routing ?? m.routing,
             }
 
           case 'error':

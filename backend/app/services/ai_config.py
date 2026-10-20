@@ -20,8 +20,17 @@ from app.services.assistant.tool_registry import get_all_tools
 
 ASSISTANT_SCOPE = "assistant"
 EXECUTION_AGENT_SCOPE = "execution_agent"
+EXECUTION_QUERY_SCOPE = "execution_query"
+EXECUTION_REASONING_SCOPE = "execution_reasoning"
+EXECUTION_ORDER_SCOPE = "execution_order"
 VERSION_KEY = "meta.version"
 TOOLS_PLACEHOLDER = "{{TOOLS}}"
+
+EXECUTION_SCOPE_BY_AGENT = {
+    "query": EXECUTION_QUERY_SCOPE,
+    "reasoning": EXECUTION_REASONING_SCOPE,
+    "order": EXECUTION_ORDER_SCOPE,
+}
 
 
 @dataclass
@@ -43,6 +52,33 @@ ASSISTANT_CONFIG_DEFS: Dict[str, ConfigDef] = {
     "max_tool_rounds": ConfigDef("max_tool_rounds", "int", 5, "工具循环轮数上限"),
     "tool_execute_timeout": ConfigDef("tool_execute_timeout", "int", 30, "工具执行超时（秒）"),
     "disabled_tools": ConfigDef("disabled_tools", "json", [], "禁用工具列表", "JSON 数组"),
+    "routing_enabled": ConfigDef("routing_enabled", "bool", True, "任务路由开关",
+                                 "开启后助手优先把任务派给本系统执行面智能体，未命中时预览 Hub 路由"),
+}
+
+def _execution_common_defs() -> Dict[str, ConfigDef]:
+    return {
+        "agent_name": ConfigDef("agent_name", "string", "", "注册显示名", "留空使用 env"),
+        "ws_url": ConfigDef("ws_url", "string", "", "Hub WebSocket 地址", "留空使用 env"),
+        "agent_id": ConfigDef("agent_id", "string", "", "Agent ID", "留空使用 env"),
+        "log_level": ConfigDef("log_level", "string", "info", "日志级别", "debug|info|warn|error"),
+    }
+
+
+EXECUTION_QUERY_CONFIG_DEFS: Dict[str, ConfigDef] = {
+    **_execution_common_defs(),
+    "query_timeout_ms": ConfigDef("query_timeout_ms", "int", 15000, "查询超时（ms）"),
+}
+
+EXECUTION_REASONING_CONFIG_DEFS: Dict[str, ConfigDef] = {
+    **_execution_common_defs(),
+    "reasoning_timeout_ms": ConfigDef("reasoning_timeout_ms", "int", 180000, "推理超时（ms）",
+                                      "变更需同步关注中台 REASONING_TIMEOUT_S 约束"),
+}
+
+EXECUTION_ORDER_CONFIG_DEFS: Dict[str, ConfigDef] = {
+    **_execution_common_defs(),
+    "write_timeout_ms": ConfigDef("write_timeout_ms", "int", 15000, "写请求超时（ms）"),
 }
 
 EXECUTION_AGENT_CONFIG_DEFS: Dict[str, ConfigDef] = {
@@ -58,6 +94,9 @@ EXECUTION_AGENT_CONFIG_DEFS: Dict[str, ConfigDef] = {
 SCOPE_DEFS: Dict[str, Dict[str, ConfigDef]] = {
     ASSISTANT_SCOPE: ASSISTANT_CONFIG_DEFS,
     EXECUTION_AGENT_SCOPE: EXECUTION_AGENT_CONFIG_DEFS,
+    EXECUTION_QUERY_SCOPE: EXECUTION_QUERY_CONFIG_DEFS,
+    EXECUTION_REASONING_SCOPE: EXECUTION_REASONING_CONFIG_DEFS,
+    EXECUTION_ORDER_SCOPE: EXECUTION_ORDER_CONFIG_DEFS,
 }
 
 
@@ -92,6 +131,12 @@ def _validate(def_: ConfigDef, value: Any) -> Any:
             raise ValueError(f"未知工具: {unknown}")
     if def_.key == "log_level" and value not in ("debug", "info", "warn", "error"):
         raise ValueError("log_level 必须是 debug|info|warn|error")
+    if def_.key == "query_timeout_ms" and not (1000 <= value <= 120000):
+        raise ValueError("query_timeout_ms 必须在 1000-120000 之间")
+    if def_.key == "reasoning_timeout_ms" and not (10000 <= value <= 600000):
+        raise ValueError("reasoning_timeout_ms 必须在 10000-600000 之间")
+    if def_.key == "write_timeout_ms" and not (1000 <= value <= 120000):
+        raise ValueError("write_timeout_ms 必须在 1000-120000 之间")
     if def_.value_type == "string":
         limit = 20000 if def_.key in ("system_prompt", "intent_prompt") else 500
         if len(value) > limit:
@@ -189,8 +234,23 @@ def render_system_prompt(template: str, disabled_tools: Optional[List[str]] = No
     return template.replace(TOOLS_PLACEHOLDER, "\n".join(lines))
 
 
-async def get_agent_external_config(db: AsyncSession) -> Dict[str, Any]:
-    """agent 拉取用：仅非空值下发（空=agent 继续用 env），附版本号"""
-    config = await get_scope_config(db, EXECUTION_AGENT_SCOPE)
-    version = await get_scope_version(db, EXECUTION_AGENT_SCOPE)
-    return {"version": version, "config": {k: v for k, v in config.items() if v not in ("", None)}}
+async def get_agent_external_config(db: AsyncSession, agent_key: Optional[str] = None) -> Dict[str, Any]:
+    """agent 拉取用：按 agent_key 选 scope，只下发显式保存的非空值（空=agent 继续用 env）。"""
+    if agent_key:
+        scope = EXECUTION_SCOPE_BY_AGENT.get(agent_key)
+        if scope is None:
+            raise ValueError(f"未知 agent: {agent_key}")
+    else:
+        scope = EXECUTION_AGENT_SCOPE
+    result = await db.execute(
+        select(AiAgentConfig.config_key, AiAgentConfig.config_value).where(AiAgentConfig.scope == scope)
+    )
+    saved_keys = [
+        row.config_key
+        for row in result
+        if row.config_key != VERSION_KEY and row.config_value not in ("", None)
+    ]
+    full = await get_scope_config(db, scope)
+    config = {key: full[key] for key in saved_keys if key in full}
+    version = await get_scope_version(db, scope)
+    return {"version": version, "config": config}

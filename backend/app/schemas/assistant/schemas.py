@@ -17,6 +17,16 @@ class AssistantCard(BaseModel):
     payload: Any = None
 
 
+class RoutingInfo(BaseModel):
+    decision: str = "none"  # local | hub | none
+    capability: Optional[str] = None
+    agent_key: Optional[str] = None
+    agent_label: Optional[str] = None
+    reason: str = ""
+    executed: bool = False
+    dispatch_error: Optional[str] = None
+
+
 class AssistantReply(BaseModel):
     intent: str = "unknown"
     text: str = ""
@@ -26,6 +36,7 @@ class AssistantReply(BaseModel):
     session_id: Optional[str] = None
     provider: str = "rule_based"
     trace_id: Optional[str] = None
+    routing: Optional[RoutingInfo] = None
     diagnostics: Optional[Dict[str, Any]] = None
 
 

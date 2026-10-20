@@ -36,7 +36,8 @@ from app.services.assistant.context_manager import (
     fallback_sliding_window,
     render_messages_for_summary,
 )
-from app.schemas.assistant.schemas import AssistantReply
+from app.schemas.assistant.schemas import AssistantReply, RoutingInfo
+from app.services.assistant.task_router import render_route_result, route_task
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +306,68 @@ async def _execute_tool_with_retry(
     return {"error": f"工具 {tool_name} 执行失败: {str(last_error)}"}
 
 
+async def _run_routing(
+    message: str,
+    history: List[Dict[str, Any]],
+    *,
+    enabled: bool,
+    model_override: Optional[str],
+    session_id: str,
+    trace_id: str,
+    run_logger: Optional[RunLogger],
+    diagnostics: Dict[str, Any],
+) -> tuple:
+    """路由步骤（fail-safe）：分类 + 本地派单。
+    返回 (routing_info, local_result)；未启用/跳过/异常返回 (None, None)。"""
+    if not enabled:
+        return None, None
+    route = None
+    routing_start = time.perf_counter()
+    try:
+        route = await route_task(message, history, model_override=model_override)
+    except Exception as e:
+        logger.warning(f"[agent:{trace_id}] 任务路由异常（已跳过）: {e}")
+        diagnostics["routing"] = {"skipped": True, "error": str(e)[:200]}
+    else:
+        result = route.get("result")
+        diagnostics["routing"] = {
+            "decision": route.get("decision"),
+            "capability": route.get("capability"),
+            "agent_key": route.get("agent_key"),
+            "agent_label": route.get("agent_label"),
+            "reason": route.get("reason"),
+            "executed": route.get("executed"),
+            "dispatch_error": route.get("dispatch_error"),
+            "classification": route.get("classification"),
+            "result_size": len(json.dumps(result, ensure_ascii=False, default=str)) if result is not None else None,
+        }
+    if run_logger:
+        await run_logger.log("task_route", diagnostics["routing"])
+    duration_ms = round((time.perf_counter() - routing_start) * 1000, 2)
+    if route:
+        report_assistant_event(
+            session_id, "task_route", "任务路由",
+            "completed" if route.get("executed") else "info",
+            f"decision={route.get('decision')} capability={route.get('capability') or '-'} executed={route.get('executed')}",
+            diagnostics["routing"], started_at=now_iso(), duration_ms=duration_ms,
+        )
+    routing_info = None
+    local_result = None
+    if route:
+        routing_info = RoutingInfo(
+            decision=route.get("decision") or "none",
+            capability=route.get("capability"),
+            agent_key=route.get("agent_key"),
+            agent_label=route.get("agent_label"),
+            reason=route.get("reason") or "",
+            executed=bool(route.get("executed")),
+            dispatch_error=route.get("dispatch_error"),
+        )
+        if route.get("executed"):
+            local_result = route.get("result")
+    return routing_info, local_result
+
+
 async def _maybe_summarize(
     messages: List[Any],
     run_logger: Optional[RunLogger],
@@ -469,6 +532,38 @@ async def run(
         if run_logger:
             await run_logger.log("intent_done", {"intent": intent})
 
+        routing_info: Optional[RoutingInfo] = None
+        local_result: Optional[Dict[str, Any]] = None
+        if intent != "ANALYZE_HISTORY":
+            routing_info, local_result = await _run_routing(
+                message, history,
+                enabled=bool(rt.get("routing_enabled", True)),
+                model_override=main_options.model,
+                session_id=session_id, trace_id=trace_id,
+                run_logger=run_logger, diagnostics=diagnostics,
+            )
+            if local_result is not None and routing_info is not None:
+                if _check_cancelled(session_id, run_logger):
+                    return AssistantReply(
+                        text="对话已取消。",
+                        provider=provider_name,
+                        routing=routing_info,
+                    )
+                text = await render_route_result(
+                    message, routing_info.agent_label or routing_info.agent_key or "执行面智能体",
+                    local_result, model_override=main_options.model,
+                )
+                reply = AssistantReply(
+                    intent="agent", text=text, cards=[], suggestions=[],
+                    provider=provider_name, diagnostics=diagnostics, routing=routing_info,
+                )
+                await _save_conversation(session_id, message, text)
+                if run_logger:
+                    await run_logger.log("done", {
+                        "intent": "agent", "route": "local_execution", "text_length": len(text),
+                    })
+                return reply
+
         if intent in ("ANALYZE_HISTORY", "GENERAL_CHAT"):
             messages: List[Any] = [ChatMessage(role="system", content=system_prompt)]
             for msg in history[-10:]:
@@ -509,6 +604,7 @@ async def run(
                     suggestions=[],
                     provider=provider_name,
                     diagnostics=diagnostics,
+                    routing=routing_info,
                 )
 
                 await _save_conversation(session_id, message, text)
@@ -523,6 +619,7 @@ async def run(
                     text="AI 服务调用失败，请稍后重试。",
                     suggestions=[],
                     provider=provider_name,
+                    routing=routing_info,
                 )
 
         tools_schema = get_openai_tools_schema(exclude=disabled)
@@ -621,6 +718,7 @@ async def run(
                 thinking = _extract_thinking(raw_text)
                 text = _strip_think_tags(raw_text)
                 reply = _build_reply(text, all_tool_results, diagnostics, message)
+                reply.routing = routing_info
                 reply.thinking = thinking if thinking else None
                 await _save_conversation(session_id, message, text)
                 if run_logger:
@@ -698,6 +796,7 @@ async def run(
             thinking = ""
 
         reply = _build_reply(text, all_tool_results, diagnostics, message)
+        reply.routing = routing_info
         reply.thinking = thinking if thinking else None
         await _save_conversation(session_id, message, text)
         if run_logger:
