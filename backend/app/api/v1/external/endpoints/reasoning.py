@@ -76,6 +76,15 @@ class ReasoningLLMMetaOut(BaseModel):
     latency_ms: Optional[float] = None
 
 
+class ReasoningUsageOut(BaseModel):
+    """大模型 Token 用量（执行面透传给 Hub run_complete.usage 记用量台账）"""
+
+    modelId: str = ""
+    tokensIn: int = 0
+    cachedTokens: int = 0
+    tokensOut: int = 0
+
+
 class ReasoningResultOut(BaseModel):
     """run_complete.result 等价结构"""
 
@@ -91,6 +100,7 @@ class ReasoningResultOut(BaseModel):
     stale: bool = False
     warnings: List[str] = []
     llm: Optional[ReasoningLLMMetaOut] = None
+    usage: Optional[ReasoningUsageOut] = None
     duration_ms: Optional[float] = None
     request_id: Optional[str] = None
 

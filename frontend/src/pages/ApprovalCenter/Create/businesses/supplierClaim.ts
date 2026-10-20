@@ -59,6 +59,7 @@ const adapter: CreateAdapter = {
     claim_reason: 'field_customer_claim',
     return_requirement: 'no_return',
     claim_items: [],
+    claim_method: '本公司财务部直接扣款',
   },
   async loadForEdit(id: number) {
     const res: any = await qualityApi.get(id)

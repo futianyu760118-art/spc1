@@ -1,5 +1,5 @@
 import type { JSX } from 'react'
-import ClaimPaper, { opinionsFromClaim } from '../../components/ClaimPaper'
+import ClaimPaper from '../../components/ClaimPaper'
 import PurchaseRequisitionPaper from '../../components/PurchaseRequisitionPaper'
 
 /** 审批详情页业务视图注册表：新 builtin 业务在此登记，Item 页不再写 bizType 分支。 */
@@ -10,7 +10,7 @@ const loadClaim: PaperLoader = async (id) => {
   try {
     const res: any = await qualityApi.get(id)
     if (!res?.data) return null
-    return { node: <ClaimPaper claim={res.data} opinions={opinionsFromClaim(res.data)} /> }
+    return { node: <ClaimPaper claim={res.data} /> }
   } catch { return null }
 }
 

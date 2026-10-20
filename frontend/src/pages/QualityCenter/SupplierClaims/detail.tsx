@@ -11,7 +11,7 @@ import { canApproveNode } from '../../../utils/approvalNode'
 import { waitPill } from '../../../utils'
 import { useAuthStore } from '../../../store/auth'
 import { fileApi } from '../../../services/api'
-import ClaimPaper, { opinionsFromClaim } from '../../../components/ClaimPaper'
+import ClaimPaper from '../../../components/ClaimPaper'
 
 const ACTION_TAG: Record<string, { cls: string; text: string }> = {
   submit: { cls: 'sc-tag-kit', text: '提交' },
@@ -138,7 +138,7 @@ export default function SupplierClaimDetail() {
             <span style={{ fontWeight: 600 }}>供应商索赔通知单</span>
             <span className="sc-note">Supplier Claim Confirmation · 只读版式，归档后按此打印</span>
           </div>
-          <div className="clm-paper-wrap"><ClaimPaper claim={r} opinions={opinionsFromClaim(r)} /></div>
+          <div className="clm-paper-wrap"><ClaimPaper claim={r} /></div>
         </Card>
 
         {/* 右：审批面板（粘性） */}

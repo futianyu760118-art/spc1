@@ -22,6 +22,8 @@ class ChatOptions:
     max_tokens: int = 2048
     timeout: int = 30
     model: Optional[str] = None  # 运行时配置覆盖；None=用 provider 构造时的 env 模型
+    # 由 provider 在本次调用完成后填充真实 Token 用量（调用方传入可变 dict 回收）
+    usage_out: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -45,6 +47,7 @@ class TokenUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_tokens: int = 0  # 输入缓存命中 token（DeepSeek 计价：命中按缓存价计费）
 
 
 @dataclass

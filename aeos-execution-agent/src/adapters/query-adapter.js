@@ -42,7 +42,13 @@ const inputSchema = Object.freeze({
 
 const outputSchema = Object.freeze({ type: "object", description: "中台 {code,message,data} 信封的 data（逐端点结构不同）" });
 
-function invoke(input) {
+function summarizeResult(data) {
+  if (Array.isArray(data)) return `返回 ${data.length} 条`;
+  if (data && Array.isArray(data.items)) return `返回 ${data.items.length} 条`;
+  return "查询完成";
+}
+
+function invoke(run, input) {
   const path = input && input.path;
   const endpointCode = PATH_ENDPOINT_CODES[path];
   if (!endpointCode) {
@@ -52,11 +58,20 @@ function invoke(input) {
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
     throw new UpstreamError("INVALID_ARGUMENT", "params 必须是对象");
   }
+  const report = run.report;
+  const startedAt = new Date().toISOString();
+  report("step_started", "查询中台接口", "started", `path=${path}`, { path }, { startedAt });
   log("info", "query_started", { path });
-  return signedGet(path, endpointCode, params).then((data) => {
-    log("info", "query_ok", { path });
-    return data;
-  });
+  return signedGet(path, endpointCode, params)
+    .then((data) => {
+      report("step_completed", "查询中台接口", "completed", summarizeResult(data), { path }, { startedAt });
+      log("info", "query_ok", { path });
+      return data;
+    })
+    .catch((e) => {
+      report("error", "查询中台接口", "failed", e.message, { path, code: e.code }, { startedAt });
+      throw e;
+    });
 }
 
 module.exports = { invoke, PATH_ENDPOINT_CODES, inputSchema, outputSchema };

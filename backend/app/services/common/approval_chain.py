@@ -1,10 +1,11 @@
 """审批链节点校验（纯函数，供配置 API 与单测使用）。
 
 节点结构（approval_config.nodes 数组元素）：
-    {seq, label, role, approvers?, condition?, conditions?, timeout_hours?}
+    {seq, label, role, approvers?, condition?, conditions?, timeout_hours?, paper_slot?}
 - role 与 approvers 二选一（approvers 优先，元素形如 {"user_id": 7, "username": "x"}）
 - conditions（数组，AND）优先；condition（单对象）为历史格式，继续兼容
 - timeout_hours：0 = 不提醒，未配置按引擎默认 48
+- paper_slot：纸质签字区绑定（供应商索赔单：claim_dept / upper_dept / general_manager / finance）
 """
 
 from typing import Optional

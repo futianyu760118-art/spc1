@@ -23,6 +23,7 @@ from app.services.assistant.retry import (
 )
 from app.services.assistant.run_logger import RunLogger
 from app.services.assistant.cancellation import CancellationRegistry
+from app.services.assistant.hub_reporter import now_iso, report_model_call
 from app.services.assistant.context_manager import (
     estimate_tokens,
     render_messages_for_summary,
@@ -229,6 +230,7 @@ async def run_stream(
     disabled = set(rt.get("disabled_tools") or [])
     system_prompt = render_system_prompt(rt.get("system_prompt") or SYSTEM_PROMPT, disabled)
     intent_prompt = (rt.get("intent_prompt") or "").strip() or None
+    model_override = (rt.get("model_name") or "").strip() or None
 
     stats: Dict[str, Any] = {"tools_called": [], "tool_rounds": 0, "total_tokens": None}
 
@@ -275,7 +277,14 @@ async def run_stream(
 
         yield _sse_event("thinking", {"stage": "intent", "message": "正在理解您的问题..."})
 
+        intent_started = now_iso()
+        intent_start = time.perf_counter()
         intent = await _recognize_intent(message, history, intent_prompt)
+        report_model_call(
+            session_id, "意图识别", provider=provider_name,
+            started_at=intent_started,
+            duration_ms=round((time.perf_counter() - intent_start) * 1000, 2),
+        )
         logger.info(f"[stream:{trace_id}] 意图: {intent}")
 
         if run_logger:
@@ -296,6 +305,7 @@ async def run_stream(
 
             full_text = ""
             full_thinking = ""
+            chat_start = time.perf_counter()
             try:
                 @async_retry(LLM_RETRY_CONFIG)
                 async def _stream_call():
@@ -320,6 +330,11 @@ async def run_stream(
 
                 result_text = await _stream_call()
                 full_text = result_text
+                report_model_call(
+                    session_id, "生成回复", provider=provider_name,
+                    model_override=model_override,
+                    duration_ms=round((time.perf_counter() - chat_start) * 1000, 2),
+                )
                 if full_text:
                     yield _sse_event("delta", {"text": full_text})
             except RetryExhaustedError as e:
@@ -384,6 +399,7 @@ async def run_stream(
                 "message": f"正在分析（第{round_idx + 1}轮）...",
             })
 
+            round_start = time.perf_counter()
             try:
                 @async_retry(LLM_RETRY_CONFIG)
                 async def _tools_call():
@@ -407,6 +423,12 @@ async def run_stream(
 
             if result.usage and result.usage.total_tokens:
                 stats["total_tokens"] = result.usage.total_tokens
+
+            report_model_call(
+                session_id, f"大模型分析（第{round_idx + 1}轮）", provider=provider_name,
+                model_override=model_override, token_usage=result.usage,
+                duration_ms=round((time.perf_counter() - round_start) * 1000, 2),
+            )
 
             if run_logger:
                 await run_logger.log("llm_response", {
@@ -460,7 +482,7 @@ async def run_stream(
                     "arguments": tc.arguments,
                 })
 
-                data = await _execute_tool_with_retry(db, tc.name, tc.arguments, timeout=rt.get("tool_execute_timeout", TOOL_EXECUTE_TIMEOUT), disabled_tools=disabled)
+                data = await _execute_tool_with_retry(db, tc.name, tc.arguments, timeout=rt.get("tool_execute_timeout", TOOL_EXECUTE_TIMEOUT), disabled_tools=disabled, trace_id=session_id)
                 has_error = "error" in data
 
                 yield _sse_event("tool_done", {
@@ -502,6 +524,7 @@ async def run_stream(
 
         full_text = ""
         full_thinking = ""
+        summary_start = time.perf_counter()
         try:
             options_summary = ChatOptions(temperature=0.1, max_tokens=4096, timeout=120)
             think_filter = ThinkTagFilter()
@@ -521,6 +544,11 @@ async def run_stream(
             if remaining:
                 chunks_buffer.append(remaining)
             full_text = "".join(chunks_buffer)
+            report_model_call(
+                session_id, "生成总结", provider=provider_name,
+                model_override=model_override,
+                duration_ms=round((time.perf_counter() - summary_start) * 1000, 2),
+            )
             if full_text:
                 yield _sse_event("delta", {"text": full_text})
         except Exception as e:

@@ -81,6 +81,8 @@ async def build_chain_snapshot(db: AsyncSession, biz_type: str, fields: dict) ->
         snap_node = {"seq": node.get("seq"), "label": node.get("label"), "role": node.get("role")}
         if node.get("approvers"):
             snap_node["approvers"] = node["approvers"]
+        if node.get("paper_slot"):
+            snap_node["paper_slot"] = node["paper_slot"]
         # 0 = 不提醒，必须与「未配置」区分，故显式判 None
         if node.get("timeout_hours") is not None:
             try:

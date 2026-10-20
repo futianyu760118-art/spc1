@@ -523,19 +523,20 @@ def build_analysis_prompt(prompt: str, task_type: str, evidence: list[dict]) -> 
     return "\n".join(lines)
 
 
-async def _invoke_reasoning_llm(prompt: str, timeout_s: int) -> ReasoningAnalysis:
-    """调用中台大模型结构化输出。rule_based 视为未接通，绝不以规则结果冒充。"""
+async def _invoke_reasoning_llm(prompt: str, timeout_s: int) -> tuple[ReasoningAnalysis, dict]:
+    """调用中台大模型结构化输出，返回 (分析结果, 真实 token 用量)。rule_based 视为未接通，绝不以规则结果冒充。"""
     provider_name = ai_service.current_provider()
     if provider_name == "rule_based":
         raise UpstreamUnavailableError(
             "中台推理智能体未接通：未配置真实大模型 provider（当前为 rule_based），拒绝伪造推理结果"
         )
+    usage_out: dict = {}
     try:
         analysis = await ai_service.structured_output(
             prompt, ReasoningAnalysis,
-            options=ChatOptions(temperature=0.2, max_tokens=3000, timeout=timeout_s),
+            options=ChatOptions(temperature=0.2, max_tokens=3000, timeout=timeout_s, usage_out=usage_out),
         )
-        return analysis
+        return analysis, usage_out
     except ReasoningError:
         raise
     except Exception as e:
@@ -704,7 +705,7 @@ async def run_reasoning_task(
         if llm_task in done:
             if llm_task.exception() is not None:
                 raise llm_task.exception()
-            analysis = llm_task.result()
+            analysis, llm_usage = llm_task.result()
         else:
             llm_task.cancel()
             cancel_wait.cancel()
@@ -738,6 +739,12 @@ async def run_reasoning_task(
             "stale": stale,
             "warnings": warnings,
             "llm": llm_meta,
+            "usage": {
+                "modelId": llm_meta["model"] or "",
+                "tokensIn": int(llm_usage.get("prompt_tokens", 0) or 0),
+                "cachedTokens": int(llm_usage.get("cached_tokens", 0) or 0),
+                "tokensOut": int(llm_usage.get("completion_tokens", 0) or 0),
+            },
             "duration_ms": round((time.time() - started) * 1000, 1),
             "request_id": request_id,
         }

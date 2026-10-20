@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Button, Card, Spin } from 'antd'
 import { ArrowLeftOutlined, PrinterOutlined } from '@ant-design/icons'
 import { qualityApi } from '../../../services/quality'
-import ClaimPaper, { opinionsFromClaim } from '../../../components/ClaimPaper'
+import ClaimPaper from '../../../components/ClaimPaper'
 
 export default function SupplierClaimPrint() {
   const { id } = useParams<{ id: string }>()
@@ -35,7 +35,7 @@ export default function SupplierClaimPrint() {
       </div>
 
       <div className="clm-sheet">
-        <div className="clm-paper-wrap"><ClaimPaper claim={r} opinions={opinionsFromClaim(r)} /></div>
+        <div className="clm-paper-wrap"><ClaimPaper claim={r} /></div>
       </div>
 
       <div className="clm-no-print sc-note" style={{ textAlign: 'center', margin: '14px auto 0' }}>

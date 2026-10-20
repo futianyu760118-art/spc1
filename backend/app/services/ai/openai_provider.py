@@ -18,6 +18,27 @@ def _unexpected_response_error(response) -> RuntimeError:
     detail = extra.get("msg") or extra.get("error") or str(extra) if extra else str(response)
     return RuntimeError(f"上游返回异常响应（choices 为空，常见于令牌失效/配额不足）: {detail}")
 
+
+def _usage_dict(usage) -> dict:
+    """openai SDK usage → {prompt/completion/total/cached}_tokens。
+
+    缓存命中兼容两种口径：OpenAI 的 prompt_tokens_details.cached_tokens 与
+    DeepSeek 的 prompt_cache_hit_tokens（SDK 未知字段落在 model_extra）。
+    """
+    if usage is None:
+        return {}
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = int(getattr(details, "cached_tokens", 0) or 0)
+    extra = getattr(usage, "model_extra", None) or {}
+    if extra.get("prompt_cache_hit_tokens") is not None:
+        cached = int(extra["prompt_cache_hit_tokens"] or 0)
+    return {
+        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+        "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+        "cached_tokens": cached,
+    }
+
 try:
     from openai import AsyncOpenAI
     _HAS_OPENAI = True
@@ -73,6 +94,8 @@ class OpenAIProvider(LLMProvider):
         if not response.choices:
             raise _unexpected_response_error(response)
         content = response.choices[0].message.content or ""
+        if opts.usage_out is not None:
+            opts.usage_out.update(_usage_dict(response.usage))
         logger.info(f"[OpenAI] model={self._model} tokens={response.usage.total_tokens if response.usage else '?'}")
         return content
 
@@ -176,9 +199,11 @@ class OpenAIProvider(LLMProvider):
                     arguments=args,
                 ))
         if response.usage:
+            usage = _usage_dict(response.usage)
             result.usage = TokenUsage(
-                prompt_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,
-                completion_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
-                total_tokens=getattr(response.usage, "total_tokens", 0) or 0,
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                total_tokens=usage["total_tokens"],
+                cached_tokens=usage["cached_tokens"],
             )
         return result

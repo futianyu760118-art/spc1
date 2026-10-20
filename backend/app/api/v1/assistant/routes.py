@@ -23,10 +23,26 @@ from app.services.assistant.tool_registry import get_all_tools
 from app.services.assistant import session_store
 from app.services.assistant.run_logger import list_log_files, read_log_file
 from app.services.assistant.cancellation import CancellationRegistry
+from app.services.assistant.hub_reporter import now_iso, report_assistant_event
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _report_turn_start(session_id: str, user_id: str, message: str, is_new_session: bool) -> None:
+    """会话级观测上报（traceId=会话 ID）：新会话发 conversation_started，每次对话发 message（仅摘要）"""
+    if is_new_session:
+        report_assistant_event(
+            session_id, "conversation_started", "会话开始", "info",
+            f"用户 {user_id} 发起会话" if user_id else "发起会话",
+            {"userId": user_id}, started_at=now_iso(),
+        )
+    report_assistant_event(
+        session_id, "message", "用户消息", "info",
+        f"用户询问：{message[:80]}",
+        {"length": len(message)}, started_at=now_iso(),
+    )
 
 
 async def _record_run(
@@ -98,6 +114,8 @@ async def chat(
     session_id = body.session_id or str(uuid.uuid4())
     user_id = _current_user_id(current_user)
 
+    _report_turn_start(session_id, user_id, body.message, is_new_session=not body.session_id)
+
     request_start = time.perf_counter()
 
     if session_id:
@@ -135,6 +153,9 @@ async def chat(
                 duration_ms=round((time.perf_counter() - request_start) * 1000, 2),
                 is_success=False, error_message=str(e),
             )
+            report_assistant_event(
+                session_id, "error", "助手异常", "failed", str(e)[:200], started_at=now_iso(),
+            )
             raise
 
         total_duration_ms = round((time.perf_counter() - request_start) * 1000, 2)
@@ -153,6 +174,17 @@ async def chat(
             is_success=not errors,
             error_message=errors[0].get("message") if errors else None,
         )
+        for err in errors:
+            report_assistant_event(
+                session_id, "error", "助手异常", "failed",
+                str(err.get("message", ""))[:200], started_at=now_iso(),
+            )
+        report_assistant_event(
+            session_id, "assistant_reply", "助手回复", "completed",
+            f"回复：{(reply.text or '')[:80]}",
+            {"intent": reply.intent, "length": len(reply.text or "")},
+            started_at=now_iso(), duration_ms=total_duration_ms,
+        )
         return {"code": 0, "data": reply.model_dump()}
     finally:
         if disconnect_task is not None:
@@ -165,17 +197,23 @@ async def chat(
 async def chat_stream(
     body: ChatMessageIn,
     request: Request,
-    db: AsyncSession = Depends(get_db),
     current_user=Depends(PermissionChecker("topbar.ai_search", "read")),
 ):
-    """SSE 流式对话接口"""
+    """SSE 流式对话接口。
+
+    不用 get_db 依赖 session：FastAPI 在发送响应体之前就退出依赖上下文，
+    generator 里再拿已关闭的 session 会重开事务且无人回收（连接池泄漏）。
+    改为在 generator 内自建 session，随生成器关闭释放。
+    """
     trace_id = str(uuid.uuid4())
     session_id = body.session_id or str(uuid.uuid4())
     user_id = _current_user_id(current_user)
 
+    _report_turn_start(session_id, user_id, body.message, is_new_session=not body.session_id)
+
     async def event_generator():
         started = time.perf_counter()
-        run_info: Dict[str, Any] = {"tools": [], "stats": None, "intent": None, "error": None, "done": False}
+        run_info: Dict[str, Any] = {"tools": [], "stats": None, "intent": None, "error": None, "done": False, "text": ""}
 
         def _track(raw_event: str) -> None:
             lines = raw_event.split("\n")
@@ -195,22 +233,25 @@ async def chat_stream(
                 run_info["done"] = True
                 run_info["intent"] = payload.get("intent")
                 run_info["stats"] = payload.get("stats")
+            elif event_name == "delta":
+                run_info["text"] += payload.get("text") or ""
             elif event_name == "error":
                 run_info["error"] = payload.get("message")
 
         try:
             yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
-            async for event in agent_stream.run_stream(
-                message=body.message,
-                db=db,
-                session_id=session_id,
-                conversation_history=body.conversation_history,
-                trace_id=trace_id,
-                user_id=str(user_id) if user_id else "",
-                request=request,
-            ):
-                _track(event)
-                yield event
+            async with AsyncSessionLocal() as stream_db:
+                async for event in agent_stream.run_stream(
+                    message=body.message,
+                    db=stream_db,
+                    session_id=session_id,
+                    conversation_history=body.conversation_history,
+                    trace_id=trace_id,
+                    user_id=str(user_id) if user_id else "",
+                    request=request,
+                ):
+                    _track(event)
+                    yield event
         finally:
             stats = run_info["stats"] or {}
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -225,6 +266,18 @@ async def chat_stream(
                 is_success=run_info["done"] and not run_info["error"],
                 error_message=run_info["error"] or (None if run_info["done"] else "stream_interrupted"),
             ))
+            if run_info["error"]:
+                report_assistant_event(
+                    session_id, "error", "助手异常", "failed",
+                    str(run_info["error"])[:200], started_at=now_iso(),
+                )
+            if run_info["done"] and run_info["text"]:
+                report_assistant_event(
+                    session_id, "assistant_reply", "助手回复", "completed",
+                    f"回复：{run_info['text'][:80]}",
+                    {"intent": run_info["intent"], "length": len(run_info["text"])},
+                    started_at=now_iso(), duration_ms=duration_ms,
+                )
 
     return StreamingResponse(
         event_generator(),
@@ -271,6 +324,7 @@ async def clear_session(
     current_user=Depends(PermissionChecker("topbar.ai_search", "read")),
 ):
     """清除会话历史"""
+    report_assistant_event(session_id, "conversation_ended", "会话结束", "info", "用户清空会话", started_at=now_iso())
     await session_store.clear_session(session_id)
     return {"code": 0, "message": "会话已清除"}
 

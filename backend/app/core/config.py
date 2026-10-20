@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     EXECUTION_AGENT_BASE_URL: str = ""   # 如 http://aeos-execution-agent:8790
     AGENT_ADMIN_TOKEN: str = ""          # 与 agent .env 的 AGENT_ADMIN_TOKEN 一致
 
+    # AEOS Hub 助手观测上报（assistant-events，中台助手调用留痕；三项任一缺失即停用）
+    AEOS_HUB_BASE: str = ""              # 如 https://aeos-hub.test:9444
+    AEOS_SYSTEM_ID: str = ""             # Hub 侧生成令牌时的系统 ID
+    AEOS_SYSTEM_TOKEN: str = ""          # Hub 侧生成的系统 HMAC 令牌
+    AEOS_HUB_CA_CERT: str = ""           # Hub 使用私有 CA 时的 CA 证书路径；空则用系统默认信任链
+
     # 物料盘点
     STOCK_CHECK_RECENT_SKIP_DAYS: int = 7  # 订单盘点建单/刷新BOM时，近 N 天内已盘过的(物料×仓库)行仅标记"近期已盘"免盘(不预填盘点数据)
 

@@ -13,6 +13,13 @@ const OP_SYMBOL: Record<ApprovalCondition['op'], string> = {
   '>=': '≥', '<=': '≤', '>': '>', '<': '<', '==': '=', '!=': '≠', 'in': 'in',
 }
 
+const CLAIM_PAPER_SLOT_OPTIONS = [
+  { value: 'claim_dept', label: '索赔部门意见' },
+  { value: 'upper_dept', label: '上级部门意见(必要时)' },
+  { value: 'general_manager', label: '总经理意见(必要时)' },
+  { value: 'finance', label: '财务结算信息' },
+]
+
 const condsOf = (node: ApprovalNodeConfig): ApprovalCondition[] =>
   node.conditions?.length ? node.conditions : (node.condition ? [node.condition] : [])
 
@@ -291,7 +298,8 @@ function ChainTab({ roleOptions, users, focusBizType, onFocusHandled, onCount }:
               {!editActive ? <span className="ac-inline-warn">停用后该业务不再产生新待办</span> : null}
             </Space>
             <ApprovalChainEditor nodes={editNodes} onChange={setEditNodes} roleOptions={roleOptions}
-              userOptions={users} fieldOptions={editing.condition_field_options || []} />
+              userOptions={users} fieldOptions={editing.condition_field_options || []}
+              paperSlotOptions={editing.biz_type === 'supplier_claim' ? CLAIM_PAPER_SLOT_OPTIONS : undefined} />
           </>
         ) : null}
       </Drawer>

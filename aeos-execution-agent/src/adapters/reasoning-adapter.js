@@ -71,10 +71,12 @@ const outputSchema = Object.freeze({
   required: ["task_id", "task_type", "status", "summary"],
 });
 
-async function invoke(runId, input, signal) {
+async function invoke(run, input) {
   if (!input || typeof input.prompt !== "string" || !input.prompt.trim()) {
     throw new UpstreamError("INVALID_ARGUMENT", "input.prompt 不能为空");
   }
+  const runId = run.runId;
+  const taskType = input.task_type ?? "";
   const body = {
     prompt: input.prompt,
     task_type: input.task_type,
@@ -83,22 +85,39 @@ async function invoke(runId, input, signal) {
     task_id: runId,
     request_id: input.request_id,
   };
+  const report = run.report;
+  const startedAt = new Date().toISOString();
+  report("step_started", "中台推理分析", "started", `task_type=${taskType}`, { task_type: taskType }, { startedAt });
   let envelope;
   try {
-    envelope = await signedPostEnvelope(ANALYZE_PATH, "reasoning.analyze", body, { signal });
+    envelope = await signedPostEnvelope(ANALYZE_PATH, "reasoning.analyze", body, { signal: run.controller.signal });
   } catch (e) {
     if (e.code === "ABORTED") return null;
+    report("error", "中台推理分析", "failed", e.message, { task_type: taskType, code: e.code }, { startedAt });
     throw e;
   }
   if (envelope.code === 0) {
+    report(
+      "step_completed",
+      "中台推理分析",
+      "completed",
+      `结论 ${envelope.data?.conclusions?.length ?? 0} 条`,
+      { task_type: taskType, status: envelope.data?.status },
+      { startedAt },
+    );
     log("info", "reasoning_ok", { runId, task_type: body.task_type });
-    return envelope.data;
+    // usage 提升为 run_complete 顶层字段（Hub 用量台账），不进 result
+    const data = envelope.data ?? {};
+    const usage = data && typeof data === "object" && data.usage ? data.usage : undefined;
+    const result = { ...data };
+    delete result.usage;
+    return usage ? { result, usage } : result;
   }
   if (envelope.code === 490) return null;
-  throw new UpstreamError(
-    mapCode(envelope.code),
-    envelope.message || `中台推理失败 code=${envelope.code}`,
-  );
+  const code = mapCode(envelope.code);
+  const message = envelope.message || `中台推理失败 code=${envelope.code}`;
+  report("error", "中台推理分析", "failed", message, { task_type: taskType, code }, { startedAt });
+  throw new UpstreamError(code, message);
 }
 
 async function cancel(runId) {

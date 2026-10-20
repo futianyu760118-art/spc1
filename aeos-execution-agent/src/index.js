@@ -32,14 +32,14 @@ const handlers = {
     },
   ],
 
-  /** dispatch 路由；run.controller.signal 透传给上游请求，召回/断线即中止 */
+  /** dispatch 路由；run.controller.signal 透传给上游请求，召回/断线即中止；run.report 供适配器上报执行步骤 */
   async onDispatch(run, input) {
     if (run.capability === "query_control_platform") {
-      return queryAdapter.invoke(input);
+      return queryAdapter.invoke(run, input);
     }
     if (run.capability === "reason_control_platform") {
       // null = 召回/取消，protocol 层据此不回报
-      return reasoningAdapter.invoke(run.runId, input, run.controller.signal);
+      return reasoningAdapter.invoke(run, input);
     }
     throw Object.assign(new Error(`能力未注册：${run.capability}`), { code: "INVALID_ARGUMENT" });
   },

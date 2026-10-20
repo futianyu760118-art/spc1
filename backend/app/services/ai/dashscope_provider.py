@@ -60,7 +60,15 @@ class DashscopeProvider(LLMProvider):
             raise RuntimeError(f"Dashscope error: {response.code} - {response.message}")
 
         content = response.output.choices[0].message.content or ""
-        logger.info(f"[Dashscope] model={self._model} tokens={response.usage.get('total_tokens', '?')}")
+        usage = response.usage or {}
+        if opts.usage_out is not None:
+            opts.usage_out.update({
+                "prompt_tokens": int(usage.get("input_tokens", 0) or 0),
+                "completion_tokens": int(usage.get("output_tokens", 0) or 0),
+                "total_tokens": int(usage.get("total_tokens", 0) or 0),
+                "cached_tokens": 0,
+            })
+        logger.info(f"[Dashscope] model={self._model} tokens={usage.get('total_tokens', '?')}")
         return content
 
     async def chat_stream(self, messages: List[ChatMessage], options: Optional[ChatOptions] = None) -> AsyncIterator[str]:

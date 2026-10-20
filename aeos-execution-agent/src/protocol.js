@@ -11,6 +11,8 @@ const { log } = require("./lib/http-client");
  * 连接：握手头 x-aeos-execution-token → register {agentId,name,version,sourceSystem?,capabilities}
  * Hub：registered {agentId,heartbeatIntervalMs} → 周期 heartbeat {status,currentRunId?}
  * 派单：dispatch {runId,capability,input} → run_update{running} → run_complete|run_failed
+ * 步骤上报：run 期间以 run_event 上报 run_received/step_started/step_completed/error/run_summary，
+ *   Hub 回 run_event_ack（仅排查用，不阻塞任务）
  * 召回：recall {runId} → 中止活动 run（含平台侧推理取消），不回报（契约 §5）
  * 断线：杀活动 run（不回报）→ 1/2/5/10/30s 阶梯 + ±20% 抖动重连后重新 register
  * 单活动 run：忙时新 dispatch 回 run_failed(INTERNAL_ERROR 'agent busy')（设计 §3 边界决策）
@@ -29,6 +31,7 @@ class HubConnection {
     this.reconnectTimer = null;
     this.stopped = false;
     this.activeRun = null;
+    this.runSeq = new Map();
   }
 
   start() {
@@ -115,6 +118,11 @@ class HubConnection {
       case "error":
         log("warn", "hub_protocol_error", { message: message.message });
         break;
+      case "run_event_ack":
+        if (message.accepted !== true) {
+          log("warn", "run_event_rejected", { runId: message.runId, eventId: message.eventId, reason: message.reason });
+        }
+        break;
       default:
         log("warn", "hub_unknown_message_type", { type: message.type });
     }
@@ -132,26 +140,47 @@ class HubConnection {
       return;
     }
 
-    const run = { runId, capability, recalled: false, controller: new AbortController() };
+    const run = {
+      runId,
+      capability,
+      recalled: false,
+      controller: new AbortController(),
+      report: (event, name, status, summary, detail, timings) =>
+        this.reportRunEvent(runId, event, name, status, summary, detail, timings),
+    };
     this.activeRun = run;
+    this.reportRunEvent(runId, "run_received", "收到任务", "info", `capability=${capability}`, {
+      capability,
+      path: dispatch.input?.path,
+    });
     this.send({ type: "run_update", runId, state: "running" });
     log("info", "run_started", { runId, capability });
 
     Promise.resolve()
       .then(() => this.handlers.onDispatch(run, dispatch.input))
-      .then((result) => {
+      .then((outcome) => {
         // null = 推理任务被召回/取消（契约 §5：召回不回报）；recalled 同样跳过
-        if (run.recalled || result === null || result === undefined) return;
-        this.send({ type: "run_complete", runId, result });
+        if (run.recalled || outcome === null || outcome === undefined) return;
+        // 适配器可返回 { result, usage }（推理用量记 Hub 台账）；其余直接当 result
+        const withUsage =
+          outcome && typeof outcome === "object" && "usage" in outcome && outcome.usage != null;
+        const result = withUsage ? outcome.result : outcome;
+        const usage = withUsage ? outcome.usage : undefined;
+        const summary =
+          capability === "query_control_platform" ? `查询 ${dispatch.input?.path ?? ""} 完成` : "推理分析完成";
+        this.reportRunEvent(runId, "run_summary", "任务完成", "completed", summary);
+        this.send({ type: "run_complete", runId, result, ...(usage ? { usage } : {}) });
         log("info", "run_complete", { runId });
       })
       .catch((e) => {
         if (run.recalled) return;
+        this.reportRunEvent(runId, "run_summary", "任务失败", "failed", e.message);
         this.send({ type: "run_failed", runId, error: { code: e.code || "INTERNAL_ERROR", message: e.message } });
         log("info", "run_failed", { runId, code: e.code || "INTERNAL_ERROR" });
       })
       .finally(() => {
         if (this.activeRun === run) this.activeRun = null;
+        this.runSeq.delete(run.runId);
       });
   }
 
@@ -183,6 +212,32 @@ class HubConnection {
   send(payload) {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(payload));
     else log("warn", "send_skipped_not_open", { type: payload.type });
+  }
+
+  /** 执行步骤上报：事件按 runId 内 seq 递增、eventId 唯一（Hub 端去重）；
+   *  timings 只给 startedAt 即自动推导 endedAt/durationMs，status=started 的事件恒不补 endedAt。 */
+  reportRunEvent(runId, event, name, status, summary, detail = null, timings = {}) {
+    const startedAt = timings.startedAt ?? null;
+    const endedAt = timings.endedAt ?? (startedAt && status !== "started" ? new Date().toISOString() : null);
+    const durationMs =
+      timings.durationMs ??
+      (startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : null);
+    const seq = (this.runSeq.get(runId) ?? 0) + 1;
+    this.runSeq.set(runId, seq);
+    this.send({
+      type: "run_event",
+      runId,
+      eventId: `evt-${runId}-${seq}`,
+      seq,
+      event,
+      name,
+      status,
+      summary,
+      detail,
+      startedAt,
+      endedAt,
+      durationMs,
+    });
   }
 
   startHeartbeat() {

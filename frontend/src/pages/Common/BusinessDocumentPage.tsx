@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Col, DatePicker, Descriptions, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Table, Tag, Tooltip, Upload, message } from 'antd'
-import { DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, HistoryOutlined, InboxOutlined, InfoCircleOutlined, PaperClipOutlined, PlusOutlined, ReloadOutlined, SendOutlined, UploadOutlined } from '@ant-design/icons'
+import { Button, Col, DatePicker, Descriptions, Drawer, Form, Input, InputNumber, List, Modal, Popconfirm, Row, Select, Space, Switch, Table, Tag, Tooltip, Upload, message } from 'antd'
+import { DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, HistoryOutlined, InboxOutlined, InfoCircleOutlined, PaperClipOutlined, PlusOutlined, ReloadOutlined, SendOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
+import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import axios from 'axios'
 import { renderAsync } from 'docx-preview'
@@ -8,6 +9,7 @@ import * as XLSX from 'xlsx'
 import { fileApi } from '../../services/api'
 import { useAuthStore } from '../../store/auth'
 import { formatDate, formatDateTime } from '../../utils'
+import BusinessDocumentFieldConfigModal, { FieldConfig, FieldConfigApiSet } from './BusinessDocumentFieldConfigModal'
 
 type DocumentApiSet = {
   list: (params: Record<string, any>) => Promise<any>
@@ -24,6 +26,8 @@ type Props = {
   title: string
   namespace: string
   api: DocumentApiSet
+  fieldConfigApi?: FieldConfigApiSet
+  canConfig?: boolean
 }
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
@@ -34,7 +38,7 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
 
 type PreviewKind = 'image' | 'pdf' | 'docx' | 'xlsx' | 'other'
 
-export default function BusinessDocumentPage({ title, namespace, api }: Props) {
+export default function BusinessDocumentPage({ title, namespace, api, fieldConfigApi, canConfig = false }: Props) {
   const [data, setData] = useState<any[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -53,6 +57,8 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
   const [xlsxSheets, setXlsxSheets] = useState<{ name: string; html: string }[]>([])
   const [form] = Form.useForm()
   const [versionForm] = Form.useForm()
+  const [fieldConfigs, setFieldConfigs] = useState<FieldConfig[]>([])
+  const [configOpen, setConfigOpen] = useState(false)
   const docxContainerRef = useRef<HTMLDivElement>(null)
 
   const authHeaders = () => {
@@ -171,6 +177,70 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
 
   useEffect(() => { load() }, [load])
 
+  const fetchFieldConfigs = useCallback(async (): Promise<FieldConfig[] | null> => {
+    if (!fieldConfigApi) {
+      setFieldConfigs([])
+      return []
+    }
+    try {
+      const res = await fieldConfigApi.list()
+      const configs: FieldConfig[] = res.data || []
+      setFieldConfigs(configs)
+      return configs
+    } catch {
+      return null
+    }
+  }, [fieldConfigApi])
+
+  useEffect(() => { fetchFieldConfigs() }, [fetchFieldConfigs])
+
+  const toFormCustomFields = (values: Record<string, any>, configs: FieldConfig[]) => {
+    const result: Record<string, any> = {}
+    for (const config of configs) {
+      const value = values[config.field_key]
+      result[config.field_key] = config.widget === 'date' && value ? dayjs(value) : value
+    }
+    return result
+  }
+
+  const fromFormCustomFields = (values: Record<string, any> = {}) => {
+    const result: Record<string, any> = {}
+    for (const config of fieldConfigs) {
+      const value = values[config.field_key]
+      if (config.widget === 'date') {
+        result[config.field_key] = value ? value.format('YYYY-MM-DD') : null
+      } else if (config.widget === 'boolean') {
+        result[config.field_key] = value ?? false
+      } else {
+        result[config.field_key] = value ?? null
+      }
+    }
+    return result
+  }
+
+  const formatCustomValue = (config: FieldConfig, value: any) => {
+    if (value === null || value === undefined || value === '') return '-'
+    if (config.widget === 'boolean') return value ? '是' : '否'
+    return String(value)
+  }
+
+  const renderCustomFieldInput = (config: FieldConfig) => {
+    switch (config.widget) {
+      case 'textarea':
+        return <Input.TextArea rows={3} />
+      case 'number':
+        return <InputNumber style={{ width: '100%' }} />
+      case 'date':
+        return <DatePicker style={{ width: '100%' }} />
+      case 'boolean':
+        return <Switch />
+      case 'select':
+        return <Select allowClear options={(config.options || []).map(option => ({ label: option, value: option }))} />
+      default:
+        return <Input />
+    }
+  }
+
   const normalizeAttachments = (files: any[] = []) =>
     files.map(file => file.response?.data || file).filter(Boolean)
 
@@ -190,30 +260,45 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
     },
   }
 
-  const openCreate = () => {
+  const openCreate = async () => {
+    if (fieldConfigApi && (await fetchFieldConfigs()) === null) return
     setEditing(null)
     form.resetFields()
     form.setFieldsValue({ status: 'draft', version_no: 'V1.0' })
     setModalOpen(true)
   }
 
-  const openEdit = (row: any) => {
+  const openEdit = async (row: any) => {
+    let configs: FieldConfig[] = []
+    if (fieldConfigApi) {
+      const loaded = await fetchFieldConfigs()
+      if (loaded === null) return
+      configs = loaded
+    }
     setEditing(row)
-    form.setFieldsValue(row)
+    form.setFieldsValue({
+      ...row,
+      custom_fields: fieldConfigApi ? toFormCustomFields(row.custom_fields || {}, configs) : row.custom_fields,
+    })
     setModalOpen(true)
   }
 
   const handleSave = async () => {
     try {
       const values = await form.validateFields()
+      const customFields = fieldConfigApi ? fromFormCustomFields(values.custom_fields || {}) : undefined
       if (editing) {
-        await api.update(editing.id, values)
+        await api.update(
+          editing.id,
+          customFields === undefined ? values : { ...values, custom_fields: customFields },
+        )
         message.success('更新成功')
       } else {
         const payload = {
           ...values,
           attachments: normalizeAttachments(values.attachments?.fileList),
           effective_date: values.effective_date ? values.effective_date.format('YYYY-MM-DD') : null,
+          ...(customFields === undefined ? {} : { custom_fields: customFields }),
         }
         await api.create(payload)
         message.success('创建成功')
@@ -221,7 +306,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       setModalOpen(false)
       load()
     } catch (e: any) {
-      if (!e?.errorFields) message.error(e.message || '保存失败')
+      if (!e?.errorFields) message.error(e?.response?.data?.detail || e.message || '保存失败')
     }
   }
 
@@ -244,7 +329,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
       setVersionModalOpen(false)
       load()
     } catch (e: any) {
-      if (!e?.errorFields) message.error(e.message || '发布失败')
+      if (!e?.errorFields) message.error(e?.response?.data?.detail || e.message || '发布失败')
     }
   }
 
@@ -302,7 +387,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
     }
   }
 
-  const columns = [
+  const baseColumns: ColumnsType<any> = [
     { title: '编码', dataIndex: 'code', width: 140 },
     { title: '标题', dataIndex: 'title' },
     { title: '适用产品', dataIndex: 'applicable_product', width: 120, render: (v: string) => v || '-' },
@@ -350,6 +435,22 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
     },
   ]
 
+  const customColumns = fieldConfigs
+    .filter(config => config.show_in_list)
+    .map(config => ({
+      key: config.field_key,
+      title: config.label,
+      dataIndex: ['custom_fields', config.field_key],
+      width: config.widget === 'textarea' ? 200 : 120,
+      render: (value: any) => formatCustomValue(config, value),
+    }))
+
+  const columns: ColumnsType<any> = [
+    ...baseColumns.slice(0, 5),
+    ...customColumns,
+    ...baseColumns.slice(5),
+  ]
+
   return (
     <div>
       <style>{`
@@ -383,6 +484,9 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
           <Col>
             <Space>
               <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+              {fieldConfigApi && canConfig && (
+                <Button icon={<SettingOutlined />} onClick={() => setConfigOpen(true)}>字段配置</Button>
+              )}
               <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增{title}</Button>
             </Space>
           </Col>
@@ -396,7 +500,7 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
           dataSource={data}
           loading={loading}
           size="small"
-          scroll={{ x: 1200, y: 'calc(100vh - 300px)' }}
+          scroll={{ x: fieldConfigApi ? 'max-content' : 1200, y: 'calc(100vh - 300px)' }}
           pagination={{
             total,
             current: page,
@@ -420,6 +524,20 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
             <Col span={8}><Form.Item name="applicable_product" label="适用产品"><Input /></Form.Item></Col>
             <Col span={8}><Form.Item name="applicable_order" label="适用订单"><Input /></Form.Item></Col>
             <Col span={8}><Form.Item name="applicable_process" label="适用工序"><Input /></Form.Item></Col>
+            {fieldConfigs.map(config => (
+              <Col key={config.field_key} span={config.widget === 'textarea' ? 24 : 8}>
+                <Form.Item
+                  name={['custom_fields', config.field_key]}
+                  label={config.label}
+                  valuePropName={config.widget === 'boolean' ? 'checked' : 'value'}
+                  rules={config.required && config.widget !== 'boolean'
+                    ? [{ required: true, whitespace: true, message: `请输入${config.label}` }]
+                    : undefined}
+                >
+                  {renderCustomFieldInput(config)}
+                </Form.Item>
+              </Col>
+            ))}
             {!editing && (
               <>
                 <Col span={8}><Form.Item name="version_no" label="初始版本" rules={[{ required: true }]}><Input /></Form.Item></Col>
@@ -554,6 +672,15 @@ export default function BusinessDocumentPage({ title, namespace, api }: Props) {
           )
         )}
       </Modal>
+
+      {fieldConfigApi && (
+        <BusinessDocumentFieldConfigModal
+          open={configOpen}
+          api={fieldConfigApi}
+          onClose={() => setConfigOpen(false)}
+          onChanged={() => { fetchFieldConfigs(); load() }}
+        />
+      )}
     </div>
   )
 }

@@ -20,6 +20,9 @@ WS 信封、握手头、心跳、召回语义、重连阶梯均对齐 `execution
   身份对齐：`EXECUTION_AGENT_ID=runtime-control-platform-agent`、`EXECUTION_AGENT_NAME=公司中台执行面智能体`。
 - Hub 回 `registered{heartbeatIntervalMs}` → 周期 `heartbeat{status: working|idle, currentRunId?}`
 - `dispatch{runId, capability, input}` → 回 `run_update{running}` → `run_complete{result}` / `run_failed{error{code,message}}`
+- 执行步骤上报：派单接受后发 `run_received`，每个中台调用前后发 `step_started` / `step_completed`
+  （失败发 `error`），收尾前发 `run_summary`；事件按 runId 内 seq 递增、eventId 唯一，
+  Hub 回 `run_event_ack`（仅排查用，不阻塞任务）
 - `recall{runId}` → 中止本地请求 + 调中台 cancel（推理任务同步取消），**不回报**
 - 断线杀活动 run（不回报），1/2/5/10/30s 阶梯 + ±20% 抖动重连后重新 register
 - 单活动 run：忙时新 dispatch 回 `run_failed(INTERNAL_ERROR 'agent busy')`（契约设计 §3 边界决策，
@@ -32,7 +35,7 @@ WS 信封、握手头、心跳、召回语义、重连阶梯均对齐 `execution
 ```
 src/
 ├── index.js                        # 入口：能力路由 / 活动run中止联动 / healthz / 信号处理
-├── protocol.js                     # WS 状态机（register/心跳/派单/召回/重连）
+├── protocol.js                     # WS 状态机（register/心跳/派单/召回/重连/步骤上报）
 ├── config.js                       # 环境变量加载（命名与 execution-agent 一致）
 ├── adapters/
 │   ├── query-adapter.js            # 查询：{path, params}，冻结白名单 + path→endpoint_code 映射

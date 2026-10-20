@@ -96,6 +96,13 @@ services:
       # 执行面智能体管理（状态/配置/重启代理；AGENT_ADMIN_TOKEN 需与 aeos-execution-agent 容器一致）
       EXECUTION_AGENT_BASE_URL: ${EXECUTION_AGENT_BASE_URL:-}
       AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
+      # AEOS Hub 助手观测上报（assistant-events，中台智能助手调用留痕；缺一即停用）
+      AEOS_HUB_BASE: ${AEOS_HUB_BASE:-}
+      AEOS_SYSTEM_ID: ${AEOS_SYSTEM_ID:-}
+      AEOS_SYSTEM_TOKEN: ${AEOS_SYSTEM_TOKEN:-}
+      AEOS_HUB_CA_CERT: ${AEOS_HUB_CA_CERT:-/app/certs/caddy-root.crt}
+    extra_hosts:
+      - "aeos-hub.test:${AEOS_HUB_IP:-192.168.0.23}"
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
       - ./data/backups:/app/backups

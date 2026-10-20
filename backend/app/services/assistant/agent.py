@@ -27,6 +27,7 @@ from app.services.assistant.retry import (
 )
 from app.services.assistant.run_logger import RunLogger
 from app.services.assistant.cancellation import CancellationRegistry
+from app.services.assistant.hub_reporter import now_iso, report_assistant_event, report_model_call
 from app.services.assistant.context_manager import (
     estimate_tokens,
     should_summarize,
@@ -249,14 +250,24 @@ async def _execute_tool_with_retry(
     params: Dict[str, Any],
     timeout: int = TOOL_EXECUTE_TIMEOUT,
     disabled_tools: Optional[set] = None,
+    trace_id: str = "",
 ) -> Dict[str, Any]:
     from app.services.assistant.tool_registry import get_tool
 
     if disabled_tools and tool_name in disabled_tools:
+        report_assistant_event(trace_id, "tool_result", tool_name, "failed", f"工具 {tool_name} 已被管理员禁用")
         return {"error": f"工具 {tool_name} 已被管理员禁用"}
     tool_def = get_tool(tool_name)
     if not tool_def:
+        report_assistant_event(trace_id, "tool_result", tool_name, "failed", f"工具 {tool_name} 不存在")
         return {"error": f"工具 {tool_name} 不存在"}
+
+    started_at = now_iso()
+    report_assistant_event(
+        trace_id, "tool_call", tool_name, "started",
+        f"调用工具 {tool_name}", {"params": params}, started_at=started_at,
+    )
+    loop_start = time.perf_counter()
 
     last_error: Optional[Exception] = None
     for attempt in range(TOOL_RETRY_CONFIG.max_retries + 1):
@@ -264,6 +275,14 @@ async def _execute_tool_with_retry(
             data = await asyncio.wait_for(
                 tool_def.execute(db, params),
                 timeout=timeout,
+            )
+            item_count = data.get("total", 0) if isinstance(data, dict) else 0
+            report_assistant_event(
+                trace_id, "tool_result", tool_name, "completed",
+                f"返回 {item_count} 条",
+                {"itemCount": item_count, "attempts": attempt + 1},
+                started_at=started_at, ended_at=now_iso(),
+                duration_ms=round((time.perf_counter() - loop_start) * 1000, 2),
             )
             return data
         except asyncio.TimeoutError as e:
@@ -276,6 +295,13 @@ async def _execute_tool_with_retry(
         if attempt < TOOL_RETRY_CONFIG.max_retries:
             await asyncio.sleep(TOOL_RETRY_CONFIG.calculate_delay(attempt))
 
+    report_assistant_event(
+        trace_id, "tool_result", tool_name, "failed",
+        f"工具执行失败：{last_error}"[:200],
+        {"attempts": TOOL_RETRY_CONFIG.max_retries + 1},
+        started_at=started_at, ended_at=now_iso(),
+        duration_ms=round((time.perf_counter() - loop_start) * 1000, 2),
+    )
     return {"error": f"工具 {tool_name} 执行失败: {str(last_error)}"}
 
 
@@ -429,7 +455,14 @@ async def run(
         if run_logger:
             await run_logger.log("intent_start", {"message_preview": message[:200]})
 
+        intent_started = now_iso()
+        intent_start = time.perf_counter()
         intent = await _recognize_intent(message, history, intent_prompt)
+        report_model_call(
+            session_id, "意图识别", provider=provider_name,
+            started_at=intent_started,
+            duration_ms=round((time.perf_counter() - intent_start) * 1000, 2),
+        )
         diagnostics["intent"] = intent
         logger.info(f"[agent:{trace_id}] 意图识别结果: {intent}")
 
@@ -449,7 +482,14 @@ async def run(
 
             try:
                 options = ChatOptions(temperature=main_options.temperature, max_tokens=main_options.max_tokens, model=main_options.model, timeout=60)
+                chat_started = now_iso()
+                chat_start = time.perf_counter()
                 result = await _llm_chat_with_retry(messages, options)
+                report_model_call(
+                    session_id, "生成回复", provider=provider_name,
+                    model_override=main_options.model, started_at=chat_started,
+                    duration_ms=round((time.perf_counter() - chat_start) * 1000, 2),
+                )
                 raw_text = result if isinstance(result, str) else (result.text or "")
                 thinking = _extract_thinking(raw_text)
                 text = _strip_think_tags(raw_text)
@@ -553,6 +593,11 @@ async def run(
                 "tool_call_count": len(result.tool_calls),
                 "duration_ms": duration_ms,
             })
+            report_model_call(
+                session_id, f"大模型分析（第{round_idx + 1}轮）", provider=provider_name,
+                model_override=main_options.model, token_usage=result.usage,
+                duration_ms=duration_ms,
+            )
 
             if result.usage and result.usage.total_tokens:
                 last_api_total_tokens = result.usage.total_tokens
@@ -589,7 +634,7 @@ async def run(
             tool_messages = []
             for tc in result.tool_calls:
                 tool_start = time.perf_counter()
-                data = await _execute_tool_with_retry(db, tc.name, tc.arguments, timeout=rt.get("tool_execute_timeout", TOOL_EXECUTE_TIMEOUT), disabled_tools=disabled)
+                data = await _execute_tool_with_retry(db, tc.name, tc.arguments, timeout=rt.get("tool_execute_timeout", TOOL_EXECUTE_TIMEOUT), disabled_tools=disabled, trace_id=session_id)
                 tool_duration = round((time.perf_counter() - tool_start) * 1000, 2)
 
                 has_error = "error" in data
@@ -636,10 +681,17 @@ async def run(
             messages.extend(tool_messages)
 
         try:
+            summary_started = now_iso()
+            summary_start = time.perf_counter()
             final_result = await _llm_chat_with_retry(messages, options)
             raw_text = final_result if isinstance(final_result, str) else (final_result.text or "")
             thinking = _extract_thinking(raw_text)
             text = _strip_think_tags(raw_text)
+            report_model_call(
+                session_id, "生成总结", provider=provider_name,
+                model_override=main_options.model, started_at=summary_started,
+                duration_ms=round((time.perf_counter() - summary_start) * 1000, 2),
+            )
         except Exception as e:
             logger.error(f"[agent:{trace_id}] 最终总结失败: {e}")
             text = "查询完成，但生成总结时出现问题。"

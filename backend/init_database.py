@@ -424,6 +424,7 @@ class DatabaseInitializer:
             },
             "business_document": {
                 "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+                "custom_fields": "JSONB DEFAULT '{}'::jsonb",
             },
             "share_link": {
                 "reason": "VARCHAR(256)",
@@ -443,6 +444,9 @@ class DatabaseInitializer:
                 "ai_stage_started_at": "TIMESTAMP",
                 "ai_progress": "JSONB",
                 "ai_result": "JSONB",
+            },
+            "supplier_claim": {
+                "clause_snapshot": "JSONB",
             },
             "notification": {
                 "sender_id": "INTEGER",
@@ -1739,12 +1743,12 @@ class DatabaseInitializer:
             if existing.fetchone():
                 return
             default_nodes = [
-                {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager"},
-                {"seq": 2, "label": "上级部门意见", "role": "manager",
+                {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager", "paper_slot": "claim_dept"},
+                {"seq": 2, "label": "上级部门意见", "role": "manager", "paper_slot": "upper_dept",
                  "condition": {"field": "claim_amount", "op": ">=", "value": 1000}},
-                {"seq": 3, "label": "总经理意见", "role": "general_manager",
+                {"seq": 3, "label": "总经理意见", "role": "general_manager", "paper_slot": "general_manager",
                  "condition": {"field": "claim_amount", "op": ">=", "value": 5000}},
-                {"seq": 4, "label": "财务结算", "role": "finance"},
+                {"seq": 4, "label": "财务结算", "role": "finance", "paper_slot": "finance"},
             ]
             await session.execute(text(
                 "INSERT INTO approval_config (biz_type, biz_name, nodes, is_active, updated_by) "

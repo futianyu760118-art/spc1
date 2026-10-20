@@ -123,7 +123,8 @@ def patch_llm(monkeypatch):
     async def fake_invoke(prompt, timeout_s):
         if holder["impl"] is None:
             raise AssertionError("测试未注入 LLM 假实现")
-        return await holder["impl"](prompt, timeout_s)
+        # 服务层契约：返回 (分析结果, token 用量)；假实现只管结果，用量置空
+        return (await holder["impl"](prompt, timeout_s), {})
 
     monkeypatch.setattr(rs, "_invoke_reasoning_llm", fake_invoke)
 
@@ -216,6 +217,9 @@ async def test_happy_path_with_evidence_validation(ext_client, external_keys, re
     assert data["data_as_of"] is not None
     assert data["data_confidence"] in ("high", "medium")
     assert data["llm"]["called"] is True
+    # 用量透传（执行面 run_complete.usage → Hub 用量台账；假 LLM 用量为空 → 全 0）
+    assert data["usage"]["modelId"] == data["llm"]["model"] or data["usage"]["modelId"] == ""
+    assert set(data["usage"].keys()) == {"modelId", "tokensIn", "cachedTokens", "tokensOut"}
 
     # 审计留痕：任务记录证明实际调用大模型（验收§五.2）
     from sqlalchemy import select
