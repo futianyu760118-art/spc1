@@ -76,7 +76,7 @@ class HubConnection {
         name: this.config.agentName,
         version: this.config.agentVersion,
         ...(this.config.sourceSystem ? { sourceSystem: this.config.sourceSystem } : {}),
-        capabilities: this.handlers.capabilities,
+        capabilities: this.handlers.capabilities.map((c) => ({ ...c, version: this.config.agentVersion })),
       });
     });
 

@@ -531,10 +531,17 @@ async def _invoke_reasoning_llm(prompt: str, timeout_s: int) -> tuple[ReasoningA
             "中台推理智能体未接通：未配置真实大模型 provider（当前为 rule_based），拒绝伪造推理结果"
         )
     usage_out: dict = {}
+    settings = get_settings()
     try:
         analysis = await ai_service.structured_output(
             prompt, ReasoningAnalysis,
-            options=ChatOptions(temperature=0.2, max_tokens=8000, timeout=timeout_s, usage_out=usage_out),
+            options=ChatOptions(
+                temperature=0.2,
+                max_tokens=8000,
+                model=(settings.REASONING_MODEL or "").strip() or None,
+                timeout=timeout_s,
+                usage_out=usage_out,
+            ),
         )
         return analysis, usage_out
     except ReasoningError:
@@ -544,6 +551,10 @@ async def _invoke_reasoning_llm(prompt: str, timeout_s: int) -> tuple[ReasoningA
 
 
 def _provider_model_name() -> Optional[str]:
+    """实际用于推理的模型名：REASONING_MODEL 覆盖优先，否则取 provider 默认模型。"""
+    override = (get_settings().REASONING_MODEL or "").strip()
+    if override:
+        return override
     provider = ai_service.get_provider()
     return getattr(provider, "_model", None)
 
@@ -735,7 +746,10 @@ async def run_reasoning_task(
             "task_type": task_type,
             "status": "succeeded",
             "summary": analysis.summary,
-            "conclusions": [c.model_dump() for c in kept],
+            "conclusions": [
+                {**c.model_dump(), "recommendation": c.recommendation or ""}
+                for c in kept
+            ],
             "dropped_conclusions": dropped,
             "evidence_refs": [ev["ref"] for ev in evidence],
             "data_as_of": data_as_of.isoformat() if data_as_of else None,

@@ -110,6 +110,7 @@ class Settings(BaseSettings):
 
     # 执行面推理（AEOS reason_control_platform 只读分析接入）
     REASONING_TIMEOUT_S: int = 170          # 单次推理任务总超时（含证据采集与 LLM；执行面 agent HTTP 超时 180s，留 10s 余量）
+    REASONING_MODEL: str = ""               # 推理专用模型名；留空沿用 AI_OPENAI_MODEL（建议 flash 档以压时延）
     REASONING_MAX_CONCURRENT: int = 5       # 单实例并发推理上限，超出返回 429
     REASONING_MAX_EVIDENCE_ITEMS: int = 25  # 单次任务证据条数上限（控制 prompt 体积与推理耗时）
     REASONING_MAX_CONCLUSIONS: int = 20     # 单次任务结论条数上限

@@ -79,6 +79,7 @@ test("registers with identity and capabilities, dispatches, reports completion a
       capabilities: ["query_control_platform"],
     },
   );
+  assert.equal(register.capabilities[0].version, "1.0.0");
   await waitUntil(() => connection.isRegistered());
 
   hub.send({ type: "dispatch", runId: "run-1", capability: "query_control_platform", input: { path: "/external/orders/list" } });
