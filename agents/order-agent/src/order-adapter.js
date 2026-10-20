@@ -88,12 +88,15 @@ function createAdapter({ config, http, log }) {
     const startedAt = new Date().toISOString();
     report("step_started", "写入订单字段", "started", `order_no=${orderNo}`, { orderNo }, { startedAt });
     log("info", "order_write_started", { orderNo });
+    const headers = { "X-Agent-Run-Id": run.runId };
+    const operatorUserId = run.operator && run.operator.user_id;
+    if (operatorUserId) headers["X-Operator-User-Id"] = String(operatorUserId);
     let envelope;
     try {
       envelope = await http.signedSendEnvelope("PUT", path, "orders.schedule.update", body, {
         signal: run.controller.signal,
         timeoutMs: config.writeTimeoutMs,
-        headers: { "X-Agent-Run-Id": run.runId },
+        headers,
       });
     } catch (e) {
       report("error", "写入订单字段", "failed", e.message, { orderNo, code: e.code }, { startedAt });

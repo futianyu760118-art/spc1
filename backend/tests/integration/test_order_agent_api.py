@@ -46,6 +46,25 @@ async def test_order_schedule_update_success_and_audit(ext_client, external_keys
     assert {row["field_name"] for row in rows} == {"shipping_plan", "planned_start_date"}
 
 
+async def test_order_schedule_operator_resolved_from_user_header(ext_client, external_keys, db):
+    await _seed_order(db, "AGENT-OP")
+    user_id = (await db.execute(text("SELECT id FROM sys_user WHERE username='admin'"))).scalar()
+    assert user_id
+    headers = _sig_headers(external_keys)
+    r = await ext_client.put(
+        "/api/v1/external/orders/AGENT-OP/schedule",
+        json={"fields": {"shipping_plan": "2026-11-03"}},
+        headers={**headers, "X-Agent-Run-Id": "run-op", "X-Operator-User-Id": str(user_id)},
+    )
+    assert r.json()["code"] == 0
+    operator = (await db.execute(text(
+        "SELECT operator FROM audit_log WHERE table_name='sale_order' "
+        "AND record_id=(SELECT id FROM sale_order WHERE order_no='AGENT-OP' LIMIT 1) "
+        "ORDER BY id DESC LIMIT 1"
+    ))).scalar()
+    assert operator == "admin（智能体）"
+
+
 async def test_order_schedule_clear_with_null(ext_client, external_keys, db):
     await _seed_order(db, "AGENT-002")
     headers = _sig_headers(external_keys)

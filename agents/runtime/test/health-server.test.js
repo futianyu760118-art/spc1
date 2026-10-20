@@ -125,8 +125,8 @@ test("admin run invokes onLocalRun and returns result", async () => {
     connection: { isRegistered: () => true, activeRun: null },
     capabilities: [{ name: "query_control_platform" }],
     agentKey: "query",
-    onLocalRun: async (runId, capability, input) => {
-      calls.push({ runId, capability, input });
+    onLocalRun: async (runId, capability, input, operator) => {
+      calls.push({ runId, capability, input, operator });
       return { items: [], total: 0 };
     },
   });
@@ -140,6 +140,7 @@ test("admin run invokes onLocalRun and returns result", async () => {
         runId: "local-1",
         capability: "query_control_platform",
         input: { path: "/common/ping", params: {} },
+        operator: { user_id: "462" },
       }),
     });
     assert.equal(res.status, 200);
@@ -150,6 +151,7 @@ test("admin run invokes onLocalRun and returns result", async () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].capability, "query_control_platform");
     assert.deepEqual(calls[0].input, { path: "/common/ping", params: {} });
+    assert.deepEqual(calls[0].operator, { user_id: "462" });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

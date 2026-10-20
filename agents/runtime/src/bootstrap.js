@@ -24,10 +24,11 @@ function safeCancel(adapter, config, log) {
 }
 
 function createLocalRunHandler(adapter, connection, log) {
-  return async (runId, capability, input) => {
+  return async (runId, capability, input, operator) => {
     const run = {
       runId,
       capability,
+      operator: operator || null,
       recalled: false,
       controller: new AbortController(),
       report: (event, name, status, summary, detail, timings) =>

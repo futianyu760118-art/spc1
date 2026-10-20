@@ -122,19 +122,21 @@ class TestRouteTask:
                 reason="查询",
             )
 
-        async def fake_dispatch(agent_key, task_input):
+        async def fake_dispatch(agent_key, task_input, operator_user_id=""):
             calls["key"] = agent_key
             calls["input"] = task_input
+            calls["operator_user_id"] = operator_user_id
             return {"online": True, "ok": True, "result": {"items": [], "total": 0}}
 
         monkeypatch.setattr(task_router, "classify_task", fake_classify)
         monkeypatch.setattr(task_router, "dispatch_local", fake_dispatch)
-        outcome = await task_router.route_task("查一下订单", [])
+        outcome = await task_router.route_task("查一下订单", [], operator_user_id="462")
         assert outcome["decision"] == "local"
         assert outcome["executed"] is True
         assert outcome["agent_key"] == "query"
         assert calls["key"] == "query"
         assert calls["input"] == {"path": "/external/orders/list", "params": {}}
+        assert calls["operator_user_id"] == "462"
 
     async def test_local_agent_offline_downgrades_to_hub(self, monkeypatch):
         async def fake_classify(message, history, model_override=None):
@@ -145,7 +147,7 @@ class TestRouteTask:
                 reason="查询",
             )
 
-        async def fake_dispatch(agent_key, task_input):
+        async def fake_dispatch(agent_key, task_input, operator_user_id=""):
             return {"online": False, "reason": "EXECUTION_QUERY_AGENT_BASE_URL 未配置"}
 
         monkeypatch.setattr(task_router, "classify_task", fake_classify)
@@ -166,7 +168,7 @@ class TestRouteTask:
 
         dispatched = {"v": False}
 
-        async def fake_dispatch(agent_key, task_input):
+        async def fake_dispatch(agent_key, task_input, operator_user_id=""):
             dispatched["v"] = True
             return {"online": True, "ok": True, "result": {}}
 

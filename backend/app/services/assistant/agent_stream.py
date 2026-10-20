@@ -300,7 +300,7 @@ async def run_stream(
                 message, history,
                 enabled=bool(rt.get("routing_enabled", True)),
                 model_override=model_override,
-                session_id=session_id, trace_id=trace_id,
+                session_id=session_id, trace_id=trace_id, user_id=user_id,
                 run_logger=run_logger, diagnostics=stats,
             )
             if routing_info:

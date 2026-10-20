@@ -208,10 +208,15 @@ async def classify_task(
         return RoutingClassification(decision="none", reason=f"分类失败: {str(e)[:120]}")
 
 
-async def dispatch_local(agent_key: str, task_input: Dict[str, Any]) -> Dict[str, Any]:
+async def dispatch_local(
+    agent_key: str, task_input: Dict[str, Any], operator_user_id: str = ""
+) -> Dict[str, Any]:
     """本地派单到执行面 agent（POST /admin/run）；失败不抛错，返回归一化结果。"""
     return await call_agent_run(
-        AGENT_SPECS[agent_key], task_input, timeout=DISPATCH_TIMEOUT_S.get(agent_key, 30.0)
+        AGENT_SPECS[agent_key],
+        task_input,
+        timeout=DISPATCH_TIMEOUT_S.get(agent_key, 30.0),
+        operator_user_id=operator_user_id,
     )
 
 
@@ -219,6 +224,7 @@ async def route_task(
     message: str,
     history: List[Dict[str, Any]],
     model_override: Optional[str] = None,
+    operator_user_id: str = "",
 ) -> Dict[str, Any]:
     """路由步骤：分类 → 校验 → 本地派单（如命中）。
 
@@ -271,7 +277,7 @@ async def route_task(
         outcome["reason"] = f"本地能力匹配但参数无效：{invalid}"
         outcome["dispatch_error"] = invalid
         return outcome
-    dispatch = await dispatch_local(agent_key, classification.input or {})
+    dispatch = await dispatch_local(agent_key, classification.input or {}, operator_user_id=operator_user_id)
     if dispatch.get("online") and dispatch.get("ok"):
         outcome["executed"] = True
         outcome["result"] = dispatch.get("result") or {}

@@ -314,6 +314,7 @@ async def _run_routing(
     model_override: Optional[str],
     session_id: str,
     trace_id: str,
+    user_id: str,
     run_logger: Optional[RunLogger],
     diagnostics: Dict[str, Any],
 ) -> tuple:
@@ -324,7 +325,7 @@ async def _run_routing(
     route = None
     routing_start = time.perf_counter()
     try:
-        route = await route_task(message, history, model_override=model_override)
+        route = await route_task(message, history, model_override=model_override, operator_user_id=user_id)
     except Exception as e:
         logger.warning(f"[agent:{trace_id}] 任务路由异常（已跳过）: {e}")
         diagnostics["routing"] = {"skipped": True, "error": str(e)[:200]}
@@ -539,7 +540,7 @@ async def run(
                 message, history,
                 enabled=bool(rt.get("routing_enabled", True)),
                 model_override=main_options.model,
-                session_id=session_id, trace_id=trace_id,
+                session_id=session_id, trace_id=trace_id, user_id=user_id,
                 run_logger=run_logger, diagnostics=diagnostics,
             )
             if local_result is not None and routing_info is not None:

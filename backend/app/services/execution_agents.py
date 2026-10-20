@@ -101,7 +101,7 @@ async def call_agent_spec(
 
 
 async def call_agent_run(
-    spec: ExecutionAgentSpec, input: dict, *, timeout: float = 30.0
+    spec: ExecutionAgentSpec, input: dict, *, timeout: float = 30.0, operator_user_id: str = ""
 ) -> dict:
     """本地派单：POST /admin/run 同步执行一个 capability（不经 Hub）。
 
@@ -110,15 +110,19 @@ async def call_agent_run(
     - agent 忙：{"online": True, "busy": True, "reason": ...}
     - 成功：{"online": True, "ok": True, "runId": ..., "result": ...}
     - 执行失败：{"online": True, "ok": False, "reason": ...}
+    operator_user_id 透传给 agent，供写接口把审计操作人落到真实登录用户。
     """
     base = _base_url(spec)
     if not base:
         return {"online": False, "reason": f"{spec.base_url_setting} 未配置"}
+    payload: dict = {"capability": spec.capability, "input": input, "runId": f"local-{uuid4().hex}"}
+    if operator_user_id:
+        payload["operator"] = {"user_id": str(operator_user_id)}
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
                 f"{base}/admin/run",
-                json={"capability": spec.capability, "input": input, "runId": f"local-{uuid4().hex}"},
+                json=payload,
                 headers=_admin_headers(),
             )
     except httpx.HTTPError as e:

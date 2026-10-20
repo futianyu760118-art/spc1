@@ -45,6 +45,9 @@ async function handleLocalRun(req, res, { log, connection, capabilities, onLocal
   }
   const capability = body && typeof body === "object" ? body.capability : undefined;
   const input = body && typeof body === "object" ? body.input : undefined;
+  const operator = body && typeof body === "object" && body.operator && typeof body.operator === "object"
+    ? body.operator
+    : null;
   if (typeof capability !== "string" || !capabilities.some((c) => c.name === capability)) {
     send(400, { status: "unknown_capability" });
     return;
@@ -65,7 +68,7 @@ async function handleLocalRun(req, res, { log, connection, capabilities, onLocal
     typeof body.runId === "string" && body.runId.trim() ? body.runId.trim() : `local-${crypto.randomUUID()}`;
   log("info", "local_run_started", { runId, capability });
   try {
-    const result = await onLocalRun(runId, capability, input);
+    const result = await onLocalRun(runId, capability, input, operator);
     send(200, { ok: true, runId, result: result ?? {} });
   } catch (e) {
     log("info", "local_run_failed", {

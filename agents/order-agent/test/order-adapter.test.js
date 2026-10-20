@@ -21,8 +21,8 @@ function createCtx() {
   };
 }
 
-function runStub() {
-  return { runId: "run-7", controller: new AbortController(), report: () => {} };
+function runStub(overrides = {}) {
+  return { runId: "run-7", controller: new AbortController(), report: () => {}, ...overrides };
 }
 
 test("declares the write capability with field whitelist", () => {
@@ -62,6 +62,19 @@ test("sends PUT with path, code, body, runId header and timeout; null allowed", 
   assert.equal(code, "orders.schedule.update");
   assert.deepEqual(body, { fields: { shipping_plan: "2026-11-01", delivery_completed_date: null }, request_id: "req-1" });
   assert.equal(opts.timeoutMs, 9876);
+  assert.equal(opts.headers["X-Agent-Run-Id"], "run-7");
+  assert.equal(opts.headers["X-Operator-User-Id"], undefined);
+});
+
+test("forwards operator user id header when run carries operator", async () => {
+  const { ctx, calls } = createCtx();
+  const adapter = createAdapter(ctx);
+  await adapter.invoke(runStub({ operator: { user_id: "462" } }), {
+    order_no: "O-1",
+    fields: { shipping_plan: "2026-11-01" },
+  });
+  const [, , , , opts] = calls[0];
+  assert.equal(opts.headers["X-Operator-User-Id"], "462");
   assert.equal(opts.headers["X-Agent-Run-Id"], "run-7");
 });
 
