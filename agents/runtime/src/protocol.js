@@ -59,7 +59,13 @@ class HubConnection {
 
   connect() {
     if (this.stopped) return;
-    const socket = new WebSocket(this.config.wsUrl, { headers: { "x-aeos-execution-token": this.config.token } });
+    // 每系统令牌模式优先（x-aeos-system-id/token，Hub system-token 鉴权）；
+    // 未配置时回退 legacy 根令牌（x-aeos-execution-token）
+    const headers =
+      this.config.systemId && this.config.systemToken
+        ? { "x-aeos-system-id": this.config.systemId, "x-aeos-system-token": this.config.systemToken }
+        : { "x-aeos-execution-token": this.config.token };
+    const socket = new WebSocket(this.config.wsUrl, { headers });
     this.socket = socket;
 
     socket.on("open", () => {

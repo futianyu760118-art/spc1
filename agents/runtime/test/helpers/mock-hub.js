@@ -7,6 +7,7 @@ const { WebSocketServer } = require("ws");
 function startHub({ heartbeatIntervalMs = 10000 } = {}) {
   const messages = [];
   const tokens = [];
+  const systemHeaders = [];
   const server = http.createServer();
   const wss = new WebSocketServer({ server, path: "/execution-agent" });
   let connectionCount = 0;
@@ -18,6 +19,10 @@ function startHub({ heartbeatIntervalMs = 10000 } = {}) {
   wss.on("connection", (socket, req) => {
     connectionCount += 1;
     tokens.push(req.headers["x-aeos-execution-token"]);
+    systemHeaders.push({
+      systemId: req.headers["x-aeos-system-id"],
+      systemToken: req.headers["x-aeos-system-token"],
+    });
     socket.on("message", (raw) => {
       const message = JSON.parse(raw.toString());
       messages.push(message);
@@ -35,6 +40,7 @@ function startHub({ heartbeatIntervalMs = 10000 } = {}) {
     ready,
     messages,
     tokens,
+    systemHeaders,
     get connectionCount() {
       return connectionCount;
     },

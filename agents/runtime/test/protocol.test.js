@@ -222,3 +222,57 @@ test("reconnects and re-registers after the socket closes", async (t) => {
   await waitUntil(() => connection.isRegistered());
   assert.ok(hub.connectionCount >= 2);
 });
+
+test("uses per-system token headers when configured, falls back to legacy token", async (t) => {
+  const hub = startHub();
+  const port = await hub.ready;
+
+  const systemConnection = new HubConnection({
+    config: createConfig(port, { systemId: "control-platform", systemToken: "sys-token-1" }),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "query_control_platform" }],
+      onDispatch: async () => null,
+      onRecall: () => {},
+    },
+  });
+  t.after(async () => {
+    systemConnection.stop();
+    await hub.close();
+  });
+
+  systemConnection.start();
+  await waitUntil(() => systemConnection.isRegistered());
+  assert.equal(hub.systemHeaders.length, 1);
+  assert.equal(hub.systemHeaders[0].systemId, "control-platform");
+  assert.equal(hub.systemHeaders[0].systemToken, "sys-token-1");
+  assert.equal(hub.tokens[0], undefined);
+  systemConnection.stop();
+  await hub.close();
+});
+
+test("falls back to legacy execution token headers without system config", async (t) => {
+  const hub = startHub();
+  const port = await hub.ready;
+
+  const legacyConnection = new HubConnection({
+    config: createConfig(port),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "query_control_platform" }],
+      onDispatch: async () => null,
+      onRecall: () => {},
+    },
+  });
+  t.after(async () => {
+    legacyConnection.stop();
+    await hub.close();
+  });
+
+  legacyConnection.start();
+  await waitUntil(() => legacyConnection.isRegistered());
+  assert.equal(hub.tokens[0], "test-token");
+  assert.equal(hub.systemHeaders[0].systemId, undefined);
+  legacyConnection.stop();
+  await hub.close();
+});

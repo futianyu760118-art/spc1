@@ -45,6 +45,8 @@ function createConfig({ agentKey, envPath, defaults = {} }) {
     healthCheckPort: toInt("HEALTH_CHECK_PORT", defaults.healthCheckPort ?? 8790),
     logLevel: read("LOG_LEVEL", "info"),
     adminToken: process.env.AGENT_ADMIN_TOKEN ?? fileVars.AGENT_ADMIN_TOKEN ?? "",
+    systemId: process.env.EXECUTION_SYSTEM_ID ?? fileVars.EXECUTION_SYSTEM_ID ?? "",
+    systemToken: process.env.EXECUTION_SYSTEM_TOKEN ?? fileVars.EXECUTION_SYSTEM_TOKEN ?? "",
     configVersion: 0,
   };
 
