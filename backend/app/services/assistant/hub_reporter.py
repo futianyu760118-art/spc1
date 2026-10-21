@@ -10,6 +10,7 @@
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from urllib.parse import quote
@@ -24,6 +25,11 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT_S = 3.0
 
 _client: Optional[httpx.AsyncClient] = None
+
+# Hub 版本尚未支持的顶层字段：按拒绝回执降级并缓存，避免每条事件都重试
+_OPTIONAL_EVENT_FIELDS = ("taskId", "stepId", "tool", "confirmationId")
+_rejected_event_fields: set[str] = set()
+_UNSUPPORTED_FIELDS_RE = re.compile(r"不支持的字段[：:]\s*([A-Za-z0-9_,\s]+)")
 
 
 def is_enabled() -> bool:
@@ -75,12 +81,26 @@ def build_usage(
     }
 
 
+def _parse_rejected_fields(body: str) -> set[str]:
+    match = _UNSUPPORTED_FIELDS_RE.search(body or "")
+    if not match:
+        return set()
+    return {name.strip() for name in match.group(1).split(",") if name.strip()}
+
+
+def _strip_rejected_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not _rejected_event_fields:
+        return payload
+    return {k: v for k, v in payload.items() if k not in _rejected_event_fields}
+
+
 async def _post(payload: Dict[str, Any]) -> None:
     settings = get_settings()
     headers = {
         "x-aeos-system-id": quote(settings.AEOS_SYSTEM_ID, safe=""),
         "x-aeos-system-token": settings.AEOS_SYSTEM_TOKEN,
     }
+    payload = _strip_rejected_fields(payload)
     try:
         resp = await _get_client().post(
             f"{settings.AEOS_HUB_BASE.rstrip('/')}/api/system/assistant-events",
@@ -92,6 +112,28 @@ async def _post(payload: Dict[str, Any]) -> None:
             f"[hub_reporter] 上报失败 trace={payload.get('traceId')} event={payload.get('event')}: {exc}"
         )
         return
+
+    rejected = _parse_rejected_fields(resp.text) if resp.status_code == 400 else set()
+    rejected &= set(_OPTIONAL_EVENT_FIELDS)
+    if rejected:
+        _rejected_event_fields.update(rejected)
+        logger.warning(
+            f"[hub_reporter] Hub 不支持字段 {sorted(rejected)}，已降级重发 "
+            f"trace={payload.get('traceId')} event={payload.get('event')}"
+        )
+        payload = _strip_rejected_fields(payload)
+        try:
+            resp = await _get_client().post(
+                f"{settings.AEOS_HUB_BASE.rstrip('/')}/api/system/assistant-events",
+                json=payload,
+                headers=headers,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[hub_reporter] 降级上报失败 trace={payload.get('traceId')} event={payload.get('event')}: {exc}"
+            )
+            return
+
     if resp.status_code >= 400:
         logger.warning(
             f"[hub_reporter] Hub 拒绝 trace={payload.get('traceId')} event={payload.get('event')} "
@@ -117,8 +159,15 @@ def report_assistant_event(
     started_at: Optional[str] = None,
     ended_at: Optional[str] = None,
     duration_ms: Optional[float] = None,
+    task_id: Optional[str] = None,
+    step_id: Optional[int] = None,
+    tool: Optional[str] = None,
+    confirmation_id: Optional[str] = None,
 ) -> None:
-    """fire-and-forget 上报一条助手观测事件；未配置或 trace 为空时直接跳过，绝不抛异常。"""
+    """fire-and-forget 上报一条助手观测事件；未配置或 trace 为空时直接跳过，绝不抛异常。
+
+    taskId / stepId / tool / confirmationId 为 Hub 时间线归并用顶层字段（缺省不出现）。
+    """
     if not trace_id or not is_enabled():
         return
     payload = {
@@ -133,6 +182,10 @@ def report_assistant_event(
         "startedAt": started_at,
         "endedAt": ended_at,
         "durationMs": round(duration_ms, 2) if duration_ms is not None else None,
+        "taskId": task_id,
+        "stepId": step_id,
+        "tool": tool,
+        "confirmationId": confirmation_id,
     }
     payload = {k: v for k, v in payload.items() if v is not None}
     try:

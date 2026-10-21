@@ -12,11 +12,13 @@ export interface ChatMessage {
   timestamp: number
   traceId?: string
   diagnostics?: any
-  routing?: RoutingInfo
+  steps?: OrchestrationStep[]
+  confirmation?: WriteConfirmation
   // 流式状态
   streaming?: boolean
   thinkingStage?: string
-  toolCalls?: ToolCallStatus[]
+  // 确认请求进行中
+  confirming?: boolean
 }
 
 export interface AssistantCard {
@@ -25,20 +27,36 @@ export interface AssistantCard {
   payload: any
 }
 
-export interface ToolCallStatus {
-  name: string
-  status: 'running' | 'done' | 'error'
-  itemCount?: number
+export interface OrchestrationStep {
+  step_id: number
+  tool: string
+  agent_label?: string
+  capability?: string
+  path?: string
+  task_type?: string
+  order_no?: string
+  status: 'running' | 'completed' | 'failed' | 'blocked' | 'pending_confirmation'
+  summary?: string
+  error?: string
+  item_count?: number
+  duration_ms?: number
 }
 
-export interface RoutingInfo {
-  decision: 'local' | 'hub' | 'none'
-  capability?: string
-  agent_key?: string
-  agent_label?: string
-  reason?: string
-  executed?: boolean
-  dispatch_error?: string
+export interface WriteConfirmationField {
+  field: string
+  old_value?: string | null
+  new_value?: string | null
+}
+
+export interface WriteConfirmation {
+  confirmation_id: string
+  order_no: string
+  fields: WriteConfirmationField[]
+  created_at?: string
+  expires_at?: string
+  status: 'pending' | 'cancelled' | 'executed' | 'failed'
+  write_result?: any
+  error?: string
 }
 
 export interface Skill {
@@ -48,6 +66,29 @@ export interface Skill {
   keywords: string[]
 }
 
+const CONFIRM_COMMANDS = new Set(['确认', '确认执行', '确定', '确定执行'])
+const CANCEL_COMMANDS = new Set(['取消', '取消操作', '不确认'])
+const NO_PENDING_CONFIRMATION_REPLY = '当前没有待确认的写操作。如需修改订单，请说明订单号与要调整的字段。'
+
+function parseConfirmationCommand(text: string): 'confirm' | 'cancel' | null {
+  const command = text.trim().replace(/[。！!，,]+$/g, '')
+  if (CONFIRM_COMMANDS.has(command)) return 'confirm'
+  if (CANCEL_COMMANDS.has(command)) return 'cancel'
+  return null
+}
+
+function mergeConfirmation(
+  current: WriteConfirmation | undefined,
+  incoming?: Partial<WriteConfirmation> | null,
+): WriteConfirmation | undefined {
+  if (!incoming) return current
+  return {
+    ...(current || {}),
+    ...incoming,
+    status: incoming.status || current?.status || 'pending',
+  } as WriteConfirmation
+}
+
 export function useAssistantChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(false)
@@ -55,13 +96,212 @@ export function useAssistantChat() {
   const sessionIdRef = useRef<string>('')
   const abortControllerRef = useRef<AbortController | null>(null)
 
+  const handleSSEEvent = useCallback((msgId: string, event: string, data: any) => {
+    setMessages(prev =>
+      prev.map(m => {
+        if (m.id !== msgId) return m
+
+        switch (event) {
+          case 'session':
+            sessionIdRef.current = data.session_id || ''
+            return m
+
+          case 'thinking':
+            return { ...m, thinkingStage: data.message || '思考中...' }
+
+          case 'step_started':
+            return {
+              ...m,
+              thinkingStage: data.step?.agent_label
+                ? `正在调用${data.step.agent_label}...`
+                : '正在调用智能体...',
+              steps: [...(m.steps || []), data.step],
+            }
+
+          case 'step_completed':
+            return {
+              ...m,
+              thinkingStage: undefined,
+              steps: (m.steps || []).map(s =>
+                s.step_id === data.step?.step_id ? data.step : s
+              ),
+            }
+
+          case 'confirmation_required':
+            return {
+              ...m,
+              thinkingStage: undefined,
+              confirmation: { ...data, status: 'pending' },
+            }
+
+          case 'delta':
+            return {
+              ...m,
+              content: m.content + (data.text || ''),
+              thinkingStage: undefined,
+            }
+
+          case 'cards':
+            return {
+              ...m,
+              cards: [...(m.cards || []), ...(data.cards || [])],
+            }
+
+          case 'suggestions':
+            return {
+              ...m,
+              suggestions: data.suggestions || [],
+            }
+
+          case 'done':
+            return {
+              ...m,
+              streaming: false,
+              thinkingStage: undefined,
+              provider: data.provider,
+              intent: data.intent,
+              steps: data.steps ?? m.steps,
+              confirmation: mergeConfirmation(m.confirmation, data.confirmation),
+            }
+
+          case 'error':
+            return {
+              ...m,
+              content: m.content || data.message || '处理请求时出现错误。',
+              streaming: false,
+              thinkingStage: undefined,
+            }
+
+          default:
+            return m
+        }
+      })
+    )
+  }, [])
+
+  const appendFollowUpReply = useCallback((reply: any) => {
+    if (!reply?.text) return
+    const followMsg: ChatMessage = {
+      id: `bot-${Date.now()}`,
+      role: 'assistant',
+      content: reply.text,
+      cards: reply.cards || [],
+      steps: reply.steps || [],
+      timestamp: Date.now(),
+      provider: reply.provider,
+    }
+    setMessages(prev => [...prev, followMsg])
+  }, [])
+
+  const confirmWrite = useCallback(async (confirmationId: string) => {
+    setMessages(prev =>
+      prev.map(m =>
+        m.confirmation?.confirmation_id === confirmationId
+          ? { ...m, confirming: true }
+          : m
+      )
+    )
+    try {
+      const res: any = await assistantApi.confirmConfirmation(confirmationId)
+      const data = res.data
+      setMessages(prev =>
+        prev.map(m => {
+          if (m.confirmation?.confirmation_id !== confirmationId) return m
+          return {
+            ...m,
+            confirming: false,
+            confirmation: mergeConfirmation(m.confirmation, data.confirmation),
+          }
+        })
+      )
+      appendFollowUpReply(data.reply)
+    } catch (e: any) {
+      const error = e?._apiData?.message || e?.message || '确认请求失败，请稍后重试'
+      setMessages(prev =>
+        prev.map(m =>
+          m.confirmation?.confirmation_id === confirmationId
+            ? {
+                ...m,
+                confirming: false,
+                confirmation: {
+                  ...m.confirmation!,
+                  status: 'failed',
+                  error,
+                },
+              }
+            : m
+        )
+      )
+    }
+  }, [appendFollowUpReply])
+
+  const cancelWrite = useCallback(async (confirmationId: string) => {
+    try {
+      const res: any = await assistantApi.cancelConfirmation(confirmationId)
+      const confirmation = res?.data?.confirmation
+      setMessages(prev =>
+        prev.map(m =>
+          m.confirmation?.confirmation_id === confirmationId
+            ? {
+                ...m,
+                confirmation: mergeConfirmation(m.confirmation, confirmation || { status: 'cancelled' }),
+              }
+            : m
+        )
+      )
+      appendFollowUpReply(res?.data?.reply)
+    } catch (e: any) {
+      const error = e?._apiData?.message || e?.message || '取消失败，请稍后重试'
+      setMessages(prev =>
+        prev.map(m =>
+          m.confirmation?.confirmation_id === confirmationId
+            ? { ...m, confirmation: { ...m.confirmation!, status: 'failed', error } }
+            : m
+        )
+      )
+    }
+  }, [appendFollowUpReply])
+
   const send = useCallback(async (text: string) => {
-    if (!text.trim() || loading) return
+    const trimmed = text.trim()
+    if (!trimmed || loading) return
+
+    const command = parseConfirmationCommand(trimmed)
+    if (command) {
+      const userMsg: ChatMessage = {
+        id: `user-${Date.now()}`,
+        role: 'user',
+        content: trimmed,
+        timestamp: Date.now(),
+      }
+      setMessages(prev => [...prev, userMsg])
+
+      const pending = [...messages]
+        .reverse()
+        .find(m => m.confirmation?.status === 'pending')
+        ?.confirmation
+      if (!pending) {
+        setMessages(prev => [...prev, {
+          id: `bot-${Date.now()}`,
+          role: 'assistant',
+          content: NO_PENDING_CONFIRMATION_REPLY,
+          timestamp: Date.now(),
+        }])
+        return
+      }
+
+      if (command === 'confirm') {
+        await confirmWrite(pending.confirmation_id)
+      } else {
+        await cancelWrite(pending.confirmation_id)
+      }
+      return
+    }
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
-      content: text.trim(),
+      content: trimmed,
       timestamp: Date.now(),
     }
     setMessages(prev => [...prev, userMsg])
@@ -78,7 +318,7 @@ export function useAssistantChat() {
       timestamp: Date.now(),
       streaming: true,
       thinkingStage: '正在连接...',
-      toolCalls: [],
+      steps: [],
     }
     setMessages(prev => [...prev, botMsg])
 
@@ -88,7 +328,7 @@ export function useAssistantChat() {
 
       const conversationHistory = messages.slice(-10)
       const response = await assistantApi.chatStream(
-        text.trim(),
+        trimmed,
         sessionIdRef.current || undefined,
         conversationHistory,
       )
@@ -153,7 +393,7 @@ export function useAssistantChat() {
       console.warn('SSE failed, falling back to non-stream:', e)
       try {
         const conversationHistory = messages.slice(-10)
-        const res: any = await assistantApi.chat(text.trim(), sessionIdRef.current || undefined, conversationHistory)
+        const res: any = await assistantApi.chat(trimmed, sessionIdRef.current || undefined, conversationHistory)
         const data = res.data
         sessionIdRef.current = data.session_id || ''
 
@@ -171,7 +411,8 @@ export function useAssistantChat() {
                   thinkingStage: undefined,
                   traceId: data.trace_id,
                   diagnostics: data.diagnostics,
-                  routing: data.routing,
+                  steps: data.steps || [],
+                  confirmation: mergeConfirmation(undefined, data.confirmation),
                 }
               : m
           )
@@ -194,88 +435,7 @@ export function useAssistantChat() {
       setLoading(false)
       abortControllerRef.current = null
     }
-  }, [loading, messages])
-
-  const handleSSEEvent = useCallback((msgId: string, event: string, data: any) => {
-    setMessages(prev =>
-      prev.map(m => {
-        if (m.id !== msgId) return m
-
-        switch (event) {
-          case 'session':
-            sessionIdRef.current = data.session_id || ''
-            return m
-
-          case 'routing':
-            return { ...m, routing: data, thinkingStage: undefined }
-
-          case 'thinking':
-            return { ...m, thinkingStage: data.message || '思考中...' }
-
-          case 'tool_start':
-            return {
-              ...m,
-              thinkingStage: `正在查询: ${data.name}...`,
-              toolCalls: [
-                ...(m.toolCalls || []),
-                { name: data.name, status: 'running' as const },
-              ],
-            }
-
-          case 'tool_done':
-            return {
-              ...m,
-              thinkingStage: undefined,
-              toolCalls: (m.toolCalls || []).map(tc =>
-                tc.name === data.name
-                  ? { ...tc, status: (data.success ? 'done' : 'error') as 'done' | 'error', itemCount: data.item_count }
-                  : tc
-              ),
-            }
-
-          case 'delta':
-            return {
-              ...m,
-              content: m.content + (data.text || ''),
-              thinkingStage: undefined,
-            }
-
-          case 'cards':
-            return {
-              ...m,
-              cards: [...(m.cards || []), ...(data.cards || [])],
-            }
-
-          case 'suggestions':
-            return {
-              ...m,
-              suggestions: data.suggestions || [],
-            }
-
-          case 'done':
-            return {
-              ...m,
-              streaming: false,
-              thinkingStage: undefined,
-              provider: data.provider,
-              intent: data.intent,
-              routing: data.routing ?? m.routing,
-            }
-
-          case 'error':
-            return {
-              ...m,
-              content: m.content || data.message || '处理请求时出现错误。',
-              streaming: false,
-              thinkingStage: undefined,
-            }
-
-          default:
-            return m
-        }
-      })
-    )
-  }, [])
+  }, [loading, messages, confirmWrite, cancelWrite, handleSSEEvent])
 
   const loadSkills = useCallback(async () => {
     try {
@@ -304,5 +464,5 @@ export function useAssistantChat() {
     )
   }, [])
 
-  return { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming }
+  return { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming, confirmWrite, cancelWrite }
 }

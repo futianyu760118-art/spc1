@@ -36,6 +36,11 @@ class HubConnection {
 
   start() {
     this.stopped = false;
+    // 本地模式：EXECUTION_WS_URL 为空时不连 Hub，仅保留 /admin/run 本地派单能力
+    if (!this.config.wsUrl) {
+      this.log("info", "hub_disabled_local_mode", { agentKey: this.config.agentKey });
+      return;
+    }
     this.connect();
   }
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-import app.services.assistant.tools  # noqa: F401 — 触发工具注册（单测不经 app.main 导入链）
+import app.services.assistant.agent_tools  # noqa: F401 — 触发智能体工具注册（单测不经 app.main 导入链）
 from app.services.ai_config import (
     ASSISTANT_CONFIG_DEFS,
     EXECUTION_AGENT_CONFIG_DEFS,
@@ -38,9 +38,9 @@ def test_render_system_prompt_placeholder():
     template = f"头部\n{TOOLS_PLACEHOLDER}\n尾部"
     rendered = render_system_prompt(template, [])
     assert "头部" in rendered and "尾部" in rendered
-    assert "- search_orders:" in rendered  # 内置工具已注册（conftest 导入链）
-    disabled_rendered = render_system_prompt(template, ["search_orders"])
-    assert "- search_orders:" not in disabled_rendered
+    assert "- call_query_agent:" in rendered  # 智能体工具已注册（conftest 导入链）
+    disabled_rendered = render_system_prompt(template, ["call_query_agent"])
+    assert "- call_query_agent:" not in disabled_rendered
 
 
 def test_render_system_prompt_without_placeholder_untouched():

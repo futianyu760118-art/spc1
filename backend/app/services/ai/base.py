@@ -12,8 +12,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ChatMessage:
-    role: str  # "system" | "user" | "assistant"
+    role: str  # "system" | "user" | "assistant" | "tool"
     content: str
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    # DeepSeek thinking 模式：带 tool_calls 的 assistant 消息必须原样回传，否则下一轮 400
+    reasoning_content: Optional[str] = None
 
 
 @dataclass

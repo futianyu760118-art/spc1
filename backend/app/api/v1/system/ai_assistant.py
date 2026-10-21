@@ -97,7 +97,8 @@ async def get_assistant_config(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(PermissionChecker("ai.assistant_config", "read")),
 ):
-    from app.services.assistant.agent import SYSTEM_PROMPT, INTENT_RECOGNITION_PROMPT
+    from app.services.assistant.agent import INTENT_RECOGNITION_PROMPT
+    from app.services.assistant.orchestrator import SYSTEM_PROMPT
     from app.core.config import get_settings
 
     config = await get_scope_config(db, ASSISTANT_SCOPE)

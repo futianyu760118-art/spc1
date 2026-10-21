@@ -49,11 +49,11 @@ ASSISTANT_CONFIG_DEFS: Dict[str, ConfigDef] = {
     "model_name": ConfigDef("model_name", "string", "", "模型名", "留空使用 .env 默认模型"),
     "temperature": ConfigDef("temperature", "float", 0.1, "温度"),
     "max_tokens": ConfigDef("max_tokens", "int", 4096, "最大输出 token"),
-    "max_tool_rounds": ConfigDef("max_tool_rounds", "int", 5, "工具循环轮数上限"),
-    "tool_execute_timeout": ConfigDef("tool_execute_timeout", "int", 30, "工具执行超时（秒）"),
+    "max_tool_rounds": ConfigDef("max_tool_rounds", "int", 6, "LLM 轮数上限（编排器）",
+                                 "AI 自主规划步骤的模型轮数上限"),
+    "max_agent_calls": ConfigDef("max_agent_calls", "int", 8, "智能体调用次数上限（编排器）",
+                                 "单次任务最多调用执行面智能体的次数"),
     "disabled_tools": ConfigDef("disabled_tools", "json", [], "禁用工具列表", "JSON 数组"),
-    "routing_enabled": ConfigDef("routing_enabled", "bool", True, "任务路由开关",
-                                 "开启后助手优先把任务派给本系统执行面智能体，未命中时预览 Hub 路由"),
 }
 
 def _execution_common_defs() -> Dict[str, ConfigDef]:

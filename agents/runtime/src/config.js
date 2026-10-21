@@ -33,7 +33,8 @@ function createConfig({ agentKey, envPath, defaults = {} }) {
   const config = {
     ...defaults.configDefaults,
     agentKey: read("EXECUTION_AGENT_KEY", agentKey),
-    wsUrl: read("EXECUTION_WS_URL", defaults.wsUrl ?? "ws://127.0.0.1:8788/execution-agent"),
+    // wsUrl 允许为空：置空即「本地模式」，只提供 /admin/run 与 /admin/status，不连 Hub
+    wsUrl: (process.env.EXECUTION_WS_URL ?? fileVars.EXECUTION_WS_URL ?? defaults.wsUrl ?? "").trim(),
     token: read("EXECUTION_PLANE_TOKEN"),
     agentId: read("EXECUTION_AGENT_ID", defaults.agentId),
     agentName: read("EXECUTION_AGENT_NAME", defaults.agentName),

@@ -33,6 +33,14 @@ async def test_risk_probability_normalized(ext_client, external_keys, orders_see
     assert item["risk_probability"] == 0.625
 
 
+async def test_order_no_exact_filter(ext_client, external_keys, orders_seeded):
+    r = await signed_get(ext_client, ORDERS_LIST, "orders.list", external_keys["orders"],
+                         {"order_no": "SO-RP-001"})
+    data = r.json()["data"]
+    assert data["total"] == 1
+    assert [item["order_no"] for item in data["items"]] == ["SO-RP-001"]
+
+
 async def test_risk_probability_null_when_not_assessed(ext_client, external_keys, orders_seeded):
     r = await signed_get(ext_client, ORDERS_LIST, "orders.list", external_keys["orders"],
                          {"keyword": "SO-RP-002"})

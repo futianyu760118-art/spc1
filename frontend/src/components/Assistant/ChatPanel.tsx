@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react'
-import { Input, Button, Space, Tag, Typography, Collapse, Descriptions } from 'antd'
-import { SendOutlined, ClearOutlined, ThunderboltOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined } from '@ant-design/icons'
+import { Input, Button, Space, Tag, Typography, Collapse, Descriptions, Tooltip, Alert } from 'antd'
+import { SendOutlined, ClearOutlined, ThunderboltOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined } from '@ant-design/icons'
 import Markdown from '../Markdown'
-import { ChatMessage, AssistantCard, Skill, ToolCallStatus } from './useAssistantChat'
+import { ChatMessage, AssistantCard, Skill, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
 import SummaryCard from './cards/SummaryCard'
 import OrderListCard from './cards/OrderListCard'
 import TextCard from './cards/TextCard'
@@ -46,6 +46,8 @@ interface Props {
   onSend: (text: string) => void
   onClear: () => void
   onStop?: () => void
+  onConfirm?: (confirmationId: string) => void
+  onCancelConfirmation?: (confirmationId: string) => void
 }
 
 const renderCard = (card: AssistantCard, index: number, onSend?: (text: string) => void) => {
@@ -86,68 +88,145 @@ const renderCard = (card: AssistantCard, index: number, onSend?: (text: string) 
   }
 }
 
-// 工具调用状态指示器
-const ToolCallIndicator: React.FC<{ toolCalls: ToolCallStatus[] }> = ({ toolCalls }) => {
-  if (!toolCalls || toolCalls.length === 0) return null
+// 编排步骤时间线：查询/推理/订单智能体，每步状态与耗时
+const STEP_STATUS_META: Record<string, { color: string; text: string }> = {
+  running: { color: 'processing', text: '执行中' },
+  completed: { color: 'success', text: '完成' },
+  failed: { color: 'error', text: '失败' },
+  blocked: { color: 'warning', text: '已拦截' },
+  pending_confirmation: { color: 'gold', text: '待确认' },
+}
 
-  const toolNameMap: Record<string, string> = {
-    search_orders: '订单',
-    search_purchase_orders: '采购单',
-    search_materials: '物料',
-    search_production: '生产进度',
-    search_exceptions: '异常',
-    search_basicdata: '基础数据',
-    search_run_orders: '跑单',
-    search_invoices: '开票',
-    search_eta_updates: '交期变更',
-    search_users: '用户',
-    get_dashboard_summary: '概览',
-    suggest_actions: '行动建议',
-  }
+const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
+  if (!steps || steps.length === 0) return null
 
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
-      {toolCalls.map((tc, i) => (
-        <Tag
-          key={i}
-          color={tc.status === 'running' ? 'processing' : tc.status === 'done' ? 'success' : 'error'}
-          style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}
-          icon={tc.status === 'running' ? <LoadingOutlined spin /> : undefined}
-        >
-          {toolNameMap[tc.name] || tc.name}
-          {tc.status === 'done' && tc.itemCount !== undefined ? ` (${tc.itemCount})` : ''}
-        </Tag>
-      ))}
+    <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {steps.map((s, i) => {
+        const meta = STEP_STATUS_META[s.status] || { color: 'default', text: s.status }
+        const node = (
+          <div key={s.step_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#64748b', flexWrap: 'wrap' }}>
+            <span
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                minWidth: 16, height: 16, borderRadius: 8, fontSize: 10,
+                background: s.status === 'failed' ? '#fee2e2' : s.status === 'completed' ? '#dcfce7' : '#e2e8f0',
+                color: s.status === 'failed' ? '#b91c1c' : s.status === 'completed' ? '#15803d' : '#475569',
+                fontWeight: 600,
+              }}
+            >
+              {i + 1}
+            </span>
+            <span style={{ fontWeight: 600, color: '#334155' }}>{s.agent_label || s.tool}</span>
+            {s.summary && <span>{s.summary}</span>}
+            <Tag color={meta.color} style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+              {meta.text}
+            </Tag>
+            {s.duration_ms != null && <span>{Math.round(s.duration_ms)}ms</span>}
+          </div>
+        )
+        return s.error ? (
+          <Tooltip key={s.step_id} title={s.error} placement="top">
+            {node}
+          </Tooltip>
+        ) : (
+          node
+        )
+      })}
     </div>
   )
 }
 
-// 任务路由徽标：本地派单成功(绿) / 本地不可用降级(橙) / Hub 预览(灰)
-const RoutingBadge: React.FC<{ routing: any }> = ({ routing }) => {
-  if (!routing || routing.decision === 'none') return null
+// 写操作确认卡片：订单号、字段、旧值 → 新值、确认 / 取消
+const WRITE_FIELD_LABELS: Record<string, string> = {
+  shipping_plan: '出货计划',
+  delivery_completed_date: '发货完成时间',
+  customer_inspection_date: '客户验货时间',
+  planned_start_date: '上线时间',
+}
 
-  if (routing.decision === 'local' && routing.executed) {
-    return (
-      <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
-        本地执行面·{routing.agent_label || routing.agent_key || '智能体'}
-      </Tag>
-    )
-  }
-  if (routing.capability && routing.dispatch_error) {
-    return (
-      <Tag color="orange" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
-        本地执行面不可用 → AEOS Hub（预览）
-      </Tag>
-    )
-  }
+const ConfirmationCard: React.FC<{
+  confirmation: WriteConfirmation
+  confirming: boolean
+  onConfirm?: (id: string) => void
+  onCancel?: (id: string) => void
+}> = ({ confirmation, confirming, onConfirm, onCancel }) => {
+  const pending = confirmation.status === 'pending'
+
   return (
-    <Tag color="default" style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
-      AEOS Hub（预览，未发布）
-    </Tag>
+    <div
+      style={{
+        marginTop: 8,
+        maxWidth: '95%',
+        border: '1px solid #fde68a',
+        background: '#fffbeb',
+        borderRadius: 10,
+        padding: '10px 12px',
+        fontSize: 12,
+      }}
+    >
+      <div style={{ fontWeight: 600, color: '#92400e', marginBottom: 6 }}>
+        写操作确认 — 订单 {confirmation.order_no}
+        <span style={{ marginLeft: 6, fontWeight: 400, color: '#b45309', fontSize: 11 }}>（不可撤销）</span>
+      </div>
+      {confirmation.fields.map(f => (
+        <div key={f.field} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, color: '#78350f', flexWrap: 'wrap' }}>
+          <span style={{ minWidth: 84, fontWeight: 500 }}>{WRITE_FIELD_LABELS[f.field] || f.field}</span>
+          <code style={{ background: '#fef3c7', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>
+            {f.old_value ?? '（空）'}
+          </code>
+          <SwapRightOutlined style={{ fontSize: 10, color: '#b45309' }} />
+          <code style={{ background: '#fde68a', padding: '1px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+            {f.new_value ?? '（空）'}
+          </code>
+        </div>
+      ))}
+
+      {pending && (
+        <Space size={8} style={{ marginTop: 8 }}>
+          <Button
+            type="primary"
+            danger
+            size="small"
+            icon={<CheckOutlined />}
+            loading={confirming}
+            onClick={() => onConfirm?.(confirmation.confirmation_id)}
+          >
+            确认执行
+          </Button>
+          <Button size="small" icon={<CloseOutlined />} onClick={() => onCancel?.(confirmation.confirmation_id)}>
+            取消
+          </Button>
+        </Space>
+      )}
+      {confirmation.status === 'executed' && (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginTop: 6, fontSize: 12 }}
+          message={
+            confirmation.write_result?.updated_at
+              ? `已执行（更新于 ${confirmation.write_result.updated_at}）`
+              : '已执行'
+          }
+        />
+      )}
+      {confirmation.status === 'failed' && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginTop: 6, fontSize: 12 }}
+          message={confirmation.error || '写操作执行失败，请重新发起'}
+        />
+      )}
+      {confirmation.status === 'cancelled' && (
+        <div style={{ marginTop: 6, color: '#94a3b8' }}>已取消，未产生任何写入</div>
+      )}
+    </div>
   )
 }
 
-const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear, onStop }) => {
+const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear, onStop, onConfirm, onCancelConfirmation }) => {
   const [inputValue, setInputValue] = useState('')
   const shouldAutoScrollRef = useRef(true)
   const listRef = useRef<HTMLDivElement>(null)
@@ -196,6 +275,8 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
       handleSend()
     }
   }
+
+  const hasPendingConfirmation = messages.some(m => m.confirmation?.status === 'pending')
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -332,10 +413,10 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                 )}
               </div>
 
-              {/* 工具调用状态 */}
-              {msg.toolCalls && msg.toolCalls.length > 0 && (
-                <div style={{ maxWidth: '85%', marginTop: 4 }}>
-                  <ToolCallIndicator toolCalls={msg.toolCalls} />
+              {/* 编排步骤时间线 */}
+              {msg.steps && msg.steps.length > 0 && (
+                <div style={{ maxWidth: '88%' }}>
+                  <StepTimeline steps={msg.steps} />
                 </div>
               )}
 
@@ -354,7 +435,18 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                       {providerLabel}
                     </Tag>
                   )}
-                  <RoutingBadge routing={msg.routing} />
+                </div>
+              )}
+
+              {/* 写操作确认卡片 */}
+              {msg.confirmation && (
+                <div style={{ maxWidth: '88%' }}>
+                  <ConfirmationCard
+                    confirmation={msg.confirmation}
+                    confirming={msg.confirming || false}
+                    onConfirm={onConfirm}
+                    onCancel={onCancelConfirmation}
+                  />
                 </div>
               )}
 
@@ -452,16 +544,6 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                               ))}
                             </Descriptions.Item>
                           )}
-                          {msg.diagnostics.routing && (
-                            <Descriptions.Item label="任务路由">
-                              <div style={{ fontSize: 10, lineHeight: '16px' }}>
-                                decision={msg.diagnostics.routing.decision} capability={msg.diagnostics.routing.capability || '-'}
-                                executed={msg.diagnostics.routing.executed ? '是' : '否'}
-                                {msg.diagnostics.routing.reason && <div>reason: {msg.diagnostics.routing.reason}</div>}
-                                {msg.diagnostics.routing.dispatch_error && <div>error: {msg.diagnostics.routing.dispatch_error}</div>}
-                              </div>
-                            </Descriptions.Item>
-                          )}
                         </Descriptions>
                       ),
                     },
@@ -482,7 +564,9 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={'输入问题，如"今天有什么需要关注的？"'}
+            placeholder={hasPendingConfirmation
+              ? '请点击上方确认卡片中的「确认执行」或「取消」'
+              : '输入问题，如"今天有什么需要关注的？"'}
             variant="borderless"
             style={{ flex: 1, background: 'transparent' }}
             disabled={loading}

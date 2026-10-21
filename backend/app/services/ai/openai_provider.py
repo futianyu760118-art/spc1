@@ -19,6 +19,26 @@ def _unexpected_response_error(response) -> RuntimeError:
     return RuntimeError(f"上游返回异常响应（choices 为空，常见于令牌失效/配额不足）: {detail}")
 
 
+def _message_payload(message: ChatMessage) -> dict:
+    """ChatMessage → OpenAI 请求体；保留工具调用链与 DeepSeek reasoning_content。"""
+    payload: dict = {"role": message.role, "content": message.content}
+    if message.role == "tool":
+        payload["tool_call_id"] = message.tool_call_id
+        return payload
+    if message.role == "assistant" and message.tool_calls:
+        payload["tool_calls"] = message.tool_calls
+        if not (message.content or "").strip():
+            payload.pop("content", None)
+        if message.reasoning_content:
+            payload["reasoning_content"] = message.reasoning_content
+    return payload
+
+
+def _reasoning_content(message) -> Optional[str]:
+    extra = getattr(message, "model_extra", None) or {}
+    return getattr(message, "reasoning_content", None) or extra.get("reasoning_content")
+
+
 def _usage_dict(usage) -> dict:
     """openai SDK usage → {prompt/completion/total/cached}_tokens。
 
@@ -85,7 +105,7 @@ class OpenAIProvider(LLMProvider):
         response = await asyncio.wait_for(
             self._client.chat.completions.create(
                 model=opts.model or self._model,
-                messages=[{"role": m.role, "content": m.content} for m in messages],
+                messages=[_message_payload(m) for m in messages],
                 temperature=opts.temperature,
                 max_tokens=opts.max_tokens,
             ),
@@ -117,7 +137,7 @@ class OpenAIProvider(LLMProvider):
         opts = options or ChatOptions()
         stream = await self._client.chat.completions.create(
             model=opts.model or self._model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
+            messages=[_message_payload(m) for m in messages],
             temperature=opts.temperature,
             max_tokens=opts.max_tokens,
             stream=True,
@@ -138,15 +158,7 @@ class OpenAIProvider(LLMProvider):
         import json as _json
 
         opts = options or ChatOptions()
-        formatted_msgs = []
-        for m in messages:
-            msg: dict = {"role": m.role, "content": m.content}
-            if hasattr(m, "tool_call_id") and m.role == "tool":
-                msg["tool_call_id"] = m.tool_call_id  # type: ignore
-            if hasattr(m, "tool_calls") and m.role == "assistant" and getattr(m, "tool_calls", None):
-                msg["tool_calls"] = m.tool_calls  # type: ignore
-                msg.pop("content", None)
-            formatted_msgs.append(msg)
+        formatted_msgs = [_message_payload(m) for m in messages]
 
         request_timeout = opts.timeout or self._timeout
         logger.info(f"[OpenAI tools] Sending request: model={self._model}, msgs={len(formatted_msgs)}, tools={len(tools) if tools else 0}, temp={opts.temperature}, max_tokens={opts.max_tokens}")
@@ -195,6 +207,7 @@ class OpenAIProvider(LLMProvider):
             # This shouldn't happen since we either break or raise inside the loop
             raise last_error  # type: ignore
         result = ChatWithToolsResult()
+        result.thinking = _reasoning_content(choice.message)
         if choice.message.content:
             result.text = choice.message.content
         if choice.message.tool_calls:

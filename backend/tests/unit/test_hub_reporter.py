@@ -73,6 +73,77 @@ async def test_enabled_reports_fire_and_forget(settings_fixture, monkeypatch):
     assert "usage" not in payload
 
 
+async def test_top_level_task_fields(settings_fixture, monkeypatch):
+    """阻塞 3 对齐：taskId / stepId / tool / confirmationId 放事件顶层，缺省不出现。"""
+    _enable(settings_fixture)
+    captured = []
+
+    async def _stub(payload):
+        captured.append(payload)
+
+    monkeypatch.setattr(hub_reporter, "_post", _stub)
+    hub_reporter.report_assistant_event(
+        "s1", "step_completed", "查询智能体", status="completed", summary="查询 销售订单列表",
+        task_id="task-abc", step_id=2, tool="call_query_agent", confirmation_id="wc-xyz",
+    )
+    hub_reporter.report_assistant_event("s1", "message", "用户消息", summary="hi")
+    await asyncio.sleep(0.01)
+    assert len(captured) == 2
+    step = captured[0]
+    assert step["taskId"] == "task-abc"
+    assert step["stepId"] == 2
+    assert step["tool"] == "call_query_agent"
+    assert step["confirmationId"] == "wc-xyz"
+    msg = captured[1]
+    assert "taskId" not in msg
+    assert "stepId" not in msg
+    assert "tool" not in msg
+    assert "confirmationId" not in msg
+
+
+async def test_post_degrades_when_hub_rejects_optional_fields(settings_fixture, monkeypatch):
+    """Hub 版本不支持顶层 taskId/stepId/tool 时，剥离后重发并缓存，后续事件直接降级。"""
+    _enable(settings_fixture)
+    monkeypatch.setattr(hub_reporter, "_rejected_event_fields", set())
+    payloads = []
+
+    class _Response:
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+
+        def json(self):
+            return {}
+
+    class _Client:
+        async def post(self, url, json, headers):
+            payloads.append(json)
+            if len(payloads) == 1:
+                return _Response(
+                    400,
+                    '{"error":"不支持的字段：taskId, stepId, tool","code":"INVALID_ARGUMENT"}',
+                )
+            return _Response(201, "{}")
+
+    monkeypatch.setattr(hub_reporter, "_get_client", lambda: _Client())
+    payload = {
+        "eventId": "e1", "traceId": "s1", "event": "tool_call",
+        "taskId": "task-1", "stepId": 1, "tool": "call_query_agent", "confirmationId": "wc-1",
+    }
+
+    await hub_reporter._post(dict(payload))
+    assert len(payloads) == 2
+    assert "taskId" not in payloads[1]
+    assert "stepId" not in payloads[1]
+    assert "tool" not in payloads[1]
+    assert payloads[1]["confirmationId"] == "wc-1"
+
+    await hub_reporter._post(dict(payload))
+    assert len(payloads) == 3
+    assert "taskId" not in payloads[2]
+    assert payloads[2]["confirmationId"] == "wc-1"
+
+
 async def test_truncates_and_unique_event_ids(settings_fixture, monkeypatch):
     _enable(settings_fixture)
     captured = []

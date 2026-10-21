@@ -287,13 +287,13 @@ function ConfigTab() {
                 </Form.Item>
               </Col>
               <Col span={8}>
-                <Form.Item name="max_tool_rounds" label="工具循环轮数上限" initialValue={5}>
+                <Form.Item name="max_tool_rounds" label="LLM 轮数上限（编排器）" initialValue={6}>
                   <InputNumber min={1} max={20} style={{ width: '100%' }}/>
                 </Form.Item>
               </Col>
               <Col span={8}>
-                <Form.Item name="tool_execute_timeout" label="工具执行超时（秒）" initialValue={30} style={{ marginBottom: 0 }}>
-                  <InputNumber min={5} max={300} style={{ width: '100%' }}/>
+                <Form.Item name="max_agent_calls" label="智能体调用次数上限" initialValue={8} style={{ marginBottom: 0 }}>
+                  <InputNumber min={1} max={50} style={{ width: '100%' }}/>
                 </Form.Item>
               </Col>
             </Row>

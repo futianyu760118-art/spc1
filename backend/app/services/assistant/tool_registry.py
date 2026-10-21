@@ -1,4 +1,4 @@
-"""Tool 注册表 — Function Calling Agent 的工具定义与注册"""
+"""Tool 注册表 — 助手暴露给 LLM 的工具定义与注册（仅执行面智能体工具）"""
 
 import logging
 from dataclasses import dataclass, field
@@ -18,6 +18,8 @@ class ToolDef:
     display_name: Optional[str] = None  # 显示名称
     keywords: List[str] = field(default_factory=list)  # 关键词列表
     category: Optional[str] = None  # 工具分类
+    read_only: bool = True  # 只读工具直接执行；写工具须经确认门禁
+    requires_confirmation: bool = False  # 写操作执行前必须人工确认
 
 
 # 全局工具注册表
@@ -31,6 +33,8 @@ def register_tool(
     display_name: Optional[str] = None,
     keywords: Optional[List[str]] = None,
     category: Optional[str] = None,
+    read_only: bool = True,
+    requires_confirmation: bool = False,
 ):
     """装饰器：注册一个查询工具"""
     def decorator(func: Callable):
@@ -42,8 +46,10 @@ def register_tool(
             display_name=display_name or name,
             keywords=keywords or [],
             category=category,
+            read_only=read_only,
+            requires_confirmation=requires_confirmation,
         )
-        logger.info(f"Tool registered: {name}")
+        logger.info(f"Tool registered: {name} (read_only={read_only})")
         return func
     return decorator
 
@@ -54,21 +60,3 @@ def get_tool(name: str) -> Optional[ToolDef]:
 
 def get_all_tools() -> List[ToolDef]:
     return list(TOOL_REGISTRY.values())
-
-
-def get_openai_tools_schema(exclude: Optional[set] = None) -> List[Dict[str, Any]]:
-    """将注册表转为 OpenAI function calling 的 tools 格式；exclude 为运行时禁用的工具名集合"""
-    excluded = exclude or set()
-    tools = []
-    for tool in TOOL_REGISTRY.values():
-        if tool.name in excluded:
-            continue
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-            },
-        })
-    return tools

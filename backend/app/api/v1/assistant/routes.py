@@ -16,9 +16,10 @@ from app.core.security import PermissionChecker
 from app.models.basicdata.ai_agent import AssistantRun
 from app.schemas.assistant.schemas import ChatMessageIn, AssistantReply, ToolInfo
 
-import app.services.assistant.tools  # noqa: F401
+import app.services.assistant.agent_tools  # noqa: F401 — 触发智能体工具注册
 from app.services.assistant import agent
 from app.services.assistant import agent_stream
+from app.services.assistant import orchestrator
 from app.services.assistant.tool_registry import get_all_tools
 from app.services.assistant import session_store
 from app.services.assistant.run_logger import list_log_files, read_log_file
@@ -225,8 +226,8 @@ async def chat_stream(
                 payload = json.loads(data_line)
             except Exception:
                 return
-            if event_name == "tool_start":
-                name = payload.get("name")
+            if event_name == "step_started":
+                name = payload.get("step", {}).get("tool")
                 if name and name not in run_info["tools"]:
                     run_info["tools"].append(name)
             elif event_name == "done":
@@ -288,6 +289,36 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/confirmations/{confirmation_id}/confirm", response_model=dict)
+async def confirm_write(
+    confirmation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(PermissionChecker("topbar.ai_search", "read")),
+):
+    """确认执行写操作：原子消费确认单 → 派单订单智能体（不重试）→ 只读续跑回查总结"""
+    outcome = await orchestrator.resolve_confirmation(
+        db, confirmation_id, "confirm", str(_current_user_id(current_user))
+    )
+    if outcome.get("code") != 0:
+        return {"code": outcome["code"], "message": outcome.get("message", "")}
+    return {"code": 0, "message": outcome.get("message", ""), "data": outcome.get("data")}
+
+
+@router.post("/confirmations/{confirmation_id}/cancel", response_model=dict)
+async def cancel_write(
+    confirmation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(PermissionChecker("topbar.ai_search", "read")),
+):
+    """取消写操作确认单：原子消费并丢弃，不产生任何写入"""
+    outcome = await orchestrator.resolve_confirmation(
+        db, confirmation_id, "cancel", str(_current_user_id(current_user))
+    )
+    if outcome.get("code") != 0:
+        return {"code": outcome["code"], "message": outcome.get("message", "")}
+    return {"code": 0, "message": outcome.get("message", ""), "data": outcome.get("data")}
 
 
 @router.get("/tools", response_model=dict)

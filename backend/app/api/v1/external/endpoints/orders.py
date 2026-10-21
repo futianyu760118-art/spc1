@@ -65,6 +65,7 @@ def _status_filter_condition(status_value: str):
 
 
 class OrdersListQuery(PageParamsMixin):
+    order_no: Optional[str] = Field(None, description="订单号精确匹配")
     keyword: Optional[str] = Field(None, description="关键字（订单号 / 客户 / 产品名 模糊匹配）")
     status: Optional[str] = Field(
         None,
@@ -105,6 +106,8 @@ class OrderOut(BaseModel):
     )
     promised_date: Optional[date] = Field(None, description="合同交期")
     planned_start_date: Optional[date] = Field(None, description="计划开工日期")
+    shipping_plan: Optional[date] = Field(None, description="出货计划")
+    customer_inspection_date: Optional[date] = Field(None, description="客户验货时间")
     owner: Optional[str] = Field(None, description="负责人")
     updated_at: Optional[datetime] = Field(None, description="最后更新时间（增量同步锚点）")
 
@@ -113,7 +116,7 @@ class OrderOut(BaseModel):
             summary="订单列表", description="endpoint_code: orders.list")
 @register_external(
     "orders.list", "订单列表", method="GET", path="/orders/list",
-    description="销售订单行列表查询，支持关键字、派生状态、客户、风险等级、合同交期范围、增量同步",
+    description="销售订单行列表查询，支持订单号精确、关键字、派生状态、客户、风险等级、合同交期范围、增量同步",
     tags=["订单"],
 )
 @log_external_call("orders.list")
@@ -127,6 +130,10 @@ async def orders_list(
     page_size = min(max(q.page_size if q.page_size is not None else 20, 1), 200)
     query = select(SaleOrder)
     count_query = select(func.count()).select_from(SaleOrder)
+
+    if q.order_no:
+        query = query.where(SaleOrder.order_no == q.order_no)
+        count_query = count_query.where(SaleOrder.order_no == q.order_no)
 
     if q.keyword:
         like_expr = f"%{q.keyword}%"
@@ -199,6 +206,8 @@ async def orders_list(
             "risk_probability": round(float(r.risk_score) / 100, 4) if r.risk_score is not None else None,
             "promised_date": r.promised_date.isoformat() if r.promised_date else None,
             "planned_start_date": r.planned_start_date.isoformat() if r.planned_start_date else None,
+            "shipping_plan": r.shipping_plan.isoformat() if r.shipping_plan else None,
+            "customer_inspection_date": r.customer_inspection_date.isoformat() if r.customer_inspection_date else None,
             "owner": r.owner,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         })

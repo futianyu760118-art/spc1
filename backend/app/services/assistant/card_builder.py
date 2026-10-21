@@ -1,104 +1,27 @@
-"""卡片构建器 - 统一的卡片构建逻辑"""
+"""卡片构建器 — 按查询路径（query-agent 白名单 path）生成卡片"""
 
 from typing import Any, Dict, List
 
 from app.schemas.assistant.schemas import AssistantCard
+from app.services.assistant.task_router import QUERY_CATALOG
 
 
-# 工具名称到卡片标题的映射
-TOOL_TYPE_LABELS = {
-    "search_orders": "订单搜索结果",
-    "search_purchase_orders": "采购订单搜索结果",
-    "search_materials": "物料搜索结果",
-    "search_production": "生产进度搜索结果",
-    "search_exceptions": "异常搜索结果",
-    "search_basicdata": "基础数据搜索结果",
-    "search_run_orders": "跑单管理搜索结果",
-    "search_invoices": "采购开票搜索结果",
-    "search_eta_updates": "交期变更记录",
-    "search_users": "用户搜索结果",
-    "suggest_actions": "行动建议",
-    "search_kit_analysis": "订单齐套结果",
-    "search_bom_details": "产品BOM明细",
-}
+def _path_name(path: str) -> str:
+    return next((c["name"] for c in QUERY_CATALOG if c["path"] == path), path)
 
 
-def build_summary_card(summary: Dict[str, Any], label: str = "概览") -> AssistantCard:
-    """构建概览卡片"""
-    return AssistantCard(
-        type="summary",
-        title=f"{label}交付概况",
-        payload={
-            "items": [
-                {"label": "应交总数", "value": summary.get("due_total", 0), "color": "#1890ff"},
-                {"label": "高风险", "value": summary.get("red_count", 0), "color": "#f5222d"},
-                {"label": "中风险", "value": summary.get("yellow_count", 0), "color": "#faad14"},
-                {"label": "逾期", "value": summary.get("overdue_count", 0), "color": "#ff4d4f"},
-                {"label": "欠料", "value": summary.get("shortage_count", 0), "color": "#fa8c16"},
-            ],
-        },
-    )
-
-
-def build_search_result_card(tool_name: str, items: List[Dict[str, Any]], total: int) -> AssistantCard:
-    """构建搜索结果卡片"""
-    title = TOOL_TYPE_LABELS.get(tool_name, "搜索结果")
-    return AssistantCard(
-        type="search_result_list",
-        title=f"{title}（共{total}条）",
-        payload={"items": items, "total": total},
-    )
-
-
-def build_cards_from_tool_results(tool_results: List[Dict[str, Any]]) -> List[AssistantCard]:
-    """从工具结果构建卡片列表"""
+def build_cards_from_query_results(query_results: List[Dict[str, Any]]) -> List[AssistantCard]:
+    """从查询智能体结果构建卡片列表；推理结果不生成卡片（由最终答复文字承载）。"""
     cards: List[AssistantCard] = []
-
-    for tr in tool_results:
-        tool_name = tr["tool"]
-        data = tr["data"]
-
-        # 处理 dashboard_summary 工具
-        if tool_name == "get_dashboard_summary":
-            summary = data.get("summary", {})
-            if summary:
-                cards.append(build_summary_card(summary, data.get("label", "概览")))
-            if data.get("items"):
-                cards.append(AssistantCard(
-                    type="search_result_list",
-                    title=f"应交订单（前{len(data['items'])}条）",
-                    payload={"items": data["items"], "total": data.get("total", 0)},
-                ))
-
-        # 处理 suggest_actions 工具
-        elif tool_name == "suggest_actions":
-            actions = data.get("actions", [])
-            if actions:
-                cards.append(AssistantCard(
-                    type="action_list",
-                    title=f"行动建议（{data.get('total', len(actions))}项）",
-                    payload={
-                        "actions": actions,
-                        "context": data.get("context", ""),
-                        "date": data.get("date", ""),
-                    },
-                ))
-
-        # 处理搜索类工具
-        elif tool_name in TOOL_TYPE_LABELS:
-            items = data.get("items", [])
-            total = data.get("total", 0)
-            if items:
-                cards.append(build_search_result_card(tool_name, items, total))
-
-            # 订单齐套查询：当存在展开后的物料明细时，追加一张明细卡片
-            if tool_name == "search_kit_analysis":
-                materials = data.get("materials", [])
-                if materials:
-                    cards.append(AssistantCard(
-                        type="search_result_list",
-                        title=f"订单物料明细（共{data.get('materials_total', len(materials))}条）",
-                        payload={"items": materials, "total": data.get("materials_total", len(materials))},
-                    ))
-
+    for qr in query_results:
+        path = qr.get("path") or ""
+        data = qr.get("data") or {}
+        items = data.get("items") if isinstance(data, dict) else None
+        if isinstance(items, list) and items:
+            total = data.get("total", len(items)) if isinstance(data, dict) else len(items)
+            cards.append(AssistantCard(
+                type="search_result_list",
+                title=f"{_path_name(path)}（共{total}条）",
+                payload={"items": items, "total": total},
+            ))
     return cards

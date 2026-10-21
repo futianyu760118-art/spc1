@@ -770,6 +770,10 @@ export const assistantApi = {
     })
   },
   listSkills: () => api.get('/assistant/skills'),
+  confirmConfirmation: (confirmationId: string) =>
+    api.post(`/assistant/confirmations/${confirmationId}/confirm`, null, { timeout: 180000 }),
+  cancelConfirmation: (confirmationId: string) =>
+    api.post(`/assistant/confirmations/${confirmationId}/cancel`, null),
 }
 
 // ============ 公告管理 (基础数据与集成中心) ============
