@@ -13,15 +13,21 @@ def _schema_names(include_order=True):
 
 
 class TestBuildAgentToolsSchema:
-    def test_three_tools_registered(self):
-        assert _schema_names() == {"call_query_agent", "call_reasoning_agent", "call_order_agent"}
+    def test_all_tools_registered(self):
+        assert _schema_names() == {
+            "call_query_agent", "call_reasoning_agent", "call_order_agent", "hub_query"
+        }
 
     def test_exclude_order_tool(self):
-        assert _schema_names(include_order=False) == {"call_query_agent", "call_reasoning_agent"}
+        assert _schema_names(include_order=False) == {
+            "call_query_agent", "call_reasoning_agent", "hub_query"
+        }
 
     def test_exclude_disabled(self):
         schemas = build_agent_tools_schema(exclude={"call_query_agent"})
-        assert {s["function"]["name"] for s in schemas} == {"call_reasoning_agent", "call_order_agent"}
+        assert {s["function"]["name"] for s in schemas} == {
+            "call_reasoning_agent", "call_order_agent", "hub_query"
+        }
 
     def test_query_path_enum_matches_catalog(self):
         schema = next(s for s in build_agent_tools_schema() if s["function"]["name"] == "call_query_agent")
@@ -89,6 +95,14 @@ class TestRegistryMetadata:
         assert query.read_only is True and reasoning.read_only is True
         assert order.read_only is False
         assert order.requires_confirmation is True
+
+    def test_hub_query_read_only(self):
+        from app.services.assistant.tool_registry import get_tool
+
+        hub = get_tool("hub_query")
+        assert hub.read_only is True
+        assert hub.requires_confirmation is False
+        assert hub.category == "agent"
 
     def test_agent_tools_registered_at_import(self):
         import app.services.assistant.agent_tools as mod  # noqa: F401

@@ -166,12 +166,12 @@ class ThinkTagFilter:
 
 
 def build_default_system_prompt() -> str:
-    """内置系统提示词：3 个智能体工具、能力缺口、跨系统不支持、写操作确认。"""
+    """内置系统提示词：3 个智能体工具 + hub_query 跨系统查询、能力缺口、写操作确认。"""
     query_lines = "\n".join(
         f"- {c['path']}：{c['name']}；可用参数 {c['params']}" for c in QUERY_CATALOG
     )
     reasoning_lines = "\n".join(f"- {c['type']}：{c['desc']}" for c in REASONING_TASK_TYPES)
-    return f"""你是供应链与生产协同中台的智能决策助手。你可以调用执行面智能体完成查询、分析与订单修改，并自主决定调用哪几个智能体、调用顺序与次数。
+    return f"""你是供应链与生产协同中台的智能决策助手。你可以调用执行面智能体完成查询、分析与订单修改，或经 hub_query 查询外部系统只读数据（当前 PLM 研发项目），并自主决定调用哪几个工具、调用顺序与次数。
 
 可用智能体工具（每一轮只能调用一个）：
 1) call_query_agent（查询智能体，只读）——path 白名单：
@@ -186,6 +186,10 @@ def build_default_system_prompt() -> str:
 - 写操作不可撤销；系统会自动拦截并生成「旧值 → 新值」确认单，用户确认后才执行
 - fields 只放用户明确要求修改的字段与日期；日期统一 YYYY-MM-DD；清空用 null
 
+4) hub_query（Hub 统一查询，只读，跨系统）——查询其他系统的数据：
+- capability 只能选工具 schema 白名单枚举（当前仅 query_plm：查询 PLM 研发项目）
+- params 只放用户消息中可确定的值（query_plm 支持 keyword：项目号或关键字，如 HJ.26033.V1.256JY）
+
 使用规则：
 - 自主规划步骤：需要数据时先查询，需要结论时先推理分析，需要改数据时先查旧值再发起写操作
 - 不要重复调用完全相同参数的工具；同工具换参数可以继续查
@@ -194,7 +198,7 @@ def build_default_system_prompt() -> str:
 能力边界（首期暂不支持，遇到时明确告知用户"暂不支持"并建议去对应页面，绝不编造数据）：
 - 采购订单查询、跑单管理、采购开票/付款、交期变更历史（ETA）
 - 客户查询、系统用户查询、驾驶舱概览、行动建议（简报/跟进/周总结）
-- PLM / ERP 等跨系统数据与操作（跨系统任务暂不支持）
+- ERP / MES / OA 等未开放系统的数据与操作；跨系统写操作不支持（只读查询仅限 hub_query 能力白名单）
 
 回复格式要求（严格遵守）：
 - 使用简洁的 Markdown 格式输出
@@ -344,6 +348,8 @@ def _step_summary(tool_name: str, args: Dict[str, Any]) -> str:
         return f"查询 {name}"
     if tool_name == "call_reasoning_agent":
         return f"分析 {args.get('task_type') or ''}"
+    if tool_name == "hub_query":
+        return f"查询外部系统 {args.get('capability') or ''}"
     return f"修改订单 {args.get('order_no') or ''}"
 
 

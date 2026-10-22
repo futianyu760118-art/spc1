@@ -1,9 +1,10 @@
-"""执行面智能体工具 — 助手暴露给 LLM 的 3 个工具：查询 / 推理 / 订单写入。
+"""执行面智能体工具 — 助手暴露给 LLM 的工具：查询 / 推理 / 订单写入 / Hub 外部查询。
 
 - call_query_agent / call_reasoning_agent：只读，编排器直接执行；
-- call_order_agent：写操作，编排器拦截生成「旧值 → 新值」确认单，人工确认后才派单（本模块不直接执行）。
+- call_order_agent：写操作，编排器拦截生成「旧值 → 新值」确认单，人工确认后才派单（本模块不直接执行）；
+- hub_query：跨系统只读查询，不经执行面 agent，直接走 hub_client（发起 + 轮询借调单）。
 
-能力边界全部来自 task_router 目录（与执行面 agent 契约同源）。
+能力边界来自 task_router 目录（与执行面 agent 契约同源）；hub_query 边界来自 Hub 能力目录。
 """
 
 import logging
@@ -11,6 +12,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from app.services.execution_agents import AGENT_SPECS, call_agent_run
+from app.services.hub_client import capability_names, query_and_poll, validate_capability
+from app.services.hub_http import is_hub_enabled
 from app.services.assistant.tool_registry import register_tool
 from app.services.assistant.hub_reporter import now_iso, report_assistant_event
 from app.services.assistant.task_router import (
@@ -26,12 +29,14 @@ AGENT_TOOL_LABELS = {
     "call_query_agent": "查询智能体",
     "call_reasoning_agent": "推理智能体",
     "call_order_agent": "订单智能体",
+    "hub_query": "Hub 外部查询",
 }
 
 CAPABILITY_BY_TOOL = {
     "call_query_agent": "query_control_platform",
     "call_reasoning_agent": "reason_control_platform",
     "call_order_agent": "update_control_platform_order",
+    "hub_query": "hub_query",
 }
 
 AGENT_KEY_BY_TOOL = {
@@ -40,11 +45,12 @@ AGENT_KEY_BY_TOOL = {
     "call_order_agent": "order",
 }
 
-# 单步超时（沿用执行面派单超时：query 20s / reasoning 200s / order 30s）
+# 单步超时（沿用执行面派单超时：query 20s / reasoning 200s / order 30s；hub_query 30s 轮询收口）
 TOOL_TIMEOUT_S = {
     "call_query_agent": 20.0,
     "call_reasoning_agent": 200.0,
     "call_order_agent": 30.0,
+    "hub_query": 30.0,
 }
 
 # 写确认前读取订单当前值的 4 个字段（与订单智能体字段白名单一致）
@@ -106,6 +112,24 @@ def _order_tool_schema() -> Dict[str, Any]:
     }
 
 
+def _hub_query_tool_schema() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "capability": {
+                "type": "string",
+                "enum": capability_names(),
+                "description": "外部系统查询能力（Hub 能力目录白名单，不含本系统；当前仅 query_plm：查询 PLM 研发项目）",
+            },
+            "params": {
+                "type": "object",
+                "description": "能力参数（query_plm 支持 keyword：项目号或关键字），只放用户消息中可确定的值，不要编造",
+            },
+        },
+        "required": ["capability"],
+    }
+
+
 def build_agent_tools_schema(include_order: bool = True, exclude: Optional[set] = None) -> List[Dict[str, Any]]:
     """生成 OpenAI function calling 工具清单；exclude 为运行时禁用工具名集合。"""
     excluded = exclude or set()
@@ -119,6 +143,11 @@ def build_agent_tools_schema(include_order: bool = True, exclude: Optional[set] 
             "name": "call_reasoning_agent",
             "description": "调用推理智能体：只读大模型分析（交期/齐套/品质/生产，带证据），耗时较长。",
             "parameters": _reasoning_tool_schema(),
+        },
+        {
+            "name": "hub_query",
+            "description": "调用 Hub 统一查询：查询其他系统的只读数据（当前支持 PLM 研发项目）。capability 只能选白名单枚举。",
+            "parameters": _hub_query_tool_schema(),
         },
     ]
     if include_order:
@@ -175,6 +204,11 @@ async def execute_agent_tool(
     返回：{"ok", "online", "result", "error", "item_count"}
     - 参数非法 / agent 离线 / 繁忙 / 执行失败均返回 ok=False + error，绝不抛错。
     """
+    if tool_name == "hub_query":
+        return await _run_hub_query(
+            args, operator_user_id=operator_user_id, trace_id=trace_id,
+            task_id=task_id, step_id=step_id,
+        )
     capability = CAPABILITY_BY_TOOL[tool_name]
     task_input = normalize_tool_input(tool_name, args)
     invalid = validate_task_input(capability, task_input)
@@ -226,14 +260,76 @@ async def execute_agent_tool(
     return {"ok": True, "online": True, "result": result, "error": None, "item_count": _item_count(result)}
 
 
+async def _run_hub_query(
+    args: Dict[str, Any],
+    *,
+    operator_user_id: str = "",
+    trace_id: str = "",
+    task_id: Optional[str] = None,
+    step_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """执行 hub_query：校验能力 → 发起 Hub 调用 → 轮询至终态（30s 收口）。
+
+    返回 {"ok", "online", "result", "error", "item_count"}；online=False 表示 Hub 未配置。
+    """
+    capability = (args or {}).get("capability") or ""
+    params = (args or {}).get("params") or {}
+    started_at = now_iso()
+    loop_start = time.perf_counter()
+    if not capability:
+        report_assistant_event(
+            trace_id, "tool_result", "hub_query", "failed", "参数非法：缺少 capability",
+            {"params": args}, started_at=started_at,
+            task_id=task_id, step_id=step_id, tool="hub_query",
+        )
+        return {"ok": False, "online": True, "result": None,
+                "error": "参数非法：缺少 capability", "item_count": 0}
+    report_assistant_event(
+        trace_id, "tool_call", "hub_query", "started",
+        f"调用 Hub 查询 {capability}", {"input": {"capability": capability, "params": params}},
+        started_at=started_at, task_id=task_id, step_id=step_id, tool="hub_query",
+    )
+
+    if not is_hub_enabled():
+        outcome = {"ok": False, "online": False, "result": None,
+                   "error": "Hub 未配置，跨系统查询暂不可用", "item_count": 0}
+    else:
+        invalid = await validate_capability(capability)
+        if invalid:
+            outcome = {"ok": False, "online": True, "result": None,
+                       "error": f"参数非法：{invalid}", "item_count": 0}
+        else:
+            polled = await query_and_poll(capability, params)
+            outcome = {
+                "ok": bool(polled.get("ok")),
+                "online": True,
+                "result": polled.get("result"),
+                "error": polled.get("error"),
+                "item_count": _item_count(polled.get("result")),
+            }
+
+    duration_ms = round((time.perf_counter() - loop_start) * 1000, 2)
+    report_assistant_event(
+        trace_id, "tool_result", "hub_query",
+        "completed" if outcome.get("ok") else "failed",
+        f"返回 {outcome['item_count']} 条" if outcome.get("ok") else (outcome.get("error") or "")[:200],
+        {"itemCount": outcome["item_count"]} if outcome.get("ok")
+        else {"input": {"capability": capability, "params": params}},
+        started_at=started_at, ended_at=now_iso(), duration_ms=duration_ms,
+        task_id=task_id, step_id=step_id, tool="hub_query",
+    )
+    return outcome
+
+
 async def query_order_current_fields(
     order_no: str, *, operator_user_id: str = "", trace_id: str = "",
     task_id: Optional[str] = None, step_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """写确认前经查询智能体读取订单当前值（4 个可写字段）。
 
-    返回 {"values": {field: value|None}, "missing": bool, "error": str|None}
-    - missing=True 表示未能读到旧值（agent 离线 / 订单不存在 / 接口未返回字段）。
+    返回 {"values": {field: value|None}, "missing": bool, "row": dict|None, "error": str|None}
+    - missing=True 表示未能读到旧值（agent 离线 / 订单不存在 / 接口未返回字段）；
+    - row 为精确匹配到的完整订单行（写后完整性校验用，不额外发起查询）。
     """
     outcome = await execute_agent_tool(
         "call_query_agent",
@@ -288,6 +384,15 @@ def register_agent_tools() -> None:
         category="agent",
         read_only=False,
         requires_confirmation=True,
+    )(_noop_execute)
+    register_tool(
+        "hub_query",
+        "调用 Hub 统一查询：查询其他系统的只读数据（当前支持 PLM 研发项目）",
+        _hub_query_tool_schema(),
+        display_name="Hub 外部查询",
+        keywords=["跨系统", "PLM", "研发项目", "外部查询"],
+        category="agent",
+        read_only=True,
     )(_noop_execute)
 
 

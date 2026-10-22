@@ -9,16 +9,15 @@
 
 import asyncio
 import logging
-import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 
 from app.core.config import get_settings
+from app.services.hub_http import hub_auth_headers, hub_http_client, is_hub_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +32,7 @@ _UNSUPPORTED_FIELDS_RE = re.compile(r"不支持的字段[：:]\s*([A-Za-z0-9_,\s
 
 
 def is_enabled() -> bool:
-    settings = get_settings()
-    return bool(settings.AEOS_HUB_BASE and settings.AEOS_SYSTEM_ID and settings.AEOS_SYSTEM_TOKEN)
+    return is_hub_enabled()
 
 
 def now_iso() -> str:
@@ -44,10 +42,7 @@ def now_iso() -> str:
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
-        settings = get_settings()
-        # Hub 用私有 CA 签发时只让上报客户端信任该 CA，避免影响其它 HTTPS 出站（OpenAI/企微等）
-        ca_cert = settings.AEOS_HUB_CA_CERT or os.environ.get("REQUESTS_CA_BUNDLE", "")
-        _client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S, verify=ca_cert or True)
+        _client = hub_http_client(REQUEST_TIMEOUT_S)
     return _client
 
 
@@ -96,10 +91,7 @@ def _strip_rejected_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 async def _post(payload: Dict[str, Any]) -> None:
     settings = get_settings()
-    headers = {
-        "x-aeos-system-id": quote(settings.AEOS_SYSTEM_ID, safe=""),
-        "x-aeos-system-token": settings.AEOS_SYSTEM_TOKEN,
-    }
+    headers = hub_auth_headers()
     payload = _strip_rejected_fields(payload)
     try:
         resp = await _get_client().post(
