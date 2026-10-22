@@ -54,6 +54,10 @@ ASSISTANT_CONFIG_DEFS: Dict[str, ConfigDef] = {
     "max_agent_calls": ConfigDef("max_agent_calls", "int", 8, "智能体调用次数上限（编排器）",
                                  "单次任务最多调用执行面智能体的次数"),
     "disabled_tools": ConfigDef("disabled_tools", "json", [], "禁用工具列表", "JSON 数组"),
+    "gap_notify_enabled": ConfigDef(
+        "gap_notify_enabled", "bool", True, "缺字段通知开关",
+        "关闭后不再发送缺字段站内信（对话内提示保留）",
+    ),
 }
 
 def _execution_common_defs() -> Dict[str, ConfigDef]:

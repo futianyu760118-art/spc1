@@ -31,6 +31,7 @@ class Notification(Base):
     content = Column(String(512), nullable=True)
     ref_type = Column(String(32), nullable=True, comment="关联对象类型")
     ref_id = Column(Integer, nullable=True, comment="关联对象ID")
+    ref_no = Column(String(64), nullable=True, comment="关联对象业务单号（字符串型主键）")
     sender_id = Column(Integer, ForeignKey("sys_user.id"), nullable=True, comment="提出人ID")
     sender_name = Column(String(64), nullable=True, comment="提出人/发送人")
     priority = Column(String(16), nullable=False, default="normal")

@@ -42,6 +42,7 @@ from app.models.exception.quality_issue import QualityIssue
 
 from app.models.common.business_document import BusinessDocument, BusinessDocumentVersion
 from app.models.common.approval_business import ApprovalBusiness  # noqa: F401
+from app.models.common.completeness_rule import CompletenessRule  # noqa: F401
 
 # 规则配置中心
 from app.models.rules.risk_rule import RiskRule
@@ -140,6 +141,7 @@ __all__ = [
     "BusinessDocument",
     "BusinessDocumentVersion",
     "ApprovalBusiness",
+    "CompletenessRule",
     # 规则配置中心
     "RiskRule",
     "NodeStandard",

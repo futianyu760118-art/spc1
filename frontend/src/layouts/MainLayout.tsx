@@ -51,6 +51,7 @@ import { useAuthStore } from '../store/auth'
 import { usePermissionStore, PermNode } from '../store/permission'
 import { authApi, notificationApi } from '../services/api'
 import { notificationStream } from '../services/notificationStream'
+import { notificationJump } from '../utils/notificationJump'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
 import { FloatingAssistant } from '../components/Assistant'
@@ -972,6 +973,12 @@ export default function MainLayout() {
                           style={{ cursor: 'pointer', padding: '10px 4px', opacity: item.is_read ? 0.55 : 1 }}
                           onClick={() => {
                             if (!item.is_read) handleMarkRead(item.id)
+                            const assistantTarget = notificationJump(item)
+                            if (assistantTarget) {
+                              setBellOpen(false)
+                              navigate(assistantTarget.path)
+                              return
+                            }
                             if (item.type === 'stock_check_appeal' && item.ref_id) {
                               setBellOpen(false)
                               navigate('/stock-check-audit?tab=appeal')

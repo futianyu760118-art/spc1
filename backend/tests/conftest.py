@@ -50,6 +50,8 @@ ROLE_PERMS["general_manager"].update({
     "quality.supplier_claim": ["read"],
     "approval.pending": ["read"],
 })
+ROLE_PERMS["admin"].update({"orders.list": ["read"], "topbar.notifications": ["read"]})
+ROLE_PERMS["manager"].update({"orders.list": ["read"], "topbar.notifications": ["read"]})
 USERS = {
     "admin": "admin",
     "qa_quality": "quality",
@@ -131,6 +133,7 @@ async def _test_db():
     from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprovalLog
     from app.models.common.approval_business import ApprovalBusiness
     from app.models.common.approval_center import ApprovalInstance, ApprovalRecord, ApprovalTask
+    from app.models.common.completeness_rule import CompletenessRule
     tables = [
         SysRole.__table__, SysUser.__table__, UserOrgScope.__table__,
         SysPermission.__table__,
@@ -153,12 +156,14 @@ async def _test_db():
         StockCheck.__table__, StockCheckItem.__table__,
         ReasoningTask.__table__, KittingResult.__table__, KittingShortage.__table__,
         AiAgentConfig.__table__, AssistantRun.__table__,
+        CompletenessRule.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
         # 既有测试库补列：create_all 只建缺失表不加列（同 init_database 的 migrate_columns 模式）
         await conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS ai_result JSONB"))
         await conn.execute(text("ALTER TABLE supplier_claim ADD COLUMN IF NOT EXISTS clause_snapshot JSONB"))
+        await conn.execute(text("ALTER TABLE notification ADD COLUMN IF NOT EXISTS ref_no VARCHAR(64)"))
         # approval_config 模型在 purchase 域（故意不导入），直接 DDL 建表
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS approval_config (
@@ -233,7 +238,7 @@ async def client(_test_db):
             "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
             "purchase_order, approval_instance, approval_task, approval_record, "
             "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item, "
-            "ai_agent_config, assistant_run "
+            "ai_agent_config, assistant_run, completeness_rule "
             "RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
@@ -243,7 +248,11 @@ async def client(_test_db):
         """), {"nodes": json.dumps(DEFAULT_CHAIN)})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        yield c
+        try:
+            yield c
+        finally:
+            from app.services.notification.assistant_notify import flush_notifications
+            await flush_notifications()
 
 
 @pytest_asyncio.fixture(loop_scope="session")

@@ -76,6 +76,46 @@ async def publish_unread_update(db: AsyncSession, user_id: int) -> None:
         logger.warning("notification_broker.publish failed user_id=%s: %s", user_id, e)
 
 
+def _chunks(items: list, size: int):
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+async def publish_unread_updates(db: AsyncSession, user_ids: list[int]) -> None:
+    """批量版本：一次聚合查询 + pipeline 发布，供广播通知使用。"""
+    unique_ids = sorted({int(uid) for uid in user_ids})
+    if not unique_ids:
+        return
+    client = get_command_client()
+    if client is None:
+        logger.warning("notification_broker.publish_bulk: redis unavailable, %s users dropped", len(unique_ids))
+        return
+    try:
+        counts: dict[int, dict[str, int]] = {}
+        for chunk in _chunks(unique_ids, 1000):
+            q = (
+                select(Notification.user_id, Notification.type, func.count(Notification.id))
+                .where(and_(Notification.user_id.in_(chunk), Notification.is_read == False))  # noqa: E712
+                .group_by(Notification.user_id, Notification.type)
+            )
+            for uid, notif_type, count in (await db.execute(q)).all():
+                counts.setdefault(int(uid), {})[notif_type] = count
+        ts = datetime.utcnow().isoformat()
+        pipe = client.pipeline()
+        for uid in unique_ids:
+            by_type = counts.get(uid, {})
+            pipe.publish(
+                CHANNEL_FMT.format(user_id=uid),
+                json.dumps({"total": sum(by_type.values()), "by_type": by_type, "ts": ts},
+                           ensure_ascii=False),
+            )
+        await pipe.execute()
+        note_success()
+    except Exception as e:
+        note_failure()
+        logger.warning("notification_broker.publish_bulk failed: %s", e)
+
+
 def _unread_chunk(payload: dict) -> str:
     return (
         "event: unread\n"

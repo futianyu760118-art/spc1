@@ -33,7 +33,8 @@ def _done(events):
     return next(d for e, d in reversed(events) if e == "done")
 
 
-async def _run(monkeypatch, script, *, limits=None, include_order=True, max_tool_rounds=6, max_agent_calls=8):
+async def _run(monkeypatch, script, *, limits=None, include_order=True, max_tool_rounds=6,
+               max_agent_calls=8, gap_notify=True):
     """执行一轮 run_reaction 并返回 (事件列表, LLM实例, execute调用记录)。"""
     llm = ScriptedLLM(script)
     monkeypatch.setattr(orchestrator.ai_service, "chat_with_tools", llm.chat_with_tools)
@@ -59,6 +60,7 @@ async def _run(monkeypatch, script, *, limits=None, include_order=True, max_tool
         disabled_tools=None, session_id="", trace_id="", user_id="u1",
         run_logger=None, provider_name="test",
         limits=limits, include_order_tool=include_order, stream_final=False,
+        gap_notify=gap_notify,
     ))
     return events, llm, exec_calls
 
@@ -334,6 +336,8 @@ class TestResolveConfirmation:
         monkeypatch.setattr(orchestrator, "get_scope_config", _fake_scope_config)
         monkeypatch.setattr(orchestrator, "render_system_prompt", lambda template, disabled=None: template)
         monkeypatch.setattr(orchestrator.session_store, "get_history", _fake_get_history)
+        monkeypatch.setattr(orchestrator, "notify_agent_change", lambda **k: None)
+        monkeypatch.setattr(orchestrator, "notify_agent_gap", lambda **k: None)
         appended = []
         monkeypatch.setattr(orchestrator.session_store, "append_messages", _fake_append(appended))
         return appended
@@ -460,3 +464,94 @@ def _fake_append(collector):
         collector.extend(messages)
         return messages
     return append
+
+
+async def test_query_path_injects_completeness_and_notifies(monkeypatch):
+    notifications = []
+
+    async def fake_refresh(*_args, **_kwargs):
+        return None
+
+    def fake_check(**_kwargs):
+        return [("promised_date", "合同交期")]
+
+    def fake_notify(**kwargs):
+        notifications.append(kwargs)
+
+    monkeypatch.setattr(orchestrator, "refresh_rules", fake_refresh)
+    monkeypatch.setattr(orchestrator, "check_completeness", fake_check)
+    monkeypatch.setattr(orchestrator, "notify_agent_gap", fake_notify)
+
+    script = [
+        tool_call("call_query_agent", {"path": "/external/orders/list", "params": {"keyword": "HJ-1"}}),
+        direct_reply("订单缺少合同交期"),
+    ]
+    events, llm, _ = await _run(monkeypatch, script)
+    assert notifications and notifications[0]["biz_no"] == "HJ-1"
+    assert any("completeness" in (getattr(m, "content", "") or "") for m in llm.calls[1])
+
+
+async def test_query_path_skipped_when_gap_notify_false(monkeypatch):
+    notifications = []
+    monkeypatch.setattr(orchestrator, "notify_agent_gap", lambda **kw: notifications.append(kw))
+    script = [
+        tool_call("call_query_agent", {"path": "/external/orders/list", "params": {"keyword": "HJ-1"}}),
+        direct_reply("ok"),
+    ]
+    events, _, _ = await _run(monkeypatch, script, gap_notify=False)
+    assert notifications == []
+
+
+async def test_query_path_detail_route_not_checked(monkeypatch):
+    notifications = []
+    monkeypatch.setattr(orchestrator, "notify_agent_gap", lambda **kw: notifications.append(kw))
+    result = await orchestrator._check_query_gaps(
+        {"path": "/external/order-details/list", "params": {"keyword": "HJ-1"}},
+        {"items": [{"order_no": "HJ-1"}]},
+        "u1",
+    )
+    assert result is None
+    assert notifications == []
+
+
+async def test_notify_write_result_skips_gap_when_snapshot_untrusted(monkeypatch):
+    calls = {"change": [], "gap": []}
+    monkeypatch.setattr(orchestrator, "notify_agent_change", lambda **kw: calls["change"].append(kw))
+    monkeypatch.setattr(orchestrator, "notify_agent_gap", lambda **kw: calls["gap"].append(kw))
+    monkeypatch.setattr(orchestrator, "report_assistant_event", lambda *a, **k: None)
+
+    async def fake_refresh():
+        return None
+
+    monkeypatch.setattr(orchestrator, "refresh_rules", fake_refresh)
+    record = {
+        "old_values_missing": True,
+        "old_row": {"promised_date": None},
+        "trace_id": "",
+        "task_id": None,
+        "order_step_id": None,
+        "confirmation_id": None,
+    }
+    await orchestrator._notify_write_result(
+        record=record, write_result=None, fields={},
+        biz_type="order", action="update", biz_no="HJ-1", operator_user_id="u1",
+    )
+    assert calls["change"]
+    assert calls["gap"] == []
+
+
+async def test_notify_write_result_create_uses_write_result_biz_no(monkeypatch):
+    calls = []
+    monkeypatch.setattr(orchestrator, "notify_agent_change", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(orchestrator, "notify_agent_gap", lambda **kw: None)
+    monkeypatch.setattr(orchestrator, "report_assistant_event", lambda *a, **k: None)
+
+    async def fake_refresh():
+        return None
+
+    monkeypatch.setattr(orchestrator, "refresh_rules", fake_refresh)
+    await orchestrator._notify_write_result(
+        record={}, write_result={"order_no": "HJ-NEW"}, fields={},
+        biz_type="order", action="create", biz_no="", operator_user_id="u1",
+    )
+    assert calls and calls[0]["biz_no"] == "HJ-NEW"

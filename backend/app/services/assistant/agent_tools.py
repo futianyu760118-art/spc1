@@ -340,14 +340,16 @@ async def query_order_current_fields(
         step_id=step_id,
     )
     if not outcome.get("ok"):
-        return {"values": {f: None for f in ORDER_READBACK_FIELDS}, "missing": True, "error": outcome.get("error")}
+        return {"values": {f: None for f in ORDER_READBACK_FIELDS}, "missing": True,
+                "row": None, "error": outcome.get("error")}
     items = (outcome.get("result") or {}).get("items") or []
     matched = next((it for it in items if str(it.get("order_no") or "") == order_no), None)
     if not matched:
-        return {"values": {f: None for f in ORDER_READBACK_FIELDS}, "missing": True, "error": f"未查到订单 {order_no}"}
+        return {"values": {f: None for f in ORDER_READBACK_FIELDS}, "missing": True,
+                "row": None, "error": f"未查到订单 {order_no}"}
     values = {f: matched.get(f) for f in ORDER_READBACK_FIELDS}
     missing = any(f not in matched for f in ORDER_READBACK_FIELDS)
-    return {"values": values, "missing": missing, "error": None}
+    return {"values": values, "missing": missing, "row": matched, "error": None}
 
 
 async def _noop_execute(db=None, params: Dict[str, Any] = None) -> Dict[str, Any]:

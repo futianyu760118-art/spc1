@@ -451,6 +451,7 @@ class DatabaseInitializer:
             "notification": {
                 "sender_id": "INTEGER",
                 "sender_name": "VARCHAR(64)",
+                "ref_no": "VARCHAR(64)",
             },
         }
         # 删除已废弃的列
@@ -1356,6 +1357,33 @@ class DatabaseInitializer:
                 await session.rollback()
                 print(f"Error seeding roles: {e}")
                 raise
+
+    async def seed_completeness_rules(self):
+        """订单完整性示例规则（幂等）；正式清单由管理员 SQL 维护。"""
+        rules = [
+            ("order", "promised_date", "合同交期"),
+            ("order", "shipping_plan", "出货计划"),
+            ("order", "customer_inspection_date", "客户验货时间"),
+        ]
+        try:
+            async with self.engine.begin() as conn:
+                existing = (
+                    await conn.execute(text("SELECT count(*) FROM completeness_rule"))
+                ).scalar() or 0
+                if existing:
+                    print("Completeness rules already configured, skip seeding")
+                    return
+                for biz_type, field_key, label in rules:
+                    await conn.execute(text("""
+                        INSERT INTO completeness_rule
+                            (biz_type, field_key, label, required, enabled)
+                        VALUES (:biz_type, :field_key, :label, TRUE, TRUE)
+                        ON CONFLICT (biz_type, field_key) DO NOTHING
+                    """), {"biz_type": biz_type, "field_key": field_key, "label": label})
+            print(f"Completeness rules seeded ({len(rules)})")
+        except Exception as e:
+            print(f"Error seeding completeness rules: {e}")
+            raise
 
     async def seed_users(self):
         """Seed / update system users"""
@@ -2508,6 +2536,7 @@ ORDER BY b.FDate DESC, b.FBillNo, e.FEntryID
             await self.backfill_sys_user_scm_employee_id()
             await self.migrate_stock_check_permission()
             await self.seed_roles()
+            await self.seed_completeness_rules()
             await self.seed_users()
             await self.seed_price_change_rule_config()
             await self.seed_supplier_claim_approval_config()

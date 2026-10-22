@@ -32,6 +32,7 @@ from app.services.assistant.agent_tools import (
 )
 from app.services.assistant.card_builder import build_cards_from_query_results
 from app.services.assistant.cancellation import CancellationRegistry
+from app.services.assistant.completeness_rules import check_completeness, refresh_rules
 from app.services.assistant.context_manager import (
     build_compressed_messages,
     estimate_tokens,
@@ -50,6 +51,11 @@ from app.services.assistant.task_router import (
     trim_result,
 )
 from app.services.execution_agents import AGENT_SPECS, call_agent_run
+from app.services.notification.assistant_notify import (
+    BIZ_NOTIFY_CONFIG,
+    notify_agent_change,
+    notify_agent_gap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +426,68 @@ async def _final_answer_text(
     return text, [t for t in thinking_parts if t]
 
 
+async def _gap_missing(
+    *, biz_type: str, biz_no: str, values: Dict[str, Any]
+) -> list:
+    await refresh_rules()
+    return check_completeness(biz_type=biz_type, biz_no=biz_no, values=values)
+
+
+def _schedule_gap_notify(
+    *, biz_type: str, biz_no: str, missing: list, initiator_user_id: str
+) -> None:
+    notify_agent_gap(
+        biz_type=biz_type, biz_no=biz_no,
+        missing_keys=[key for key, _ in missing],
+        missing_labels=[label for _, label in missing],
+        initiator_user_id=initiator_user_id,
+    )
+
+
+async def _check_query_gaps(
+    args: Dict[str, Any], result: Dict[str, Any], user_id: str
+) -> Optional[Dict[str, Any]]:
+    try:
+        path = args.get("path")
+        biz_type = next(
+            (key for key, cfg in BIZ_NOTIFY_CONFIG.items()
+             if path in (cfg.get("query_paths") or [])),
+            None,
+        )
+        if not biz_type:
+            return None
+        params = args.get("params") or {}
+        order_no = params.get("order_no") or params.get("keyword")
+        if not order_no:
+            return None
+        items = result.get("items") if isinstance(result, dict) else None
+        if not isinstance(items, list):
+            return None
+        row = next(
+            (item for item in items
+             if isinstance(item, dict) and str(item.get("order_no") or "") == str(order_no)),
+            None,
+        )
+        if row is None:
+            logger.info("gap_skip reason=no_match path=%s biz_no=%s", path, order_no)
+            return None
+        missing = await _gap_missing(
+            biz_type=biz_type, biz_no=str(order_no), values=row
+        )
+        logger.info("gap_check biz_type=%s biz_no=%s missing=%s",
+                    biz_type, order_no, len(missing))
+        if not missing:
+            return {"missing": []}
+        _schedule_gap_notify(
+            biz_type=biz_type, biz_no=str(order_no), missing=missing,
+            initiator_user_id=user_id,
+        )
+        return {"missing": [label for _, label in missing]}
+    except Exception as e:
+        logger.warning("gap check failed path=%s: %s", args.get("path"), e)
+        return None
+
+
 async def run_reaction(
     message: str,
     history: List[Dict[str, Any]],
@@ -441,6 +509,7 @@ async def run_reaction(
     stream_final: bool = False,
     task_id: Optional[str] = None,
     step_id_base: int = 0,
+    gap_notify: bool = True,
 ) -> AsyncIterator[Tuple[str, Dict[str, Any]]]:
     """AI 自主 ReAct 循环：LLM 逐步决定调用哪个智能体，编排器负责校验、执行、拦截与审计。
 
@@ -704,6 +773,9 @@ async def run_reaction(
                 "fields": args.get("fields") or {},
                 "old_values": old.get("values") or {},
                 "old_values_missing": bool(old.get("missing")),
+                "biz_type": "order",
+                "action": "update",
+                "old_row": old.get("row") or {},
                 "model_override": model_override,
             })
             if run_logger:
@@ -769,10 +841,17 @@ async def run_reaction(
         if outcome.get("ok"):
             step["status"] = "completed"
             step["item_count"] = outcome.get("item_count")
+            gap_info = None
+            if tool_name == "call_query_agent" and gap_notify:
+                gap_info = await _check_query_gaps(
+                    args, outcome.get("result") or {}, user_id
+                )
             trimmed = trim_result(
                 outcome.get("result") or {},
                 max_items=lim["trim_max_items"], max_chars=lim["trim_max_chars"],
             )
+            if gap_info is not None:
+                trimmed = {**trimmed, "completeness": gap_info}
             if tool_name == "call_query_agent":
                 query_results.append({"path": args.get("path"), "data": outcome.get("result") or {}})
         else:
@@ -837,6 +916,65 @@ async def _append_session_note(session_id: str, text: str) -> None:
         logger.warning(f"回填会话失败: {e}")
 
 
+async def _notify_write_result(
+    *, record: Dict[str, Any], write_result: Any, fields: Dict[str, Any],
+    biz_type: str, action: str, biz_no: str, operator_user_id: str,
+) -> None:
+    try:
+        effective_biz_no = str(biz_no or "").strip()
+        if action == "create" and not effective_biz_no and isinstance(write_result, dict):
+            effective_biz_no = str(
+                write_result.get("order_no") or write_result.get("biz_no") or ""
+            ).strip()
+        report_assistant_event(
+            str(record.get("trace_id") or ""),
+            "note", "助手通知", "info",
+            f"{biz_type} {effective_biz_no} {action} 通知已调度",
+            {"bizType": biz_type, "bizNo": effective_biz_no, "action": action},
+            started_at=now_iso(),
+            task_id=record.get("task_id") or None,
+            step_id=record.get("order_step_id"),
+            tool="assistant_notify",
+            confirmation_id=record.get("confirmation_id"),
+        )
+        notify_agent_change(
+            biz_type=biz_type, biz_no=effective_biz_no, action=action,
+            operator_user_id=operator_user_id,
+        )
+        if action == "delete":
+            return
+        if action == "update" and record.get("old_values_missing"):
+            logger.info("gap_skip reason=untrusted biz_type=%s biz_no=%s",
+                        biz_type, effective_biz_no)
+            return
+        if action == "create":
+            values = dict(record.get("payload") or record.get("fields") or {})
+            if isinstance(write_result, dict):
+                values = {**values, **write_result}
+        else:
+            old_row = record.get("old_row") or {}
+            if not old_row:
+                logger.info("gap_skip reason=untrusted biz_type=%s biz_no=%s",
+                            biz_type, effective_biz_no)
+                return
+            values = {**old_row, **fields}
+        if not values:
+            logger.info("gap_skip reason=untrusted biz_type=%s biz_no=%s",
+                        biz_type, effective_biz_no)
+            return
+        missing = await _gap_missing(
+            biz_type=biz_type, biz_no=effective_biz_no, values=values
+        )
+        if missing:
+            _schedule_gap_notify(
+                biz_type=biz_type, biz_no=effective_biz_no, missing=missing,
+                initiator_user_id=operator_user_id,
+            )
+    except Exception as e:
+        logger.warning("notify write result failed biz_type=%s biz_no=%s: %s",
+                       biz_type, biz_no, e)
+
+
 async def resolve_confirmation(
     db: Any,
     confirmation_id: str,
@@ -864,6 +1002,8 @@ async def resolve_confirmation(
     order_no = record.get("order_no") or ""
     fields = record.get("fields") or {}
     old_values = record.get("old_values") or {}
+    biz_type = str(record.get("biz_type") or "order")
+    write_action = str(record.get("action") or "update")
     fields_payload = [
         {"field": f, "old_value": old_values.get(f), "new_value": fields.get(f)}
         for f in fields
@@ -972,6 +1112,12 @@ async def resolve_confirmation(
         await _append_session_note(session_id, f"写操作执行失败：{error}")
         return {"code": 0, "message": error, "data": {"confirmation": confirmation_info, "reply": None}}
 
+    await _notify_write_result(
+        record=record, write_result=write_result, fields=fields,
+        biz_type=biz_type, action=write_action, biz_no=order_no,
+        operator_user_id=record_user or current_user_id,
+    )
+
     # 回填对话 + 只读续跑：回查验证与总结
     try:
         rt = await get_scope_config(db, ASSISTANT_SCOPE)
@@ -1008,6 +1154,7 @@ async def resolve_confirmation(
             provider_name=ai_service.current_provider(),
             limits=CONTINUATION_LIMITS, include_order_tool=False, stream_final=False,
             task_id=task_id, step_id_base=order_step_id,
+            gap_notify=False,
         ):
             if event == "delta":
                 text += data.get("text") or ""
