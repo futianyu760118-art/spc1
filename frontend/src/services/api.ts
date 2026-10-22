@@ -104,6 +104,10 @@ api.interceptors.response.use(
         rememberRedirectBeforeLogin()
         window.location.href = loginPathForCurrentEntry()
       }
+    } else if (status === 400) {
+      const detail = error.response?.data?.detail
+      error.message = typeof detail === 'string' && detail ? detail : '请求参数有误，请检查后重试'
+      if (!skipToast) messageApi?.error(error.message)
     } else if (status === 403) {
       error.message = error.response?.data?.detail || '权限不足，无法执行此操作'
       if (!skipToast) messageApi?.error(error.message)
