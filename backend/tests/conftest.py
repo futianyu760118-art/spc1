@@ -123,6 +123,12 @@ async def _test_db():
         PurchaseRequisitionApprovalLog,
         PurchaseRequisitionLine,
     )
+    from app.models.purchase.price_change import (
+        PurchasePriceChange,
+        PurchasePriceChangeAiAnalysis,
+        PurchasePriceChangeApprovalLog,
+        PurchasePriceChangeItem,
+    )
     from app.models.order.sale_order import SaleOrder, SaleOrderLine
     from app.models.production.base_condition import ProductionBaseCondition
     from app.models.production.capacity_slot import CapacitySlot
@@ -152,6 +158,8 @@ async def _test_db():
         Material.__table__, PurchaseOrder.__table__,
         PurchaseRequisition.__table__, PurchaseRequisitionLine.__table__,
         PurchaseRequisitionApprovalLog.__table__,
+        PurchasePriceChange.__table__, PurchasePriceChangeItem.__table__,
+        PurchasePriceChangeApprovalLog.__table__, PurchasePriceChangeAiAnalysis.__table__,
         Inventory.__table__, Location.__table__,
         StockCheck.__table__, StockCheckItem.__table__,
         ReasoningTask.__table__, KittingResult.__table__, KittingShortage.__table__,
@@ -164,6 +172,17 @@ async def _test_db():
         await conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS ai_result JSONB"))
         await conn.execute(text("ALTER TABLE supplier_claim ADD COLUMN IF NOT EXISTS clause_snapshot JSONB"))
         await conn.execute(text("ALTER TABLE notification ADD COLUMN IF NOT EXISTS ref_no VARCHAR(64)"))
+        await conn.execute(text(
+            "ALTER TABLE purchase_price_change_item ADD COLUMN IF NOT EXISTS unit_id INTEGER"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE purchase_price_change_item "
+            "ALTER COLUMN price_change_pct TYPE NUMERIC(10,2)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE purchase_price_change "
+            "ALTER COLUMN self_check_evidence TYPE JSONB USING self_check_evidence::jsonb"
+        ))
         # approval_config 模型在 purchase 域（故意不导入），直接 DDL 建表
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS approval_config (
@@ -236,6 +255,8 @@ async def client(_test_db):
         await conn.execute(text(
             "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, feedback, "
             "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
+            "purchase_price_change, purchase_price_change_item, purchase_price_change_approval_log, "
+            "purchase_price_change_ai_analysis, "
             "purchase_order, approval_instance, approval_task, approval_record, "
             "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item, "
             "ai_agent_config, assistant_run, completeness_rule "

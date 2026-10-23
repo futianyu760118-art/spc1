@@ -73,7 +73,7 @@ SQL_LIST = [
       old_price       NUMERIC(15,4),
       old_price_date  VARCHAR(16),
       new_price       NUMERIC(15,4),
-      price_change_pct NUMERIC(5,2),
+      price_change_pct NUMERIC(10,2),
 
       remark          VARCHAR(256)
     )

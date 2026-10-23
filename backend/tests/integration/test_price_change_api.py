@@ -1,7 +1,10 @@
 """调价单 API 回归测试（supplier-last-price 回退取价：无记录 / 空价不得 500）。"""
 
+from decimal import Decimal
+
 from sqlalchemy import text
 
+from app.services.purchase.price_change_service import PriceChangeService
 from tests.conftest import login
 
 ADMIN = "admin"
@@ -48,3 +51,24 @@ async def test_supplier_last_price_null_price_returns_empty(client, db):
     body = r.json()
     assert body["code"] == 0
     assert body["data"] is None
+
+
+async def test_create_price_change_pct_over_999_does_not_overflow(db):
+    """低价物料涨幅超过 1000% 时应正常落库（NUMERIC(5,2) 会 numeric field overflow 致提交 500）。"""
+    await db.execute(text("DELETE FROM purchase_price_change"))
+    await db.commit()
+    service = PriceChangeService(db)
+    record = await service.create_price_change(
+        {"supplier_code": "S-PCT-OVERFLOW", "supplier_name": "测试供应商", "title": "大涨幅回归"},
+        [{
+            "material_code": "M-PCT-OVERFLOW",
+            "material_name": "测试物料",
+            "old_price": 0.148,
+            "new_price": 4.5,
+        }],
+        submit=False,
+        applicant=ADMIN,
+    )
+    await db.commit()
+    assert record is not None
+    assert Decimal(str(record["items"][0]["price_change_pct"])) == Decimal("2940.54")
