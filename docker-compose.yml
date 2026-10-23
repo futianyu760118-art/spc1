@@ -50,10 +50,8 @@ services:
       WRITEBACK_POLL_INTERVAL: ${WRITEBACK_POLL_INTERVAL:-}
       WRITEBACK_BATCH_SIZE: ${WRITEBACK_BATCH_SIZE:-}
       WRITEBACK_CLAIM_TIMEOUT: ${WRITEBACK_CLAIM_TIMEOUT:-}
-      # 执行面智能体管理（状态/配置/重启代理到 aeos-execution-agent 的 admin 面）
-      EXECUTION_AGENT_BASE_URL: ${EXECUTION_AGENT_BASE_URL:-http://aeos-execution-agent:8790}
+      # 执行面智能体（query/reasoning/order）admin 面代理地址
       AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
-      # 拆分后双 Agent（query/reasoning）admin 面代理地址
       EXECUTION_QUERY_AGENT_BASE_URL: ${EXECUTION_QUERY_AGENT_BASE_URL:-http://aeos-query-agent:8790}
       EXECUTION_REASONING_AGENT_BASE_URL: ${EXECUTION_REASONING_AGENT_BASE_URL:-http://aeos-reasoning-agent:8790}
       EXECUTION_ORDER_AGENT_BASE_URL: ${EXECUTION_ORDER_AGENT_BASE_URL:-http://aeos-order-agent:8790}
@@ -83,57 +81,6 @@ services:
       - "3000:80"
     depends_on:
       - backend
-
-  # 执行面智能体（反向连 AEOS Hub）：默认不启动，需 `docker compose --profile agent up -d`
-  # 且 .env 中已配置 EXECUTION_WS_URL / EXECUTION_PLANE_TOKEN / CONTROL_PLATFORM_* 才有意义
-  execution-agent:
-    build:
-      context: .
-      dockerfile: execution-agent/Dockerfile
-    image: spc-execution-agent
-    profiles: ["agent"]
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
-    environment:
-      TZ: Asia/Shanghai
-      EXECUTION_WS_URL: ${EXECUTION_WS_URL:-ws://127.0.0.1:8788/execution-agent}
-      EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
-      EXECUTION_AGENT_ID: ${EXECUTION_AGENT_ID:-runtime-execution-query}
-      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-}
-      QUERY_TIMEOUT_MS: ${QUERY_TIMEOUT_MS:-30000}
-      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
-      CONTROL_PLATFORM_APP_KEY: ${CONTROL_PLATFORM_APP_KEY:-}
-      CONTROL_PLATFORM_APP_SECRET: ${CONTROL_PLATFORM_APP_SECRET:-}
-
-  # AEOS Hub 执行面智能体（查询 + 推理合一，旧合并版）：
-  # 已被 aeos-query-agent / aeos-reasoning-agent 取代，保留用于切换回退，验收后删除。
-  # 回退启动：docker compose --profile aeos-legacy up -d aeos-execution-agent
-  aeos-execution-agent:
-    build: ./aeos-execution-agent
-    image: aeos-execution-agent:latest
-    profiles: ["aeos-legacy"]
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
-    environment:
-      TZ: Asia/Shanghai
-      EXECUTION_WS_URL: ${EXECUTION_WS_URL:-ws://127.0.0.1:8788/execution-agent}
-      EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
-      EXECUTION_AGENT_ID: ${EXECUTION_AGENT_ID:-runtime-control-platform-agent}
-      EXECUTION_AGENT_NAME: ${EXECUTION_AGENT_NAME:-}
-      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-}
-      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
-      CONTROL_PLATFORM_APP_KEY: ${CONTROL_PLATFORM_APP_KEY:-}
-      CONTROL_PLATFORM_APP_SECRET: ${CONTROL_PLATFORM_APP_SECRET:-}
-      CONTROL_PLATFORM_TIMEOUT_MS: ${CONTROL_PLATFORM_TIMEOUT_MS:-15000}
-      CONTROL_PLATFORM_REASONING_TIMEOUT_MS: ${CONTROL_PLATFORM_REASONING_TIMEOUT_MS:-180000}
-      HEALTH_CHECK_PORT: ${AEOS_HEALTH_CHECK_PORT:-8790}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
-    stop_grace_period: 30s
 
   # AEOS Hub 执行面查询智能体（agents/query-agent，只注册 query_control_platform）：
   # 启动：docker compose --profile aeos up -d

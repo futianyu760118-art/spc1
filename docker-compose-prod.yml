@@ -95,10 +95,8 @@ services:
       WRITEBACK_POLL_INTERVAL: ${WRITEBACK_POLL_INTERVAL:-}
       WRITEBACK_BATCH_SIZE: ${WRITEBACK_BATCH_SIZE:-}
       WRITEBACK_CLAIM_TIMEOUT: ${WRITEBACK_CLAIM_TIMEOUT:-}
-      # 执行面智能体管理（状态/配置/重启代理；AGENT_ADMIN_TOKEN 需与 aeos-execution-agent 容器一致）
-      EXECUTION_AGENT_BASE_URL: ${EXECUTION_AGENT_BASE_URL:-}
+      # 执行面智能体（query/reasoning/order）admin 面代理地址
       AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
-      # 拆分后双 Agent（query/reasoning）admin 面代理地址
       EXECUTION_QUERY_AGENT_BASE_URL: ${EXECUTION_QUERY_AGENT_BASE_URL:-http://aeos-query-agent:8790}
       EXECUTION_REASONING_AGENT_BASE_URL: ${EXECUTION_REASONING_AGENT_BASE_URL:-http://aeos-reasoning-agent:8790}
       EXECUTION_ORDER_AGENT_BASE_URL: ${EXECUTION_ORDER_AGENT_BASE_URL:-http://aeos-order-agent:8790}
@@ -136,29 +134,6 @@ services:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - backend
-
-  # 执行面智能体（反向 WS 连 AEOS Hub，只读查本中台）。镜像不在 deploy-remote 打包链内，
-  # 需单独构建上传（见 execution-agent/README.md）；EXECUTION_*/CONTROL_PLATFORM_* 配置在服务器 .env。
-  # 已被 aeos-query-agent 取代，保留用于切换回退（profile legacy，验收后删除）；
-  # 回退启动：docker compose -f docker-compose-prod.yml --profile legacy up -d execution-agent
-  execution-agent:
-    image: spc-execution-agent:latest
-    profiles: ["legacy"]
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
-    environment:
-      TZ: Asia/Shanghai
-      EXECUTION_WS_URL: ${EXECUTION_WS_URL:-}
-      EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
-      EXECUTION_AGENT_ID: ${EXECUTION_AGENT_ID:-runtime-execution-query}
-      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-}
-      AGENT_NAME: ${AGENT_NAME:-}
-      QUERY_TIMEOUT_MS: ${QUERY_TIMEOUT_MS:-30000}
-      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
-      CONTROL_PLATFORM_APP_KEY: ${CONTROL_PLATFORM_APP_KEY:-}
-      CONTROL_PLATFORM_APP_SECRET: ${CONTROL_PLATFORM_APP_SECRET:-}
 
   # AEOS Hub 执行面查询智能体（agents/query-agent，只注册 query_control_platform）。
   # 镜像需单独构建上传（见 agents/README.md）；EXECUTION_*/CONTROL_PLATFORM_* 配置在服务器 .env。

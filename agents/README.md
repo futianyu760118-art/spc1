@@ -34,13 +34,3 @@ docker build -f agents/order-agent/Dockerfile -t aeos-order-agent:latest agents
 ```powershell
 docker compose --profile aeos up -d aeos-query-agent aeos-reasoning-agent aeos-order-agent
 ```
-
-回退到旧合并 Agent：
-
-```powershell
-docker compose --profile aeos stop aeos-query-agent aeos-reasoning-agent
-docker compose --profile aeos-legacy up -d aeos-execution-agent
-```
-
-回退期间旧 Agent 走旧管理端点 `/api/v1/system/execution-agent/*`（当前管理页不展示旧 Agent，
-需通过 API 或临时回滚 backend/frontend 镜像管理；旧端点将在验收后删除）。
