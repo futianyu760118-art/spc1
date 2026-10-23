@@ -177,6 +177,10 @@ class SyncScheduler:
         if status == "success":
             config.last_sync_time = datetime.now()
             config.next_sync_time = self._calculate_next_sync_time(config)
+        elif status == "failed":
+            # 失败不推进 last_sync_time（增量同步游标），只推迟下次重试：
+            # 既避免失败任务每分钟重试，也不跳过失败期间产生的数据。
+            config.next_sync_time = datetime.now() + self._parse_interval(config.sync_interval)
         await db.flush()
 
     def _compute_since(self, config: SyncSqlConfig):
@@ -248,6 +252,7 @@ class SyncScheduler:
         config_status = "failed"
         message = ""
         error_detail = None
+        sync_completed = False
         try:
             async with AsyncSessionLocal() as sync_db:
                 service = ERPSyncService(sync_db)
@@ -259,6 +264,7 @@ class SyncScheduler:
                     logger.error(f"[调度器] 同步数据 commit 失败: {commit_err}")
                     await sync_db.rollback()
                     raise
+            sync_completed = True
 
             synced_count = result.get("synced", 0)
             created_count = result.get("created", 0)
@@ -271,7 +277,7 @@ class SyncScheduler:
                 message += f", 失败{errors_count}条"
 
             sync_log_status = "success" if errors_count == 0 else "failed"
-            config_status = "success"
+            config_status = "success" if errors_count == 0 else "failed"
             # 同步方法内部捕获的异常只进入了 stats["errors"]，
             # 不会触发下方外层 except。这里把错误明细写入 error_detail，
             # 否则前端只能看到 "失败N条" 而无法定位失败原因。
@@ -292,8 +298,9 @@ class SyncScheduler:
             errors_count, sync_log_status, error_detail,
         )
 
-        # 仅同步成功时回报类型，供 _run_sync 判断是否触发齐套重算
-        if config_status == "success":
+        # 同步方法已执行完成（即使个别行失败）即回报类型，供 _run_sync 触发齐套重算；
+        # 整体异常（未进入同步或 commit 失败）不回报。
+        if sync_completed:
             return sync_type
         return None
 
@@ -320,12 +327,8 @@ class SyncScheduler:
                 )
                 config = result.scalar_one_or_none()
                 if config:
-                    if config_status == "success":
-                        await self._update_sync_status(db, config, "success", message)
-                    else:
-                        config.last_sync_status = config_status
-                        config.last_sync_message = message
-                        await db.flush()
+                    # 失败也要推进 next_sync_time，否则调度器会每分钟重试同一失败任务。
+                    await self._update_sync_status(db, config, config_status, message)
 
                 log_result = await db.execute(
                     select(SyncLog).where(SyncLog.task_id == task_id)

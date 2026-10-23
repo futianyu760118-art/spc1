@@ -167,11 +167,16 @@ async def _run_sync_background(task_id: str, sync_type: str, sync_params: dict, 
                 cfg_result = await db.execute(select(SyncSqlConfig).where(SyncSqlConfig.sync_type == st))
                 cfg = cfg_result.scalar_one_or_none()
                 if cfg:
-                    cfg.last_sync_time = now
-                    cfg.last_sync_status = "success"
                     sync_result = result.get(st.replace("-", "_"), result) if sync_type == "all" else result
+                    failed_count = 0
                     if isinstance(sync_result, dict):
+                        failed_count = len(sync_result.get("errors", []))
                         cfg.last_sync_message = f"手动同步: 处理{sync_result.get('synced', 0)}条, 新增{sync_result.get('created', 0)}条, 更新{sync_result.get('updated', 0)}条"
+                        if failed_count:
+                            cfg.last_sync_message += f", 失败{failed_count}条"
+                    cfg.last_sync_status = "success" if failed_count == 0 else "failed"
+                    if failed_count == 0:
+                        cfg.last_sync_time = now
                     cfg.next_sync_time = now + timedelta(seconds=_parse_interval_seconds(cfg.sync_interval))
             await db.commit()
 

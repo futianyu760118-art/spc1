@@ -329,6 +329,9 @@ const QUICK_VIEW_DEFS: { key: QuickView; label: string }[] = [
   { key: 'shipweek', label: '本周发货' },
 ]
 
+/* 「未完成」口径：未发货 且 未关闭（is_closed=1 的 ERP 已关闭单不参与）；点「含已关闭」才放开 */
+const UNFINISHED_ORDER_PARAMS: Record<string, string> = { delivery_completed: 'no', is_closed: '0' }
+
 /* 编辑弹窗：选项与分节配置（整单字段集中维护） */
 const GRADE_OPTS = [
   { value: 'A', label: 'A 级' }, { value: 'B', label: 'B 级' },
@@ -444,7 +447,7 @@ export default function OrderList() {
     packaging_status: [],
     procurement_status: [],
     delivery_completed: ['no'],
-    is_closed: [],
+    is_closed: ['0'],
     order_type: ['big'],
     order_no_text: [],
     customer_code: [],
@@ -848,27 +851,28 @@ export default function OrderList() {
       return editWrap(record, field, display)
     }
 
-  /* ── 快速视图 → 后端筛选参数（复用已有接口能力，不改后端）── */
+  /* ── 快速视图 → 后端筛选参数（复用已有接口能力，不改后端）；各视图均为「未完成」口径 ── */
   const quickViewParams = useCallback((view: QuickView): Record<string, any> => {
     const t = dayjs().format('YYYY-MM-DD')
     switch (view) {
-      case 'mine': return userName ? { owner: userName, delivery_completed: 'no' } : { delivery_completed: 'no' }
-      case 'today': return { promised_date_start: t, promised_date_end: t, delivery_completed: 'no' }
-      case 'overdue': return { promised_date_end: dayjs().subtract(1, 'day').format('YYYY-MM-DD'), delivery_completed: 'no' }
-      case 'high': return { risk_level: 'red,yellow', delivery_completed: 'no' }
-      case 'shipweek': return { shipping_plan_start: t, shipping_plan_end: dayjs().add(6, 'day').format('YYYY-MM-DD'), delivery_completed: 'no' }
+      case 'mine': return { ...(userName ? { owner: userName } : {}), ...UNFINISHED_ORDER_PARAMS }
+      case 'today': return { promised_date_start: t, promised_date_end: t, ...UNFINISHED_ORDER_PARAMS }
+      case 'overdue': return { promised_date_end: dayjs().subtract(1, 'day').format('YYYY-MM-DD'), ...UNFINISHED_ORDER_PARAMS }
+      case 'high': return { risk_level: 'red,yellow', ...UNFINISHED_ORDER_PARAMS }
+      case 'shipweek': return { shipping_plan_start: t, shipping_plan_end: dayjs().add(6, 'day').format('YYYY-MM-DD'), ...UNFINISHED_ORDER_PARAMS }
       default: return {}
     }
   }, [userName])
 
-  /* 快速视图 chips 计数：发货完成口径是各 chip 自己的维度，先从基础参数剥离再各自追加；
-     「全部」恒为未完成口径、「含已关闭」恒为全量口径，选中哪个视图都不影响彼此计数 */
+  /* 快速视图 chips 计数：发货完成/是否关闭口径是各 chip 自己的维度，先从基础参数剥离再各自追加；
+     「全部」及各视图恒为「未完成」口径，「含已关闭」恒为全量口径，选中哪个视图都不影响彼此计数 */
   const fetchChipCounts = useCallback(async (baseParams: Record<string, any>) => {
     const viewBase = { ...baseParams }
     delete viewBase.delivery_completed
+    delete viewBase.is_closed
     const views: QuickView[] = ['all', 'mine', 'today', 'overdue', 'high', 'shipweek']
     const requests = [
-      ...views.map(v => (v === 'all' ? { ...viewBase, delivery_completed: 'no' } : { ...viewBase, ...quickViewParams(v) })),
+      ...views.map(v => (v === 'all' ? { ...viewBase, ...UNFINISHED_ORDER_PARAMS } : { ...viewBase, ...quickViewParams(v) })),
       viewBase,
     ]
     const totals = await Promise.all(requests.map(async (params) => {
@@ -955,12 +959,13 @@ export default function OrderList() {
   }, [shouldInitialLoad, fetchOrders])
 
   /* 顶部 chip 组：含已关闭 与 各快速视图互斥选择（点击即拉取，不用 effect 监听 quickView）；
-     选任一快速视图都回到「未完成」口径，选「含已关闭」才放开已关闭/已交付订单 */
+     选任一快速视图都回到「未完成」口径（未发货 且 未关闭），选「含已关闭」才放开这两项 */
   const applyQuickView = (view: QuickView, includeClosed = false) => {
-    const deliveryIsNo = filters.delivery_completed.length === 1 && filters.delivery_completed[0] === 'no'
+    const unfinishedOn = filters.delivery_completed.length === 1 && filters.delivery_completed[0] === 'no'
+      && filters.is_closed.length === 1 && filters.is_closed[0] === '0'
     const newFilters: Filters = includeClosed
-      ? { ...filters, delivery_completed: [] }
-      : (deliveryIsNo ? filters : { ...filters, delivery_completed: ['no'] })
+      ? { ...filters, delivery_completed: [], is_closed: [] }
+      : (unfinishedOn ? filters : { ...filters, delivery_completed: ['no'], is_closed: ['0'] })
     setFilters(newFilters)
     setQuickView(view)
     fetchOrders(1, pagination.pageSize, newFilters, sortInfo, view)
@@ -1616,16 +1621,15 @@ export default function OrderList() {
           style={{ width: 230 }}
         />
         <span
-          className={`sc-chip${quickView === 'all' && filters.delivery_completed.length === 0 ? ' on' : ''}`}
+          className={`sc-chip${quickView === 'all' && filters.delivery_completed.length === 0 && filters.is_closed.length === 0 ? ' on' : ''}`}
           style={{ cursor: 'pointer' }}
           onClick={() => applyQuickView('all', true)}
           title="查看含已关闭/已交付订单的全部订单"
         >含已关闭 <span className="n">{chipCounts.inclClosed ?? '-'}</span></span>
         {QUICK_VIEW_DEFS.map(v => {
           const hot = (v.key === 'high' && (chipCounts.high ?? 0) > 0) || (v.key === 'overdue' && (chipCounts.overdue ?? 0) > 0)
-          const active = v.key === 'all'
-            ? (quickView === 'all' && filters.delivery_completed.length > 0)
-            : quickView === v.key
+          const inclClosedOn = quickView === 'all' && filters.delivery_completed.length === 0 && filters.is_closed.length === 0
+          const active = v.key === 'all' ? (quickView === 'all' && !inclClosedOn) : quickView === v.key
           return (
             <span
               key={v.key}
