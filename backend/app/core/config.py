@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     REASONING_MAX_CONCLUSIONS: int = 20     # 单次任务结论条数上限
 
     # 智能体管理台（backend 代理访问执行面 agent 的 admin 面；两者留空则 status/restart 返回下线态）
-    EXECUTION_AGENT_BASE_URL: str = ""   # 如 http://aeos-execution-agent:8790
+    EXECUTION_AGENT_BASE_URL: str = ""   # legacy 单 Agent 管理代理（已停用，仅旧端点兼容）
     EXECUTION_QUERY_AGENT_BASE_URL: str = ""
     EXECUTION_REASONING_AGENT_BASE_URL: str = ""
     EXECUTION_ORDER_AGENT_BASE_URL: str = ""
