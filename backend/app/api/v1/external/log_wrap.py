@@ -10,7 +10,7 @@ from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.schemas.common import ResponseModel
 from app.services.basicdata.data_supply_service import log_call
 
-from .freshness import ExternalSourceUnavailable
+from .common import ExternalEnvelopeError
 
 
 def log_external_call(endpoint_code: str, path_params: tuple = ()):
@@ -41,17 +41,17 @@ def log_external_call(endpoint_code: str, path_params: tuple = ()):
                     if isinstance(result, dict) and "items" in result
                     else (1 if result else 0)
                 )
-            except ExternalSourceUnavailable as e:
+            except ExternalEnvelopeError as e:
                 duration_ms = (time.time() - start_time) * 1000
                 await log_call(
                     db=db, api_key_id=key_obj.id, api_key_name=key_obj.key_name,
                     data_type=endpoint_code, request_params=params,
-                    response_status=503, response_count=0,
+                    response_status=e.code, response_count=0,
                     ip_address=client_ip,
                     user_agent=request.headers.get("user-agent"),
                     duration_ms=duration_ms, error_message=e.message,
                 )
-                return ResponseModel(code=503, message=e.message, data=None)
+                return ResponseModel(code=e.code, message=e.message, data=None)
             except HTTPException:
                 raise
             except Exception as e:

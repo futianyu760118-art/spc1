@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.database import engine, Base, AsyncSessionLocal
 from app.core.config import get_settings
 from app.core.security import get_password_hash
+import app.models  # noqa: F401  经包 __init__ 注册全部模型到 Base.metadata，create_all 才能看到所有表
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.order.eta_update import ETAUpdate
 from app.models.order.run_order import RunOrder
@@ -423,6 +424,7 @@ class DatabaseInitializer:
             },
             "business_document": {
                 "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+                "custom_fields": "JSONB DEFAULT '{}'::jsonb",
             },
             "share_link": {
                 "reason": "VARCHAR(256)",
@@ -443,9 +445,13 @@ class DatabaseInitializer:
                 "ai_progress": "JSONB",
                 "ai_result": "JSONB",
             },
+            "supplier_claim": {
+                "clause_snapshot": "JSONB",
+            },
             "notification": {
                 "sender_id": "INTEGER",
                 "sender_name": "VARCHAR(64)",
+                "ref_no": "VARCHAR(64)",
             },
         }
         # 删除已废弃的列
@@ -578,6 +584,18 @@ class DatabaseInitializer:
             print("  share_link_recipient.wecom_msg_id resized to VARCHAR(256)")
         except Exception as e:
             print(f"  share_link_recipient.wecom_msg_id resize skipped: {e}")
+
+        # purchase_price_change_item.price_change_pct 扩容: NUMERIC(5,2) 上限 ±999.99,
+        # 低价物料涨幅超过 1000% 时 numeric field overflow 会导致整单提交 500。
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE purchase_price_change_item "
+                    "ALTER COLUMN price_change_pct TYPE NUMERIC(10,2)"
+                ))
+            print("  purchase_price_change_item.price_change_pct resized to NUMERIC(10,2)")
+        except Exception as e:
+            print(f"  purchase_price_change_item.price_change_pct resize skipped: {e}")
 
         # 物料盘点单 order_no 改为可空,支持 manual 类型独立物料盘点
         try:
@@ -759,6 +777,16 @@ class DatabaseInitializer:
                 print("  feedback.ai_status index ensured")
             except Exception as e:
                 print(f"  feedback.ai_status index skipped: {e}")
+        # 单独事务：po_no 唯一索引是 order_material_po_binding 外键前提（对齐 alembic），
+        # 半建库（create_all 中途失败留下无唯一索引的 purchase_order）靠此收敛；有重复数据时失败不影响上面已确保的索引
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_purchase_order_po_no ON purchase_order (po_no)"
+                ))
+                print("  purchase_order.po_no unique index ensured")
+            except Exception as e:
+                print(f"  purchase_order.po_no unique index skipped: {e}")
 
     async def migrate_production_daily_report_index(self):
         """将 production_daily_report 的唯一索引由 (oa_id) 改为 (oa_id, oa_detail_id)，
@@ -1342,6 +1370,33 @@ class DatabaseInitializer:
                 print(f"Error seeding roles: {e}")
                 raise
 
+    async def seed_completeness_rules(self):
+        """订单完整性示例规则（幂等）；正式清单由管理员 SQL 维护。"""
+        rules = [
+            ("order", "promised_date", "合同交期"),
+            ("order", "shipping_plan", "出货计划"),
+            ("order", "customer_inspection_date", "客户验货时间"),
+        ]
+        try:
+            async with self.engine.begin() as conn:
+                existing = (
+                    await conn.execute(text("SELECT count(*) FROM completeness_rule"))
+                ).scalar() or 0
+                if existing:
+                    print("Completeness rules already configured, skip seeding")
+                    return
+                for biz_type, field_key, label in rules:
+                    await conn.execute(text("""
+                        INSERT INTO completeness_rule
+                            (biz_type, field_key, label, required, enabled)
+                        VALUES (:biz_type, :field_key, :label, TRUE, TRUE)
+                        ON CONFLICT (biz_type, field_key) DO NOTHING
+                    """), {"biz_type": biz_type, "field_key": field_key, "label": label})
+            print(f"Completeness rules seeded ({len(rules)})")
+        except Exception as e:
+            print(f"Error seeding completeness rules: {e}")
+            raise
+
     async def seed_users(self):
         """Seed / update system users"""
         print("Seeding system users...")
@@ -1728,12 +1783,12 @@ class DatabaseInitializer:
             if existing.fetchone():
                 return
             default_nodes = [
-                {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager"},
-                {"seq": 2, "label": "上级部门意见", "role": "manager",
+                {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager", "paper_slot": "claim_dept"},
+                {"seq": 2, "label": "上级部门意见", "role": "manager", "paper_slot": "upper_dept",
                  "condition": {"field": "claim_amount", "op": ">=", "value": 1000}},
-                {"seq": 3, "label": "总经理意见", "role": "general_manager",
+                {"seq": 3, "label": "总经理意见", "role": "general_manager", "paper_slot": "general_manager",
                  "condition": {"field": "claim_amount", "op": ">=", "value": 5000}},
-                {"seq": 4, "label": "财务结算", "role": "finance"},
+                {"seq": 4, "label": "财务结算", "role": "finance", "paper_slot": "finance"},
             ]
             await session.execute(text(
                 "INSERT INTO approval_config (biz_type, biz_name, nodes, is_active, updated_by) "
@@ -2493,6 +2548,7 @@ ORDER BY b.FDate DESC, b.FBillNo, e.FEntryID
             await self.backfill_sys_user_scm_employee_id()
             await self.migrate_stock_check_permission()
             await self.seed_roles()
+            await self.seed_completeness_rules()
             await self.seed_users()
             await self.seed_price_change_rule_config()
             await self.seed_supplier_claim_approval_config()

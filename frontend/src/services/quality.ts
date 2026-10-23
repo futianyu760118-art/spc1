@@ -46,6 +46,7 @@ export interface ClaimStats {
 }
 
 export const qualityApi = {
+  template: () => api.get('/quality/supplier-claims/template'),
   stats: () => api.get('/quality/supplier-claims/stats'),
   list: (params: Record<string, any>) => api.get('/quality/supplier-claims', { params }),
   get: (id: number) => api.get(`/quality/supplier-claims/${id}`),

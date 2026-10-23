@@ -127,3 +127,8 @@ async def test_pubsub_drop_reconnects_with_compensation_snapshot(monkeypatch):
         "unread", "unread", "degraded", "unread", "recovered", "unread",
     ]
     assert dropped_pubsub.closed and dropped_client.closed
+
+
+async def test_publish_unread_updates_degrades_without_redis(db):
+    from app.services.notification.notification_broker import publish_unread_updates
+    await publish_unread_updates(db, [1, 2, 3])

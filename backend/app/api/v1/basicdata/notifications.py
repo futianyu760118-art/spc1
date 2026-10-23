@@ -44,6 +44,10 @@ TYPE_LABELS = {
     "material_alert": "物料提醒",
     "exception_alert": "异常提醒",
     "approval_timeout": "审批超时",
+    "assistant_update": "助手更新",
+    "assistant_create": "助手新增",
+    "assistant_delete": "助手删除",
+    "assistant_gap": "助手提醒",
 }
 
 
@@ -125,6 +129,7 @@ async def list_notifications(
                 "content": r.content,
                 "ref_type": r.ref_type,
                 "ref_id": r.ref_id,
+                "ref_no": r.ref_no,
                 "sender_id": r.sender_id,
                 "sender_name": r.sender_name,
                 "priority": r.priority,

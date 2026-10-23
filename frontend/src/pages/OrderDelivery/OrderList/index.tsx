@@ -147,6 +147,67 @@ interface Filters {
   assembly_complete_date_range: [string, string] | null
 }
 
+/* 筛选状态 → 列表接口参数（快速视图参数由调用方追加，保证各视图计数与列表共用同一筛选口径） */
+function filtersToParams(f: Filters): Record<string, any> {
+  const params: Record<string, any> = {}
+  if (f.keyword) params.keyword = f.keyword
+  if (f.risk_level.length > 0) params.risk_level = f.risk_level.join(',')
+  if (f.customer_grade.length > 0) params.customer_grade = f.customer_grade.join(',')
+  if (f.department.length > 0) params.department = f.department.join(',')
+  if (f.status.length > 0) params.erp_status = f.status.join(',')
+  if (f.inspection_result.length > 0) params.inspection_result = f.inspection_result.join(',')
+  if (f.packaging_status.length > 0) params.packaging_status = f.packaging_status.join(',')
+  if (f.procurement_status.length > 0) params.procurement_status = f.procurement_status.join(',')
+  if (f.delivery_completed.length > 0) params.delivery_completed = f.delivery_completed.join(',')
+  if (f.is_closed.length > 0) params.is_closed = f.is_closed.join(',')
+  if (f.order_type.length > 0) params.order_type = f.order_type.join(',')
+  if (f.order_no_text.length > 0) params.order_no = f.order_no_text.join(',')
+  if (f.customer_code.length > 0) params.customer_code = f.customer_code.join(',')
+  if (f.shipping_status_desc.length > 0) params.shipping_status_desc = f.shipping_status_desc.join(',')
+  if (f.year) params.year = f.year
+  if (f.promised_date_range) {
+    params.promised_date_start = f.promised_date_range[0]
+    params.promised_date_end = f.promised_date_range[1]
+  }
+  if (f.shipping_plan_range) {
+    params.shipping_plan_start = f.shipping_plan_range[0]
+    params.shipping_plan_end = f.shipping_plan_range[1]
+  }
+  if (f.order_date_range) {
+    params.order_date_start = f.order_date_range[0]
+    params.order_date_end = f.order_date_range[1]
+  }
+  if (f.customer_inspection_date_range) {
+    params.customer_inspection_date_start = f.customer_inspection_date_range[0]
+    params.customer_inspection_date_end = f.customer_inspection_date_range[1]
+  }
+  if (f.planned_start_date_range) {
+    params.planned_start_date_start = f.planned_start_date_range[0]
+    params.planned_start_date_end = f.planned_start_date_range[1]
+  }
+  if (f.material_ready_date_range) {
+    params.material_ready_date_start = f.material_ready_date_range[0]
+    params.material_ready_date_end = f.material_ready_date_range[1]
+  }
+  if (f.front_process_date_range) {
+    params.front_process_date_start = f.front_process_date_range[0]
+    params.front_process_date_end = f.front_process_date_range[1]
+  }
+  if (f.first_article_date_range) {
+    params.first_article_date_start = f.first_article_date_range[0]
+    params.first_article_date_end = f.first_article_date_range[1]
+  }
+  if (f.assembly_start_date_range) {
+    params.assembly_start_date_start = f.assembly_start_date_range[0]
+    params.assembly_start_date_end = f.assembly_start_date_range[1]
+  }
+  if (f.assembly_complete_date_range) {
+    params.assembly_complete_date_start = f.assembly_complete_date_range[0]
+    params.assembly_complete_date_end = f.assembly_complete_date_range[1]
+  }
+  return params
+}
+
 const MATERIAL_KEYS = [
   '电子料', 'SMT上线', '光源', '感应器/电源/控制板',
   '结构', '结构2', '支架', '电缆线', '塑料件', '手杆',
@@ -268,6 +329,9 @@ const QUICK_VIEW_DEFS: { key: QuickView; label: string }[] = [
   { key: 'shipweek', label: '本周发货' },
 ]
 
+/* 「未完成」口径：未发货 且 未关闭（is_closed=1 的 ERP 已关闭单不参与）；点「含已关闭」才放开 */
+const UNFINISHED_ORDER_PARAMS: Record<string, string> = { delivery_completed: 'no', is_closed: '0' }
+
 /* 编辑弹窗：选项与分节配置（整单字段集中维护） */
 const GRADE_OPTS = [
   { value: 'A', label: 'A 级' }, { value: 'B', label: 'B 级' },
@@ -383,7 +447,7 @@ export default function OrderList() {
     packaging_status: [],
     procurement_status: [],
     delivery_completed: ['no'],
-    is_closed: [],
+    is_closed: ['0'],
     order_type: ['big'],
     order_no_text: [],
     customer_code: [],
@@ -400,7 +464,7 @@ export default function OrderList() {
     assembly_complete_date_range: null,
   })
   const [sortInfo, setSortInfo] = useState<{ sort_by?: string; sort_order?: string }>({})
-  const [summary, setSummary] = useState({ total: 0, red: 0, yellow: 0, blue: 0, green: 0, shortage: 0, order_qty_total: 0, order_amount_total: 0 })
+  const [summary, setSummary] = useState({ red: 0, yellow: 0, blue: 0, green: 0, shortage: 0, order_qty_total: 0, order_amount_total: 0 })
   const [showCharts, setShowCharts] = useState(false)
   const [analyticsLoading, setAnalyticsLoading] = useState(false)
   const [analyticsData, setAnalyticsData] = useState<any>(null)
@@ -787,27 +851,33 @@ export default function OrderList() {
       return editWrap(record, field, display)
     }
 
-  /* ── 快速视图 → 后端筛选参数（复用已有接口能力，不改后端）── */
+  /* ── 快速视图 → 后端筛选参数（复用已有接口能力，不改后端）；各视图均为「未完成」口径 ── */
   const quickViewParams = useCallback((view: QuickView): Record<string, any> => {
     const t = dayjs().format('YYYY-MM-DD')
     switch (view) {
-      case 'mine': return userName ? { owner: userName } : {}
-      case 'today': return { promised_date_start: t, promised_date_end: t, delivery_completed: 'no' }
-      case 'overdue': return { promised_date_end: dayjs().subtract(1, 'day').format('YYYY-MM-DD'), delivery_completed: 'no' }
-      case 'high': return { risk_level: 'red,yellow', delivery_completed: 'no' }
-      case 'shipweek': return { shipping_plan_start: t, shipping_plan_end: dayjs().add(6, 'day').format('YYYY-MM-DD'), delivery_completed: 'no' }
+      case 'mine': return { ...(userName ? { owner: userName } : {}), ...UNFINISHED_ORDER_PARAMS }
+      case 'today': return { promised_date_start: t, promised_date_end: t, ...UNFINISHED_ORDER_PARAMS }
+      case 'overdue': return { promised_date_end: dayjs().subtract(1, 'day').format('YYYY-MM-DD'), ...UNFINISHED_ORDER_PARAMS }
+      case 'high': return { risk_level: 'red,yellow', ...UNFINISHED_ORDER_PARAMS }
+      case 'shipweek': return { shipping_plan_start: t, shipping_plan_end: dayjs().add(6, 'day').format('YYYY-MM-DD'), ...UNFINISHED_ORDER_PARAMS }
       default: return {}
     }
   }, [userName])
 
-  /* 快速视图 chips 计数（page_size=1 轻量并行请求，只取 total） */
+  /* 快速视图 chips 计数：发货完成/是否关闭口径是各 chip 自己的维度，先从基础参数剥离再各自追加；
+     「全部」及各视图恒为「未完成」口径，「含已关闭」恒为全量口径，选中哪个视图都不影响彼此计数 */
   const fetchChipCounts = useCallback(async (baseParams: Record<string, any>) => {
-    const allBase = { ...baseParams }
-    delete allBase.delivery_completed
+    const viewBase = { ...baseParams }
+    delete viewBase.delivery_completed
+    delete viewBase.is_closed
     const views: QuickView[] = ['all', 'mine', 'today', 'overdue', 'high', 'shipweek']
-    const totals = await Promise.all(views.map(async (v) => {
+    const requests = [
+      ...views.map(v => (v === 'all' ? { ...viewBase, ...UNFINISHED_ORDER_PARAMS } : { ...viewBase, ...quickViewParams(v) })),
+      viewBase,
+    ]
+    const totals = await Promise.all(requests.map(async (params) => {
       try {
-        const res: any = await orderApi.list({ page: 1, page_size: 1, ...(v === 'all' ? allBase : baseParams), ...quickViewParams(v) })
+        const res: any = await orderApi.list({ page: 1, page_size: 1, ...params })
         return (res?.data?.total ?? undefined) as number | undefined
       } catch { return undefined }
     }))
@@ -815,10 +885,11 @@ export default function OrderList() {
       all: totals[0],
       mine: !userName ? undefined : totals[1],
       today: totals[2], overdue: totals[3], high: totals[4], shipweek: totals[5],
+      inclClosed: totals[6],
     })
   }, [quickViewParams, userName])
 
-  /* 计数请求防抖（搜索逐键触发时避免每键 6 个请求） */
+  /* 计数请求防抖（搜索逐键触发时避免每键 7 个请求） */
   const chipCountsTimer = useRef<number | null>(null)
   const scheduleChipCounts = useCallback((base: Record<string, any>) => {
     if (chipCountsTimer.current) window.clearTimeout(chipCountsTimer.current)
@@ -841,75 +912,18 @@ export default function OrderList() {
     pageSize = 50,
     overrideFilters?: Filters,
     overrideSort?: { sort_by?: string; sort_order?: string },
+    overrideView?: QuickView,
   ) => {
     const seq = ++fetchSeqRef.current
     setLoading(true)
     try {
       const f = overrideFilters ?? filters
       const s = overrideSort ?? sortInfo
-      const params: Record<string, any> = { page, page_size: pageSize }
-      const countBase: Record<string, any> = {}
-      if (f.keyword) countBase.keyword = f.keyword
-      if (f.year) countBase.year = f.year
-      if (f.delivery_completed.length > 0) countBase.delivery_completed = f.delivery_completed.join(',')
+      const countBase = filtersToParams(f)
+      const params: Record<string, any> = { page, page_size: pageSize, ...countBase }
       if (s.sort_by) params.sort_by = s.sort_by
       if (s.sort_order) params.sort_order = s.sort_order
-      if (f.keyword) params.keyword = f.keyword
-      if (f.risk_level.length > 0) params.risk_level = f.risk_level.join(',')
-      if (f.customer_grade.length > 0) params.customer_grade = f.customer_grade.join(',')
-      if (f.department.length > 0) params.department = f.department.join(',')
-      if (f.status.length > 0) params.erp_status = f.status.join(',')
-      if (f.inspection_result.length > 0) params.inspection_result = f.inspection_result.join(',')
-      if (f.packaging_status.length > 0) params.packaging_status = f.packaging_status.join(',')
-      if (f.procurement_status.length > 0) params.procurement_status = f.procurement_status.join(',')
-      if (f.delivery_completed.length > 0) params.delivery_completed = f.delivery_completed.join(',')
-      if (f.is_closed.length > 0) params.is_closed = f.is_closed.join(',')
-      if (f.order_type.length > 0) params.order_type = f.order_type.join(',')
-      if (f.order_no_text.length > 0) params.order_no = f.order_no_text.join(',')
-      if (f.customer_code.length > 0) params.customer_code = f.customer_code.join(',')
-      if (f.shipping_status_desc.length > 0) params.shipping_status_desc = f.shipping_status_desc.join(',')
-      if (f.year) params.year = f.year
-      if (f.promised_date_range) {
-        params.promised_date_start = f.promised_date_range[0]
-        params.promised_date_end = f.promised_date_range[1]
-      }
-      if (f.shipping_plan_range) {
-        params.shipping_plan_start = f.shipping_plan_range[0]
-        params.shipping_plan_end = f.shipping_plan_range[1]
-      }
-      if (f.order_date_range) {
-        params.order_date_start = f.order_date_range[0]
-        params.order_date_end = f.order_date_range[1]
-      }
-      if (f.customer_inspection_date_range) {
-        params.customer_inspection_date_start = f.customer_inspection_date_range[0]
-        params.customer_inspection_date_end = f.customer_inspection_date_range[1]
-      }
-      if (f.planned_start_date_range) {
-        params.planned_start_date_start = f.planned_start_date_range[0]
-        params.planned_start_date_end = f.planned_start_date_range[1]
-      }
-      if (f.material_ready_date_range) {
-        params.material_ready_date_start = f.material_ready_date_range[0]
-        params.material_ready_date_end = f.material_ready_date_range[1]
-      }
-      if (f.front_process_date_range) {
-        params.front_process_date_start = f.front_process_date_range[0]
-        params.front_process_date_end = f.front_process_date_range[1]
-      }
-      if (f.first_article_date_range) {
-        params.first_article_date_start = f.first_article_date_range[0]
-        params.first_article_date_end = f.first_article_date_range[1]
-      }
-      if (f.assembly_start_date_range) {
-        params.assembly_start_date_start = f.assembly_start_date_range[0]
-        params.assembly_start_date_end = f.assembly_start_date_range[1]
-      }
-      if (f.assembly_complete_date_range) {
-        params.assembly_complete_date_start = f.assembly_complete_date_range[0]
-        params.assembly_complete_date_end = f.assembly_complete_date_range[1]
-      }
-      Object.assign(params, quickViewParams(quickView))
+      Object.assign(params, quickViewParams(overrideView ?? quickView))
       const res: any = await orderApi.list(params)
       if (seq !== fetchSeqRef.current) return
       const items = res.data.items || []
@@ -918,7 +932,6 @@ export default function OrderList() {
       // 使用后端返回的全局统计
       const stats = res.data.stats || {}
       setSummary({
-        total: stats.total || res.data.total,
         red: stats.red_count || 0,
         yellow: stats.yellow_count || 0,
         blue: stats.blue_count || 0,
@@ -945,13 +958,18 @@ export default function OrderList() {
     }
   }, [shouldInitialLoad, fetchOrders])
 
-  // 快速视图切换后重新拉取（跳过首次，避免与初始加载重复）
-  const quickViewFirstRef = useRef(false)
-  useEffect(() => {
-    if (!quickViewFirstRef.current) { quickViewFirstRef.current = true; return }
-    fetchOrders(1, pagination.pageSize)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickView])
+  /* 顶部 chip 组：含已关闭 与 各快速视图互斥选择（点击即拉取，不用 effect 监听 quickView）；
+     选任一快速视图都回到「未完成」口径（未发货 且 未关闭），选「含已关闭」才放开这两项 */
+  const applyQuickView = (view: QuickView, includeClosed = false) => {
+    const unfinishedOn = filters.delivery_completed.length === 1 && filters.delivery_completed[0] === 'no'
+      && filters.is_closed.length === 1 && filters.is_closed[0] === '0'
+    const newFilters: Filters = includeClosed
+      ? { ...filters, delivery_completed: [], is_closed: [] }
+      : (unfinishedOn ? filters : { ...filters, delivery_completed: ['no'], is_closed: ['0'] })
+    setFilters(newFilters)
+    setQuickView(view)
+    fetchOrders(1, pagination.pageSize, newFilters, sortInfo, view)
+  }
 
   const handleTableChange = (pag: any, tableFilters: any, sorter: any) => {
     let sortField = sorter.field
@@ -1042,66 +1060,10 @@ export default function OrderList() {
     }
   }
 
-  const buildFilterParams = useCallback(() => {
-    const params: Record<string, any> = {}
-    if (filters.keyword) params.keyword = filters.keyword
-    if (filters.risk_level.length > 0) params.risk_level = filters.risk_level.join(',')
-    if (filters.customer_grade.length > 0) params.customer_grade = filters.customer_grade.join(',')
-    if (filters.department.length > 0) params.department = filters.department.join(',')
-    if (filters.status.length > 0) params.erp_status = filters.status.join(',')
-    if (filters.inspection_result.length > 0) params.inspection_result = filters.inspection_result.join(',')
-    if (filters.packaging_status.length > 0) params.packaging_status = filters.packaging_status.join(',')
-    if (filters.procurement_status.length > 0) params.procurement_status = filters.procurement_status.join(',')
-    if (filters.delivery_completed.length > 0) params.delivery_completed = filters.delivery_completed.join(',')
-    if (filters.is_closed.length > 0) params.is_closed = filters.is_closed.join(',')
-    if (filters.order_type.length > 0) params.order_type = filters.order_type.join(',')
-    if (filters.order_no_text.length > 0) params.order_no = filters.order_no_text.join(',')
-    if (filters.customer_code.length > 0) params.customer_code = filters.customer_code.join(',')
-    if (filters.shipping_status_desc.length > 0) params.shipping_status_desc = filters.shipping_status_desc.join(',')
-    if (filters.year) params.year = filters.year
-    if (filters.promised_date_range) {
-      params.promised_date_start = filters.promised_date_range[0]
-      params.promised_date_end = filters.promised_date_range[1]
-    }
-    if (filters.shipping_plan_range) {
-      params.shipping_plan_start = filters.shipping_plan_range[0]
-      params.shipping_plan_end = filters.shipping_plan_range[1]
-    }
-    if (filters.order_date_range) {
-      params.order_date_start = filters.order_date_range[0]
-      params.order_date_end = filters.order_date_range[1]
-    }
-    if (filters.customer_inspection_date_range) {
-      params.customer_inspection_date_start = filters.customer_inspection_date_range[0]
-      params.customer_inspection_date_end = filters.customer_inspection_date_range[1]
-    }
-    if (filters.planned_start_date_range) {
-      params.planned_start_date_start = filters.planned_start_date_range[0]
-      params.planned_start_date_end = filters.planned_start_date_range[1]
-    }
-    if (filters.material_ready_date_range) {
-      params.material_ready_date_start = filters.material_ready_date_range[0]
-      params.material_ready_date_end = filters.material_ready_date_range[1]
-    }
-    if (filters.front_process_date_range) {
-      params.front_process_date_start = filters.front_process_date_range[0]
-      params.front_process_date_end = filters.front_process_date_range[1]
-    }
-    if (filters.first_article_date_range) {
-      params.first_article_date_start = filters.first_article_date_range[0]
-      params.first_article_date_end = filters.first_article_date_range[1]
-    }
-    if (filters.assembly_start_date_range) {
-      params.assembly_start_date_start = filters.assembly_start_date_range[0]
-      params.assembly_start_date_end = filters.assembly_start_date_range[1]
-    }
-    if (filters.assembly_complete_date_range) {
-      params.assembly_complete_date_start = filters.assembly_complete_date_range[0]
-      params.assembly_complete_date_end = filters.assembly_complete_date_range[1]
-    }
-    Object.assign(params, quickViewParams(quickView))
-    return params
-  }, [filters, quickView, quickViewParams])
+  const buildFilterParams = useCallback(
+    () => ({ ...filtersToParams(filters), ...quickViewParams(quickView) }),
+    [filters, quickView, quickViewParams],
+  )
 
   const handleExport = (format: 'xlsx' | 'csv', columns?: string[]) => {
     const params: Record<string, any> = { format, ...buildFilterParams() }
@@ -1154,12 +1116,6 @@ export default function OrderList() {
     } finally {
       setImporting(false)
     }
-  }
-
-  const handleUnfinishedOrdersToggle = (checked: boolean) => {
-    const newFilters = { ...filters, delivery_completed: checked ? ['no'] : [] }
-    setFilters(newFilters)
-    fetchOrders(1, pagination.pageSize, newFilters, sortInfo)
   }
 
   const fetchDetail = useCallback(async (orderNo: string, lineNo: string | null) => {
@@ -1665,21 +1621,22 @@ export default function OrderList() {
           style={{ width: 230 }}
         />
         <span
-          className={`sc-chip${filters.delivery_completed.includes('no') ? '' : ' on'}`}
+          className={`sc-chip${quickView === 'all' && filters.delivery_completed.length === 0 && filters.is_closed.length === 0 ? ' on' : ''}`}
           style={{ cursor: 'pointer' }}
-          onClick={() => handleUnfinishedOrdersToggle(filters.delivery_completed.includes('no') ? false : true)}
-          title="是否包含已关闭/已交付订单"
-        >含已关闭 <span className="n">{chipCounts.all ?? '-'}</span></span>
+          onClick={() => applyQuickView('all', true)}
+          title="查看含已关闭/已交付订单的全部订单"
+        >含已关闭 <span className="n">{chipCounts.inclClosed ?? '-'}</span></span>
         {QUICK_VIEW_DEFS.map(v => {
           const hot = (v.key === 'high' && (chipCounts.high ?? 0) > 0) || (v.key === 'overdue' && (chipCounts.overdue ?? 0) > 0)
-          const cnt = v.key === 'all' ? summary.total : chipCounts[v.key]
+          const inclClosedOn = quickView === 'all' && filters.delivery_completed.length === 0 && filters.is_closed.length === 0
+          const active = v.key === 'all' ? (quickView === 'all' && !inclClosedOn) : quickView === v.key
           return (
             <span
               key={v.key}
-              className={`sc-chip${quickView === v.key ? ' on' : ''}`}
+              className={`sc-chip${active ? ' on' : ''}`}
               style={{ cursor: 'pointer' }}
-              onClick={() => setQuickView(v.key)}
-            >{v.label} <span className={`n${hot ? ' hot' : ''}`}>{cnt ?? '-'}</span></span>
+              onClick={() => applyQuickView(v.key)}
+            >{v.label} <span className={`n${hot ? ' hot' : ''}`}>{chipCounts[v.key] ?? '-'}</span></span>
           )
         })}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>

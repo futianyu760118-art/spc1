@@ -123,7 +123,7 @@ export default function SupplierClaimNew() {
       </div>
 
       <Form form={form} layout="vertical"
-        initialValues={{ claim_date: dayjs(), claim_reason: 'field_customer_claim', return_requirement: 'no_return', claim_items: [] }}>
+        initialValues={{ claim_date: dayjs(), claim_reason: 'field_customer_claim', return_requirement: 'no_return', claim_items: [], claim_method: '本公司财务部直接扣款' }}>
         {/* 卡片选中态由组件渲染维护，隐藏 Item 仅承载表单值 */}
         <Form.Item name="claim_reason" hidden><Input /></Form.Item>
         <Form.Item name="return_requirement" hidden><Input /></Form.Item>

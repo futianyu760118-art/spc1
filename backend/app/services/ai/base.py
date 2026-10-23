@@ -12,8 +12,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ChatMessage:
-    role: str  # "system" | "user" | "assistant"
+    role: str  # "system" | "user" | "assistant" | "tool"
     content: str
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    # DeepSeek thinking 模式：带 tool_calls 的 assistant 消息必须原样回传，否则下一轮 400
+    reasoning_content: Optional[str] = None
 
 
 @dataclass
@@ -21,6 +25,9 @@ class ChatOptions:
     temperature: float = 0.7
     max_tokens: int = 2048
     timeout: int = 30
+    model: Optional[str] = None  # 运行时配置覆盖；None=用 provider 构造时的 env 模型
+    # 由 provider 在本次调用完成后填充真实 Token 用量（调用方传入可变 dict 回收）
+    usage_out: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -44,6 +51,7 @@ class TokenUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_tokens: int = 0  # 输入缓存命中 token（DeepSeek 计价：命中按缓存价计费）
 
 
 @dataclass

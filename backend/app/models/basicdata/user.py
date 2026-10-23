@@ -1,6 +1,6 @@
 """基础数据与集成中心 — 用户/角色模型"""
 
-from sqlalchemy import BigInteger, Column, Integer, String, Boolean, DateTime
+from sqlalchemy import text, BigInteger, Column, Integer, String, Boolean, DateTime
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
@@ -33,12 +33,12 @@ class SysUser(Base):
     scm_employee_id = Column(BigInteger, nullable=True, comment="关联员工ID（scm_employee.id）；emp_code 的整数外键，K3 回写等场景直接 JOIN 取 erp_user_id")
     wecom_user_id = Column(String(64), nullable=True, unique=True, comment="绑定企业微信userid")
     is_active = Column(Boolean, nullable=False, default=True)
-    login_version = Column(Integer, nullable=False, default=0, comment="（已废弃，保留兼容）原 web 渠道登录版本号，现由 channel_sessions 取代")
+    login_version = Column(Integer, nullable=False, default=0, server_default=text('0'), comment="（已废弃，保留兼容）原 web 渠道登录版本号，现由 channel_sessions 取代")
     last_token_jti = Column(String(64), nullable=True, comment="（已废弃，保留兼容）原 web 渠道 token jti，现由 channel_sessions 取代")
     channel_sessions = Column(JSONB, nullable=True, comment="分渠道会话状态：{渠道名: {version, last_jti}}，同渠道互斥、跨渠道并存，新增端直接使用新渠道名")
     last_login_time = Column(DateTime, nullable=True, comment="最后一次登录时间")
     font_size_scale = Column(String(10), nullable=True, default='1.0', comment="字体大小缩放比例")
     ui_preferences = Column(JSONB, nullable=True, comment="UI偏好设置（如各页面列可见性等）")
-    is_default_password = Column(Boolean, nullable=False, default=True, comment="是否默认密码，首次登录强制修改")
+    is_default_password = Column(Boolean, nullable=False, default=True, server_default=text('TRUE'), comment="是否默认密码，首次登录强制修改")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

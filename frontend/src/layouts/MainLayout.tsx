@@ -45,11 +45,13 @@ import {
   ScheduleOutlined,
   AlertOutlined,
   HomeOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { usePermissionStore, PermNode } from '../store/permission'
 import { authApi, notificationApi } from '../services/api'
 import { notificationStream } from '../services/notificationStream'
+import { notificationJump } from '../utils/notificationJump'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
 import { FloatingAssistant } from '../components/Assistant'
@@ -170,6 +172,8 @@ function buildMenuItemsFromTree(nodes: PermNode[]): PermissionAwareItem[] {
         icon,
         label: node.name,
         permission: node.code,
+        // 页面子权限（Tab 级，无独立路由）任一授予时，页面本身也应可见/可进
+        anyOfPermissions: (node.children || []).filter(c => !c.route_path).map(c => c.code),
       }
     })
     .filter(Boolean) as PermissionAwareItem[]
@@ -293,6 +297,8 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/share-management', icon: <SendOutlined />, label: '分享管理', permission: 'basicdata.share_management' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
       { key: '/backups', icon: <DatabaseOutlined />, label: '备份管理', permission: 'backup' },
+      { key: '/ai-assistant', icon: <RobotOutlined />, label: '智能助手管理', permission: 'ai.assistant_monitor', anyOfPermissions: ['ai.assistant_config'] },
+      { key: '/execution-agent', icon: <ApiOutlined />, label: '执行面智能体', permission: 'ai.execution_agent' },
       { key: '/basicdata/data-supply', icon: <ApiOutlined />, label: '数据供给', permission: 'basicdata.data_supply' },
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
       { key: '/basicdata/files', icon: <FolderOpenOutlined />, label: '文件管理', permission: 'basicdata.files' },
@@ -332,6 +338,12 @@ const allMenuItems: PermissionAwareItem[] = [
   },
 ]
 
+function itemAllowed(item: PermissionAwareItem, hasPermission: (resource: string, action: string) => boolean): boolean {
+  if (!item.permission) return true
+  if (hasPermission(item.permission, 'read')) return true
+  return (item.anyOfPermissions || []).some(p => hasPermission(p, 'read'))
+}
+
 function filterMenuByPermission(items: PermissionAwareItem[], hasPermission: (resource: string, action: string) => boolean): PermissionAwareItem[] {
   return items
     .map(item => {
@@ -340,7 +352,7 @@ function filterMenuByPermission(items: PermissionAwareItem[], hasPermission: (re
         if (filtered.length > 0) return { ...item, children: filtered }
         return null
       }
-      if (!item.permission || hasPermission(item.permission, 'read')) return item
+      if (itemAllowed(item, hasPermission)) return item
       return null
     })
     .filter(Boolean) as PermissionAwareItem[]
@@ -354,7 +366,7 @@ function filterMenuByPath(items: PermissionAwareItem[], targetPath: string, hasP
         if (filtered.length > 0) return { ...item, children: filtered }
         return null
       }
-      if (item.key === targetPath && (!item.permission || hasPermission(item.permission, 'read'))) return item
+      if (item.key === targetPath && itemAllowed(item, hasPermission)) return item
       return null
     })
     .filter(Boolean) as PermissionAwareItem[]
@@ -480,6 +492,8 @@ const pathToGroupKey: Record<string, string> = {
   '/share-management': 'basicdata-center',
   '/sync-config': 'basicdata-center',
   '/backups': 'basicdata-center',
+  '/ai-assistant': 'basicdata-center',
+  '/execution-agent': 'basicdata-center',
   '/basicdata/feedback': 'basicdata-center',
   '/basicdata/files': 'basicdata-center',
   '/basicdata/data-supply': 'basicdata-center',
@@ -540,6 +554,8 @@ const pathToPermission: Record<string, string> = {
   '/share-management': 'basicdata.share_management',
   '/sync-config': 'settings',
   '/backups': 'backup',
+  '/ai-assistant': 'ai.assistant_monitor',
+  '/execution-agent': 'ai.execution_agent',
   '/permissions': 'permissions',
   '/basicdata/customers': 'basicdata.data',
   '/basicdata/suppliers': 'basicdata.data',
@@ -830,7 +846,29 @@ export default function MainLayout() {
   }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
-  const canViewCurrentPage = !requiredPermission || hasPermission(requiredPermission, 'read')
+  // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（如仅授 ai.assistant_config 也能进 /ai-assistant）
+  // 静态兜底：权限树未加载（接口失败/竞态）时动态映射为空，用静态映射保证放行逻辑不缺位
+  const STATIC_PATH_ANY_OF: Record<string, string[]> = {
+    '/ai-assistant': ['ai.assistant_monitor', 'ai.assistant_config'],
+  }
+  const pathAnyOfMap = useMemo(() => {
+    const map: Record<string, string[]> = { ...STATIC_PATH_ANY_OF }
+    const walk = (nodes: PermNode[]) => {
+      for (const n of nodes) {
+        if (n.route_path) {
+          const anyOf = [n.code, ...(n.children || []).filter(c => !c.route_path).map(c => c.code)]
+          if (anyOf.length > 1) map[n.route_path] = anyOf
+        }
+        if (n.children?.length) walk(n.children)
+      }
+    }
+    walk(permTree)
+    return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [permTree])
+  const canViewCurrentPage = !requiredPermission
+    || hasPermission(requiredPermission, 'read')
+    || (pathAnyOfMap[location.pathname] || []).some(p => hasPermission(p, 'read'))
 
   const menuItems = toAntdItems(navTree)
 
@@ -935,6 +973,12 @@ export default function MainLayout() {
                           style={{ cursor: 'pointer', padding: '10px 4px', opacity: item.is_read ? 0.55 : 1 }}
                           onClick={() => {
                             if (!item.is_read) handleMarkRead(item.id)
+                            const assistantTarget = notificationJump(item)
+                            if (assistantTarget) {
+                              setBellOpen(false)
+                              navigate(assistantTarget.path)
+                              return
+                            }
                             if (item.type === 'stock_check_appeal' && item.ref_id) {
                               setBellOpen(false)
                               navigate('/stock-check-audit?tab=appeal')

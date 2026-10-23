@@ -187,12 +187,19 @@ export default function PriceChangeDetail() {
     try {
       const cid = parseInt(id)
       const evidenceItems: any[] = []
+      const failedUploads: string[] = []
       const uploadTasks = scEvidenceFiles.map(async (ef) => {
         const rawFile = ef.originFileObj || ef
         const uploaded = await uploadScEvidence(rawFile)
         if (uploaded) evidenceItems.push(uploaded)
+        else failedUploads.push(ef.name || '凭证文件')
       })
       await Promise.all(uploadTasks)
+      if (failedUploads.length) {
+        message.error(`凭证上传失败：${failedUploads.join('、')}，已中止提交，请重试`)
+        setScSaving(false)
+        return
+      }
       for (const existing of scEvidence) {
         if (existing.id) evidenceItems.push(existing)
       }

@@ -16,13 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.material.kitting_calc_service import freshness_of, load_source_as_of, min_as_of
 
+from .common import ExternalEnvelopeError
 
-class ExternalSourceUnavailable(Exception):
+
+class ExternalSourceUnavailable(ExternalEnvelopeError):
     """对外接口数据源不可用：算不出 data_as_of，由 log_external_call 转 code=503 信封错误"""
 
     def __init__(self, message: str):
-        super().__init__(message)
-        self.message = message
+        super().__init__(503, message)
 
 
 async def table_max_as_of(db: AsyncSession, *columns) -> Optional[datetime]:

@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -36,23 +36,19 @@ from app.schemas.basicdata.feedback import (
 )
 from app.services.common.file_service import FileService
 from app.services.notification.notification_broker import publish_unread_update
+from app.services.notification.text_utils import (
+    NOTIFICATION_CONTENT_MAX,
+    NOTIFICATION_TITLE_MAX,
+    clip_text,
+)
 
 logger = logging.getLogger(__name__)
 
 _FEEDBACK_TYPE_LABELS = {"issue": "问题", "suggestion": "建议", "inquiry": "咨询"}
 _SEVERITY_LABELS = {"high": "高", "medium": "中", "low": "低"}
 _STATUS_LABELS = {"pending": "待处理", "processing": "处理中", "resolved": "已解决", "closed": "已关闭"}
-_NOTIFICATION_TITLE_MAX = 256
-_NOTIFICATION_CONTENT_MAX = 512
 
 router = APIRouter()
-
-
-def _clip_notification_text(text: str, limit: int) -> str:
-    """通知表 title/content 为 varchar(256/512)，超长写入会触发 500，统一截断。"""
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1] + "…"
 
 
 def _is_admin(user: dict) -> bool:
@@ -129,22 +125,11 @@ async def _insert_handler_notifications(db: AsyncSession, fb: Feedback) -> list[
     这样在 RoleManagement 调整权限矩阵后，通知接收人自动跟随。
     严重度 high → priority important（触发加载时 toast），其余 normal。排除提交人本人。
     """
-    from app.core.permissions import merge_role_permission_additions
-    rows = await db.execute(text("""
-        SELECT u.id, r.role_code, r.permissions
-        FROM sys_user u
-        JOIN sys_role r ON u.role_id = r.id
-        WHERE u.is_active = TRUE
-    """))
-    handler_ids: list[int] = []
-    for uid, role_code, raw_perms in rows:
-        if uid is None:
-            continue
-        perms = merge_role_permission_additions(
-            role_code, raw_perms if isinstance(raw_perms, dict) else {}
-        )
-        if _can_handle({"role": role_code, "permissions": perms}):
-            handler_ids.append(int(uid))
+    from app.services.common.permission_users import user_ids_matching
+    handler_ids = await user_ids_matching(
+        db,
+        lambda role_code, perms: _can_handle({"role": role_code, "permissions": perms}),
+    )
     if fb.submitter_id and fb.submitter_id in handler_ids:
         handler_ids = [u for u in handler_ids if u != fb.submitter_id]
     if not handler_ids:
@@ -158,8 +143,8 @@ async def _insert_handler_notifications(db: AsyncSession, fb: Feedback) -> list[
         db.add(Notification(
             user_id=hid,
             type="feedback",
-            title=_clip_notification_text(title, _NOTIFICATION_TITLE_MAX),
-            content=_clip_notification_text(content, _NOTIFICATION_CONTENT_MAX),
+            title=clip_text(title, NOTIFICATION_TITLE_MAX),
+            content=clip_text(content, NOTIFICATION_CONTENT_MAX),
             ref_type="feedback",
             ref_id=fb.id,
             sender_id=fb.submitter_id,
@@ -183,10 +168,10 @@ async def _insert_submitter_progress_notification(
     db.add(Notification(
         user_id=fb.submitter_id,
         type="feedback",
-        title=_clip_notification_text(
-            f"[问题反馈]您的反馈「{fb.title}」处理进度有更新", _NOTIFICATION_TITLE_MAX
+        title=clip_text(
+            f"[问题反馈]您的反馈「{fb.title}」处理进度有更新", NOTIFICATION_TITLE_MAX
         ),
-        content=_clip_notification_text(action_desc, _NOTIFICATION_CONTENT_MAX),
+        content=clip_text(action_desc, NOTIFICATION_CONTENT_MAX),
         ref_type="feedback",
         ref_id=fb.id,
         sender_id=_get_user_id(actor_user),

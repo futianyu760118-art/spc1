@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -196,7 +197,17 @@ async def lifespan(app: FastAPI):
             logger.warning("[启动] Redis 不可用，相关功能（token黑名单/权限缓存/实时协同/限流）降级运行")
     except Exception as e:
         logger.warning(f"[启动] Redis 探测异常（将降级）: {e}")
+    try:
+        from app.services.assistant.completeness_rules import refresh_rules
+        await refresh_rules(force=True)
+    except Exception as e:
+        logger.warning(f"[启动] 完整性规则预热失败（缺字段通知降级）: {e}")
     yield
+    try:
+        from app.services.notification.assistant_notify import flush_notifications
+        await asyncio.wait_for(flush_notifications(), timeout=5)
+    except Exception as e:
+        logger.warning(f"[关闭] 等待通知任务失败: {e}")
     # 关闭时：停止调度器
     # 关闭共享 Redis 客户端
     try:

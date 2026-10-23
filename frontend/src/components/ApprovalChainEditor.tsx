@@ -20,12 +20,13 @@ const APPROVER_MODE_OPTIONS = [
   { value: 'users', label: '指定人员' },
 ]
 
-export default function ApprovalChainEditor({ nodes, onChange, roleOptions, userOptions, fieldOptions }: {
+export default function ApprovalChainEditor({ nodes, onChange, roleOptions, userOptions, fieldOptions, paperSlotOptions }: {
   nodes: ApprovalNodeConfig[]
   onChange: (nodes: ApprovalNodeConfig[]) => void
   roleOptions: { value: string; label: string }[]
   userOptions: ApprovalUserOption[]
   fieldOptions: Array<{ value: string; label: string }>
+  paperSlotOptions?: Array<{ value: string; label: string }>
 }) {
   const userLabel = (username?: string, userId?: number) => {
     const hit = userOptions.find(u => u.username === username || u.id === userId)
@@ -155,6 +156,14 @@ export default function ApprovalChainEditor({ nodes, onChange, roleOptions, user
                   )}
                 </div>
               </div>
+              {paperSlotOptions?.length ? (
+                <div className="ac-nc-field">
+                  <label>纸质签字区</label>
+                  <Select allowClear options={paperSlotOptions} value={node.paper_slot || undefined}
+                    placeholder="不绑定（按名称/角色自动匹配）" style={{ width: '100%' }}
+                    onChange={v => patchNode(index, { paper_slot: v || undefined })} />
+                </div>
+              ) : null}
               <div className="ac-nc-field">
                 <label>超时提醒（小时，0 = 不提醒）</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

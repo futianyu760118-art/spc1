@@ -17,6 +17,40 @@ class AssistantCard(BaseModel):
     payload: Any = None
 
 
+class OrchestrationStep(BaseModel):
+    """编排步骤（步骤时间线 / 审计）"""
+    step_id: int
+    tool: str  # call_query_agent | call_reasoning_agent | call_order_agent
+    agent_label: str = ""
+    capability: str = ""
+    path: Optional[str] = None
+    task_type: Optional[str] = None
+    order_no: Optional[str] = None
+    status: str = "running"  # running | completed | failed | blocked | pending_confirmation
+    summary: str = ""
+    error: Optional[str] = None
+    item_count: Optional[int] = None
+    duration_ms: Optional[float] = None
+
+
+class WriteConfirmationField(BaseModel):
+    field: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+
+
+class WriteConfirmationInfo(BaseModel):
+    """写操作确认单（前端确认卡片）"""
+    confirmation_id: str
+    order_no: str
+    fields: List[WriteConfirmationField] = []
+    created_at: str = ""
+    expires_at: str = ""
+    status: str = "pending"  # pending | confirmed | cancelled | executed | failed
+    write_result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
 class AssistantReply(BaseModel):
     intent: str = "unknown"
     text: str = ""
@@ -26,6 +60,8 @@ class AssistantReply(BaseModel):
     session_id: Optional[str] = None
     provider: str = "rule_based"
     trace_id: Optional[str] = None
+    steps: List[OrchestrationStep] = []
+    confirmation: Optional[WriteConfirmationInfo] = None
     diagnostics: Optional[Dict[str, Any]] = None
 
 

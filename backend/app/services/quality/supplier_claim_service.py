@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.common.approval_center_service import ApprovalCenterService
 from app.services.common.approval_engine import check_node_permission
+from app.services.quality.supplier_claim_template import CLAIM_CLAUSE_TEMPLATE
 
 logger = logging.getLogger(__name__)
 
@@ -148,20 +149,25 @@ class SupplierClaimService:
             d["claim_items"] = json.loads(d["claim_items"] or "[]")
         if isinstance(d.get("attachments"), str):
             d["attachments"] = json.loads(d["attachments"] or "[]")
-        logs_row = await self.db.execute(
-            text("SELECT * FROM supplier_claim_approval_log WHERE claim_id = :eid ORDER BY id"),
-            {"eid": claim_id},
-        )
+        await self._fill_paper_slots(d.get("approval_snapshot") or [])
+        logs_row = await self.db.execute(text("""
+            SELECT l.*, COALESCE(u.display_name, l.approver) AS approver_display
+            FROM supplier_claim_approval_log l
+            LEFT JOIN sys_user u ON u.username = l.approver
+            WHERE l.claim_id = :eid ORDER BY l.id
+        """), {"eid": claim_id})
         logs = [dict(x._mapping) for x in logs_row]
         # 中心化后新流水只写 approval_record：并入并映射回旧日志形状，业务页/打印不感知架构切换。
         # 存量迁移（migrate_approval_center.py）曾把旧日志复制进中心表，按 (action, approver,
         # operated_at) 去重防双计（与迁移脚本自身的幂等键一致）。
         legacy_keys = {(lg.get("action"), lg.get("approver"), lg.get("operated_at")) for lg in logs}
         records_row = await self.db.execute(text("""
-            SELECT r.id, r.node_seq AS approval_level, r.operator AS approver, r.action,
-                   r.comment, r.created_at AS operated_at
+            SELECT r.id, r.node_seq AS approval_level, r.operator AS approver,
+                   COALESCE(u.display_name, r.operator) AS approver_display,
+                   r.action, r.comment, r.created_at AS operated_at
             FROM approval_record r
             JOIN approval_instance i ON i.id = r.instance_id
+            LEFT JOIN sys_user u ON u.username = r.operator
             WHERE i.biz_type = 'supplier_claim' AND i.biz_id = :eid
             ORDER BY r.id
         """), {"eid": claim_id})
@@ -180,6 +186,32 @@ class SupplierClaimService:
         d["approval_round"] = current_round
         return self._serialize(d)
 
+    async def _fill_paper_slots(self, snapshot: list[dict]) -> None:
+        """历史快照缺少 paper_slot 时，用当前审批链的绑定做展示回填（不改库）。"""
+        if not snapshot or all(n.get("paper_slot") for n in snapshot if isinstance(n, dict)):
+            return
+        row = await self.db.execute(text(
+            "SELECT nodes FROM approval_config WHERE biz_type = 'supplier_claim' ORDER BY id LIMIT 1"
+        ))
+        r = row.fetchone()
+        if not r:
+            return
+        nodes = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or [])
+        by_label = {
+            node.get("label"): node.get("paper_slot")
+            for node in nodes
+            if isinstance(node, dict) and node.get("paper_slot")
+        }
+        by_role = {
+            node.get("role"): node.get("paper_slot")
+            for node in nodes
+            if isinstance(node, dict) and node.get("paper_slot") and node.get("role")
+        }
+        for node in snapshot:
+            if not isinstance(node, dict) or node.get("paper_slot"):
+                continue
+            node["paper_slot"] = by_label.get(node.get("label")) or by_role.get(node.get("role"))
+
     def _serialize(self, d: dict) -> dict:
         if isinstance(d.get("claim_date"), date):
             d["claim_date"] = d["claim_date"].isoformat()
@@ -190,6 +222,8 @@ class SupplierClaimService:
             d["claim_items"] = json.loads(d["claim_items"] or "[]")
         if isinstance(d.get("attachments"), str):
             d["attachments"] = json.loads(d["attachments"] or "[]")
+        if isinstance(d.get("clause_snapshot"), str):
+            d["clause_snapshot"] = json.loads(d.get("clause_snapshot") or "[]")
         if isinstance(d.get("approval_snapshot"), str):
             d["approval_snapshot"] = json.loads(d["approval_snapshot"] or "[]")
         if d.get("claim_amount") is not None:
@@ -320,6 +354,10 @@ class SupplierClaimService:
         if not (rec.get("supplier_name") or "").strip():
             raise ValueError("供应商不能为空，无法提交")
         await ApprovalCenterService(self.db).submit("supplier_claim", claim_id, applicant)  # 链未配置/已停用抛 ValueError，原样上抛
+        await self.db.execute(
+            text("UPDATE supplier_claim SET clause_snapshot = :cs WHERE id = :eid"),
+            {"cs": json.dumps(CLAIM_CLAUSE_TEMPLATE, ensure_ascii=False), "eid": claim_id},
+        )
         # 绑定附件引用计数，避免孤儿清理误删已被单据引用的文件
         try:
             from app.services.common.file_service import FileService

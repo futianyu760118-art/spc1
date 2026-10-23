@@ -1,0 +1,17 @@
+{
+  "name": "spc-execution-agents",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "runtime",
+    "query-agent",
+    "reasoning-agent",
+    "order-agent"
+  ],
+  "scripts": {
+    "test": "node --test runtime/test/bootstrap.test.js runtime/test/http-client.test.js runtime/test/protocol.test.js runtime/test/config.test.js runtime/test/remote-config.test.js runtime/test/health-server.test.js query-agent/test/query-adapter.test.js reasoning-agent/test/reasoning-adapter.test.js query-agent/test/agent-e2e.test.js reasoning-agent/test/agent-e2e.test.js order-agent/test/order-adapter.test.js order-agent/test/agent-e2e.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -50,6 +50,8 @@ ROLE_PERMS["general_manager"].update({
     "quality.supplier_claim": ["read"],
     "approval.pending": ["read"],
 })
+ROLE_PERMS["admin"].update({"orders.list": ["read"], "topbar.notifications": ["read"]})
+ROLE_PERMS["manager"].update({"orders.list": ["read"], "topbar.notifications": ["read"]})
 USERS = {
     "admin": "admin",
     "qa_quality": "quality",
@@ -95,6 +97,7 @@ async def _test_db():
     # 2) 只建本套件所需的最小表集合——全量 create_all 会被遗留模型的
     #    order_material_po_binding 非法外键（po_no 无唯一约束）卡死，且与本功能无关
     from app.models.basicdata.announcement import Notification
+    from app.models.basicdata.ai_agent import AiAgentConfig, AssistantRun
     from app.models.basicdata.audit_log import AuditLog
     from app.models.basicdata.backup import BackupConfig, BackupRecord
     from app.models.basicdata.bom import Bom
@@ -110,13 +113,21 @@ async def _test_db():
     from app.models.basicdata.user import SysRole, SysUser
     from app.models.basicdata.supplier import Supplier
     from app.models.basicdata.user_org_scope import UserOrgScope
+    from app.models.basicdata.reasoning import ReasoningTask
     from app.models.exception.quality_issue import QualityIssue
     from app.models.material.inventory_check import StockCheck, StockCheckItem
+    from app.models.material.kitting import KittingResult, KittingShortage
     from app.models.material.purchase_order import PurchaseOrder
     from app.models.material.purchase_requisition import (
         PurchaseRequisition,
         PurchaseRequisitionApprovalLog,
         PurchaseRequisitionLine,
+    )
+    from app.models.purchase.price_change import (
+        PurchasePriceChange,
+        PurchasePriceChangeAiAnalysis,
+        PurchasePriceChangeApprovalLog,
+        PurchasePriceChangeItem,
     )
     from app.models.order.sale_order import SaleOrder, SaleOrderLine
     from app.models.production.base_condition import ProductionBaseCondition
@@ -128,6 +139,7 @@ async def _test_db():
     from app.models.quality.supplier_claim import SupplierClaim, SupplierClaimApprovalLog
     from app.models.common.approval_business import ApprovalBusiness
     from app.models.common.approval_center import ApprovalInstance, ApprovalRecord, ApprovalTask
+    from app.models.common.completeness_rule import CompletenessRule
     tables = [
         SysRole.__table__, SysUser.__table__, UserOrgScope.__table__,
         SysPermission.__table__,
@@ -146,13 +158,31 @@ async def _test_db():
         Material.__table__, PurchaseOrder.__table__,
         PurchaseRequisition.__table__, PurchaseRequisitionLine.__table__,
         PurchaseRequisitionApprovalLog.__table__,
+        PurchasePriceChange.__table__, PurchasePriceChangeItem.__table__,
+        PurchasePriceChangeApprovalLog.__table__, PurchasePriceChangeAiAnalysis.__table__,
         Inventory.__table__, Location.__table__,
         StockCheck.__table__, StockCheckItem.__table__,
+        ReasoningTask.__table__, KittingResult.__table__, KittingShortage.__table__,
+        AiAgentConfig.__table__, AssistantRun.__table__,
+        CompletenessRule.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
         # 既有测试库补列：create_all 只建缺失表不加列（同 init_database 的 migrate_columns 模式）
         await conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS ai_result JSONB"))
+        await conn.execute(text("ALTER TABLE supplier_claim ADD COLUMN IF NOT EXISTS clause_snapshot JSONB"))
+        await conn.execute(text("ALTER TABLE notification ADD COLUMN IF NOT EXISTS ref_no VARCHAR(64)"))
+        await conn.execute(text(
+            "ALTER TABLE purchase_price_change_item ADD COLUMN IF NOT EXISTS unit_id INTEGER"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE purchase_price_change_item "
+            "ALTER COLUMN price_change_pct TYPE NUMERIC(10,2)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE purchase_price_change "
+            "ALTER COLUMN self_check_evidence TYPE JSONB USING self_check_evidence::jsonb"
+        ))
         # approval_config 模型在 purchase 域（故意不导入），直接 DDL 建表
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS approval_config (
@@ -225,8 +255,11 @@ async def client(_test_db):
         await conn.execute(text(
             "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, feedback, "
             "purchase_requisition, purchase_requisition_line, purchase_requisition_approval_log, "
+            "purchase_price_change, purchase_price_change_item, purchase_price_change_approval_log, "
+            "purchase_price_change_ai_analysis, "
             "purchase_order, approval_instance, approval_task, approval_record, "
-            "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item "
+            "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item, "
+            "ai_agent_config, assistant_run, completeness_rule "
             "RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
@@ -236,7 +269,11 @@ async def client(_test_db):
         """), {"nodes": json.dumps(DEFAULT_CHAIN)})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        yield c
+        try:
+            yield c
+        finally:
+            from app.services.notification.assistant_notify import flush_notifications
+            await flush_notifications()
 
 
 @pytest_asyncio.fixture(loop_scope="session")
@@ -252,6 +289,9 @@ async def db(_test_db):
 EXTERNAL_QUALITY_KEY = {"app_key": "ak_pytest_quality", "app_secret": "sk_pytest_quality"}
 EXTERNAL_ORDERS_KEY = {"app_key": "ak_pytest_orders", "app_secret": "sk_pytest_orders"}
 EXTERNAL_PRODUCTION_KEY = {"app_key": "ak_pytest_production", "app_secret": "sk_pytest_production"}
+EXTERNAL_REASONING_KEY = {"app_key": "ak_pytest_reasoning", "app_secret": "sk_pytest_reasoning"}
+EXTERNAL_AGENT_KEY = {"app_key": "ak_pytest_agent", "app_secret": "sk_pytest_agent"}
+EXTERNAL_ORDER_AGENT_KEY = {"app_key": "ak_pytest_order_agent", "app_secret": "sk_pytest_order_agent"}
 
 PRODUCTION_ENDPOINT_CODES = [
     "production.work_orders.list",
@@ -264,7 +304,7 @@ PRODUCTION_ENDPOINT_CODES = [
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def external_keys(_test_db):
-    """清空质量/生产/数据供给表并种入三把 HMAC Key：quality / orders（未授权对照）/ production。"""
+    """清空质量/生产/数据供给表并种入四把 HMAC Key：quality / orders（未授权对照）/ production / reasoning。"""
     from app.core.database import engine
 
     async with engine.begin() as conn:
@@ -273,7 +313,8 @@ async def external_keys(_test_db):
             "scm_material, scm_supplier, production_task_order, process_progress, "
             "production_order_schedule_snapshot, production_daily_report, "
             "production_capacity_slot, production_base_condition, "
-            "data_supply_api_key, data_supply_call_log RESTART IDENTITY CASCADE"
+            "data_supply_api_key, data_supply_call_log, "
+            "reasoning_task, kitting_result, kitting_shortage RESTART IDENTITY CASCADE"
         ))
         await conn.execute(text("""
             INSERT INTO data_supply_api_key
@@ -286,17 +327,30 @@ async def external_keys(_test_db):
                  '["orders.list", "order_details.list", "boms.tree", "materials.list", "suppliers.list"]',
                  0, :oak, :oas, NULL, 'pytest'),
                 ('pytest-production', 'ak_pytest_production', TRUE,
-                 CAST(:pcodes AS jsonb), 0, :pak, :pas, NULL, 'pytest')
+                 CAST(:pcodes AS jsonb), 0, :pak, :pas, NULL, 'pytest'),
+                ('pytest-reasoning', 'ak_pytest_reasoning', TRUE,
+                 '["reasoning.analyze", "reasoning.cancel", "reasoning.task"]',
+                 0, :rak, :ras, NULL, 'pytest'),
+                ('pytest-agent', 'ak_pytest_agent', TRUE,
+                 '["agent.config"]', 0, :gak, :gas, NULL, 'pytest'),
+                ('pytest-order-agent', 'ak_pytest_order_agent', TRUE,
+                 '["orders.schedule.update"]', 0, :oak2, :oas2, NULL, 'pytest')
         """), {
             "qak": EXTERNAL_QUALITY_KEY["app_key"], "qas": EXTERNAL_QUALITY_KEY["app_secret"],
             "oak": EXTERNAL_ORDERS_KEY["app_key"], "oas": EXTERNAL_ORDERS_KEY["app_secret"],
             "pak": EXTERNAL_PRODUCTION_KEY["app_key"], "pas": EXTERNAL_PRODUCTION_KEY["app_secret"],
+            "rak": EXTERNAL_REASONING_KEY["app_key"], "ras": EXTERNAL_REASONING_KEY["app_secret"],
+            "gak": EXTERNAL_AGENT_KEY["app_key"], "gas": EXTERNAL_AGENT_KEY["app_secret"],
+            "oak2": EXTERNAL_ORDER_AGENT_KEY["app_key"], "oas2": EXTERNAL_ORDER_AGENT_KEY["app_secret"],
             "pcodes": json.dumps(PRODUCTION_ENDPOINT_CODES),
         })
     yield {
         "quality": EXTERNAL_QUALITY_KEY,
         "orders": EXTERNAL_ORDERS_KEY,
         "production": EXTERNAL_PRODUCTION_KEY,
+        "reasoning": EXTERNAL_REASONING_KEY,
+        "agent": EXTERNAL_AGENT_KEY,
+        "order_agent": EXTERNAL_ORDER_AGENT_KEY,
     }
 
 

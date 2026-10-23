@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons'
 import { notificationApi } from '../../services/api'
 import { notificationStream } from '../../services/notificationStream'
+import { notificationJump } from '../../utils/notificationJump'
 import { useAuthStore } from '../../store/auth'
 import './index.css'
 
@@ -18,6 +19,7 @@ interface NotifItem {
   content?: string | null
   ref_type?: string | null
   ref_id?: number | null
+  ref_no?: string | null
   sender_id?: number | null
   sender_name?: string | null
   priority: string
@@ -38,6 +40,10 @@ const TYPE_DEFS = [
   { key: 'feedback', label: '问题反馈', icon: MessageOutlined, color: '#8b5cf6', bg: '#f5f3ff' },
   { key: 'feedback_alert', label: '反馈提醒', icon: MessageOutlined, color: '#8b5cf6', bg: '#f5f3ff' },
   { key: 'system', label: '系统', icon: SettingOutlined, color: '#0284c7', bg: '#f0f9ff' },
+  { key: 'assistant_update', label: '助手更新', icon: BellOutlined, color: '#0f766e', bg: '#f0fdfa' },
+  { key: 'assistant_create', label: '助手新增', icon: BellOutlined, color: '#15803d', bg: '#f0fdf4' },
+  { key: 'assistant_delete', label: '助手删除', icon: BellOutlined, color: '#b91c1c', bg: '#fef2f2' },
+  { key: 'assistant_gap', label: '助手提醒', icon: WarningOutlined, color: '#b45309', bg: '#fffbeb' },
 ]
 
 const KNOWN_TYPES = TYPE_DEFS.map(t => t.key)
@@ -76,6 +82,8 @@ function isPendingApprovalNotify(n: NotifItem) {
 }
 
 function jumpTarget(n: NotifItem): { label: string; path: string } | null {
+  const assistantTarget = notificationJump(n)
+  if (assistantTarget) return assistantTarget
   if (n.type === 'stock_check_appeal' && n.ref_id) return { label: '复议待裁决', path: '/stock-check-audit?tab=appeal' }
   // 审批待办 / 超时提醒：ref_type 即业务标识（如 supplier_claim），带单据参数进入待办工作台并自动打开审批抽屉
   if (n.type === 'approval_timeout' || isPendingApprovalNotify(n)) {

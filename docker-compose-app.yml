@@ -44,6 +44,13 @@ services:
       WRITEBACK_POLL_INTERVAL: ${WRITEBACK_POLL_INTERVAL:-}
       WRITEBACK_BATCH_SIZE: ${WRITEBACK_BATCH_SIZE:-}
       WRITEBACK_CLAIM_TIMEOUT: ${WRITEBACK_CLAIM_TIMEOUT:-}
+      # AEOS Hub 助手观测上报（assistant-events，中台智能助手调用留痕；缺一即停用）
+      AEOS_HUB_BASE: ${AEOS_HUB_BASE:-}
+      AEOS_SYSTEM_ID: ${AEOS_SYSTEM_ID:-}
+      AEOS_SYSTEM_TOKEN: ${AEOS_SYSTEM_TOKEN:-}
+      AEOS_HUB_CA_CERT: ${AEOS_HUB_CA_CERT:-/app/certs/caddy-root.crt}
+    extra_hosts:
+      - "aeos-hub.test:${AEOS_HUB_IP:-192.168.0.23}"
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
       - ./data/backups:/app/backups

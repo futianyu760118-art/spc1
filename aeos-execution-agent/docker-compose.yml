@@ -1,0 +1,20 @@
+services:
+  aeos-execution-agent:
+    build: .
+    image: aeos-execution-agent:latest
+    container_name: aeos-execution-agent
+    restart: unless-stopped
+    # .env 允许暂缺：build 不依赖配置；up 前必须 cp .env.example .env 并填写，
+    # 否则容器启动时 config.js 会以明确报错退出
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
+    # 推理同步调用最长约 REASONING_TIMEOUT_S(120s)，容器级超时留余量
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

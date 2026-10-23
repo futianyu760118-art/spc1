@@ -90,6 +90,7 @@ export type ApprovalNodeConfig = {
   condition?: ApprovalCondition
   conditions?: ApprovalCondition[]
   timeout_hours?: number | null
+  paper_slot?: string
 }
 
 export type ApprovalConfigItem = {

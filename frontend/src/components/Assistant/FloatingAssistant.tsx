@@ -23,7 +23,7 @@ const WIN_HEIGHT = 620
 
 const FloatingAssistant: React.FC = () => {
   const [open, setOpen] = useState(false)
-  const { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming } = useAssistantChat()
+  const { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming, confirmWrite, cancelWrite } = useAssistantChat()
 
   // 以距右、距底的偏移存储位置，窗口缩放时仍贴右下
   const [pos, setPos] = useState({ right: 24, bottom: 24 })
@@ -203,6 +203,8 @@ const FloatingAssistant: React.FC = () => {
               onSend={send}
               onClear={clearMessages}
               onStop={stopStreaming}
+              onConfirm={confirmWrite}
+              onCancelConfirmation={cancelWrite}
             />
           </div>
         </div>

@@ -98,6 +98,19 @@ async def test_snapshot_keeps_node_timeout(client):
     assert [n.get("timeout_hours") for n in a["approval_snapshot"]] == [24, 0]
 
 
+async def test_snapshot_keeps_paper_slot(client):
+    """纸质签字区绑定随快照冻结，供索赔单打印把节点映射到固定四栏。"""
+    h_admin, h_q = await login(client, ADMIN), await login(client, Q)
+    nodes = [
+        {"seq": 1, "label": "单级确认", "role": "quality", "paper_slot": "claim_dept"},
+        {"seq": 2, "label": "财务结算", "role": "finance", "paper_slot": "finance"},
+    ]
+    r = await client.put("/api/v1/approvals/configs/supplier_claim", json={"nodes": nodes}, headers=h_admin)
+    assert r.json()["code"] == 0
+    a = await create(client, h_q, 100, submit=True)
+    assert [n.get("paper_slot") for n in a["approval_snapshot"]] == ["claim_dept", "finance"]
+
+
 async def test_pending_returns_page_and_stats(client):
     """分页结构 + 统计卡口径 + 等待时长分级字段。"""
     h_q, h_pm = await login(client, Q), await login(client, PM)

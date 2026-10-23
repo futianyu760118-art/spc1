@@ -10,6 +10,55 @@ from app.services.ai.base import LLMProvider, ChatMessage, ChatOptions, ChatWith
 
 logger = logging.getLogger(__name__)
 
+
+def _unexpected_response_error(response) -> RuntimeError:
+    # 部分 OpenAI 兼容网关（如 bigmodel.cn）在令牌失效/配额不足时返回 HTTP 200 + 错误 JSON，
+    # SDK 解析后 choices 为 None，这里还原原始错误体避免 'NoneType' is not subscriptable
+    extra = getattr(response, "model_extra", None) or {}
+    detail = extra.get("msg") or extra.get("error") or str(extra) if extra else str(response)
+    return RuntimeError(f"上游返回异常响应（choices 为空，常见于令牌失效/配额不足）: {detail}")
+
+
+def _message_payload(message: ChatMessage) -> dict:
+    """ChatMessage → OpenAI 请求体；保留工具调用链与 DeepSeek reasoning_content。"""
+    payload: dict = {"role": message.role, "content": message.content}
+    if message.role == "tool":
+        payload["tool_call_id"] = message.tool_call_id
+        return payload
+    if message.role == "assistant" and message.tool_calls:
+        payload["tool_calls"] = message.tool_calls
+        if not (message.content or "").strip():
+            payload.pop("content", None)
+        if message.reasoning_content:
+            payload["reasoning_content"] = message.reasoning_content
+    return payload
+
+
+def _reasoning_content(message) -> Optional[str]:
+    extra = getattr(message, "model_extra", None) or {}
+    return getattr(message, "reasoning_content", None) or extra.get("reasoning_content")
+
+
+def _usage_dict(usage) -> dict:
+    """openai SDK usage → {prompt/completion/total/cached}_tokens。
+
+    缓存命中兼容两种口径：OpenAI 的 prompt_tokens_details.cached_tokens 与
+    DeepSeek 的 prompt_cache_hit_tokens（SDK 未知字段落在 model_extra）。
+    """
+    if usage is None:
+        return {}
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = int(getattr(details, "cached_tokens", 0) or 0)
+    extra = getattr(usage, "model_extra", None) or {}
+    if extra.get("prompt_cache_hit_tokens") is not None:
+        cached = int(extra["prompt_cache_hit_tokens"] or 0)
+    return {
+        "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+        "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+        "cached_tokens": cached,
+    }
+
 try:
     from openai import AsyncOpenAI
     _HAS_OPENAI = True
@@ -55,15 +104,29 @@ class OpenAIProvider(LLMProvider):
         request_timeout = opts.timeout or self._timeout
         response = await asyncio.wait_for(
             self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": m.role, "content": m.content} for m in messages],
+                model=opts.model or self._model,
+                messages=[_message_payload(m) for m in messages],
                 temperature=opts.temperature,
                 max_tokens=opts.max_tokens,
             ),
             timeout=request_timeout,
         )
-        content = response.choices[0].message.content or ""
-        logger.info(f"[OpenAI] model={self._model} tokens={response.usage.total_tokens if response.usage else '?'}")
+        if not response.choices:
+            raise _unexpected_response_error(response)
+        choice = response.choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason == "length":
+            logger.warning(
+                f"[OpenAI] 输出被 max_tokens 截断 model={opts.model or self._model} "
+                f"max_tokens={opts.max_tokens}（推理模型需为 reasoning_content 预留 token）"
+            )
+        content = choice.message.content or ""
+        if opts.usage_out is not None:
+            opts.usage_out.update(_usage_dict(response.usage))
+        logger.info(
+            f"[OpenAI] model={self._model} finish={finish_reason} "
+            f"tokens={response.usage.total_tokens if response.usage else '?'}"
+        )
         return content
 
     async def chat_stream(self, messages: List[ChatMessage], options: Optional[ChatOptions] = None) -> AsyncIterator[str]:
@@ -73,8 +136,8 @@ class OpenAIProvider(LLMProvider):
 
         opts = options or ChatOptions()
         stream = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[{"role": m.role, "content": m.content} for m in messages],
+            model=opts.model or self._model,
+            messages=[_message_payload(m) for m in messages],
             temperature=opts.temperature,
             max_tokens=opts.max_tokens,
             stream=True,
@@ -95,22 +158,14 @@ class OpenAIProvider(LLMProvider):
         import json as _json
 
         opts = options or ChatOptions()
-        formatted_msgs = []
-        for m in messages:
-            msg: dict = {"role": m.role, "content": m.content}
-            if hasattr(m, "tool_call_id") and m.role == "tool":
-                msg["tool_call_id"] = m.tool_call_id  # type: ignore
-            if hasattr(m, "tool_calls") and m.role == "assistant" and getattr(m, "tool_calls", None):
-                msg["tool_calls"] = m.tool_calls  # type: ignore
-                msg.pop("content", None)
-            formatted_msgs.append(msg)
+        formatted_msgs = [_message_payload(m) for m in messages]
 
         request_timeout = opts.timeout or self._timeout
         logger.info(f"[OpenAI tools] Sending request: model={self._model}, msgs={len(formatted_msgs)}, tools={len(tools) if tools else 0}, temp={opts.temperature}, max_tokens={opts.max_tokens}")
 
         # Build request kwargs - only include parameters the model supports
         create_kwargs: dict = {
-            "model": self._model,
+            "model": opts.model or self._model,
             "messages": formatted_msgs,
         }
         if tools:
@@ -132,6 +187,8 @@ class OpenAIProvider(LLMProvider):
                     timeout=request_timeout,
                 )
                 # Success
+                if not response.choices:
+                    raise _unexpected_response_error(response)
                 choice = response.choices[0]
                 logger.info(f"[OpenAI tools] model={self._model} finish={choice.finish_reason} tokens={response.usage.total_tokens if response.usage else '?'}")
                 break
@@ -150,6 +207,7 @@ class OpenAIProvider(LLMProvider):
             # This shouldn't happen since we either break or raise inside the loop
             raise last_error  # type: ignore
         result = ChatWithToolsResult()
+        result.thinking = _reasoning_content(choice.message)
         if choice.message.content:
             result.text = choice.message.content
         if choice.message.tool_calls:
@@ -164,9 +222,11 @@ class OpenAIProvider(LLMProvider):
                     arguments=args,
                 ))
         if response.usage:
+            usage = _usage_dict(response.usage)
             result.usage = TokenUsage(
-                prompt_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,
-                completion_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
-                total_tokens=getattr(response.usage, "total_tokens", 0) or 0,
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                total_tokens=usage["total_tokens"],
+                cached_tokens=usage["cached_tokens"],
             )
         return result

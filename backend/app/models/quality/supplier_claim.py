@@ -26,6 +26,7 @@ class SupplierClaim(Base):
     claim_date = Column(Date)
     remarks = Column(Text)
     attachments = Column(JSON, default=list)
+    clause_snapshot = Column(JSON)
 
     # 审批字段（公共审批引擎约定列）
     approval_status = Column(String(16), default="draft")

@@ -48,6 +48,8 @@ import {
 } from '../pages/BasicDataCenter'
 import WritebackConfig from '../pages/BasicDataCenter/WritebackConfig'
 import Backup from '../pages/SystemCenter/Backup'
+import AssistantManagement from '../pages/SystemCenter/AssistantManagement'
+import ExecutionAgentManagement from '../pages/SystemCenter/ExecutionAgentManagement'
 import WritebackMonitor from '../pages/WritebackMonitor/index'
 import Notifications from '../pages/Notifications'
 import Profile from '../pages/Profile'
@@ -90,7 +92,6 @@ import ApprovalConfig from '../pages/Purchase/PriceChange/config'
 import SupplierClaimList from '../pages/QualityCenter/SupplierClaims/list'
 import SupplierClaimNew from '../pages/QualityCenter/SupplierClaims/new'
 import SupplierClaimDetail from '../pages/QualityCenter/SupplierClaims/detail'
-import SupplierClaimPrint from '../pages/QualityCenter/SupplierClaims/print'
 import ApprovalPending from '../pages/ApprovalCenter/Pending'
 import ApprovalConfigs from '../pages/ApprovalCenter/Configs'
 import ApprovalItem from '../pages/ApprovalCenter/Item'
@@ -163,6 +164,8 @@ export const contentRoutes = (
         <Route path="/permissions" element={<PermissionManagement/>}/>
         <Route path="/audit" element={<AuditLog/>}/>
         <Route path="/backups" element={<Backup/>} key="backups"/>
+        <Route path="/ai-assistant" element={<AssistantManagement/>} key="ai-assistant"/>
+        <Route path="/execution-agent" element={<ExecutionAgentManagement/>} key="execution-agent"/>
         <Route path="/share-management" element={<ShareManagement/>}/>
         <Route path="/sync-config" element={<SyncSqlConfig/>}/>
         <Route path="/writeback-config" element={<WritebackConfig/>}/>
@@ -194,7 +197,6 @@ export const contentRoutes = (
         <Route path="/purchase/price-change/:id" element={<PriceChangeDetail/>}/>
         <Route path="/quality/supplier-claims" element={<SupplierClaimList/>}/>
         <Route path="/quality/supplier-claims/new" element={<SupplierClaimNew/>}/>
-        <Route path="/quality/supplier-claims/print/:id" element={<SupplierClaimPrint/>}/>
         <Route path="/quality/supplier-claims/:id" element={<SupplierClaimDetail/>}/>
         <Route path="/approvals/pending" element={<ApprovalPending/>}/>
         <Route path="/approvals/configs" element={<ApprovalConfigs/>}/>

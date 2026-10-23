@@ -1,6 +1,6 @@
 """基础数据与集成中心 — 即时库存模型"""
 
-from sqlalchemy import Column, BigInteger, String, Integer, Numeric, DateTime, UniqueConstraint
+from sqlalchemy import text, Column, BigInteger, String, Integer, Numeric, DateTime, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -24,8 +24,8 @@ class Inventory(Base):
     locked_qty = Column(Numeric(15, 2), nullable=False, default=0, comment="锁定数量")
     balance_qty = Column(Numeric(15, 2), nullable=False, default=0, comment="结存数量")
     qty_in_transit = Column(Numeric(15, 2), nullable=False, default=0, comment="在途库存")
-    unit_price = Column(Numeric(15, 6), nullable=False, default=0, comment="库存单价")
-    ending_balance = Column(Numeric(15, 2), nullable=False, default=0, comment="期末余额")
+    unit_price = Column(Numeric(15, 6), nullable=False, default=0, server_default=text('0'), comment="库存单价")
+    ending_balance = Column(Numeric(15, 2), nullable=False, default=0, server_default=text('0'), comment="期末余额")
     batch_no = Column(String(50), nullable=True, comment="批次号")
     last_inbound_at = Column(DateTime, nullable=True, comment="最后入库时间(ERP)")
     last_outbound_at = Column(DateTime, nullable=True, comment="最后出库时间(ERP)")

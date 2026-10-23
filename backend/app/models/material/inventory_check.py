@@ -2,7 +2,7 @@
 
 from sqlalchemy import (
     Column, BigInteger, Integer, String, Numeric, DateTime, Date, Text,
-    UniqueConstraint, Index, ForeignKey,
+    UniqueConstraint, Index, ForeignKey, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
@@ -32,7 +32,7 @@ class StockCheck(Base):
     covered_products = Column(JSONB, nullable=True, comment="本次盘点覆盖的产品行 [{product_code,bom_no,line_no,product_name,order_qty}]")
     co_checker_user_ids = Column(JSONB, nullable=True, comment="共同盘点人 sys_user.id 列表")
     created_by_user_id = Column(BigInteger, nullable=True, comment="创建人 sys_user.id（用于修改权限判定）")
-    version = Column(Integer, nullable=False, default=0, comment="乐观锁版本号,每次更新+1")
+    version = Column(Integer, nullable=False, default=0, server_default=text('0'), comment="乐观锁版本号,每次更新+1")
     source = Column(String(16), nullable=False, default="manual", server_default="manual", comment="数据来源 manual/k3")
     erp_bill_no = Column(String(64), nullable=True, comment="K3 盘盈盘亏单号(YADJ/KADJ),幂等键")
     erp_inter_id = Column(BigInteger, nullable=True, comment="K3 ICStockBill.FInterID")
@@ -77,7 +77,7 @@ class StockCheckItem(Base):
     remark = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
-    version = Column(Integer, nullable=False, default=0, comment="乐观锁版本号,每次更新+1")
+    version = Column(Integer, nullable=False, default=0, server_default=text('0'), comment="乐观锁版本号,每次更新+1")
     audit_failed = Column(Integer, nullable=False, default=0, server_default="0", comment="抽检问题行标记 0/1;重录实盘数时清零")
     appeal_status = Column(String(16), nullable=True, index=True, comment="复议状态 pending/accepted/rejected;NULL=无复议")
     appeal_reason = Column(Text, nullable=True, comment="复议申请原因")

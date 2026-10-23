@@ -104,6 +104,10 @@ api.interceptors.response.use(
         rememberRedirectBeforeLogin()
         window.location.href = loginPathForCurrentEntry()
       }
+    } else if (status === 400) {
+      const detail = error.response?.data?.detail
+      error.message = typeof detail === 'string' && detail ? detail : '请求参数有误，请检查后重试'
+      if (!skipToast) messageApi?.error(error.message)
     } else if (status === 403) {
       error.message = error.response?.data?.detail || '权限不足，无法执行此操作'
       if (!skipToast) messageApi?.error(error.message)
@@ -682,6 +686,10 @@ export const documentApi = {
   publishOrderStandardVersion: (id: number, data: Record<string, any>) => api.post(`/rules/order-standards/${id}/versions`, data),
   publishOrderStandard: (id: number) => api.post(`/rules/order-standards/${id}/publish`),
   archiveOrderStandard: (id: number) => api.post(`/rules/order-standards/${id}/archive`),
+  listOrderStandardFieldConfigs: () => api.get('/rules/order-standards/field-configs'),
+  createOrderStandardFieldConfig: (data: Record<string, any>) => api.post('/rules/order-standards/field-configs', data),
+  updateOrderStandardFieldConfig: (id: number, data: Record<string, any>) => api.put(`/rules/order-standards/field-configs/${id}`, data),
+  deleteOrderStandardFieldConfig: (id: number) => api.delete(`/rules/order-standards/field-configs/${id}`),
   listWorkInstructions: (params: Record<string, any> = {}) => api.get('/rules/work-instructions', { params }),
   createWorkInstruction: (data: Record<string, any>) => api.post('/rules/work-instructions', data),
   updateWorkInstruction: (id: number, data: Record<string, any>) => api.put(`/rules/work-instructions/${id}`, data),
@@ -766,6 +774,10 @@ export const assistantApi = {
     })
   },
   listSkills: () => api.get('/assistant/skills'),
+  confirmConfirmation: (confirmationId: string) =>
+    api.post(`/assistant/confirmations/${confirmationId}/confirm`, null, { timeout: 180000 }),
+  cancelConfirmation: (confirmationId: string) =>
+    api.post(`/assistant/confirmations/${confirmationId}/cancel`, null),
 }
 
 // ============ 公告管理 (基础数据与集成中心) ============

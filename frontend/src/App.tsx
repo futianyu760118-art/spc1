@@ -5,6 +5,7 @@ import MainLayout from './layouts/MainLayout'
 import { appHistory } from './utils/appHistory'
 import Login from './pages/Login'
 import ShareAccess from './pages/ShareAccess'
+import SupplierClaimPrint from './pages/QualityCenter/SupplierClaims/print'
 import {useAuthStore} from './store/auth'
 import {useThemeStore} from './store/theme'
 import {setGlobalMessageApi} from './utils/antdMessage'
@@ -85,6 +86,16 @@ export default function App() {
                     <Routes>
                         <Route path="/login" element={<Login/>}/>
                         <Route path="/share/:token" element={<ShareAccess/>}/>
+                        <Route
+                            path="/quality/supplier-claims/print/:id"
+                            element={
+                                <PrivateRoute>
+                                    <ShareRouteGuard>
+                                        <SupplierClaimPrint/>
+                                    </ShareRouteGuard>
+                                </PrivateRoute>
+                            }
+                        />
                         <Route
                             path="/"
                             element={

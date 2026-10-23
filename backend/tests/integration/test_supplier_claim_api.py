@@ -6,6 +6,8 @@
 通知落库、附件引用计数、审批配置变更生效。
 """
 
+import json
+
 import pytest
 from sqlalchemy import text
 
@@ -450,3 +452,112 @@ async def test_attachment_refcount_bound_on_submit_and_freed_on_delete(db, clien
         "SELECT ref_count, is_orphan FROM file_asset WHERE key = :k"), {"k": keys[0]})).one()
     await db.commit()
     assert counts[0] == 0 and counts[1] is True
+
+
+# ---------------------------------------------------------------- 纸质模板与条款快照
+
+async def test_clause_template_endpoint(client):
+    h = await login(client, Q)
+    r = await client.get("/api/v1/quality/supplier-claims/template", headers=h)
+    body = r.json()
+    assert body["code"] == 0, body
+    assert len(body["data"]["clauses"]) == 5
+    assert body["data"]["clauses"][0].startswith("供应商同一产品连续两次以上")
+    assert body["data"]["claim_method_default"] == "本公司财务部直接扣款"
+
+
+async def test_draft_has_no_clause_snapshot(client):
+    h = await login(client, Q)
+    a = await create(client, h, 500)
+    d = await get_claim(client, h, a["id"])
+    assert not d.get("clause_snapshot")
+
+
+async def test_submit_snapshots_clause_template(client):
+    h = await login(client, Q)
+    a = await create(client, h, 500, submit=True)
+    d = await get_claim(client, h, a["id"])
+    assert len(d["clause_snapshot"]) == 5
+    assert d["clause_snapshot"][0].startswith("供应商同一产品连续两次以上")
+
+
+async def test_submit_failure_leaves_clause_snapshot_null(db, client):
+    h = await login(client, Q)
+    a = await create(client, h, 500)
+    await db.execute(text("UPDATE approval_config SET is_active = FALSE WHERE biz_type = 'supplier_claim'"))
+    await db.commit()
+    r = await client.post(f"/api/v1/quality/supplier-claims/{a['id']}/submit", json={}, headers=h)
+    assert r.json()["code"] == 1
+    d = await get_claim(client, h, a["id"])
+    assert not d.get("clause_snapshot")
+
+
+async def test_resubmit_refreshes_clause_snapshot(db, client):
+    h = await login(client, Q)
+    a = await create(client, h, 500, submit=True)
+    await db.execute(
+        text("UPDATE supplier_claim SET clause_snapshot = '[\"old\"]'::jsonb WHERE id = :i"),
+        {"i": a["id"]},
+    )
+    await db.commit()
+    pm = await login(client, PM)
+    assert (await act(client, pm, a["id"], "reject", "测试驳回")).json()["code"] == 0
+    r = await client.post(f"/api/v1/quality/supplier-claims/{a['id']}/submit", json={}, headers=h)
+    assert r.json()["code"] == 0, r.text
+    d = await get_claim(client, h, a["id"])
+    assert len(d["clause_snapshot"]) == 5
+
+
+async def test_approval_log_has_approver_display(db, client):
+    h = await login(client, Q)
+    a = await create(client, h, 500, submit=True)
+    try:
+        await db.execute(text("UPDATE sys_user SET display_name = '采购经理' WHERE username = :u"), {"u": PM})
+        await db.commit()
+        pm = await login(client, PM)
+        assert (await act(client, pm, a["id"], "approve")).json()["code"] == 0
+        d = await get_claim(client, h, a["id"])
+        row = next(l for l in d["approval_logs"] if l["approver"] == PM and l["action"] == "approve")
+        assert row["approver_display"] == "采购经理"
+    finally:
+        await db.execute(text("UPDATE sys_user SET display_name = NULL WHERE username = :u"), {"u": PM})
+        await db.commit()
+
+
+async def test_legacy_approval_log_has_approver_display(db, client):
+    h = await login(client, Q)
+    a = await create(client, h, 500, submit=True)
+    try:
+        await db.execute(text("UPDATE sys_user SET display_name = '采购经理' WHERE username = :u"), {"u": PM})
+        await db.execute(text("""
+            INSERT INTO supplier_claim_approval_log (claim_id, approval_level, approver, action, comment)
+            VALUES (:cid, 1, :ap, 'approve', 'legacy-ok')
+        """), {"cid": a["id"], "ap": PM})
+        await db.commit()
+        d = await get_claim(client, h, a["id"])
+        row = next(l for l in d["approval_logs"] if l.get("comment") == "legacy-ok")
+        assert row["approver_display"] == "采购经理"
+    finally:
+        await db.execute(text("UPDATE sys_user SET display_name = NULL WHERE username = :u"), {"u": PM})
+        await db.commit()
+
+
+async def test_legacy_snapshot_gets_paper_slot_from_current_config(db, client):
+    """历史快照没有 paper_slot 时，读取时用当前审批链绑定回填，保证旧单也能签字。"""
+    h = await login(client, Q)
+    a = await create(client, h, 5000, submit=True)
+    nodes = [
+        {"seq": 1, "label": "索赔部门意见", "role": "purchase_manager", "paper_slot": "claim_dept"},
+        {"seq": 2, "label": "上级部门意见", "role": "manager", "paper_slot": "upper_dept"},
+        {"seq": 3, "label": "总经理意见", "role": "general_manager", "paper_slot": "general_manager"},
+        {"seq": 4, "label": "财务结算", "role": "finance", "paper_slot": "finance"},
+    ]
+    await db.execute(
+        text("UPDATE approval_config SET nodes = CAST(:n AS jsonb) WHERE biz_type = 'supplier_claim'"),
+        {"n": json.dumps(nodes)},
+    )
+    await db.commit()
+    d = await get_claim(client, h, a["id"])
+    assert [n.get("paper_slot") for n in d["approval_snapshot"]] == [
+        "claim_dept", "upper_dept", "general_manager", "finance",
+    ]

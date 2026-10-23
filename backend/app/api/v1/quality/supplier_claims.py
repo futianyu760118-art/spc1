@@ -11,6 +11,7 @@ from app.schemas.common import ResponseModel
 from app.services.common.export_service import GenericExportService, ExportColumn
 from app.services.common.approval_center_service import ApprovalConflictError
 from app.services.quality.supplier_claim_service import SupplierClaimService, CLAIM_ITEM_LABELS, CLAIM_REASON_LABELS
+from app.services.quality.supplier_claim_template import CLAIM_CLAUSE_TEMPLATE, CLAIM_METHOD_DEFAULT
 
 CLAIM_EXPORT_COLUMNS = [
     ExportColumn("claim_no", "索赔单号", 18),
@@ -138,6 +139,17 @@ async def export_claims(
     return StreamingResponse(
         svc.to_xlsx(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=supplier_claims.xlsx"})
+
+
+@router.get("/template", response_model=ResponseModel)
+async def claim_template(
+    _: dict = Depends(PermissionChecker("quality.supplier_claim", "read")),
+):
+    """纸质单固定条款与默认索赔方式；新建页预览使用。"""
+    return ResponseModel(data={
+        "clauses": CLAIM_CLAUSE_TEMPLATE,
+        "claim_method_default": CLAIM_METHOD_DEFAULT,
+    })
 
 
 @router.get("/{claim_id}", response_model=ResponseModel)

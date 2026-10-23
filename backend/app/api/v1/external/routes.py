@@ -6,10 +6,10 @@ from .registry import check_registry_matches_router
 # 触发 endpoints 包导入，使所有 @register_external 装饰器生效
 from . import endpoints  # noqa: F401
 from .endpoints import (
-    bom, bom_detail, bom_tree, human_resources, inventory, inventory_availability,
-    masterdata, material_kitting, material_supplies, orders, production,
+    agent_config, bom, bom_detail, bom_tree, human_resources, inventory, inventory_availability,
+    masterdata, material_kitting, material_supplies, order_schedule, orders, production,
     production_task_orders, production_coordination, process_data, purchase,
-    quality, warehouse,
+    quality, reasoning, warehouse,
 )
 
 external_router = APIRouter()
@@ -25,6 +25,9 @@ for r in (
     material_kitting.router, material_supplies.router,
     quality.router, quality.router_trace,
     warehouse.wh_router, warehouse.loc_router,
+    reasoning.router,
+    agent_config.router,
+    order_schedule.router,
 ):
     external_router.include_router(r)
 
