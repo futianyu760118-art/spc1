@@ -21,9 +21,11 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Literal, Optional
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.external.freshness import source_as_of, table_max_as_of
@@ -56,6 +58,8 @@ ANCHOR_TYPES = {"order", "product", "batch"}
 
 PROMPT_MAX_CHARS = 2000
 
+_BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
+
 
 # ═══════════════════════════════════════════
 # 结构化错误（endpoint 层转 ExternalEnvelopeError 信封）
@@ -85,6 +89,11 @@ class EmptyResultError(ReasoningError):
 class TaskCancelledError(ReasoningError):
     code = 490
     status = "cancelled"
+
+
+class TaskInProgressError(ReasoningError):
+    code = 409
+    status = "running"
 
 
 class UpstreamUnavailableError(ReasoningError):
@@ -134,6 +143,15 @@ class EvidenceBundle:
 # ═══════════════════════════════════════════
 # 锚点解析与结论校验（纯函数，供单测）
 # ═══════════════════════════════════════════
+
+def format_data_as_of(value: Optional[datetime]) -> Optional[str]:
+    """业务时点转 ISO 8601；DB 存本地 naive 时间，按 Asia/Shanghai 补偏移。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=_BUSINESS_TZ)
+    return value.isoformat()
+
 
 def parse_business_object_ref(ref: Optional[str]) -> BusinessAnchor:
     if not ref:
@@ -625,6 +643,26 @@ async def _gather_evidence(db: AsyncSession, task_type: str, anchor: BusinessAnc
     return evidence, tool_calls, (min(as_of_values) if as_of_values else None)
 
 
+async def _find_task_by_id(db: AsyncSession, task_id: str) -> Optional[ReasoningTask]:
+    return (
+        await db.execute(select(ReasoningTask).where(ReasoningTask.task_id == task_id))
+    ).scalar_one_or_none()
+
+
+def _replay_existing_task(record: ReasoningTask) -> dict:
+    """同 task_id 幂等回放：成功返回原结果；失败/取消/超时重放原错误；运行中拒绝重复执行。"""
+    if record.status == "succeeded" and record.result_json:
+        return {**record.result_json, "idempotent_replay": True}
+    if record.status == "running":
+        raise TaskInProgressError(f"推理任务 {record.task_id} 正在执行中，请稍后查询状态")
+    error = ReasoningError(
+        record.error_message or f"推理任务 {record.task_id} 已结束（{record.status}），无可用结果"
+    )
+    error.code = record.error_code or 500
+    error.status = record.status
+    raise error
+
+
 async def run_reasoning_task(
     db: AsyncSession,
     *,
@@ -649,8 +687,10 @@ async def run_reasoning_task(
         raise InvalidRequestError(f"task_type 不支持：{task_type}（当前支持 {sorted(TASK_TYPES)}）")
     anchor = parse_business_object_ref(context.get("businessObjectRef"))
 
-    handle = _RunningHandle(task_id)
-    _running_tasks[task_id] = handle
+    existing = await _find_task_by_id(db, task_id)
+    if existing is not None:
+        return _replay_existing_task(existing)
+
     started = time.time()
     record = ReasoningTask(
         task_id=task_id, task_type=task_type, prompt=prompt,
@@ -659,12 +699,24 @@ async def run_reasoning_task(
         app_key=app_key, request_id=request_id,
     )
     db.add(record)
-    # running 态先提交，让状态/取消请求在其它会话可见（同 log_call 的显式提交先例）
-    await db.commit()
+    try:
+        # running 态先提交，让状态/取消请求在其它会话可见（同 log_call 的显式提交先例）
+        await db.commit()
+    except IntegrityError:
+        # 并发同 task_id：唯一约束兜底，回滚后按既有任务回放
+        await db.rollback()
+        existing = await _find_task_by_id(db, task_id)
+        if existing is None:
+            raise
+        return _replay_existing_task(existing)
+
+    handle = _RunningHandle(task_id)
+    _running_tasks[task_id] = handle
 
     llm_meta: dict = {"called": False, "provider": None, "model": None, "latency_ms": None}
     evidence: list[dict] = []
     tool_calls: list[dict] = []
+    data_as_of: Optional[datetime] = None
     result: Optional[dict] = None
 
     async def _finalize(status: str, error: Optional[ReasoningError] = None):
@@ -680,9 +732,9 @@ async def run_reasoning_task(
         if error is not None:
             record.error_code = error.code
             record.error_message = error.message
+        record.data_as_of = data_as_of
         if result is not None:
             record.result_json = result
-            record.data_as_of = datetime.fromisoformat(result["data_as_of"]) if result["data_as_of"] else None
             record.data_confidence = result["data_confidence"]
             record.dropped_conclusion_count = result.get("dropped_conclusions", 0)
 
@@ -752,7 +804,7 @@ async def run_reasoning_task(
             ],
             "dropped_conclusions": dropped,
             "evidence_refs": [ev["ref"] for ev in evidence],
-            "data_as_of": data_as_of.isoformat() if data_as_of else None,
+            "data_as_of": format_data_as_of(data_as_of),
             "data_confidence": data_confidence,
             "stale": stale,
             "warnings": warnings,
@@ -795,7 +847,7 @@ def _serialize_record(record: ReasoningTask) -> dict:
         "llm_called": bool(record.llm_called),
         "llm_provider": record.llm_provider,
         "llm_model": record.llm_model,
-        "data_as_of": record.data_as_of.isoformat() if record.data_as_of else None,
+        "data_as_of": format_data_as_of(record.data_as_of),
         "data_confidence": record.data_confidence,
         "duration_ms": float(record.duration_ms) if record.duration_ms is not None else None,
         "created_at": record.created_at.isoformat() if record.created_at else None,

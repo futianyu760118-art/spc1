@@ -108,6 +108,7 @@ class OpenAIProvider(LLMProvider):
                 messages=[_message_payload(m) for m in messages],
                 temperature=opts.temperature,
                 max_tokens=opts.max_tokens,
+                timeout=request_timeout,
             ),
             timeout=request_timeout,
         )
@@ -135,12 +136,14 @@ class OpenAIProvider(LLMProvider):
             raise RuntimeError("OpenAI provider is not available")
 
         opts = options or ChatOptions()
+        request_timeout = opts.timeout or self._timeout
         stream = await self._client.chat.completions.create(
             model=opts.model or self._model,
             messages=[_message_payload(m) for m in messages],
             temperature=opts.temperature,
             max_tokens=opts.max_tokens,
             stream=True,
+            timeout=request_timeout,
         )
         async for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
@@ -167,6 +170,7 @@ class OpenAIProvider(LLMProvider):
         create_kwargs: dict = {
             "model": opts.model or self._model,
             "messages": formatted_msgs,
+            "timeout": request_timeout,
         }
         if tools:
             create_kwargs["tools"] = tools

@@ -1,5 +1,8 @@
 """执行面推理服务纯函数单测：锚点解析、结论证据校验、提示词组装。"""
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pytest
 
 from app.services.reasoning import service as rs
@@ -103,3 +106,50 @@ def test_build_prompt_contains_refs_and_constraints():
     assert "分析订单风险" in prompt
     assert "需人工确认" in prompt
     assert "evidence_refs" in prompt
+
+
+# ═══════════════════════════════════════════
+# format_data_as_of / 幂等回放
+# ═══════════════════════════════════════════
+
+def test_format_data_as_of_adds_business_offset():
+    assert rs.format_data_as_of(datetime(2026, 10, 26, 14, 30)) == "2026-10-26T14:30:00+08:00"
+
+
+def test_format_data_as_of_none():
+    assert rs.format_data_as_of(None) is None
+
+
+def test_format_data_as_of_keeps_aware_value():
+    aware = datetime(2026, 10, 26, 6, 30, tzinfo=timezone.utc)
+    assert rs.format_data_as_of(aware) == "2026-10-26T06:30:00+00:00"
+
+
+def test_replay_succeeded_marks_idempotent():
+    record = SimpleNamespace(
+        status="succeeded", result_json={"task_id": "t1", "summary": "s"},
+        task_id="t1", error_code=None, error_message=None,
+    )
+    replayed = rs._replay_existing_task(record)
+    assert replayed["idempotent_replay"] is True
+    assert replayed["summary"] == "s"
+
+
+def test_replay_failed_raises_recorded_error():
+    record = SimpleNamespace(
+        status="failed", result_json=None, task_id="t2",
+        error_code=503, error_message="上游不可用",
+    )
+    with pytest.raises(rs.ReasoningError) as exc:
+        rs._replay_existing_task(record)
+    assert exc.value.code == 503 and "上游不可用" in exc.value.message
+
+
+def test_replay_running_raises_409():
+    record = SimpleNamespace(
+        status="running", result_json=None, task_id="t3",
+        error_code=None, error_message=None,
+    )
+    with pytest.raises(rs.TaskInProgressError) as exc:
+        rs._replay_existing_task(record)
+    assert exc.value.code == 409
