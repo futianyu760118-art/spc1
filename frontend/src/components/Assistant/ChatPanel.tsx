@@ -2,17 +2,7 @@ import React, { useRef, useEffect, useState } from 'react'
 import { Input, Button, Space, Tag, Typography, Collapse, Descriptions, Tooltip, Alert } from 'antd'
 import { SendOutlined, ClearOutlined, ThunderboltOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined } from '@ant-design/icons'
 import Markdown from '../Markdown'
-import { ChatMessage, AssistantCard, Skill, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
-import SummaryCard from './cards/SummaryCard'
-import OrderListCard from './cards/OrderListCard'
-import TextCard from './cards/TextCard'
-// Import new card components
-import SearchResultListCard from './SearchResultListCard'
-import MaterialListCard from './MaterialListCard'
-import ProductionListCard from './ProductionListCard'
-import ExceptionListCard from './ExceptionListCard'
-import BasicDataCard from './BasicDataCard'
-import ActionListCard from './ActionListCard'
+import { ChatMessage, Skill, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
 
 const { Text } = Typography
 
@@ -49,45 +39,6 @@ interface Props {
   onConfirm?: (confirmationId: string) => void
   onCancelConfirmation?: (confirmationId: string) => void
 }
-
-const renderCard = (card: AssistantCard, index: number, onSend?: (text: string) => void) => {
-  switch (card.type) {
-    case 'summary':
-      return <SummaryCard key={index} title={card.title} payload={card.payload} />
-    case 'order_list':
-      return <OrderListCard key={index} title={card.title} payload={card.payload} />
-    case 'text':
-      return <TextCard key={index} title={card.title} payload={card.payload} />
-    case 'search_result_list':
-      return <SearchResultListCard key={index} title={card.title} items={card.payload.items} total={card.payload.total} />
-    case 'material_list':
-      return <MaterialListCard key={index} title={card.title} items={card.payload.items} total={card.payload.total} />
-    case 'production_list':
-      return <ProductionListCard key={index} title={card.title} items={card.payload.items} total={card.payload.total} />
-    case 'exception_list':
-      return <ExceptionListCard key={index} title={card.title} items={card.payload.items} total={card.payload.total} />
-    case 'basicdata_list':
-      return <BasicDataCard key={index} title={card.title} items={card.payload.items} total={card.payload.total} />
-    case 'action_list':
-      return (
-        <ActionListCard
-          key={index}
-          title={card.title}
-          actions={card.payload.actions}
-          context={card.payload.context}
-          onActionClick={(action) => {
-            if (action.action_type === 'query' && action.action_params?.tool && onSend) {
-              // 将行动建议转化为查询指令
-              onSend(action.title)
-            }
-          }}
-        />
-      )
-    default:
-      return null
-  }
-}
-
 // 编排步骤时间线：查询/推理/订单智能体，每步状态与耗时
 const STEP_STATUS_META: Record<string, { color: string; text: string }> = {
   running: { color: 'processing', text: '执行中' },
@@ -447,13 +398,6 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                     onConfirm={onConfirm}
                     onCancel={onCancelConfirmation}
                   />
-                </div>
-              )}
-
-              {/* 卡片 */}
-              {msg.cards && msg.cards.length > 0 && (
-                <div style={{ maxWidth: '100%', marginTop: 8 }}>
-                  {msg.cards.map((card, i) => renderCard(card, i, onSend))}
                 </div>
               )}
 
