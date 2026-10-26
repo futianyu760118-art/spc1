@@ -80,7 +80,7 @@ class PurchasePriceChangeItem(Base):
     old_price = Column(Numeric(15, 4))
     old_price_date = Column(String(16))
     new_price = Column(Numeric(15, 4))
-    price_change_pct = Column(Numeric(5, 2))
+    price_change_pct = Column(Numeric(10, 2))
 
     remark = Column(String(256))
 

@@ -574,6 +574,19 @@ class DatabaseInitializer:
         except Exception as e:
             print(f"  share_link_recipient.wecom_msg_id resize skipped: {e}")
 
+        # 调价幅度扩容: 原 NUMERIC(5,2) 最大只到 999.99%，
+        # 旧价为分/厘、新价正常时涨幅可能超过该值，导致 numeric field overflow 500
+        try:
+            async with self.engine.begin() as conn:
+                await conn.execute(text(
+                    "ALTER TABLE purchase_price_change_item "
+                    "ALTER COLUMN price_change_pct TYPE NUMERIC(10,2) "
+                    "USING price_change_pct::NUMERIC(10,2)"
+                ))
+            print("  purchase_price_change_item.price_change_pct resized to NUMERIC(10,2)")
+        except Exception as e:
+            print(f"  purchase_price_change_item.price_change_pct resize skipped: {e}")
+
         # 物料盘点单 order_no 改为可空,支持 manual 类型独立物料盘点
         try:
             async with self.engine.begin() as conn:
