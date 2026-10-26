@@ -2513,8 +2513,8 @@ export default function SchedulePlans() {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="plan_date" label="计划日期（留空则按倒排开始日）">
-                <DatePicker style={{ width: '100%' }} placeholder="不填则系统自动倒排" />
+              <Form.Item name="plan_date" label={editing ? '计划日期（请在「日期调整」页修改）' : '计划日期（留空则按倒排开始日）'}>
+                <DatePicker disabled={Boolean(editing)} style={{ width: '100%' }} placeholder="不填则系统自动倒排" />
               </Form.Item>
             </Col>
             <Col span={8}>
@@ -2534,8 +2534,8 @@ export default function SchedulePlans() {
                 <Select options={Object.entries(PRIORITY_MAP).map(([value, item]) => ({ value, label: item.label }))} />
               </Form.Item>
             </Col>
-            <Col span={8}><Form.Item name="start_date" label="开始日期"><DatePicker style={{ width: '100%' }} /></Form.Item></Col>
-            <Col span={8}><Form.Item name="end_date" label="结束日期"><DatePicker style={{ width: '100%' }} /></Form.Item></Col>
+            <Col span={8}><Form.Item name="start_date" label="开始日期"><DatePicker disabled={Boolean(editing)} style={{ width: '100%' }} /></Form.Item></Col>
+            <Col span={8}><Form.Item name="end_date" label="结束日期"><DatePicker disabled={Boolean(editing)} style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={24}><Form.Item name="remark" label="备注"><Input.TextArea rows={3} /></Form.Item></Col>
           </Row>
         </Form>

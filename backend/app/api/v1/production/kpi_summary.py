@@ -3,7 +3,10 @@
 阶段 1a 最小版：接通 today + pending，frozen/material 返回 None，anomalies 空。
 """
 
-from fastapi import APIRouter, Depends
+from datetime import date
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -22,19 +25,21 @@ async def _lightweight_auth(token: str = Depends(oauth2_scheme)) -> dict:
 
 @router.get("", response_model=ResponseModel)
 async def get_kpi_summary_endpoint(
+    target_date: Optional[date] = Query(None, description="驾驶舱基准日期, 默认今天"),
     current_user: dict = Depends(_lightweight_auth),
     db: AsyncSession = Depends(get_db),
 ):
-    data = await get_kpi_summary(db)
+    data = await get_kpi_summary(db, target_date=target_date)
     return ResponseModel(data=data)
 
 
 @router.get("/today-cards", response_model=ResponseModel)
 async def get_today_cards_endpoint(
+    target_date: Optional[date] = Query(None, description="查看哪一天的在产计划, 默认今天"),
     current_user: dict = Depends(_lightweight_auth),
     db: AsyncSession = Depends(get_db),
 ):
-    data = await get_today_cards(db)
+    data = await get_today_cards(db, target_date=target_date)
     return ResponseModel(data=data)
 
 
