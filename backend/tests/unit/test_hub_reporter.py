@@ -34,7 +34,15 @@ def _enable(settings, hub_base="http://127.0.0.1:1"):
     settings.AEOS_SYSTEM_TOKEN = "test-token"
 
 
+def _disable(settings):
+    settings.AEOS_HUB_BASE = ""
+    settings.AEOS_SYSTEM_ID = ""
+    settings.AEOS_SYSTEM_TOKEN = ""
+    settings.AEOS_HUB_CA_CERT = ""
+
+
 async def test_disabled_skips_report(settings_fixture, monkeypatch):
+    _disable(settings_fixture)
     captured = []
 
     async def _stub(payload):

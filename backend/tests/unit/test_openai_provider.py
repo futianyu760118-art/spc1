@@ -2,8 +2,18 @@
 
 from types import SimpleNamespace
 
+import pytest
+
+from app.services.ai import openai_provider
 from app.services.ai.base import ChatMessage, ChatOptions
 from app.services.ai.openai_provider import OpenAIProvider
+
+
+@pytest.fixture(autouse=True)
+def _fake_openai_sdk(monkeypatch):
+    """不依赖本机安装 openai 包：用 FakeClient 覆盖 SDK 客户端。"""
+    monkeypatch.setattr(openai_provider, "_HAS_OPENAI", True)
+    monkeypatch.setattr(openai_provider, "AsyncOpenAI", lambda **kwargs: None, raising=False)
 
 
 class _FakeCompletions:
@@ -87,3 +97,16 @@ async def test_chat_keeps_tool_history_fields():
     assert sent[2]["reasoning_content"] == "先调用查询智能体"
     assert sent[2]["tool_calls"][0]["id"] == "call-1"
     assert sent[3]["tool_call_id"] == "call-1"
+
+
+async def test_chat_passes_per_request_timeout():
+    """推理 170s 依赖按请求透传 timeout，不能被 AI_REQUEST_TIMEOUT 提前截断。"""
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="ok", reasoning_content=None), finish_reason="stop")],
+        usage=None,
+    )
+    provider = _provider(response)
+
+    await provider.chat(_tool_messages(), ChatOptions(timeout=170))
+
+    assert provider._client.completions.requests[0]["timeout"] == 170

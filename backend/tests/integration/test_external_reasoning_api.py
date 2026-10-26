@@ -215,6 +215,7 @@ async def test_happy_path_with_evidence_validation(ext_client, external_keys, re
     assert data["evidence_refs"] and KITTING_RESULT_REF in data["evidence_refs"]
     # 数据时效与置信度（验收§五.3）
     assert data["data_as_of"] is not None
+    assert data["data_as_of"].endswith("+08:00")
     assert data["data_confidence"] in ("high", "medium")
     assert data["llm"]["called"] is True
     # 用量透传（执行面 run_complete.usage → Hub 用量台账；假 LLM 用量为空 → 全 0）
@@ -369,3 +370,83 @@ async def test_status_unknown_task_404(ext_client, external_keys):
         ext_client, STATUS.format(task_id="nope"), "reasoning.task", external_keys["reasoning"],
     )
     assert r.json()["code"] == 404
+
+
+# ═══════════════════════════════════════════
+# 幂等回放（同 task_id 重试不重复执行、不 500）
+# ═══════════════════════════════════════════
+
+async def test_duplicate_task_id_replays_succeeded(ext_client, external_keys, reasoning_seeded, patch_llm, db):
+    from sqlalchemy import func, select
+
+    from app.models.basicdata.reasoning import ReasoningTask
+
+    patch_llm(_analysis_impl)
+    first = await signed_post(
+        ext_client, ANALYZE, "reasoning.analyze", external_keys["reasoning"],
+        _base_body(task_id="dup-1", request_id="req-1"),
+    )
+    assert first.json()["code"] == 0
+    first_data = first.json()["data"]
+    assert first_data["idempotent_replay"] is False
+
+    second = await signed_post(
+        ext_client, ANALYZE, "reasoning.analyze", external_keys["reasoning"],
+        _base_body(task_id="dup-1", request_id="req-2"),
+    )
+    body = second.json()
+    assert body["code"] == 0
+    assert body["data"]["idempotent_replay"] is True
+    assert body["data"]["summary"] == first_data["summary"]
+    assert body["data"]["request_id"] == "req-1"
+
+    count = (
+        await db.execute(
+            select(func.count()).select_from(ReasoningTask).where(ReasoningTask.task_id == "dup-1")
+        )
+    ).scalar_one()
+    assert count == 1
+
+
+async def test_duplicate_task_id_replays_failure(ext_client, external_keys, reasoning_seeded, monkeypatch, db):
+    from sqlalchemy import func, select
+
+    from app.models.basicdata.reasoning import ReasoningTask
+    from app.services.reasoning import service as rs
+
+    monkeypatch.setattr(rs.ai_service, "current_provider", lambda: "rule_based")
+    first = await signed_post(
+        ext_client, ANALYZE, "reasoning.analyze", external_keys["reasoning"],
+        _base_body(task_id="dup-fail-1"),
+    )
+    assert first.json()["code"] == 503
+
+    second = await signed_post(
+        ext_client, ANALYZE, "reasoning.analyze", external_keys["reasoning"],
+        _base_body(task_id="dup-fail-1"),
+    )
+    assert second.json()["code"] == 503
+
+    count = (
+        await db.execute(
+            select(func.count()).select_from(ReasoningTask).where(ReasoningTask.task_id == "dup-fail-1")
+        )
+    ).scalar_one()
+    assert count == 1
+
+
+async def test_duplicate_running_task_id_409(ext_client, external_keys, db):
+    from app.models.basicdata.reasoning import ReasoningTask
+
+    db.add(ReasoningTask(
+        task_id="running-1", task_type="order_delivery_analysis", prompt="执行中", status="running",
+    ))
+    await db.commit()
+
+    r = await signed_post(
+        ext_client, ANALYZE, "reasoning.analyze", external_keys["reasoning"],
+        _base_body(task_id="running-1"),
+    )
+    body = r.json()
+    assert body["code"] == 409
+    assert "正在执行" in body["message"]
