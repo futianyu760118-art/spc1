@@ -39,13 +39,18 @@ def _set_cached(key: str, value: Any) -> None:
     _kpi_cache[key] = (datetime.now(), value)
 
 
-async def get_kpi_summary(db: AsyncSession) -> dict[str, Any]:
+def invalidate_kpi_cache() -> None:
+    """排产日期变更后清空驾驶舱缓存，保证看板/卡片立即刷新。"""
+    _kpi_cache.clear()
+
+
+async def get_kpi_summary(db: AsyncSession, target_date: Optional[date] = None) -> dict[str, Any]:
+    today = target_date or date.today()
+    cache_key = f"kpi_summary:{today.isoformat()}"
     # 进程内缓存命中则直接返回
-    cached = _get_cached('kpi_summary')
+    cached = _get_cached(cache_key)
     if cached is not None:
         return cached
-
-    today = date.today()
 
     # === 🔴 今日栏（区间相交口径，R2） ===
     today_stmt = select(
@@ -178,18 +183,18 @@ async def get_kpi_summary(db: AsyncSession) -> dict[str, Any]:
             "orders": ["today", "pending"],
         },
     }
-    _set_cached('kpi_summary', result)
+    _set_cached(cache_key, result)
     return result
 
 
-async def get_today_cards(db: AsyncSession) -> list[dict[str, Any]]:
-    """今日在产计划卡片（区间相交口径，R2）"""
+async def get_today_cards(db: AsyncSession, target_date: Optional[date] = None) -> list[dict[str, Any]]:
+    """指定日期的在产计划卡片（区间相交口径，R2）"""
+    day = target_date or date.today()
+    cache_key = f"today_cards:{day.isoformat()}"
     # 进程内缓存
-    cached = _get_cached('today_cards')
+    cached = _get_cached(cache_key)
     if cached is not None:
         return cached
-
-    today = date.today()
 
     stmt = select(
         ProductionSchedulePlan.id,
@@ -206,8 +211,8 @@ async def get_today_cards(db: AsyncSession) -> list[dict[str, Any]]:
         ProductionSchedulePlan.needs_reschedule,
     ).where(
         ProductionSchedulePlan.is_active.is_(True),
-        ProductionSchedulePlan.start_date <= today,
-        ProductionSchedulePlan.end_date >= today,
+        ProductionSchedulePlan.start_date <= day,
+        ProductionSchedulePlan.end_date >= day,
     ).order_by(ProductionSchedulePlan.order_no)
 
     rows = (await db.execute(stmt)).all()
@@ -229,7 +234,7 @@ async def get_today_cards(db: AsyncSession) -> list[dict[str, Any]]:
             "status": r.status,
             "needs_reschedule": bool(r.needs_reschedule),
         })
-    _set_cached('today_cards', cards)
+    _set_cached(cache_key, cards)
     return cards
 
 

@@ -35,6 +35,7 @@ from app.models.production.workshop_daily_report import (  # noqa: F401
     WorkshopDailyReportTask,
 )
 from app.models.production.production_report import ProductionReport  # noqa: F401
+from app.models.production.rework_order import ProductionReworkOrder  # noqa: F401
 
 # 异常与质量中心
 from app.models.exception.risk_issue import RiskIssue

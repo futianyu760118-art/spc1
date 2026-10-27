@@ -4,8 +4,8 @@ import api from './api'
 export const productionApi = {
   // 生产总览
   getOverview: () => api.get('/production/overview'),
-  getKpiSummary: () => api.get('/production/kpi-summary'),
-  getTodayCards: () => api.get('/production/kpi-summary/today-cards'),
+  getKpiSummary: (params?: Record<string, any>) => api.get('/production/kpi-summary', { params }),
+  getTodayCards: (params?: Record<string, any>) => api.get('/production/kpi-summary/today-cards', { params }),
   getWorkshopOverview: (params: Record<string, any>) => api.get('/production/kpi-summary/workshop-overview', { params }),
   listSchedulePlans: (params: Record<string, any>) => api.get('/production/schedule-plans', { params }),
   createSchedulePlan: (data: Record<string, any>) => api.post('/production/schedule-plans', data),
@@ -81,6 +81,21 @@ export const productionApi = {
     api.post('/production/schedule-plans/change-events/status', data),
   listUpphImpactPlans: (params: Record<string, any>) => api.get('/production/schedule-plans/upph-impact', { params }),
   batchReschedulePlans: (data: { plan_ids: number[], all_or_none?: boolean }) => api.post('/production/schedule-plans/batch-reschedule', data),
+  // 手工改日期（硬排，以手工日期为准，超产能只提示）
+  adjustScheduleDates: (data: { items: Array<{ plan_id: number; target_date: string }>; reason?: string }) =>
+    api.post('/production/schedule-date-adjust/batch', data, { timeout: 120000 }),
+  insertSchedulePlan: (data: Record<string, any>) =>
+    api.post('/production/schedule-date-adjust/insert', data, { timeout: 180000 }),
+  splitSchedulePlan: (data: Record<string, any>) =>
+    api.post('/production/schedule-date-adjust/split', data, { timeout: 180000 }),
+  // OA 返工单（品质异常流程）只读快照
+  listReworkOrders: (params: Record<string, any>) =>
+    api.get('/production/rework-orders', { params }),
+  syncReworkOrders: () =>
+    api.post('/production/rework-orders/sync', null, { timeout: 180000 }),
+  // 拆单少排/只生产一部分后的待排余量
+  listScheduleRemainders: (params: Record<string, any>) =>
+    api.get('/production/schedule-date-adjust/remainders', { params }),
   batchDeletePlans: (planIds: number[]) => api.post('/production/schedule-plans/batch-delete', { plan_ids: planIds }, { timeout: 120000 }),
   listOperationLogs: (params: Record<string, any>) => api.get('/production/schedule-plans/operation-logs', { params }),
   getScheduleDebugTrace: (params: { order_no: string; line_no: string }) =>

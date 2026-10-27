@@ -591,7 +591,8 @@ class DatabaseInitializer:
             async with self.engine.begin() as conn:
                 await conn.execute(text(
                     "ALTER TABLE purchase_price_change_item "
-                    "ALTER COLUMN price_change_pct TYPE NUMERIC(10,2)"
+                    "ALTER COLUMN price_change_pct TYPE NUMERIC(10,2) "
+                    "USING price_change_pct::NUMERIC(10,2)"
                 ))
             print("  purchase_price_change_item.price_change_pct resized to NUMERIC(10,2)")
         except Exception as e:

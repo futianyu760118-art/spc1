@@ -66,6 +66,7 @@ from app.schemas.production.schemas import (
     BoardCapacityResponse,
 )
 from app.services.production.config_service import ProductionScheduleConfigService
+from app.services.production.kpi_summary_service import invalidate_kpi_cache
 from app.services.production.assembly_roll_schedule_service import AssemblyRollScheduleService
 from app.services.production.plan_delete_backfill_service import PlanDeleteAndBackfillService
 from app.services.production.production_change_service import ProductionChangeService
@@ -416,6 +417,8 @@ def _invalidate_schedule_runtime_caches() -> None:
     _schedule_plan_list_cache.clear()
     _delete_preview_cache.clear()
     _production_schedule_read_permission_cache.clear()
+    # 驾驶舱今日卡片/KPI 也在进程内缓存，排产变更后必须一起失效
+    invalidate_kpi_cache()
 
 
 def _get_runtime_page_cache(
@@ -3094,7 +3097,12 @@ async def _build_split_rules_map(db: AsyncSession, bom_codes: list[Optional[str]
             missed.append(code)
 
     if missed:
-        fresh = await AssemblyRollScheduleService(db).get_stage_rules_bulk(missed)
+        try:
+            fresh = await AssemblyRollScheduleService(db).get_stage_rules_bulk(missed)
+        except Exception as exc:
+            # OA 工序规则只是排产增强信息，ERP/OA 不可用时不能让订单池整页 500
+            logger.warning("[split_rules] 工序规则批量查询失败，降级为空: %s", exc)
+            fresh = {}
         for code, payload in fresh.items():
             _split_rules_cache[code] = (now, payload)
             result[code] = payload

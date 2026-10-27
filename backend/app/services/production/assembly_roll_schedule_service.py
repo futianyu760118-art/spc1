@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
@@ -9,9 +10,12 @@ from typing import Any, Optional
 from sqlalchemy import text
 
 from app.models.production.product_process_capacity import resolve_capacity_upph
+from app.core.config import get_settings
 from app.services.basicdata.erp_sync_service import ERPSyncService
 from app.services.production.schedule_simulation_service import ScheduleSimulationService
 from app.services.production.upph_formula_config_service import UpphFormulaConfigService
+
+logger = logging.getLogger(__name__)
 
 ASSEMBLY_WORKSHOP_NAME = "装配车间"
 ASSEMBLY_PROCESS_TYPES = ("组装", "组装前加工")
@@ -110,6 +114,23 @@ class AssemblyRollScheduleService:
         if not original_codes:
             return {}
 
+        pricing_map: dict[str, dict[str, Any]] = {
+            code: {
+                "bom_code": code,
+                "resolved": False,
+                "stage_price_totals": {"assembly": 0.0, "packaging": 0.0},
+                "selected_main_id": None,
+            }
+            for code in dict.fromkeys(original_codes)
+        }
+
+        settings = get_settings()
+        if not settings.ERP_DB_URL or not settings.ERP_SYNC_ENABLED:
+            logger.warning(
+                "[stage_rules] ERP/OA 未启用，跳过装配工价查询，使用本地产能数据"
+            )
+            return pricing_map
+
         candidate_rows: list[tuple[str, str]] = []
         seen_pairs: set[tuple[str, str]] = set()
         for code in dict.fromkeys(original_codes):
@@ -134,9 +155,18 @@ class AssemblyRollScheduleService:
             params[f"original_bom_{index}"] = original_code
             params[f"match_bom_{index}"] = match_code
 
-        await self.erp_service._connect_erp()
-        main_columns = await self._load_table_columns("formtable_main_51")
-        department_columns = await self._load_table_columns("HrmDepartment")
+        try:
+            await self.erp_service._connect_erp()
+        except Exception as exc:
+            logger.warning("[stage_rules] OA 工价查询连接失败，降级为本地产能: %s", exc)
+            return pricing_map
+        try:
+            main_columns = await self._load_table_columns("formtable_main_51")
+            department_columns = await self._load_table_columns("HrmDepartment")
+        except Exception as exc:
+            logger.warning("[stage_rules] OA 表结构读取失败，降级为本地产能: %s", exc)
+            return pricing_map
+
         request_column = "requestID" if "requestid" in main_columns else None
         request_filter = f"AND a.{request_column} IS NULL" if request_column else ""
         department_join = ""
@@ -194,15 +224,6 @@ class AssemblyRollScheduleService:
             params,
         )
 
-        pricing_map: dict[str, dict[str, Any]] = {
-            code: {
-                "bom_code": code,
-                "resolved": False,
-                "stage_price_totals": {"assembly": 0.0, "packaging": 0.0},
-                "selected_main_id": None,
-            }
-            for code in dict.fromkeys(original_codes)
-        }
         for row in rows:
             bom_code = str(row.get("bom_code") or "").strip()
             if not bom_code:
