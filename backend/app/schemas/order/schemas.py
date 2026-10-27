@@ -33,6 +33,8 @@ class SaleOrderOut(BaseModel):
     order_date: Optional[date] = None
     # ── 点检新增字段 ──
     delivery_completed_date: Optional[date] = None
+    inbound_date: Optional[date] = None
+    outbound_date: Optional[date] = None
     customer_grade: Optional[str] = None
     shipping_plan: Optional[date] = None
     customer_inspection_date: Optional[date] = None

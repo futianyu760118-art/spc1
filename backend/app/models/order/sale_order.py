@@ -42,6 +42,8 @@ class SaleOrder(Base):
 
     # ── 点检新增字段 ──
     delivery_completed_date = Column(Date, comment="6.发货完成日期")
+    inbound_date = Column(Date, comment="K3 产品入库单最后审核日期")
+    outbound_date = Column(Date, comment="K3 销售出库单最后审核日期")
     customer_grade = Column(String(4), comment="客户等级 A/B/C/D")
     shipping_plan = Column(Date, comment="出货计划")
     customer_inspection_date = Column(Date, comment="客户验货时间")
