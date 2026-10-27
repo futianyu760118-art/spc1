@@ -1,4 +1,4 @@
-"""hub_client 单元测试：目录枚举兜底、错误映射、能力校验、轮询终态/超时（全程 monkeypatch，不打真实 Hub）。"""
+"""hub_client 单元测试：目录枚举兜底、错误映射、能力校验、网关 payload、轮询终态/超时。"""
 
 import time
 
@@ -26,6 +26,13 @@ async def test_capability_names_filters_self_and_fallback():
     _reset_catalog()
 
 
+async def test_provider_system_reads_catalog():
+    _seed_catalog([{"capability": "query_plm", "providerSystem": "hengjian-plm"}])
+    assert hub_client.provider_system("query_plm") == "hengjian-plm"
+    assert hub_client.provider_system("query_erp") is None
+    _reset_catalog()
+
+
 def test_readable_error_maps_known_code():
     assert "借调单过多" in hub_client._readable_error("TOO_MANY_OPEN_ORDERS", "x")
     assert "Hub 返回错误" in hub_client._readable_error("UNKNOWN_CODE", "x")
@@ -41,6 +48,49 @@ async def test_validate_capability_rejects_unknown_and_self():
     assert await hub_client.validate_capability("query_control_platform") == "不能通过 Hub 调用本系统能力"
     assert "不在" in await hub_client.validate_capability("query_erp")
     _reset_catalog()
+
+
+async def test_invoke_capability_payload(monkeypatch):
+    captured = {}
+
+    async def _post(payload):
+        captured.update(payload)
+        return {"ok": True, "status": 202, "body": {"invocation": {"borrowOrderId": "borrow-1"}},
+                "text": "", "error": None}
+
+    monkeypatch.setattr(hub_client, "is_hub_enabled", lambda: True)
+    monkeypatch.setattr(hub_client.gateway_client, "post_borrow_order", _post)
+    out = await hub_client.invoke_capability(
+        "query_plm", {"keyword": "HJ.1"}, to_system="hengjian-plm",
+        caller={"systemId": "control-platform", "agentId": "AG-000001", "userId": "10086",
+                "taskId": "AT-000123", "traceId": "trace-1"},
+        trace_id="trace-1",
+    )
+    assert out["ok"] is True
+    assert captured["toSystem"] == "hengjian-plm"
+    assert captured["input"] == {"keyword": "HJ.1"}
+    assert set(captured["caller"]) == {"systemId", "agentId", "userId", "taskId", "traceId"}
+    assert "fromAgentId" not in captured
+    assert captured["requestId"].startswith("spc-trace-1-")
+
+
+async def test_invoke_capability_omits_caller_and_requires_provider(monkeypatch):
+    captured = {}
+
+    async def _post(payload):
+        captured.update(payload)
+        return {"ok": True, "status": 202, "body": {"invocation": {"borrowOrderId": "borrow-2"}},
+                "text": "", "error": None}
+
+    monkeypatch.setattr(hub_client, "is_hub_enabled", lambda: True)
+    monkeypatch.setattr(hub_client.gateway_client, "post_borrow_order", _post)
+    out = await hub_client.invoke_capability("query_plm", {"keyword": "HJ.1"}, to_system="hengjian-plm")
+    assert out["ok"] is True
+    assert "caller" not in captured
+
+    missing = await hub_client.invoke_capability("query_plm", {"keyword": "HJ.1"})
+    assert missing["ok"] is False
+    assert "providerSystem" in missing["error"]
 
 
 async def test_query_and_poll_completed(monkeypatch):

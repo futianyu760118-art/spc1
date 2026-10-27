@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from uuid import uuid4
-from typing import Dict
+from typing import Dict, Optional
 
 import httpx
 from sqlalchemy import text
@@ -107,6 +107,8 @@ async def call_agent_run(
     timeout: float = 30.0,
     operator_user_id: str = "",
     actor_token: str = "",
+    trace_id: str = "",
+    caller: Optional[dict] = None,
 ) -> dict:
     """本地派单：POST /admin/run 同步执行一个 capability（不经 Hub）。
 
@@ -125,6 +127,10 @@ async def call_agent_run(
         payload["operator"] = {"user_id": str(operator_user_id)}
     if actor_token:
         payload["actorToken"] = actor_token
+    if trace_id:
+        payload["traceId"] = trace_id
+    if caller:
+        payload["caller"] = caller
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(

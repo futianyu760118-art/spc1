@@ -28,7 +28,11 @@ test("health server exposes healthz and token-protected admin status", async () 
   const server = startHealthServer({
     config,
     log: () => {},
-    connection: { isRegistered: () => true, activeRun: null },
+    connection: {
+      isRegistered: () => true,
+      hubRun: null,
+      localRuns: new Map([["local-1", { runId: "local-1" }]]),
+    },
     capabilities: [{ name: "query_control_platform" }],
     agentKey: "query",
   });
@@ -50,6 +54,7 @@ test("health server exposes healthz and token-protected admin status", async () 
     assert.equal(status.status, 200);
     const body = await status.json();
     assert.equal(body.agentKey, "query");
+    assert.equal(body.currentRunId, "local-1");
     assert.deepEqual(body.capabilities, ["query_control_platform"]);
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -62,7 +67,7 @@ test("admin run requires token and rejects unknown capability", async () => {
   const server = startHealthServer({
     config,
     log: () => {},
-    connection: { isRegistered: () => true, activeRun: null },
+    connection: { isRegistered: () => true, hubRun: null },
     capabilities: [{ name: "query_control_platform" }],
     agentKey: "query",
     onLocalRun: async () => ({}),
@@ -89,27 +94,36 @@ test("admin run requires token and rejects unknown capability", async () => {
   }
 });
 
-test("admin run returns 409 while hub dispatch occupies activeRun", async () => {
+test("admin run stays available while a hub dispatch occupies hubRun", async () => {
   const port = await getFreePort();
   const config = { healthCheckPort: port, adminToken: "tok", configVersion: 0, agentId: "a" };
+  let invoked = false;
   const server = startHealthServer({
     config,
     log: () => {},
-    connection: { isRegistered: () => true, activeRun: { runId: "hub-run-1" } },
+    connection: { isRegistered: () => true, hubRun: { runId: "hub-run-1" } },
     capabilities: [{ name: "query_control_platform" }],
     agentKey: "query",
-    onLocalRun: async () => ({}),
+    onLocalRun: async () => {
+      invoked = true;
+      return { ok: true };
+    },
   });
   if (!server.listening) await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
-    const busy = await fetch(`${baseUrl}/admin/run`, {
+    const res = await fetch(`${baseUrl}/admin/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-admin-token": "tok" },
-      body: JSON.stringify({ capability: "query_control_platform", input: { path: "/common/ping" } }),
+      body: JSON.stringify({
+        capability: "query_control_platform",
+        input: { path: "/common/ping" },
+        actorToken: "actor-test",
+      }),
     });
-    assert.equal(busy.status, 409);
-    assert.equal((await busy.json()).status, "busy");
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).ok, true);
+    assert.equal(invoked, true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -122,11 +136,11 @@ test("admin run invokes onLocalRun and returns result", async () => {
   const server = startHealthServer({
     config,
     log: () => {},
-    connection: { isRegistered: () => true, activeRun: null },
+    connection: { isRegistered: () => true, hubRun: null },
     capabilities: [{ name: "query_control_platform" }],
     agentKey: "query",
-    onLocalRun: async (runId, capability, input, operator) => {
-      calls.push({ runId, capability, input, operator });
+    onLocalRun: async (runId, capability, input, operator, actorToken, traceId, caller) => {
+      calls.push({ runId, capability, input, operator, actorToken, traceId, caller });
       return { items: [], total: 0 };
     },
   });
@@ -154,6 +168,8 @@ test("admin run invokes onLocalRun and returns result", async () => {
         input: { path: "/common/ping", params: {} },
         operator: { user_id: "462" },
         actorToken: "actor-test",
+        traceId: "trace-local",
+        caller: { systemId: "control-platform", agentId: "AG-000001", taskId: "AT-000123" },
       }),
     });
     assert.equal(res.status, 200);
@@ -165,6 +181,82 @@ test("admin run invokes onLocalRun and returns result", async () => {
     assert.equal(calls[0].capability, "query_control_platform");
     assert.deepEqual(calls[0].input, { path: "/common/ping", params: {} });
     assert.deepEqual(calls[0].operator, { user_id: "462" });
+    assert.equal(calls[0].actorToken, "actor-test");
+    assert.equal(calls[0].traceId, "trace-local");
+    assert.deepEqual(calls[0].caller, { systemId: "control-platform", agentId: "AG-000001", taskId: "AT-000123" });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("internal hub proxy requires the gateway token and delegates the request", async () => {
+  const port = await getFreePort();
+  const config = {
+    healthCheckPort: port,
+    adminToken: "tok",
+    gatewayInternalToken: "gw-token",
+    configVersion: 0,
+    agentId: "gateway",
+  };
+  const proxied = [];
+  const server = startHealthServer({
+    config,
+    log: () => {},
+    connection: { isRegistered: () => true, hubRun: null },
+    capabilities: [{ name: "query_control_platform" }],
+    agentKey: "gateway",
+    onHubProxy: async (req, res, pathname, send) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      proxied.push({ method: req.method, pathname, body: Buffer.concat(chunks).toString("utf8") });
+      send(200, { ok: true });
+    },
+  });
+  if (!server.listening) await once(server, "listening");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const unauthorized = await fetch(`${baseUrl}/internal/hub/capability-invocations`);
+    assert.equal(unauthorized.status, 401);
+
+    const res = await fetch(`${baseUrl}/internal/hub/assistant-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-gateway-token": "gw-token" },
+      body: JSON.stringify({ eventId: "e1" }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+    assert.deepEqual(proxied, [
+      { method: "POST", pathname: "/internal/hub/assistant-events", body: '{"eventId":"e1"}' },
+    ]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("internal hub proxy returns 503 when no proxy hook is configured", async () => {
+  const port = await getFreePort();
+  const config = {
+    healthCheckPort: port,
+    adminToken: "tok",
+    gatewayInternalToken: "gw-token",
+    configVersion: 0,
+    agentId: "query",
+  };
+  const server = startHealthServer({
+    config,
+    log: () => {},
+    connection: { isRegistered: () => true, hubRun: null },
+    capabilities: [{ name: "query_control_platform" }],
+    agentKey: "query",
+  });
+  if (!server.listening) await once(server, "listening");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const res = await fetch(`${baseUrl}/internal/hub/capability-invocations`, {
+      headers: { "x-gateway-token": "gw-token" },
+    });
+    assert.equal(res.status, 503);
+    assert.equal((await res.json()).status, "proxy_disabled");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -176,7 +268,7 @@ test("admin run maps adapter failure to 500 with code", async () => {
   const server = startHealthServer({
     config,
     log: () => {},
-    connection: { isRegistered: () => true, activeRun: null },
+    connection: { isRegistered: () => true, hubRun: null },
     capabilities: [{ name: "query_control_platform" }],
     agentKey: "query",
     onLocalRun: async () => {

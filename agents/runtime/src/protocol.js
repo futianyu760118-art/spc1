@@ -17,6 +17,26 @@ const WebSocket = require("ws");
  */
 const RECONNECT_LADDER_MS = [1000, 2000, 5000, 10000, 30000];
 const DEFAULT_HEARTBEAT_MS = 5000;
+const CALLER_KEYS = ["systemId", "agentId", "userId", "taskId", "traceId"];
+
+function normalizeCaller(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const caller = {};
+  for (const key of CALLER_KEYS) {
+    const raw = value[key];
+    if (raw === undefined || raw === null || String(raw).trim() === "") continue;
+    caller[key] = String(raw).trim();
+  }
+  return Object.keys(caller).length ? caller : null;
+}
+
+function traceFields(run) {
+  if (!run) return {};
+  const fields = {};
+  if (run.traceId) fields.traceId = run.traceId;
+  if (run.taskId) fields.taskId = run.taskId;
+  return fields;
+}
 
 class HubConnection {
   constructor({ config, log, handlers }) {
@@ -30,7 +50,9 @@ class HubConnection {
     this.reconnectStep = 0;
     this.reconnectTimer = null;
     this.stopped = false;
-    this.activeRun = null;
+    this.hubRun = null;
+    this.localRuns = new Map();
+    this.runs = new Map();
     this.runSeq = new Map();
   }
 
@@ -110,6 +132,13 @@ class HubConnection {
   }
 
   handleMessage(message) {
+    if (message && typeof message === "object" && message.type !== "heartbeat") {
+      this.log("info", "hub_message_received", {
+        type: message.type,
+        runId: message.runId ?? null,
+        capability: message.capability ?? null,
+      });
+    }
     switch (message.type) {
       case "registered": {
         const interval = Number(message.heartbeatIntervalMs);
@@ -142,29 +171,44 @@ class HubConnection {
   onDispatch(dispatch) {
     const { runId, capability } = dispatch ?? {};
     if (!runId) return;
-    if (this.activeRun) {
+    this.log("info", "dispatch_received", {
+      runId,
+      capability,
+      traceId: dispatch.traceId ?? null,
+      caller: normalizeCaller(dispatch.caller),
+    });
+    if (this.hubRun) {
+      this.log("warn", "dispatch_rejected", { runId, reason: "busy", currentRunId: this.hubRun.runId });
       this.send({ type: "run_failed", runId, error: { code: "INTERNAL_ERROR", message: "agent busy" } });
       return;
     }
     if (!this.handlers.capabilities.some((c) => c.name === capability)) {
+      this.log("warn", "dispatch_rejected", { runId, reason: "unknown_capability", capability });
       this.send({ type: "run_failed", runId, error: { code: "INVALID_ARGUMENT", message: `未知 capability: ${capability}` } });
       return;
     }
 
+    const caller = normalizeCaller(dispatch.caller);
+    const traceId = dispatch.traceId || (caller && caller.traceId) || runId;
+    const taskId = caller && caller.taskId ? caller.taskId : null;
     const run = {
       runId,
       capability,
+      caller,
+      traceId,
+      taskId,
       recalled: false,
       controller: new AbortController(),
       report: (event, name, status, summary, detail, timings) =>
         this.reportRunEvent(runId, event, name, status, summary, detail, timings),
     };
-    this.activeRun = run;
+    this.hubRun = run;
+    this.runs.set(runId, run);
     this.reportRunEvent(runId, "run_received", "收到任务", "info", `capability=${capability}`, {
       capability,
       path: dispatch.input?.path,
     });
-    this.send({ type: "run_update", runId, state: "running" });
+    this.send({ type: "run_update", runId, ...traceFields(run), state: "running" });
     this.log("info", "run_started", { runId, capability });
 
     Promise.resolve()
@@ -179,7 +223,7 @@ class HubConnection {
         const usage = withUsage ? outcome.usage : undefined;
         const summary = `任务完成：${capability}`;
         this.reportRunEvent(runId, "run_summary", "任务完成", "completed", summary);
-        this.send({ type: "run_complete", runId, result, ...(usage ? { usage } : {}) });
+        this.send({ type: "run_complete", runId, ...traceFields(run), result, ...(usage ? { usage } : {}) });
         this.log("info", "run_complete", { runId });
       })
       .catch((e) => {
@@ -189,13 +233,14 @@ class HubConnection {
         this.log("info", "run_failed", { runId, code: e.code || "INTERNAL_ERROR" });
       })
       .finally(() => {
-        if (this.activeRun === run) this.activeRun = null;
+        if (this.hubRun === run) this.hubRun = null;
+        this.runs.delete(run.runId);
         this.runSeq.delete(run.runId);
       });
   }
 
   onRecall(runId) {
-    const run = this.activeRun;
+    const run = this.hubRun;
     if (!run) {
       this.log("warn", "recall_ignored_no_active_run", { runId: runId ?? null });
       return;
@@ -211,12 +256,15 @@ class HubConnection {
   }
 
   abortActive(reason) {
-    const run = this.activeRun;
-    if (!run) return;
-    run.recalled = true;
-    this.log("info", "run_aborted", { runId: run.runId, reason });
-    run.controller.abort();
-    this.handlers.onRecall(run.runId);
+    const runs = [];
+    if (this.hubRun) runs.push(this.hubRun);
+    for (const run of this.localRuns.values()) runs.push(run);
+    for (const run of runs) {
+      run.recalled = true;
+      this.log("info", "run_aborted", { runId: run.runId, reason });
+      run.controller.abort();
+      this.handlers.onRecall(run.runId);
+    }
   }
 
   send(payload) {
@@ -237,6 +285,7 @@ class HubConnection {
     this.send({
       type: "run_event",
       runId,
+      ...traceFields(this.runs.get(runId)),
       eventId: `evt-${runId}-${seq}`,
       seq,
       event,
@@ -255,9 +304,9 @@ class HubConnection {
     this.heartbeatTimer = setInterval(() => {
       const message = {
         type: "heartbeat",
-        status: this.activeRun ? "working" : "idle",
+        status: this.hubRun ? "working" : "idle",
       };
-      if (this.activeRun) message.currentRunId = this.activeRun.runId;
+      if (this.hubRun) message.currentRunId = this.hubRun.runId;
       this.send(message);
     }, this.heartbeatIntervalMs);
   }
@@ -280,4 +329,4 @@ class HubConnection {
   }
 }
 
-module.exports = { HubConnection };
+module.exports = { HubConnection, normalizeCaller };

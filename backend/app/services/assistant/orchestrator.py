@@ -17,13 +17,17 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from sqlalchemy import select
+
 from app.core.config import get_settings
+from app.models.agent.task import AgentTask
 from app.models.basicdata.user import SysUser
 from app.services.ai import ai_service, ChatMessage, ChatOptions
 from app.services.ai_config import ASSISTANT_SCOPE, get_scope_config, render_system_prompt
 from app.services.agent import task_tools
 from app.services.agent.actor import issue_actor_token
 from app.services.agent.business import resolve_business_object
+from app.services.agent.caller import build_caller
 from app.services.agent.capabilities import allowed_query_paths, allowed_reasoning_types
 from app.services.agent.context import AgentContext, load_agent_context
 from app.services.agent.task_service import TaskError
@@ -539,6 +543,20 @@ async def run_reaction(
     lim["max_agent_calls"] = max(1, min(int(max_agent_calls), lim["max_agent_calls"]))
     provider = provider_name or ai_service.current_provider()
     task_id = task_id or f"task-{uuid4().hex}"
+
+    caller_task_no = ""
+    if db is not None and agent_task_id:
+        row = await db.execute(select(AgentTask.task_no).where(AgentTask.id == int(agent_task_id)))
+        caller_task_no = row.scalar_one_or_none() or ""
+
+    caller = None
+    if agent_context is not None:
+        caller = build_caller(
+            user=agent_context.user,
+            agent=agent_context.agent,
+            task_no=caller_task_no,
+            trace_id=trace_id,
+        )
     logger.info(f"[orchestrator:{trace_id}] session_id={session_id} task_id={task_id}")
 
     def _next_step_id() -> int:
@@ -985,6 +1003,7 @@ async def run_reaction(
         tool_start = time.perf_counter()
         tool_kwargs = {
             "operator_user_id": user_id, "trace_id": session_id,
+            "hub_trace_id": trace_id, "caller": caller,
             "task_id": task_id, "step_id": step["step_id"],
         }
         if actor_token:
@@ -1362,6 +1381,7 @@ async def resolve_confirmation(
     dispatch_kwargs = {
         "timeout": TOOL_TIMEOUT_S["call_order_agent"],
         "operator_user_id": record_user or current_user_id,
+        "trace_id": trace_id,
     }
     if actor_token:
         dispatch_kwargs["actor_token"] = actor_token
@@ -1448,6 +1468,27 @@ async def resolve_confirmation(
         except Exception as e:
             logger.warning(f"[orchestrator] 续跑 RunLogger 初始化失败: {e}")
 
+    continuation_context = None
+    if db is not None and record_user:
+        try:
+            continuation_user_id = int(record_user)
+        except (TypeError, ValueError):
+            continuation_user_id = None
+        if continuation_user_id is not None:
+            continuation_user = await db.get(SysUser, continuation_user_id)
+            if continuation_user:
+                try:
+                    continuation_context = await load_agent_context(db, continuation_user)
+                except Exception as e:
+                    logger.warning(f"[orchestrator] 续跑加载智能体上下文失败: {e}")
+
+    continuation_task_id = record.get("agent_task_id")
+    if continuation_task_id is not None:
+        try:
+            continuation_task_id = int(continuation_task_id)
+        except (TypeError, ValueError):
+            continuation_task_id = None
+
     text, cards, steps_out = "", [], []
     try:
         async for event, data in run_reaction(
@@ -1461,6 +1502,8 @@ async def resolve_confirmation(
             limits=CONTINUATION_LIMITS, include_order_tool=False, stream_final=False,
             task_id=task_id, step_id_base=order_step_id,
             gap_notify=False,
+            db=db, agent_context=continuation_context,
+            agent_task_id=continuation_task_id,
         ):
             if event == "delta":
                 text += data.get("text") or ""

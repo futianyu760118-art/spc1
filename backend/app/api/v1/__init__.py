@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import agent, approval, assistant, basicdata, common, dashboard, exception, external, masterdata, material, mrp, order, production, purchase, quality, rules, system, writeback
+from app.api.v1 import agent, approval, assistant, basicdata, common, dashboard, exception, external, internal, masterdata, material, mrp, order, production, purchase, quality, rules, system, writeback
 
 api_router = APIRouter()
 
@@ -113,3 +113,6 @@ api_router.include_router(
     prefix="/system/execution-agents",
     tags=["系统管理-执行面智能体"],
 )
+
+# 内网接口（仅网关容器调用，nginx 对外 deny）
+api_router.include_router(internal.router, prefix="/internal", tags=["内网接口"], include_in_schema=False)

@@ -55,6 +55,16 @@ test("rejects empty prompt", async () => {
   );
 });
 
+test("rejects missing context.businessObjectRef", async () => {
+  const { ctx } = createCtx(async () => ({ code: 0, data: {} }));
+  const adapter = createAdapter(ctx);
+  const input = { ...validInput(), context: {} };
+  await assert.rejects(
+    () => adapter.invoke(runStub(), input),
+    (e) => e.code === "INVALID_ARGUMENT" && /businessObjectRef/.test(e.message),
+  );
+});
+
 test("passes config.reasoningTimeoutMs to the signed POST", async () => {
   const { ctx, calls } = createCtx(async () => ({ code: 0, data: {} }));
   const adapter = createAdapter(ctx);

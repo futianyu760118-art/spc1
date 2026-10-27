@@ -1,9 +1,9 @@
 """AEOS Hub 助手观测上报（assistant-events）——只发元数据+摘要，失败仅记日志不影响主流程。
 
-契约：《中台助手调用留痕-接入清单》POST {AEOS_HUB_BASE}/api/system/assistant-events
+契约：《中台助手调用留痕-接入清单》POST /internal/hub/assistant-events（backend -> 网关 -> Hub）
 - traceId 用中台会话 ID（一次对话串成一个 trace，Hub 按 traceId 归并会话）
-- 鉴权头 x-aeos-system-id（非 ASCII 必须 URL 编码）/ x-aeos-system-token（HMAC）
-- AEOS_HUB_BASE / AEOS_SYSTEM_ID / AEOS_SYSTEM_TOKEN 三项任一缺失即整体停用
+- 网关负责 Hub 鉴权头；backend 只带 X-Gateway-Token
+- GATEWAY_BASE_URL / GATEWAY_INTERNAL_TOKEN 任一缺失即整体停用
 - 不等待回执：fire-and-forget，上报失败/被拒只写日志
 """
 
@@ -14,16 +14,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-import httpx
-
 from app.core.config import get_settings
-from app.services.hub_http import hub_auth_headers, hub_http_client, is_hub_enabled
+from app.services import gateway_client
 
 logger = logging.getLogger(__name__)
-
-REQUEST_TIMEOUT_S = 3.0
-
-_client: Optional[httpx.AsyncClient] = None
 
 # Hub 版本尚未支持的顶层字段：按拒绝回执降级并缓存，避免每条事件都重试
 _OPTIONAL_EVENT_FIELDS = ("taskId", "stepId", "tool", "confirmationId")
@@ -32,18 +26,11 @@ _UNSUPPORTED_FIELDS_RE = re.compile(r"不支持的字段[：:]\s*([A-Za-z0-9_,\s
 
 
 def is_enabled() -> bool:
-    return is_hub_enabled()
+    return gateway_client.is_gateway_enabled()
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None or _client.is_closed:
-        _client = hub_http_client(REQUEST_TIMEOUT_S)
-    return _client
 
 
 def _model_id(provider: str, model_override: Optional[str]) -> str:
@@ -90,22 +77,10 @@ def _strip_rejected_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _post(payload: Dict[str, Any]) -> None:
-    settings = get_settings()
-    headers = hub_auth_headers()
     payload = _strip_rejected_fields(payload)
-    try:
-        resp = await _get_client().post(
-            f"{settings.AEOS_HUB_BASE.rstrip('/')}/api/system/assistant-events",
-            json=payload,
-            headers=headers,
-        )
-    except Exception as exc:
-        logger.warning(
-            f"[hub_reporter] 上报失败 trace={payload.get('traceId')} event={payload.get('event')}: {exc}"
-        )
-        return
+    result = await gateway_client.post_assistant_event(payload)
 
-    rejected = _parse_rejected_fields(resp.text) if resp.status_code == 400 else set()
+    rejected = _parse_rejected_fields(result.get("text") or "") if result.get("status") == 400 else set()
     rejected &= set(_OPTIONAL_EVENT_FIELDS)
     if rejected:
         _rejected_event_fields.update(rejected)
@@ -114,30 +89,17 @@ async def _post(payload: Dict[str, Any]) -> None:
             f"trace={payload.get('traceId')} event={payload.get('event')}"
         )
         payload = _strip_rejected_fields(payload)
-        try:
-            resp = await _get_client().post(
-                f"{settings.AEOS_HUB_BASE.rstrip('/')}/api/system/assistant-events",
-                json=payload,
-                headers=headers,
-            )
-        except Exception as exc:
-            logger.warning(
-                f"[hub_reporter] 降级上报失败 trace={payload.get('traceId')} event={payload.get('event')}: {exc}"
-            )
-            return
+        result = await gateway_client.post_assistant_event(payload)
 
-    if resp.status_code >= 400:
+    if not result.get("ok"):
         logger.warning(
-            f"[hub_reporter] Hub 拒绝 trace={payload.get('traceId')} event={payload.get('event')} "
-            f"status={resp.status_code} body={resp.text[:200]}"
+            f"[hub_reporter] 上报失败 trace={payload.get('traceId')} event={payload.get('event')}: "
+            f"{result.get('error') or result.get('text')}"
         )
         return
-    try:
-        body = resp.json()
-        if not body.get("accepted", True):
-            logger.warning(f"[hub_reporter] Hub 未接收 eventId={payload.get('eventId')}: {body}")
-    except Exception:
-        pass
+    body = result.get("body") or {}
+    if isinstance(body, dict) and not body.get("accepted", True):
+        logger.warning(f"[hub_reporter] Hub 未接收 eventId={payload.get('eventId')}: {body}")
 
 
 def report_assistant_event(

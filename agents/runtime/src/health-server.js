@@ -5,6 +5,13 @@ const http = require("node:http");
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
+function tokenMatches(provided, expected) {
+  if (!expected || typeof provided !== "string") return false;
+  const providedBuf = Buffer.from(provided);
+  const expectedBuf = Buffer.from(expected);
+  return providedBuf.length === expectedBuf.length && crypto.timingSafeEqual(providedBuf, expectedBuf);
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -30,7 +37,7 @@ function readJsonBody(req) {
   });
 }
 
-async function handleLocalRun(req, res, { log, connection, capabilities, onLocalRun }) {
+async function handleLocalRun(req, res, { log, capabilities, onLocalRun }) {
   const send = (status, body) => {
     if (res.writableEnded) return;
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -51,16 +58,18 @@ async function handleLocalRun(req, res, { log, connection, capabilities, onLocal
   const actorToken = body && typeof body === "object" && typeof body.actorToken === "string"
     ? body.actorToken
     : null;
+  const traceId = body && typeof body === "object" && typeof body.traceId === "string"
+    ? body.traceId
+    : "";
+  const caller = body && typeof body === "object" && body.caller && typeof body.caller === "object"
+    ? body.caller
+    : null;
   if (typeof capability !== "string" || !capabilities.some((c) => c.name === capability)) {
     send(400, { status: "unknown_capability" });
     return;
   }
   if (input === undefined || input === null || typeof input !== "object" || Array.isArray(input)) {
     send(400, { status: "bad_input" });
-    return;
-  }
-  if (connection.activeRun) {
-    send(409, { status: "busy" });
     return;
   }
   if (!actorToken) {
@@ -75,7 +84,7 @@ async function handleLocalRun(req, res, { log, connection, capabilities, onLocal
     typeof body.runId === "string" && body.runId.trim() ? body.runId.trim() : `local-${crypto.randomUUID()}`;
   log("info", "local_run_started", { runId, capability });
   try {
-    const result = await onLocalRun(runId, capability, input, operator, actorToken);
+    const result = await onLocalRun(runId, capability, input, operator, actorToken, traceId, caller);
     send(200, { ok: true, runId, result: result ?? {} });
   } catch (e) {
     log("info", "local_run_failed", {
@@ -93,7 +102,7 @@ async function handleLocalRun(req, res, { log, connection, capabilities, onLocal
   }
 }
 
-function startHealthServer({ config, log, connection, capabilities, agentKey, onLocalRun }) {
+function startHealthServer({ config, log, connection, capabilities, agentKey, onLocalRun, onHubProxy }) {
   if (config.healthCheckPort <= 0) return null;
   const server = http.createServer((req, res) => {
     const pathname = req.url ? req.url.split("?")[0] : "";
@@ -106,6 +115,21 @@ function startHealthServer({ config, log, connection, capabilities, agentKey, on
       send(ok ? 200 : 503, { status: ok ? "ok" : "not_registered" });
       return;
     }
+    if (pathname.startsWith("/internal/hub/")) {
+      if (typeof onHubProxy !== "function") {
+        send(503, { status: "proxy_disabled" });
+        return;
+      }
+      if (!tokenMatches(req.headers["x-gateway-token"], config.gatewayInternalToken)) {
+        send(401, { status: "unauthorized" });
+        return;
+      }
+      Promise.resolve(onHubProxy(req, res, pathname, send)).catch((e) => {
+        log("error", "hub_proxy_failed", { message: e.message, path: pathname });
+        if (!res.writableEnded) send(500, { status: "internal_error" });
+      });
+      return;
+    }
     if (!pathname.startsWith("/admin/")) {
       send(404, { status: "not_found" });
       return;
@@ -114,21 +138,16 @@ function startHealthServer({ config, log, connection, capabilities, agentKey, on
       send(503, { status: "admin_disabled" });
       return;
     }
-    const token = req.headers["x-admin-token"];
-    if (typeof token !== "string") {
-      send(401, { status: "unauthorized" });
-      return;
-    }
-    const tokenBuf = Buffer.from(token);
-    const adminBuf = Buffer.from(config.adminToken);
-    if (tokenBuf.length !== adminBuf.length || !crypto.timingSafeEqual(tokenBuf, adminBuf)) {
+    if (!tokenMatches(req.headers["x-admin-token"], config.adminToken)) {
       send(401, { status: "unauthorized" });
       return;
     }
     if (pathname === "/admin/status" && req.method === "GET") {
+      const localRun = connection.localRuns ? connection.localRuns.values().next().value : null;
+      const currentRun = connection.hubRun || localRun || null;
       send(200, {
         registered: connection.isRegistered(),
-        currentRunId: connection.activeRun ? connection.activeRun.runId : null,
+        currentRunId: currentRun ? currentRun.runId : null,
         configVersion: config.configVersion,
         uptimeS: Math.floor(process.uptime()),
         agentKey,
@@ -144,7 +163,7 @@ function startHealthServer({ config, log, connection, capabilities, agentKey, on
       return;
     }
     if (pathname === "/admin/run" && req.method === "POST") {
-      handleLocalRun(req, res, { log, connection, capabilities, onLocalRun }).catch((e) => {
+      handleLocalRun(req, res, { log, capabilities, onLocalRun }).catch((e) => {
         log("error", "local_run_handler_error", { message: e.message });
         if (!res.writableEnded) send(500, { status: "internal_error" });
       });
@@ -158,4 +177,4 @@ function startHealthServer({ config, log, connection, capabilities, agentKey, on
   return server;
 }
 
-module.exports = { startHealthServer };
+module.exports = { startHealthServer, readJsonBody };

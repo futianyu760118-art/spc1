@@ -1,18 +1,29 @@
-# 执行面多智能体
+# 执行面智能体
 
-三个独立 Agent，共用 `runtime` 包：
+`gateway-agent` 是 SPC 对 AEOS Hub 的唯一身份与唯一 HTTP 出口，其余 Agent 收敛为内部适配器或本地执行器：
 
-- `query-agent`：`query_control_platform`，18 个只读查询路径。
-- `reasoning-agent`：`reason_control_platform`，只读推理。
-- `order-agent`：`update_control_platform_order`，**写能力**——直写订单头四个日期字段（出货计划 / 发货完成 / 客户验货 / 上线时间），字段白名单校验，全量审计。**写操作不可撤销，召回只中止本地等待，不会回滚已写入的字段。**
+- `gateway-agent`：唯一 Hub WS 身份 `gateway-control-platform`，注册 `query_control_platform` / `reason_control_platform`；内置 `query-agent` / `reasoning-agent` 适配器；代理借调、能力目录、assistant-events；`/admin/run` 供 SPC 助手本地调用。**必须单副本**，多副本会以同一 `agentId` 重复注册 Hub。
+- `query-agent` / `reasoning-agent`：仅作为网关内部 adapter 复用，不再独立部署、不再直连 Hub。
+- `order-agent`：`update_control_platform_order`，仅本地 `/admin/run` 执行（`EXECUTION_WS_URL=""`），不连 Hub。**写操作不可撤销，召回只中止本地等待，不会回滚已写入的字段。**
 
 ## 本地运行
 
+依赖 Node 20，在 `agents/` 下安装 workspace 依赖：
+
 ```powershell
 npm install
-cd query-agent
-Copy-Item .env.example .env
-npm start
+```
+
+网关按仓库根 `.env.example` 第 12 节在 `gateway-agent/.env` 配置环境变量（`EXECUTION_WS_URL` 置空为本地模式），然后：
+
+```powershell
+npm run start -w gateway-agent
+```
+
+订单智能体（参考 `order-agent/.env.example`）：
+
+```powershell
+npm run start -w order-agent
 ```
 
 ## 测试
@@ -24,13 +35,16 @@ npm test
 ## 构建镜像
 
 ```powershell
-docker build -f agents/query-agent/Dockerfile -t aeos-query-agent:latest agents
-docker build -f agents/reasoning-agent/Dockerfile -t aeos-reasoning-agent:latest agents
+docker build -f agents/gateway-agent/Dockerfile -t aeos-gateway:latest agents
 docker build -f agents/order-agent/Dockerfile -t aeos-order-agent:latest agents
 ```
+
+`query-agent` / `reasoning-agent` 的 Dockerfile 仅保留作本地调试，不再部署。
 
 ## 部署
 
 ```powershell
-docker compose --profile aeos up -d aeos-query-agent aeos-reasoning-agent aeos-order-agent
+docker compose --profile aeos up -d aeos-gateway aeos-order-agent
 ```
+
+`aeos-gateway` 通过 `backend/certs/caddy-root.crt` 信任 Hub 私有 CA（`NODE_EXTRA_CA_CERTS`），并挂载为只读证书。

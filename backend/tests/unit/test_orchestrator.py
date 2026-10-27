@@ -45,7 +45,10 @@ async def _run(monkeypatch, script, *, limits=None, include_order=True, max_tool
 
     exec_calls = []
 
-    async def fake_execute(tool_name, args, *, operator_user_id="", trace_id="", task_id=None, step_id=None):
+    async def fake_execute(
+        tool_name, args, *, operator_user_id="", trace_id="", hub_trace_id="", caller=None,
+        task_id=None, step_id=None,
+    ):
         exec_calls.append({"tool": tool_name, "args": args})
         return {
             "ok": True, "online": True, "error": None, "item_count": 1,
@@ -361,7 +364,7 @@ class TestResolveConfirmation:
         )
         dispatched = []
 
-        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id=""):
+        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id="", trace_id="", caller=None):
             dispatched.append(input)
             return {"online": True, "ok": True, "result": {}}
 
@@ -380,7 +383,7 @@ class TestResolveConfirmation:
         )
         dispatched = []
 
-        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id=""):
+        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id="", trace_id="", caller=None):
             dispatched.append((input, operator_user_id))
             return {"online": True, "ok": True, "runId": "r1", "result": {
                 "order_no": input["order_no"],
@@ -418,7 +421,7 @@ class TestResolveConfirmation:
         )
         dispatched = []
 
-        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id=""):
+        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id="", trace_id="", caller=None):
             dispatched.append(input)
             return {"online": True, "ok": False, "reason": "订单已关闭"}
 

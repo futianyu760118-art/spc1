@@ -24,6 +24,7 @@ npm run build      # = tsc -b && vite build，唯一 typecheck，交付前必跑
 
 - 本地开发（仓库根）：`docker-compose up -d` —— backend :8000、frontend :3000。
 - 生产部署（部署脚本使用）：`docker compose -f docker-compose-prod.yml up -d` —— 自带 postgres/redis，backend :18085、frontend :18084。
+- AEOS 执行面（`aeos` profile）：`docker compose --profile aeos up -d aeos-gateway aeos-order-agent` —— 单一网关 + 本地订单 Agent；网关必须单副本。
 - backend 容器启动命令：生产为 `python init_database.py && uvicorn ...`（每次启动自动迁移）；本地 dev compose 只跑 uvicorn，需手动执行 `python init_database.py`。
 
 ### 部署（Windows 本机，多服务器并行）
@@ -33,6 +34,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteracti
 ```
 
 - 服务器列表/角色（full=全套含 postgres/redis，app=仅应用连主库）/各台 .env 在 `scripts/deploy-config.ps1` 的 `$DEPLOY_SERVERS` 数组；`-Servers main,app1` 只部署部分，`-KeepRemoteEnv` 保留远程 .env。
+- 部署脚本会构建并随镜像包上传 `aeos-gateway:latest`，并把 `backend/certs/caddy-root.crt` 随配置包上传（网关只读挂载）；网关属于 `aeos` profile，部署后需在 full 服务器按需启动（`docker compose --profile aeos up -d aeos-gateway aeos-order-agent`），保持单副本。
 - 版本回退：`powershell -File scripts\manage-version.ps1 -Server <名称> list | rollback <版本名> | cleanup`。
 - `.env`（含数据库/Redis/ERP 密码）与 SSH 密钥永不进仓库。
 
@@ -124,6 +126,15 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteracti
 
 ERP 集成是 SQL 驱动的：同步 SQL 与字段映射存在 `sync_sql_config` / `field_mapping` 表，可在运行时编辑；手动触发 `POST /api/v1/basicdata/sync/...`。**ERP 同步只覆盖 `data_source = 'erp'` 的行，永不碰 `manual` / `excel` 行；改 `app/services/basicdata/` 的同步代码时必须保留此守卫。**
 
+### 执行面（AEOS 单一网关）
+
+- **唯一 Hub 身份**：`agents/gateway-agent` 以 `gateway-control-platform` 注册，是 SPC 唯一的 Hub WS 连接；能力固定 `query_control_platform` / `reason_control_platform`。网关必须单副本（多副本会重复注册同一 `agentId`）。
+- **旧 Agent 收敛**：`query-agent` / `reasoning-agent` 仅作为网关内部 adapter 复用，不再独立部署或直连 Hub；`order-agent` 仅本地 `/admin/run`（`EXECUTION_WS_URL=""`），不连 Hub。
+- **出站边界**：所有 Hub HTTP（借调、能力目录、assistant-events）统一经网关白名单代理 `/internal/hub/*`；backend `hub_client` / `hub_reporter` 只能走 `app/services/gateway_client.py`，不得恢复直连 Hub 的第二出口。
+- **入站 caller 路由**：网关调内网 `POST /api/v1/internal/gateway/resolve-caller`（`X-Gateway-Token` 鉴权）解析 `caller` 并签发 actor token；审计写 `gateway_dispatch_log`，fail-closed。`caller.userId` 按 `GATEWAY_CALLER_USER_ID_FIELD` 解析，默认 `emp_code`。nginx 对 `/api/v1/internal/` 一律 deny，仅 Docker 内网可达。
+- **关键 env**：backend `GATEWAY_BASE_URL` / `GATEWAY_INTERNAL_TOKEN` / `GATEWAY_CALLER_USER_ID_FIELD`；gateway `GATEWAY_AGENT_ID` / `GATEWAY_AGENT_NAME` / `BACKEND_INTERNAL_BASE_URL` / `AEOS_HUB_BASE` / `AEOS_SYSTEM_ID` / `AEOS_SYSTEM_TOKEN` / `AEOS_HUB_CA_CERT` / `NODE_EXTRA_CA_CERTS`；`EXECUTION_QUERY_AGENT_BASE_URL` / `EXECUTION_REASONING_AGENT_BASE_URL` 均指向网关。
+- **命令**：`docker build -f agents/gateway-agent/Dockerfile -t aeos-gateway:latest agents`；`cd agents && npm install && npm test`。改网关 / resolver / 审批中心代码后跑 `python -m pytest` 与 `npm test`。
+
 ### 审批中心（approval）
 
 - **构成**：待办工作台（待我审批 / 我已审批 / 我发起的 三 Tab）+ 审批链配置，独立一级菜单。
@@ -151,10 +162,11 @@ ERP 集成是 SQL 驱动的：同步 SQL 与字段映射存在 `sync_sql_config`
 ```bash
 cd backend && pip install -r requirements-dev.txt   # pytest / pytest-asyncio（生产镜像不装）
 python -m pytest -v                                  # 全量
-python -m pytest tests/unit tests/integration -v     # 只跑供应商索赔/审批中心套件
+python -m pytest tests/unit tests/integration -v     # 只跑供应商索赔/审批中心/网关套件
+cd agents && npm install && npm test                 # runtime + gateway + 各 Agent 测试
 ```
 
-- `tests/unit/` + `tests/integration/` —— 供应商索赔单 + 审批中心自动化测试（2026-09 新增）：独立测试库 `spc_test`（conftest 自动建库 + 最小种子 + 每用例清表，**不碰开发库**），ASGI 内存客户端直打 FastAPI app，不起 uvicorn。
+- `tests/unit/` + `tests/integration/` —— 供应商索赔单 + 审批中心 + 网关 resolver/内网端点自动化测试：独立测试库 `spc_test`（conftest 自动建库 + 最小种子 + 每用例清表，**不碰开发库**），ASGI 内存客户端直打 FastAPI app，不起 uvicorn。
 - **`pytest.ini` 的 `asyncio_default_fixture_loop_scope = session` / `asyncio_default_test_loop_scope = session` 是硬性前提**：全局异步引擎池跨事件循环会损坏连接，删掉这两行会让全部集成用例报 "Future attached to a different loop"。
 - `tests/` 根下其余 `test_*.py`（`test_context_manager.py`、`test_cancellation.py` 等）是既有单测；`test_external_*.py` 是针对活服务的独立脚本（无 test_ 函数，pytest 只导入不执行）。
 - 改审批引擎 / 索赔单 / 审批中心代码后必须跑 `python -m pytest`。

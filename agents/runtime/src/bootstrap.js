@@ -24,22 +24,25 @@ function safeCancel(adapter, config, log) {
 }
 
 function createLocalRunHandler(adapter, connection, log) {
-  return async (runId, capability, input, operator, actorToken) => {
+  return async (runId, capability, input, operator, actorToken, traceId, caller) => {
     const run = {
       runId,
       capability,
       operator: operator || null,
       actorToken: actorToken || null,
+      caller: caller || null,
+      traceId: traceId || "",
+      taskId: (caller && caller.taskId) || null,
       recalled: false,
       controller: new AbortController(),
       report: (event, name, status, summary, detail, timings) =>
         log("info", "local_run_event", { runId, event, name, status, summary, detail, timings }),
     };
-    connection.activeRun = run;
+    connection.localRuns.set(runId, run);
     try {
       return await adapter.invoke(run, input);
     } finally {
-      if (connection.activeRun === run) connection.activeRun = null;
+      connection.localRuns.delete(runId);
     }
   };
 }

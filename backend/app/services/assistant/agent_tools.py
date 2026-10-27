@@ -12,8 +12,13 @@ import time
 from typing import Any, Dict, List, Optional
 
 from app.services.execution_agents import AGENT_SPECS, call_agent_run
-from app.services.hub_client import capability_names, query_and_poll, validate_capability
-from app.services.hub_http import is_hub_enabled
+from app.services.hub_client import (
+    capability_names,
+    is_hub_enabled,
+    provider_system,
+    query_and_poll,
+    validate_capability,
+)
 from app.services.assistant.tool_registry import register_tool
 from app.services.assistant.hub_reporter import now_iso, report_assistant_event
 from app.services.assistant.task_router import (
@@ -217,18 +222,22 @@ async def execute_agent_tool(
     *,
     operator_user_id: str = "",
     trace_id: str = "",
+    hub_trace_id: str = "",
+    caller: Optional[Dict[str, Any]] = None,
     task_id: Optional[str] = None,
     step_id: Optional[int] = None,
     actor_token: str = "",
 ) -> Dict[str, Any]:
     """直接执行只读智能体工具（query / reasoning）。
 
+    trace_id 为会话观测 trace；hub_trace_id 为每请求 Hub caller/借调 trace。
     返回：{"ok", "online", "result", "error", "item_count"}
     - 参数非法 / agent 离线 / 繁忙 / 执行失败均返回 ok=False + error，绝不抛错。
     """
     if tool_name == "hub_query":
         return await _run_hub_query(
             args, operator_user_id=operator_user_id, trace_id=trace_id,
+            hub_trace_id=hub_trace_id, caller=caller,
             task_id=task_id, step_id=step_id,
         )
     capability = CAPABILITY_BY_TOOL[tool_name]
@@ -255,6 +264,8 @@ async def execute_agent_tool(
         timeout=TOOL_TIMEOUT_S[tool_name],
         operator_user_id=operator_user_id,
         actor_token=actor_token,
+        trace_id=hub_trace_id,
+        caller=caller,
     )
     duration_ms = round((time.perf_counter() - loop_start) * 1000, 2)
     if not dispatch.get("online"):
@@ -288,6 +299,8 @@ async def _run_hub_query(
     *,
     operator_user_id: str = "",
     trace_id: str = "",
+    hub_trace_id: str = "",
+    caller: Optional[Dict[str, Any]] = None,
     task_id: Optional[str] = None,
     step_id: Optional[int] = None,
 ) -> Dict[str, Any]:
@@ -322,14 +335,22 @@ async def _run_hub_query(
             outcome = {"ok": False, "online": True, "result": None,
                        "error": f"参数非法：{invalid}", "item_count": 0}
         else:
-            polled = await query_and_poll(capability, params)
-            outcome = {
-                "ok": bool(polled.get("ok")),
-                "online": True,
-                "result": polled.get("result"),
-                "error": polled.get("error"),
-                "item_count": _item_count(polled.get("result")),
-            }
+            to_system = provider_system(capability) or ""
+            if not to_system:
+                outcome = {"ok": False, "online": True, "result": None,
+                           "error": "Hub 能力目录缺少 providerSystem", "item_count": 0}
+            else:
+                polled = await query_and_poll(
+                    capability, params, to_system=to_system,
+                    caller=caller, trace_id=hub_trace_id,
+                )
+                outcome = {
+                    "ok": bool(polled.get("ok")),
+                    "online": True,
+                    "result": polled.get("result"),
+                    "error": polled.get("error"),
+                    "item_count": _item_count(polled.get("result")),
+                }
 
     duration_ms = round((time.perf_counter() - loop_start) * 1000, 2)
     report_assistant_event(

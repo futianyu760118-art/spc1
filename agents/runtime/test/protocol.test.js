@@ -41,13 +41,15 @@ test("registers with identity and capabilities, dispatches, reports completion a
   const port = await hub.ready;
   const logs = [];
   let release;
+  let dispatchedRun;
   const gate = new Promise((resolve) => { release = resolve; });
   const connection = new HubConnection({
     config: createConfig(port),
     log: (level, event) => logs.push({ level, event }),
     handlers: {
       capabilities: [{ name: "query_control_platform" }],
-      onDispatch: async () => {
+      onDispatch: async (run) => {
+        dispatchedRun = run;
         await gate;
         return { items: [1] };
       },
@@ -82,17 +84,145 @@ test("registers with identity and capabilities, dispatches, reports completion a
   assert.equal(register.capabilities[0].version, "1.0.0");
   await waitUntil(() => connection.isRegistered());
 
-  hub.send({ type: "dispatch", runId: "run-1", capability: "query_control_platform", input: { path: "/external/orders/list" } });
+  hub.send({
+    type: "dispatch",
+    runId: "run-1",
+    capability: "query_control_platform",
+    input: { path: "/external/orders/list" },
+    traceId: "trace-1",
+    caller: {
+      systemId: "aeos-hub",
+      agentId: "AG-000001",
+      userId: " 10086 ",
+      taskId: "AT-000123",
+      traceId: "trace-1",
+      token: "must-not-leak",
+    },
+  });
   await waitUntil(() => hub.messages.some((m) => m.type === "run_update" && m.runId === "run-1"));
+
+  const update = hub.messages.find((m) => m.type === "run_update" && m.runId === "run-1");
+  const received = hub.messages.find((m) => m.type === "run_event" && m.event === "run_received");
+  assert.equal(update.traceId, "trace-1");
+  assert.equal(update.taskId, "AT-000123");
+  assert.equal(received.traceId, "trace-1");
+  assert.equal(received.taskId, "AT-000123");
+  assert.deepEqual(dispatchedRun.caller, {
+    systemId: "aeos-hub",
+    agentId: "AG-000001",
+    userId: "10086",
+    taskId: "AT-000123",
+    traceId: "trace-1",
+  });
+  assert.equal(dispatchedRun.traceId, "trace-1");
+  assert.equal(dispatchedRun.taskId, "AT-000123");
 
   hub.send({ type: "dispatch", runId: "run-2", capability: "query_control_platform", input: {} });
   await waitUntil(() => hub.messages.some((m) => m.type === "run_failed" && m.runId === "run-2"));
+  const busy = hub.messages.find((m) => m.type === "run_failed" && m.runId === "run-2");
+  assert.equal(busy.error.code, "INTERNAL_ERROR");
+  assert.equal(busy.error.message, "agent busy");
 
   release();
   await waitUntil(() => hub.messages.some((m) => m.type === "run_complete" && m.runId === "run-1"));
   const complete = hub.messages.find((m) => m.type === "run_complete" && m.runId === "run-1");
   assert.deepEqual(complete.result, { items: [1] });
+  assert.equal(complete.traceId, "trace-1");
+  assert.equal(complete.taskId, "AT-000123");
   assert.equal(logs.some((l) => l.event === "run_started"), true);
+});
+
+test("tolerates a missing caller and falls back to runId for trace and top-level events", async (t) => {
+  const hub = startHub();
+  const port = await hub.ready;
+  let dispatchedRun;
+  const connection = new HubConnection({
+    config: createConfig(port),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "query_control_platform" }],
+      onDispatch: async (run) => {
+        dispatchedRun = run;
+        return { ok: true };
+      },
+      onRecall: () => {},
+    },
+  });
+  t.after(async () => {
+    connection.stop();
+    await hub.close();
+  });
+
+  connection.start();
+  await waitUntil(() => connection.isRegistered());
+  hub.send({ type: "dispatch", runId: "run-null", capability: "query_control_platform", input: {} });
+  await waitUntil(() => hub.messages.some((m) => m.type === "run_complete" && m.runId === "run-null"));
+
+  assert.equal(dispatchedRun.caller, null);
+  assert.equal(dispatchedRun.traceId, "run-null");
+  assert.equal(dispatchedRun.taskId, null);
+  const events = hub.messages.filter(
+    (m) => (m.type === "run_update" || m.type === "run_event" || m.type === "run_complete") && m.runId === "run-null",
+  );
+  assert.ok(events.length >= 3);
+  for (const message of events) {
+    assert.equal(message.traceId, "run-null");
+    assert.equal("taskId" in message, false);
+  }
+});
+
+test("local runs do not occupy the hub run slot", async (t) => {
+  const hub = startHub();
+  const port = await hub.ready;
+  const connection = new HubConnection({
+    config: createConfig(port),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "query_control_platform" }],
+      onDispatch: async () => ({ ok: true }),
+      onRecall: () => {},
+    },
+  });
+  const localRun = { runId: "local-1", controller: new AbortController() };
+  connection.localRuns.set("local-1", localRun);
+  t.after(async () => {
+    connection.stop();
+    await hub.close();
+  });
+
+  connection.start();
+  await waitUntil(() => connection.isRegistered());
+  hub.send({ type: "dispatch", runId: "run-hub", capability: "query_control_platform", input: {} });
+  await waitUntil(() => hub.messages.some((m) => m.type === "run_complete" && m.runId === "run-hub"));
+
+  assert.equal(hub.messages.some((m) => m.type === "run_failed" && m.runId === "run-hub"), false);
+  assert.equal(connection.localRuns.has("local-1"), true);
+  assert.equal(localRun.recalled, undefined);
+});
+
+test("abortActive tears down the hub run and every local run", () => {
+  let recalled = [];
+  const connection = new HubConnection({
+    config: createConfig(1),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "query_control_platform" }],
+      onDispatch: async () => null,
+      onRecall: (runId) => recalled.push(runId),
+    },
+  });
+  const hubRun = { runId: "hub-1", recalled: false, controller: new AbortController() };
+  const localRun = { runId: "local-1", recalled: false, controller: new AbortController() };
+  connection.hubRun = hubRun;
+  connection.localRuns.set("local-1", localRun);
+
+  connection.abortActive("shutdown");
+
+  assert.equal(hubRun.recalled, true);
+  assert.equal(localRun.recalled, true);
+  assert.equal(hubRun.controller.signal.aborted, true);
+  assert.equal(localRun.controller.signal.aborted, true);
+  assert.deepEqual(recalled.sort(), ["hub-1", "local-1"]);
 });
 
 test("recall aborts the active run and does not report completion", async (t) => {
@@ -122,7 +252,7 @@ test("recall aborts the active run and does not report completion", async (t) =>
   connection.start();
   await waitUntil(() => connection.isRegistered());
   hub.send({ type: "dispatch", runId: "run-r", capability: "query_control_platform", input: {} });
-  await waitUntil(() => connection.activeRun);
+  await waitUntil(() => connection.hubRun);
   hub.send({ type: "recall", runId: "run-r" });
   await waitUntil(() => recalled === 1);
   await new Promise((resolve) => setTimeout(resolve, 100));

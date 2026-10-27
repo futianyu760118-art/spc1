@@ -75,6 +75,10 @@ function createAdapter({ config, http, log }) {
     if (!input || typeof input.prompt !== "string" || !input.prompt.trim()) {
       throw new UpstreamError("INVALID_ARGUMENT", "input.prompt 不能为空");
     }
+    const businessObjectRef = input.context && input.context.businessObjectRef;
+    if (typeof businessObjectRef !== "string" || !businessObjectRef.trim()) {
+      throw new UpstreamError("INVALID_ARGUMENT", "input.context.businessObjectRef 不能为空");
+    }
     const runId = run.runId;
     const taskType = input.task_type ?? "";
     const body = {

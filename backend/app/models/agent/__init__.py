@@ -2,6 +2,7 @@
 
 from app.models.agent.agent import Agent, AgentConfigLog, AgentHierarchyLog
 from app.models.agent.conversation import AgentConversation, AgentMessage
+from app.models.agent.gateway import GatewayDispatchLog
 from app.models.agent.task import AgentTask, AgentTaskEvent, AgentTaskReport
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "AgentTaskReport",
     "AgentConversation",
     "AgentMessage",
+    "GatewayDispatchLog",
 ]

@@ -95,10 +95,15 @@ services:
       WRITEBACK_POLL_INTERVAL: ${WRITEBACK_POLL_INTERVAL:-}
       WRITEBACK_BATCH_SIZE: ${WRITEBACK_BATCH_SIZE:-}
       WRITEBACK_CLAIM_TIMEOUT: ${WRITEBACK_CLAIM_TIMEOUT:-}
-      # 执行面智能体（query/reasoning/order）admin 面代理地址
+      # 执行面单一网关（全部 Hub HTTP 与 resolve-caller 统一出口）
+      GATEWAY_BASE_URL: ${GATEWAY_BASE_URL:-http://aeos-gateway:8790}
+      GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN:-}
+      GATEWAY_CALLER_USER_ID_FIELD: ${GATEWAY_CALLER_USER_ID_FIELD:-emp_code}
+      GATEWAY_HUB_TIMEOUT_S: ${GATEWAY_HUB_TIMEOUT_S:-20}
+      # 执行面智能体 admin 面代理地址（query/reasoning 均由网关承载）
       AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
-      EXECUTION_QUERY_AGENT_BASE_URL: ${EXECUTION_QUERY_AGENT_BASE_URL:-http://aeos-query-agent:8790}
-      EXECUTION_REASONING_AGENT_BASE_URL: ${EXECUTION_REASONING_AGENT_BASE_URL:-http://aeos-reasoning-agent:8790}
+      EXECUTION_QUERY_AGENT_BASE_URL: ${EXECUTION_QUERY_AGENT_BASE_URL:-http://aeos-gateway:8790}
+      EXECUTION_REASONING_AGENT_BASE_URL: ${EXECUTION_REASONING_AGENT_BASE_URL:-http://aeos-gateway:8790}
       EXECUTION_ORDER_AGENT_BASE_URL: ${EXECUTION_ORDER_AGENT_BASE_URL:-http://aeos-order-agent:8790}
       # AEOS Hub 助手观测上报（assistant-events，中台智能助手调用留痕；缺一即停用）
       AEOS_HUB_BASE: ${AEOS_HUB_BASE:-}
@@ -135,59 +140,51 @@ services:
     depends_on:
       - backend
 
-  # AEOS Hub 执行面查询智能体（agents/query-agent，只注册 query_control_platform）。
+  # AEOS Hub 单一系统网关（agents/gateway-agent，唯一 Hub WS 身份，内置 query/reasoning 适配器）。
   # 镜像需单独构建上传（见 agents/README.md）；EXECUTION_*/CONTROL_PLATFORM_* 配置在服务器 .env。
-  aeos-query-agent:
-    image: aeos-query-agent:latest
+  # 必须单副本：多副本会以同一 agentId 重复注册 Hub。
+  aeos-gateway:
+    image: aeos-gateway:latest
+    profiles: ["aeos"]
     restart: unless-stopped
+    # app 服务器的 backend 需要访问网关（GATEWAY_BASE_URL）；仅对 app 服务器 IP 开放防火墙。
+    ports:
+      - "18086:8790"
     depends_on:
       backend:
         condition: service_healthy
     environment:
       TZ: Asia/Shanghai
-      EXECUTION_AGENT_KEY: query
+      EXECUTION_AGENT_KEY: gateway
       EXECUTION_WS_URL: ${EXECUTION_WS_URL:-}
+      # 网关使用系统令牌（EXECUTION_SYSTEM_ID/TOKEN）；legacy 根令牌可留空
       EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
-      EXECUTION_AGENT_ID: ${EXECUTION_QUERY_AGENT_ID:-runtime-control-platform-query}
-      EXECUTION_AGENT_NAME: ${EXECUTION_QUERY_AGENT_NAME:-公司中台查询智能体}
-      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-}
-      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
+      EXECUTION_AGENT_ID: ${GATEWAY_AGENT_ID:-gateway-control-platform}
+      EXECUTION_AGENT_NAME: ${GATEWAY_AGENT_NAME:-公司中台系统网关}
+      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-control-platform}
+      EXECUTION_SYSTEM_ID: ${AEOS_SYSTEM_ID:-control-platform}
+      EXECUTION_SYSTEM_TOKEN: ${AEOS_SYSTEM_TOKEN:-}
+      AEOS_SYSTEM_ID: ${AEOS_SYSTEM_ID:-control-platform}
+      AEOS_SYSTEM_TOKEN: ${AEOS_SYSTEM_TOKEN:-}
+      AEOS_HUB_BASE: ${AEOS_HUB_BASE:-}
+      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-http://backend:8000/api/v1}
+      BACKEND_INTERNAL_BASE_URL: ${BACKEND_INTERNAL_BASE_URL:-http://backend:8000}
       CONTROL_PLATFORM_QUERY_APP_KEY: ${CONTROL_PLATFORM_QUERY_APP_KEY:-}
       CONTROL_PLATFORM_QUERY_APP_SECRET: ${CONTROL_PLATFORM_QUERY_APP_SECRET:-}
-      CONTROL_PLATFORM_TIMEOUT_MS: ${CONTROL_PLATFORM_TIMEOUT_MS:-15000}
-      HEALTH_CHECK_PORT: "8790"
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
-      # 每系统令牌握手（Hub system-token 鉴权；配置后优先于 legacy 根令牌）
-      EXECUTION_SYSTEM_ID: ${EXECUTION_SYSTEM_ID:-}
-      EXECUTION_SYSTEM_TOKEN: ${EXECUTION_SYSTEM_TOKEN:-}
-
-  # AEOS Hub 执行面推理智能体（agents/reasoning-agent，只注册 reason_control_platform）。
-  # 镜像需单独构建上传（见 agents/README.md）；EXECUTION_*/CONTROL_PLATFORM_* 配置在服务器 .env。
-  aeos-reasoning-agent:
-    image: aeos-reasoning-agent:latest
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
-    environment:
-      TZ: Asia/Shanghai
-      EXECUTION_AGENT_KEY: reasoning
-      EXECUTION_WS_URL: ${EXECUTION_WS_URL:-}
-      EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
-      EXECUTION_AGENT_ID: ${EXECUTION_REASONING_AGENT_ID:-runtime-control-platform-reasoning}
-      EXECUTION_AGENT_NAME: ${EXECUTION_REASONING_AGENT_NAME:-公司中台推理智能体}
-      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-}
-      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-http://backend:8000/api/v1}
       CONTROL_PLATFORM_REASONING_APP_KEY: ${CONTROL_PLATFORM_REASONING_APP_KEY:-}
       CONTROL_PLATFORM_REASONING_APP_SECRET: ${CONTROL_PLATFORM_REASONING_APP_SECRET:-}
+      GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN:-}
+      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
+      CONTROL_PLATFORM_TIMEOUT_MS: ${CONTROL_PLATFORM_TIMEOUT_MS:-15000}
       CONTROL_PLATFORM_REASONING_TIMEOUT_MS: ${CONTROL_PLATFORM_REASONING_TIMEOUT_MS:-180000}
       HEALTH_CHECK_PORT: "8790"
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
-      # 每系统令牌握手（Hub system-token 鉴权；配置后优先于 legacy 根令牌）
-      EXECUTION_SYSTEM_ID: ${EXECUTION_SYSTEM_ID:-}
-      EXECUTION_SYSTEM_TOKEN: ${EXECUTION_SYSTEM_TOKEN:-}
+      AEOS_HUB_CA_CERT: ${AEOS_HUB_CA_CERT:-/app/certs/caddy-root.crt}
+      NODE_EXTRA_CA_CERTS: /app/certs/caddy-root.crt
+    extra_hosts:
+      - "aeos-hub.test:${AEOS_HUB_IP:-192.168.0.23}"
+    volumes:
+      - ./backend/certs/caddy-root.crt:/app/certs/caddy-root.crt:ro
 
   # AEOS Hub 执行面订单智能体（agents/order-agent，只注册 update_control_platform_order，写订单四日期字段）。
   # 镜像需单独构建上传（见 agents/README.md）；EXECUTION_*/CONTROL_PLATFORM_* 配置在服务器 .env。

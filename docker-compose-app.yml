@@ -50,6 +50,15 @@ services:
       AEOS_SYSTEM_ID: ${AEOS_SYSTEM_ID:-}
       AEOS_SYSTEM_TOKEN: ${AEOS_SYSTEM_TOKEN:-}
       AEOS_HUB_CA_CERT: ${AEOS_HUB_CA_CERT:-/app/certs/caddy-root.crt}
+      # SPC 单一网关（主服务器 aeos-gateway；app 服务器 backend 通过该地址访问）
+      GATEWAY_BASE_URL: ${GATEWAY_BASE_URL:-}
+      GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN:-}
+      GATEWAY_CALLER_USER_ID_FIELD: ${GATEWAY_CALLER_USER_ID_FIELD:-emp_code}
+      GATEWAY_HUB_TIMEOUT_S: ${GATEWAY_HUB_TIMEOUT_S:-20}
+      EXECUTION_QUERY_AGENT_BASE_URL: ${EXECUTION_QUERY_AGENT_BASE_URL:-}
+      EXECUTION_REASONING_AGENT_BASE_URL: ${EXECUTION_REASONING_AGENT_BASE_URL:-}
+      # app 端本地助手仍通过网关 /admin/run 调 query/reasoning，需与主服务器一致
+      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
     extra_hosts:
       - "aeos-hub.test:${AEOS_HUB_IP:-192.168.0.23}"
     volumes:

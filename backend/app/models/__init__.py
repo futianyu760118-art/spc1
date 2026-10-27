@@ -79,6 +79,7 @@ from app.models.agent import (  # noqa: F401
     AgentTask,
     AgentTaskEvent,
     AgentTaskReport,
+    GatewayDispatchLog,
 )
 from app.models.purchase.price_change import (  # noqa: F401
     ApprovalConfig,
@@ -189,6 +190,7 @@ __all__ = [
     "AgentTask",
     "AgentTaskEvent",
     "AgentTaskReport",
+    "GatewayDispatchLog",
     "ApprovalConfig",
     "PriceChangeRuleConfig",
     "PurchasePriceChange",
