@@ -131,7 +131,7 @@ ERP 集成是 SQL 驱动的：同步 SQL 与字段映射存在 `sync_sql_config`
 - **唯一 Hub 身份**：`agents/gateway-agent` 以 `gateway-control-platform` 注册，是 SPC 唯一的 Hub WS 连接；能力固定 `query_control_platform` / `reason_control_platform`。网关必须单副本（多副本会重复注册同一 `agentId`）。
 - **旧 Agent 收敛**：`query-agent` / `reasoning-agent` 仅作为网关内部 adapter 复用，不再独立部署或直连 Hub；`order-agent` 仅本地 `/admin/run`（`EXECUTION_WS_URL=""`），不连 Hub。
 - **出站边界**：所有 Hub HTTP（借调、能力目录、assistant-events）统一经网关白名单代理 `/internal/hub/*`；backend `hub_client` / `hub_reporter` 只能走 `app/services/gateway_client.py`，不得恢复直连 Hub 的第二出口。
-- **入站 caller 路由**：网关调内网 `POST /api/v1/internal/gateway/resolve-caller`（`X-Gateway-Token` 鉴权）解析 `caller` 并签发 actor token；审计写 `gateway_dispatch_log`，fail-closed。`caller.userId` 按 `GATEWAY_CALLER_USER_ID_FIELD` 解析，默认 `emp_code`。nginx 对 `/api/v1/internal/` 一律 deny，仅 Docker 内网可达。
+- **入站 caller 路由**：网关调内网 `POST /api/v1/internal/gateway/resolve-caller`（`X-Gateway-Token` 鉴权）解析 `caller` 并签发 actor token；审计写 `gateway_dispatch_log`，fail-closed。`caller.userId` 按 `GATEWAY_CALLER_USER_ID_FIELD` 解析，默认 `emp_code`。`caller.systemId` 非空且不等于 `control-platform`（如 Hub 页面派单的 `aeos-hub`）按外部 caller 处理：保留元数据、按系统级执行，不映射 SPC 用户。nginx 对 `/api/v1/internal/` 一律 deny，仅 Docker 内网可达。
 - **关键 env**：backend `GATEWAY_BASE_URL` / `GATEWAY_INTERNAL_TOKEN` / `GATEWAY_CALLER_USER_ID_FIELD`；gateway `GATEWAY_AGENT_ID` / `GATEWAY_AGENT_NAME` / `BACKEND_INTERNAL_BASE_URL` / `AEOS_HUB_BASE` / `AEOS_SYSTEM_ID` / `AEOS_SYSTEM_TOKEN` / `AEOS_HUB_CA_CERT` / `NODE_EXTRA_CA_CERTS`；`EXECUTION_QUERY_AGENT_BASE_URL` / `EXECUTION_REASONING_AGENT_BASE_URL` 均指向网关。
 - **命令**：`docker build -f agents/gateway-agent/Dockerfile -t aeos-gateway:latest agents`；`cd agents && npm install && npm test`。改网关 / resolver / 审批中心代码后跑 `python -m pytest` 与 `npm test`。
 

@@ -21,6 +21,8 @@ USER_COLUMNS = {
     "id": SysUser.id,
 }
 
+DEFAULT_SYSTEM_ID = "control-platform"
+
 
 @dataclass
 class DispatchResolution:
@@ -151,6 +153,17 @@ async def resolve_dispatch(
     audit_ctx = AuditContext(
         run_id=run_id, trace_id=trace_id, capability=capability, caller=caller,
     )
+
+    caller_system_id = _value(caller, "systemId")
+    local_system_id = get_settings().AEOS_SYSTEM_ID or DEFAULT_SYSTEM_ID
+    is_external = bool(caller_system_id and caller_system_id != local_system_id)
+    if is_external:
+        # 外部系统（如 Hub 页面）的 caller 只做归属元数据，不映射 SPC 内部用户
+        resolution = DispatchResolution(ok=True, mode="system")
+        _audit(db, audit_ctx, resolution)
+        await db.flush()
+        return resolution
+
     agent, user, mismatch, reason = await _resolve_agent(db, caller)
     is_system = not _value(caller, "agentId") and not _value(caller, "userId")
     agent_ctx = None

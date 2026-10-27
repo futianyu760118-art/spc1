@@ -38,7 +38,7 @@ async def test_resolve_by_user_id(user_id_field):
             db, run_id="run-1", trace_id="trace-1",
             capability="query_control_platform",
             input_data={"path": "/external/orders/list"},
-            caller={"systemId": "aeos-hub", "userId": str(user_id), "traceId": "trace-1"},
+            caller={"systemId": "control-platform", "userId": str(user_id), "traceId": "trace-1"},
         )
         await db.commit()
     assert result.ok is True
@@ -74,6 +74,37 @@ async def test_resolve_system_mode(user_id_field):
     assert result.actor_token is None
 
 
+async def test_external_caller_keeps_metadata_but_runs_as_system():
+    caller = {
+        "systemId": "aeos-hub",
+        "agentId": "AG-ACCEPT-1",
+        "userId": "accept-user-1",
+        "taskId": "AT-EXTERNAL-1",
+        "traceId": "trace-external-1",
+    }
+    async with AsyncSessionLocal() as db:
+        result = await resolve_dispatch(
+            db, run_id="run-external", trace_id="trace-external-1",
+            capability="query_control_platform",
+            input_data={"path": "/common/ping"},
+            caller=caller,
+        )
+        await db.commit()
+        row = (await db.execute(
+            select(GatewayDispatchLog).where(GatewayDispatchLog.run_id == "run-external")
+        )).scalars().one()
+    assert result.ok is True
+    assert result.mode == "system"
+    assert result.actor_token is None
+    assert row.mode == "system"
+    assert row.result == "routed"
+    assert row.caller_system_id == "aeos-hub"
+    assert row.caller_agent_id == "AG-ACCEPT-1"
+    assert row.caller_user_id == "accept-user-1"
+    assert row.caller_task_id == "AT-EXTERNAL-1"
+    assert row.caller_trace_id == "trace-external-1"
+
+
 @pytest.mark.parametrize(
     ("field", "stored", "caller_value"),
     [
@@ -96,7 +127,7 @@ async def test_resolve_by_configurable_user_field(field, stored, caller_value):
                 db, run_id=f"run-{field}", trace_id=f"trace-{field}",
                 capability="query_control_platform",
                 input_data={"path": "/external/orders/list"},
-                caller={"systemId": "aeos-hub", "userId": caller_value},
+                caller={"systemId": "control-platform", "userId": caller_value},
             )
             await db.commit()
         assert result.ok is True
