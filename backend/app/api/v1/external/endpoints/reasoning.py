@@ -102,6 +102,7 @@ class ReasoningResultOut(BaseModel):
     llm: Optional[ReasoningLLMMetaOut] = None
     usage: Optional[ReasoningUsageOut] = None
     duration_ms: Optional[float] = None
+    idempotent_replay: bool = False
     request_id: Optional[str] = None
 
 

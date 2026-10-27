@@ -18,3 +18,4 @@ from app.models.production.workshop_daily_report import (  # noqa: F401
     WorkshopDailyReportTask,
 )
 from app.models.production.production_report import ProductionReport  # noqa: F401
+from app.models.production.rework_order import ProductionReworkOrder  # noqa: F401

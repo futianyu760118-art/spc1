@@ -55,6 +55,7 @@ const outputSchema = Object.freeze({
     stale: { type: "boolean" },
     warnings: { type: "array", items: { type: "string" } },
     duration_ms: { type: "integer" },
+    idempotent_replay: { type: "boolean" },
     request_id: { type: "string" },
   },
   required: ["task_id", "task_type", "status", "summary"],

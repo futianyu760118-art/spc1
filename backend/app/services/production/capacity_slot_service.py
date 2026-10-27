@@ -140,6 +140,7 @@ async def find_slot_bookings(
     current_order_no: Optional[str] = None,
     earliest_fill_date: Optional[date] = None,
     max_backfill_days: int = 7,
+    force_first_day: bool = False,
 ) -> list[dict[str, Any]]:
     """给定总工时和目标开工日, 计算占用哪些日期的多少小时.
 
@@ -163,7 +164,11 @@ async def find_slot_bookings(
          从 target_start_date 往前逐日找空位, 填进 bookings 头部
 
     串行模式(serial_mode=True):
-      同一天同一个工序段, 如果有"其他订单"还没做完, 不插队.
+     同一天同一个工序段, 如果有"其他订单"还没做完, 不插队.
+
+    force_first_day=True(手工改日期专用):
+     首个生产日强制按 daily_capacity 占槽, 不检查既有占用, 保证卡片落在用户选的日期;
+     由此产生的超产能只做冲突提示, 不自动挪到后面.
 
     返回: [{"date": date, "hours": float, "is_full_day": bool, "available_before": float}, ...]
            按日期升序
@@ -175,6 +180,7 @@ async def find_slot_bookings(
 
     remaining = float(total_hours)
     bookings: list[dict[str, Any]] = []
+    force_pending = force_first_day
 
     # === 第一步: 主路径, 从 target_start_date 往后占 ===
     cur_date = target_start_date
@@ -190,6 +196,9 @@ async def find_slot_bookings(
             cur_date=cur_date, exclude_plan_id=exclude_plan_id,
         )
         available_today = max(0.0, daily_capacity - booked_today)
+        if force_pending:
+            available_today = daily_capacity
+            force_pending = False
 
         can_book = True
         if serial_mode and available_today > 0.01:
@@ -495,6 +504,7 @@ async def recompute_plan_slots(
     serial_mode: bool = True,
     target_end_date: Optional[date] = None,
     earliest_fill_date: Optional[date] = None,
+    force_first_day: bool = False,
 ) -> list[dict[str, Any]]:
     """重算并刷新某计划的时间槽占用.
 
@@ -534,6 +544,7 @@ async def recompute_plan_slots(
         serial_mode=serial_mode,
         current_order_no=order_no,
         earliest_fill_date=earliest_fill_date,
+        force_first_day=force_first_day,
     )
 
     # 3. 补全 bookings 里的 department/bucket, 写入
