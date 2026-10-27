@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import { assistantApi } from '../../services/api'
+import { agentApi } from '../../services/agent'
 
 export interface ChatMessage {
   id: string
@@ -50,8 +51,10 @@ export interface WriteConfirmationField {
 
 export interface WriteConfirmation {
   confirmation_id: string
-  order_no: string
+  action_type?: string
+  order_no?: string
   fields: WriteConfirmationField[]
+  preview?: Record<string, any>
   created_at?: string
   expires_at?: string
   status: 'pending' | 'cancelled' | 'executed' | 'failed'
@@ -68,7 +71,7 @@ export interface Skill {
 
 const CONFIRM_COMMANDS = new Set(['确认', '确认执行', '确定', '确定执行'])
 const CANCEL_COMMANDS = new Set(['取消', '取消操作', '不确认'])
-const NO_PENDING_CONFIRMATION_REPLY = '当前没有待确认的写操作。如需修改订单，请说明订单号与要调整的字段。'
+const NO_PENDING_CONFIRMATION_REPLY = '当前没有待确认的操作。如需修改订单或执行任务动作，请先发起。'
 
 function parseConfirmationCommand(text: string): 'confirm' | 'cancel' | null {
   const command = text.trim().replace(/[。！!，,]+$/g, '')
@@ -94,6 +97,7 @@ export function useAssistantChat() {
   const [loading, setLoading] = useState(false)
   const [skills, setSkills] = useState<Skill[]>([])
   const sessionIdRef = useRef<string>('')
+  const conversationIdRef = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const handleSSEEvent = useCallback((msgId: string, event: string, data: any) => {
@@ -104,6 +108,7 @@ export function useAssistantChat() {
         switch (event) {
           case 'session':
             sessionIdRef.current = data.session_id || ''
+            if (data.conversation_id) conversationIdRef.current = Number(data.conversation_id)
             return m
 
           case 'thinking':
@@ -262,7 +267,7 @@ export function useAssistantChat() {
     }
   }, [appendFollowUpReply])
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, taskId?: number) => {
     const trimmed = text.trim()
     if (!trimmed || loading) return
 
@@ -331,6 +336,8 @@ export function useAssistantChat() {
         trimmed,
         sessionIdRef.current || undefined,
         conversationHistory,
+        conversationIdRef.current || undefined,
+        taskId,
       )
 
       if (!response.ok) {
@@ -393,9 +400,13 @@ export function useAssistantChat() {
       console.warn('SSE failed, falling back to non-stream:', e)
       try {
         const conversationHistory = messages.slice(-10)
-        const res: any = await assistantApi.chat(trimmed, sessionIdRef.current || undefined, conversationHistory)
+        const res: any = await assistantApi.chat(
+          trimmed, sessionIdRef.current || undefined, conversationHistory,
+          conversationIdRef.current || undefined, taskId,
+        )
         const data = res.data
         sessionIdRef.current = data.session_id || ''
+        if (data.conversation_id) conversationIdRef.current = Number(data.conversation_id)
 
         setMessages(prev =>
           prev.map(m =>
@@ -444,9 +455,27 @@ export function useAssistantChat() {
     } catch { /* ignore */ }
   }, [])
 
+  const loadConversation = useCallback(async (conversationId: number) => {
+    const res: any = await agentApi.conversation(conversationId)
+    const historyMessages = (res.data?.messages || [])
+      .filter((item: any) => item.role === 'user' || item.role === 'assistant')
+      .map((item: any, index: number): ChatMessage => ({
+        id: `history-${item.id ?? index}`,
+        role: item.role === 'user' ? 'user' : 'assistant',
+        content: item.content || '',
+        timestamp: item.created_at ? new Date(item.created_at).getTime() : Date.now(),
+        cards: [],
+        suggestions: [],
+      }))
+    conversationIdRef.current = conversationId
+    sessionIdRef.current = ''
+    setMessages(historyMessages)
+  }, [])
+
   const clearMessages = useCallback(() => {
     setMessages([])
     sessionIdRef.current = ''
+    conversationIdRef.current = null
     // 取消正在进行的流式请求
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
@@ -464,5 +493,8 @@ export function useAssistantChat() {
     )
   }, [])
 
-  return { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming, confirmWrite, cancelWrite }
+  return {
+    messages, loading, send, skills, loadSkills, clearMessages, stopStreaming,
+    confirmWrite, cancelWrite, loadConversation,
+  }
 }

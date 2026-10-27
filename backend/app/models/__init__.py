@@ -68,6 +68,18 @@ from app.models.basicdata.share_link import ShareLink  # noqa: F401
 from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa: F401
 from app.models.basicdata.backup import BackupConfig, BackupRecord  # noqa: F401
 from app.models.basicdata.ai_agent import AiAgentConfig, AssistantRun  # noqa: F401
+
+# 智能体中心（2026-10-26 多智能体层级与主管任务闭环）
+from app.models.agent import (  # noqa: F401
+    Agent,
+    AgentConfigLog,
+    AgentConversation,
+    AgentHierarchyLog,
+    AgentMessage,
+    AgentTask,
+    AgentTaskEvent,
+    AgentTaskReport,
+)
 from app.models.purchase.price_change import (  # noqa: F401
     ApprovalConfig,
     PriceChangeRuleConfig,
@@ -169,6 +181,14 @@ __all__ = [
     "BackupRecord",
     "AiAgentConfig",
     "AssistantRun",
+    "Agent",
+    "AgentConfigLog",
+    "AgentConversation",
+    "AgentHierarchyLog",
+    "AgentMessage",
+    "AgentTask",
+    "AgentTaskEvent",
+    "AgentTaskReport",
     "ApprovalConfig",
     "PriceChangeRuleConfig",
     "PurchasePriceChange",

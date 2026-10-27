@@ -89,6 +89,7 @@ function createAdapter({ config, http, log }) {
     report("step_started", "写入订单字段", "started", `order_no=${orderNo}`, { orderNo }, { startedAt });
     log("info", "order_write_started", { orderNo });
     const headers = { "X-Agent-Run-Id": run.runId };
+    if (run.actorToken) headers["X-Actor-Token"] = run.actorToken;
     const operatorUserId = run.operator && run.operator.user_id;
     if (operatorUserId) headers["X-Operator-User-Id"] = String(operatorUserId);
     let envelope;

@@ -20,6 +20,7 @@ from app.services.scheduler.backup_scheduler import backup_scheduler  # noqa: F4
 from app.services.scheduler.wage_reminder_scheduler import wage_reminder_scheduler  # noqa: F401
 from app.services.scheduler.snapshot_refresh_scheduler import snapshot_refresh_scheduler  # noqa: F401
 from app.services.scheduler.production_change_scheduler import production_change_scheduler  # noqa: F401
+from app.services.agent.worker import agent_task_worker  # noqa: F401
 
 
 class SafeJSONEncoder(json.JSONEncoder):
@@ -188,6 +189,8 @@ async def lifespan(app: FastAPI):
     # 启动时：开启写回 Worker
     from app.services.basicdata.writeback_worker import writeback_worker
     writeback_worker.start()
+    # 启动时：开启智能体任务 Worker（自动分析 + 提醒；AGENT_TASK_ENABLED 控制）
+    agent_task_worker.start()
     # 启动时：探测共享 Redis 客户端（不可用仅告警，各调用方自动降级）
     try:
         from app.core.redis_client import probe_redis
@@ -216,6 +219,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     await writeback_worker.stop()
+    await agent_task_worker.stop()
     backup_scheduler.stop()
     capacity_sync_scheduler.stop()
     await mrp_scheduler.stop()

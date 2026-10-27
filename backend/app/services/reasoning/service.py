@@ -24,7 +24,7 @@ from typing import Any, Callable, Literal, Optional
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -229,12 +229,14 @@ def _order_summary(row: SaleOrder) -> str:
     return " / ".join(parts)
 
 
-async def collect_order_evidence(db: AsyncSession, anchor: BusinessAnchor) -> EvidenceBundle:
+async def collect_order_evidence(db: AsyncSession, anchor: BusinessAnchor, scope=None) -> EvidenceBundle:
     """销售订单行（含明细行的 BOM 归属）——与 orders.list / order_details.list 同域"""
     bundle = EvidenceBundle(source="orders")
     condition = _anchor_condition(anchor, SaleOrder.order_no, SaleOrder.product_code, SaleOrder.batch_no)
     if condition is None:
         return bundle
+    if scope is not None:
+        condition = and_(condition, scope.order_condition())
     started = time.time()
     rows = (
         await db.execute(
@@ -271,9 +273,12 @@ async def collect_order_evidence(db: AsyncSession, anchor: BusinessAnchor) -> Ev
             "summary": _order_summary(row), "data": data,
         })
     if rows:
+        line_condition = SaleOrderLine.order_no == rows[0].order_no
+        if scope is not None:
+            line_condition = and_(line_condition, SaleOrderLine.order_no.in_(scope.visible_order_no_select()))
         line_rows = (
             await db.execute(
-                select(SaleOrderLine).where(SaleOrderLine.order_no == rows[0].order_no)
+                select(SaleOrderLine).where(line_condition)
                 .order_by(SaleOrderLine.id.asc()).limit(20)
             )
         ).scalars().all()
@@ -300,7 +305,7 @@ async def collect_order_evidence(db: AsyncSession, anchor: BusinessAnchor) -> Ev
     return bundle
 
 
-async def collect_kitting_evidence(db: AsyncSession, anchor: BusinessAnchor) -> EvidenceBundle:
+async def collect_kitting_evidence(db: AsyncSession, anchor: BusinessAnchor, scope=None) -> EvidenceBundle:
     """齐套结果 + 缺料明细 —— 与 kitting.results / kitting.shortages 同域"""
     bundle = EvidenceBundle(source="kitting")
     demand_condition = (
@@ -309,6 +314,8 @@ async def collect_kitting_evidence(db: AsyncSession, anchor: BusinessAnchor) -> 
     )
     if demand_condition is None:
         return bundle
+    if scope is not None:
+        demand_condition = and_(demand_condition, KittingResult.demand_no.in_(scope.visible_order_no_select()))
     started = time.time()
     results = (
         await db.execute(
@@ -392,16 +399,22 @@ async def collect_kitting_evidence(db: AsyncSession, anchor: BusinessAnchor) -> 
     return bundle
 
 
-async def collect_production_evidence(db: AsyncSession, anchor: BusinessAnchor) -> EvidenceBundle:
+async def collect_production_evidence(db: AsyncSession, anchor: BusinessAnchor, scope=None) -> EvidenceBundle:
     """OA 生产任务单 —— 与 production_task_orders.list 同域（仅订单锚点）"""
     bundle = EvidenceBundle(source="production")
     if anchor.type != "order":
         return bundle
+    production_condition = ProductionTaskOrder.sale_order_no == anchor.key
+    if scope is not None:
+        production_condition = and_(
+            production_condition,
+            ProductionTaskOrder.sale_order_no.in_(scope.visible_order_no_select()),
+        )
     started = time.time()
     rows = (
         await db.execute(
             select(ProductionTaskOrder)
-            .where(ProductionTaskOrder.sale_order_no == anchor.key)
+            .where(production_condition)
             .order_by(ProductionTaskOrder.id.asc()).limit(20)
         )
     ).scalars().all()
@@ -442,7 +455,7 @@ async def collect_production_evidence(db: AsyncSession, anchor: BusinessAnchor) 
     return bundle
 
 
-async def collect_quality_evidence(db: AsyncSession, anchor: BusinessAnchor) -> EvidenceBundle:
+async def collect_quality_evidence(db: AsyncSession, anchor: BusinessAnchor, scope=None) -> EvidenceBundle:
     """品质异常 —— 与 quality_issues.list 同域（订单 / 产品锚点直查；批次锚点经订单明细中转）"""
     bundle = EvidenceBundle(source="quality")
     if anchor.type == "order":
@@ -461,6 +474,8 @@ async def collect_quality_evidence(db: AsyncSession, anchor: BusinessAnchor) -> 
         condition = QualityIssue.order_no.in_(set(order_nos))
     else:
         return bundle
+    if scope is not None:
+        condition = and_(condition, scope.quality_condition())
     started = time.time()
     rows = (
         await db.execute(
@@ -614,12 +629,12 @@ def _check_cancelled(handle: _RunningHandle):
 # 主流程
 # ═══════════════════════════════════════════
 
-async def _gather_evidence(db: AsyncSession, task_type: str, anchor: BusinessAnchor) -> tuple[list[dict], list[dict], Optional[datetime]]:
+async def _gather_evidence(db: AsyncSession, task_type: str, anchor: BusinessAnchor, scope=None) -> tuple[list[dict], list[dict], Optional[datetime]]:
     """按任务类型采集证据；单域失败不致命（记入 tool_calls 审计），全部无证据由调用方判 404。"""
     bundles = []
     for collector in TASK_COLLECTORS[task_type]:
         try:
-            bundles.append(await collector(db, anchor))
+            bundles.append(await collector(db, anchor, scope=scope))
         except Exception as e:  # noqa: BLE001 — 单域不可用降级，任务继续
             logger.warning("证据采集失败 collector=%s error=%s", getattr(collector, "__name__", "?"), e)
             bundles.append(EvidenceBundle(source=getattr(collector, "__name__", "?"), error=str(e)))
@@ -675,6 +690,7 @@ async def run_reasoning_task(
     api_key_name: Optional[str],
     app_key: Optional[str],
     request_id: Optional[str],
+    scope=None,
 ) -> dict:
     """执行一次只读推理；失败抛 ReasoningError 子类（终态已落审计后 re-raise）。"""
     settings = get_settings()
@@ -740,7 +756,7 @@ async def run_reasoning_task(
 
     try:
         # 1) 证据采集
-        evidence, tool_calls, data_as_of = await _gather_evidence(db, task_type, anchor)
+        evidence, tool_calls, data_as_of = await _gather_evidence(db, task_type, anchor, scope=scope)
         _check_cancelled(handle)
         if not evidence:
             raise EmptyResultError(

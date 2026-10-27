@@ -113,6 +113,12 @@ async def _test_db():
     from app.models.basicdata.user import SysRole, SysUser
     from app.models.basicdata.supplier import Supplier
     from app.models.basicdata.user_org_scope import UserOrgScope
+    from app.models.basicdata.employee import Employee
+    from app.models.basicdata.organization import Organization
+    from app.models.agent import (
+        Agent, AgentConfigLog, AgentConversation, AgentHierarchyLog,
+        AgentMessage, AgentTask, AgentTaskEvent, AgentTaskReport,
+    )
     from app.models.basicdata.reasoning import ReasoningTask
     from app.models.exception.quality_issue import QualityIssue
     from app.models.material.inventory_check import StockCheck, StockCheckItem
@@ -165,6 +171,10 @@ async def _test_db():
         ReasoningTask.__table__, KittingResult.__table__, KittingShortage.__table__,
         AiAgentConfig.__table__, AssistantRun.__table__,
         CompletenessRule.__table__,
+        Organization.__table__, Employee.__table__,
+        Agent.__table__, AgentConfigLog.__table__, AgentHierarchyLog.__table__,
+        AgentTask.__table__, AgentTaskEvent.__table__, AgentTaskReport.__table__,
+        AgentConversation.__table__, AgentMessage.__table__,
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -172,6 +182,12 @@ async def _test_db():
         await conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS ai_result JSONB"))
         await conn.execute(text("ALTER TABLE supplier_claim ADD COLUMN IF NOT EXISTS clause_snapshot JSONB"))
         await conn.execute(text("ALTER TABLE notification ADD COLUMN IF NOT EXISTS ref_no VARCHAR(64)"))
+        await conn.execute(text("ALTER TABLE assistant_run ADD COLUMN IF NOT EXISTS agent_id BIGINT"))
+        await conn.execute(text("ALTER TABLE assistant_run ADD COLUMN IF NOT EXISTS task_id BIGINT"))
+        await conn.execute(text("ALTER TABLE assistant_run ADD COLUMN IF NOT EXISTS conversation_id BIGINT"))
+        await conn.execute(text(
+            "ALTER TABLE assistant_run ADD COLUMN IF NOT EXISTS trigger VARCHAR(16) NOT NULL DEFAULT 'chat'"
+        ))
         await conn.execute(text(
             "ALTER TABLE purchase_price_change_item ADD COLUMN IF NOT EXISTS unit_id INTEGER"
         ))
@@ -259,7 +275,9 @@ async def client(_test_db):
             "purchase_price_change_ai_analysis, "
             "purchase_order, approval_instance, approval_task, approval_record, "
             "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item, "
-            "ai_agent_config, assistant_run, completeness_rule "
+            "ai_agent_config, assistant_run, completeness_rule, "
+            "agent_message, agent_conversation, agent_task_report, agent_task_event, agent_task, "
+            "agent_hierarchy_log, agent_config_log, agent, scm_employee, scm_organization "
             "RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）

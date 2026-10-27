@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Button } from 'antd'
-import { RobotOutlined, CloseOutlined } from '@ant-design/icons'
+import { Badge, Button, List, Popover, Tag } from 'antd'
+import { RobotOutlined, CloseOutlined, UnorderedListOutlined, HistoryOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import ChatPanel from './ChatPanel'
 import { useAssistantChat } from './useAssistantChat'
+import { agentApi } from '../../services/agent'
+import { useAgentStore } from '../../store/agent'
 
 // 悬浮球尺寸
 const BALL_SIZE = 52
@@ -23,7 +26,15 @@ const WIN_HEIGHT = 620
 
 const FloatingAssistant: React.FC = () => {
   const [open, setOpen] = useState(false)
-  const { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming, confirmWrite, cancelWrite } = useAssistantChat()
+  const [taskId, setTaskId] = useState<number | undefined>()
+  const [recentTasks, setRecentTasks] = useState<any[]>([])
+  const [conversationList, setConversationList] = useState<any[]>([])
+  const navigate = useNavigate()
+  const { openTasks, refreshTaskSummary } = useAgentStore()
+  const {
+    messages, loading, send, skills, loadSkills, clearMessages, stopStreaming,
+    confirmWrite, cancelWrite, loadConversation,
+  } = useAssistantChat()
 
   // 以距右、距底的偏移存储位置，窗口缩放时仍贴右下
   const [pos, setPos] = useState({ right: 24, bottom: 24 })
@@ -39,6 +50,30 @@ const FloatingAssistant: React.FC = () => {
       loadSkills()
     }
   }, [open, skills.length, loadSkills])
+
+  useEffect(() => {
+    if (!open) return
+    refreshTaskSummary()
+    agentApi.myTasks({ page_size: 5 }, true)
+      .then((res: any) => setRecentTasks(res.data?.items || []))
+      .catch(() => setRecentTasks([]))
+    agentApi.conversations({ page_size: 20 }, true)
+      .then((res: any) => setConversationList(res.data?.items || []))
+      .catch(() => setConversationList([]))
+  }, [open, refreshTaskSummary])
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {}
+      if (detail.taskId) {
+        clearMessages()
+      }
+      setTaskId(detail.taskId ? Number(detail.taskId) : undefined)
+      setOpen(true)
+    }
+    window.addEventListener('spc:open-assistant', handler)
+    return () => window.removeEventListener('spc:open-assistant', handler)
+  }, [clearMessages])
 
   // 任何交互（悬停 / 拖动 / 打开面板）都应取消收起状态
   useEffect(() => {
@@ -184,23 +219,90 @@ const FloatingAssistant: React.FC = () => {
             <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 15, letterSpacing: .3 }}>
               <RobotOutlined style={{ fontSize: 18 }} />
               AI 智能助手
+              {taskId && <Tag color="blue" style={{ marginInlineEnd: 0 }}>任务 #{taskId}</Tag>}
             </span>
-            <Button
-              type="text"
-              size="small"
-              icon={<CloseOutlined />}
-              onClick={() => setOpen(false)}
-              style={{ color: '#fff', width: 28, height: 28, borderRadius: 8 }}
-            />
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                title="历史会话"
+                content={
+                  <List
+                    size="small"
+                    style={{ width: 300 }}
+                    dataSource={conversationList}
+                    locale={{ emptyText: '暂无历史会话' }}
+                    renderItem={(item: any) => (
+                      <List.Item
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => {
+                          setTaskId(item.task_id ? Number(item.task_id) : undefined)
+                          loadConversation(item.id)
+                          setOpen(true)
+                        }}
+                      >
+                        <List.Item.Meta
+                          title={<span style={{ fontSize: 12 }}>{item.title || '（未命名会话）'}</span>}
+                          description={<span style={{ fontSize: 11 }}>{item.last_message_at ? new Date(item.last_message_at).toLocaleString('zh-CN') : ''}</span>}
+                        />
+                      </List.Item>
+                    )}
+                  />
+                }
+              >
+                <Button type="text" size="small" icon={<HistoryOutlined />} style={{ color: '#fff' }} />
+              </Popover>
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                title="我的任务"
+                content={
+                  <List
+                    size="small"
+                    style={{ width: 300 }}
+                    dataSource={recentTasks}
+                    locale={{ emptyText: '暂无任务' }}
+                    renderItem={(item: any) => (
+                      <List.Item
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => { setOpen(false); navigate(`/agents/tasks/${item.id}`) }}
+                      >
+                        <List.Item.Meta
+                          title={<span style={{ fontSize: 12 }}>{item.task_no} · {item.title}</span>}
+                          description={<span style={{ fontSize: 11 }}>{item.status} · 截止 {item.due_at ? new Date(item.due_at).toLocaleString('zh-CN') : '-'}</span>}
+                        />
+                      </List.Item>
+                    )}
+                  />
+                }
+              >
+                <Badge count={openTasks} size="small">
+                  <Button type="text" size="small" icon={<UnorderedListOutlined />} style={{ color: '#fff' }} />
+                </Badge>
+              </Popover>
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={() => setOpen(false)}
+                style={{ color: '#fff', width: 28, height: 28, borderRadius: 8 }}
+              />
+            </span>
           </div>
 
           {/* 主体 */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, background: '#f8fafc' }}>
+            {taskId && (
+              <div style={{ padding: '6px 12px', fontSize: 12, color: '#475569', background: '#eff6ff', borderBottom: '1px solid #dbeafe' }}>
+                当前任务 #{taskId}：回答会结合任务上下文；确认卡提交前仍会二次校验。
+                <Button type="link" size="small" onClick={() => { setTaskId(undefined); clearMessages() }}>退出任务</Button>
+              </div>
+            )}
             <ChatPanel
               messages={messages}
               loading={loading}
               skills={skills}
-              onSend={send}
+              onSend={(text) => send(text, taskId)}
               onClear={clearMessages}
               onStop={stopStreaming}
               onConfirm={confirmWrite}
@@ -234,7 +336,9 @@ const FloatingAssistant: React.FC = () => {
             transition: 'bottom .2s ease',
           }}
         >
-          <RobotOutlined style={{ fontSize: 14 }} />
+          <Badge count={openTasks} size="small">
+            <RobotOutlined style={{ fontSize: 14 }} />
+          </Badge>
         </div>
       )}
 
@@ -268,7 +372,9 @@ const FloatingAssistant: React.FC = () => {
             boxShadow: hovering ? '0 10px 28px rgba(59,130,246,.5)' : '0 6px 20px rgba(59,130,246,.35)',
           }}
         >
-          <RobotOutlined style={{ fontSize: 24 }} />
+          <Badge count={openTasks} size="small">
+            <RobotOutlined style={{ fontSize: 24 }} />
+          </Badge>
         </div>
       )}
 

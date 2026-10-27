@@ -4,6 +4,13 @@ from typing import Dict, List
 
 FULL_ACTIONS = ["create", "read", "update", "delete"]
 
+# 智能体中心通用权限：所有内部角色可用；ai.agent.admin 仅管理员
+INTERNAL_AGENT_PERMISSIONS: Dict[str, List[str]] = {
+    "ai.agent.self": ["read"],
+    "ai.agent.team": ["read"],
+}
+RESTRICTED_PERMISSION_ROLES = {"supplier", "api_caller", "share"}
+
 
 ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
     "admin": {
@@ -31,6 +38,9 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "ai.assistant_monitor": ["read"],
         "ai.assistant_config": ["read", "update"],
         "ai.execution_agent": ["read", "update"],
+        "ai.agent.self": ["read"],
+        "ai.agent.team": ["read"],
+        "ai.agent.admin": ["read", "update"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],
@@ -113,6 +123,10 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
 def merge_role_permission_additions(role_code: str, permissions: Dict[str, List[str]] | None) -> Dict[str, List[str]]:
     merged = deepcopy(permissions or {})
     additions = ROLE_PERMISSION_ADDITIONS.get(role_code, {})
+    # 动态岗位角色（岗位-* / orgX_posY）与其它内部角色一样需要通用基础权限；
+    # 供应商 / API 调用方 / 分享等受限角色不合并，避免越权。
+    if role_code not in RESTRICTED_PERMISSION_ROLES:
+        additions = {**INTERNAL_AGENT_PERMISSIONS, **additions}
     for resource, actions in additions.items():
         current = set(merged.get(resource, []))
         current.update(actions)

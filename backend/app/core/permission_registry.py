@@ -452,3 +452,38 @@ declare_permission(
     actions=["read", "create", "update", "convert"],
     route_path="/purchase-requisitions", sort_order=15,
 )
+
+# 智能体中心（2026-10-26）— 一人一智能体、主管任务闭环
+declare_permission(
+    "ai.agent.self", "智能体中心",
+    module="agent", actions=["read"], sort_order=15,
+)
+declare_permission(
+    "ai.agent.self.me", "我的智能体",
+    module="agent", parent_code="ai.agent.self", actions=["read"],
+    route_path="/agents/me", sort_order=1,
+)
+declare_permission(
+    "ai.agent.self.tasks", "我的任务",
+    module="agent", parent_code="ai.agent.self", actions=["read"],
+    route_path="/agents/tasks", sort_order=2,
+)
+declare_permission(
+    "ai.agent.team", "团队",
+    module="agent", parent_code="ai.agent.self", actions=["read"], sort_order=3,
+)
+declare_permission(
+    "ai.agent.team.tasks", "团队任务",
+    module="agent", parent_code="ai.agent.team", actions=["read"],
+    route_path="/agents/team", sort_order=1,
+)
+declare_permission(
+    "ai.agent.team.config", "团队配置",
+    module="agent", parent_code="ai.agent.team", actions=["read"],
+    route_path="/agents/team/config", sort_order=2,
+)
+declare_permission(
+    "ai.agent.admin", "智能体管理",
+    module="agent", parent_code="ai.agent.self", actions=["read", "update"],
+    route_path="/agents/admin", sort_order=4,
+)

@@ -453,6 +453,12 @@ class DatabaseInitializer:
                 "sender_name": "VARCHAR(64)",
                 "ref_no": "VARCHAR(64)",
             },
+            "assistant_run": {
+                "agent_id": "BIGINT",
+                "task_id": "BIGINT",
+                "conversation_id": "BIGINT",
+                "trigger": "VARCHAR(16) NOT NULL DEFAULT 'chat'",
+            },
         }
         # 删除已废弃的列
         drop_columns = {

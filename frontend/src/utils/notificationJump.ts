@@ -1,6 +1,7 @@
 export interface NotificationJumpItem {
   type: string
   ref_type?: string | null
+  ref_id?: number | null
   ref_no?: string | null
 }
 
@@ -26,6 +27,14 @@ export function notificationJump(item: NotificationJumpItem): NotificationJumpTa
       label: `订单 ${refNo}`,
       path: `/orders/${encodeURIComponent(refNo)}`,
     }
+  }
+  if (item.type === 'agent_task' || item.type === 'agent_analysis') {
+    if (item.ref_type === 'agent_task' && item.ref_id) {
+      return { label: '任务详情', path: `/agents/tasks/${item.ref_id}` }
+    }
+  }
+  if (item.type === 'agent_config' || item.type === 'agent_hierarchy') {
+    return { label: '我的智能体', path: '/agents/me' }
   }
   return null
 }

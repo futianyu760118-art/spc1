@@ -104,6 +104,22 @@ const ConfirmationCard: React.FC<{
 }> = ({ confirmation, confirming, onConfirm, onCancel }) => {
   const pending = confirmation.status === 'pending'
 
+  const isOrder = !confirmation.action_type || confirmation.action_type === 'order_update'
+  const preview = confirmation.preview || {}
+  const previewRows: Array<[string, any]> = [
+    ['接收人', preview.assignee_name],
+    ['任务标题', preview.task_title],
+    ['截止时间', preview.due_at],
+    ['优先级', preview.priority],
+    ['业务对象', preview.biz_title],
+    ['新接收人', preview.new_assignee_name],
+    ['成员', preview.target_name || preview.agent_name],
+    ['原因', preview.reason],
+    ['汇报摘要', preview.summary],
+    ['授予能力', Array.isArray(preview.granted) ? preview.granted.join(', ') : preview.granted],
+    ['禁用能力', Array.isArray(preview.disabled) ? preview.disabled.join(', ') : preview.disabled],
+  ].filter(([, value]) => value !== undefined && value !== null && value !== '') as Array<[string, any]>
+
   return (
     <div
       style={{
@@ -117,10 +133,10 @@ const ConfirmationCard: React.FC<{
       }}
     >
       <div style={{ fontWeight: 600, color: '#92400e', marginBottom: 6 }}>
-        写操作确认 — 订单 {confirmation.order_no}
-        <span style={{ marginLeft: 6, fontWeight: 400, color: '#b45309', fontSize: 11 }}>（不可撤销）</span>
+        {isOrder ? `写操作确认 — 订单 ${confirmation.order_no}` : `操作确认 — ${preview.title || confirmation.action_type}`}
+        <span style={{ marginLeft: 6, fontWeight: 400, color: '#b45309', fontSize: 11 }}>（服务端将再次校验权限与状态）</span>
       </div>
-      {confirmation.fields.map(f => (
+      {isOrder ? confirmation.fields.map(f => (
         <div key={f.field} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, color: '#78350f', flexWrap: 'wrap' }}>
           <span style={{ minWidth: 84, fontWeight: 500 }}>{WRITE_FIELD_LABELS[f.field] || f.field}</span>
           <code style={{ background: '#fef3c7', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>
@@ -130,6 +146,11 @@ const ConfirmationCard: React.FC<{
           <code style={{ background: '#fde68a', padding: '1px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
             {f.new_value ?? '（空）'}
           </code>
+        </div>
+      )) : previewRows.map(([label, value]) => (
+        <div key={label} style={{ display: 'flex', gap: 6, marginBottom: 3, color: '#78350f', flexWrap: 'wrap' }}>
+          <span style={{ minWidth: 84, fontWeight: 500 }}>{label}</span>
+          <span style={{ wordBreak: 'break-all' }}>{String(value)}</span>
         </div>
       ))}
 
@@ -171,7 +192,7 @@ const ConfirmationCard: React.FC<{
         />
       )}
       {confirmation.status === 'cancelled' && (
-        <div style={{ marginTop: 6, color: '#94a3b8' }}>已取消，未产生任何写入</div>
+        <div style={{ marginTop: 6, color: '#94a3b8' }}>已取消，未产生任何变更</div>
       )}
     </div>
   )

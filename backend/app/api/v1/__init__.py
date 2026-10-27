@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import approval, assistant, basicdata, common, dashboard, exception, external, masterdata, material, mrp, order, production, purchase, quality, rules, system, writeback
+from app.api.v1 import agent, approval, assistant, basicdata, common, dashboard, exception, external, masterdata, material, mrp, order, production, purchase, quality, rules, system, writeback
 
 api_router = APIRouter()
 
@@ -88,6 +88,9 @@ api_router.include_router(external.docs_router, prefix="/external", include_in_s
 api_router.include_router(common.files_router, prefix="/files", tags=["文件"])
 api_router.include_router(common.health.router, prefix="/common", tags=["common"])
 api_router.include_router(assistant.assistant_router, prefix="/assistant", tags=["智能助手"])
+
+# 智能体中心（一人一智能体 + 主管任务闭环）
+api_router.include_router(agent.router, prefix="/agents", tags=["智能体中心"])
 
 # Purchase center
 api_router.include_router(purchase.price_change_router, prefix="/purchase/price-change", tags=["采购中心-调价单"])

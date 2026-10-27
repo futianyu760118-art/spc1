@@ -19,9 +19,10 @@ from app.core.database import get_db
 from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.schemas.common import ResponseModel
 from app.services import reasoning as reasoning_service
+from app.services.agent.capabilities import CONFIGURABLE_CAPABILITIES
 
 from ..common import ExternalEnvelopeError
-from ..deps import external_auth
+from ..deps import external_auth, get_actor_scope
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -137,6 +138,15 @@ async def reasoning_analyze(
     db: AsyncSession = Depends(get_db),
     key: DataSupplyApiKey = Depends(external_auth("reasoning.analyze")),
 ):
+    actor_capabilities = getattr(request.state, "actor_capabilities", None)
+    if actor_capabilities is not None:
+        allowed_types = set()
+        for code in actor_capabilities:
+            cap = CONFIGURABLE_CAPABILITIES.get(code)
+            if cap:
+                allowed_types |= set(cap.reasoning_types)
+        if payload.task_type not in allowed_types:
+            raise HTTPException(status_code=403, detail="当前智能体没有该推理任务类型的能力")
     if reasoning_service.running_count() >= get_settings().REASONING_MAX_CONCURRENT:
         raise HTTPException(
             status_code=429,
@@ -156,6 +166,7 @@ async def reasoning_analyze(
             api_key_name=key.key_name,
             app_key=key.app_key,
             request_id=payload.request_id,
+            scope=get_actor_scope(request),
         )
     except reasoning_service.ReasoningError as e:
         raise ExternalEnvelopeError(e.code, e.message)

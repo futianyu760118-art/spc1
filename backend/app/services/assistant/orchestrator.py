@@ -18,8 +18,15 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from app.core.config import get_settings
+from app.models.basicdata.user import SysUser
 from app.services.ai import ai_service, ChatMessage, ChatOptions
 from app.services.ai_config import ASSISTANT_SCOPE, get_scope_config, render_system_prompt
+from app.services.agent import task_tools
+from app.services.agent.actor import issue_actor_token
+from app.services.agent.business import resolve_business_object
+from app.services.agent.capabilities import allowed_query_paths, allowed_reasoning_types
+from app.services.agent.context import AgentContext, load_agent_context
+from app.services.agent.task_service import TaskError
 from app.services.assistant import session_store, write_confirmation
 from app.services.assistant.agent_tools import (
     AGENT_TOOL_LABELS,
@@ -356,6 +363,8 @@ def _step_summary(tool_name: str, args: Dict[str, Any]) -> str:
         return f"分析 {args.get('task_type') or ''}"
     if tool_name == "hub_query":
         return f"查询外部系统 {args.get('capability') or ''}"
+    if task_tools.is_task_tool(tool_name):
+        return f"执行任务操作 {tool_name}"
     return f"修改订单 {args.get('order_no') or ''}"
 
 
@@ -510,6 +519,10 @@ async def run_reaction(
     task_id: Optional[str] = None,
     step_id_base: int = 0,
     gap_notify: bool = True,
+    db: Any = None,
+    agent_context: Optional[AgentContext] = None,
+    agent_task_id: Optional[int] = None,
+    task_context_text: str = "",
 ) -> AsyncIterator[Tuple[str, Dict[str, Any]]]:
     """AI 自主 ReAct 循环：LLM 逐步决定调用哪个智能体，编排器负责校验、执行、拦截与审计。
 
@@ -536,7 +549,27 @@ async def run_reaction(
     diagnostics: Dict[str, Any] = {"llm_rounds": [], "tools": [], "errors": [], "total_tokens": None}
     stats: Dict[str, Any] = {"tools_called": [], "tool_rounds": 0, "total_tokens": None}
 
-    tools_schema = build_agent_tools_schema(include_order=include_order_tool, exclude=disabled_tools or set())
+    actor_token = ""
+    if agent_context is not None:
+        actor_token = issue_actor_token(
+            user_id=int(agent_context.user.id),
+            agent_id=int(agent_context.agent.id),
+            username=agent_context.user.username or "",
+            role=agent_context.role_code,
+        )
+    effective = agent_context.effective_capabilities if agent_context else None
+    include_order = include_order_tool and (
+        effective is None or "write.order_schedule" in effective
+    )
+    tools_schema = build_agent_tools_schema(
+        include_order=include_order,
+        exclude=disabled_tools or set(),
+        allowed_tools=agent_context.allowed_tools if agent_context else None,
+        query_paths=allowed_query_paths(effective) if effective is not None else None,
+        reasoning_types=allowed_reasoning_types(effective) if effective is not None else None,
+    )
+    if agent_context is not None:
+        tools_schema.extend(task_tools.build_task_tools_schema(agent_context.allowed_tools))
 
     messages: List[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
     for msg in history[-10:]:
@@ -678,8 +711,20 @@ async def run_reaction(
         # ── 闸门 2：步数与循环 ──
         tool_key = f"{tool_name}:{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}"
         block_reason: Optional[str] = None
-        if tool_name not in CAPABILITY_BY_TOOL:
+        if tool_name not in CAPABILITY_BY_TOOL and not task_tools.is_task_tool(tool_name):
             block_reason = f"工具 {tool_name} 不在能力目录内，请改用系统提供的智能体工具"
+        elif task_tools.is_task_tool(tool_name) and (db is None or agent_context is None):
+            block_reason = "任务工具仅在智能体中心启用时可用"
+        elif tool_name == "call_query_agent" and effective is not None:
+            if args.get("path") not in allowed_query_paths(effective):
+                block_reason = "当前智能体没有该查询路径的能力，请更换查询范围"
+        elif tool_name == "call_reasoning_agent" and effective is not None:
+            if args.get("task_type") not in allowed_reasoning_types(effective):
+                block_reason = "当前智能体没有该推理能力，请更换分析类型"
+        elif tool_name == "call_order_agent" and effective is not None and "write.order_schedule" not in effective:
+            block_reason = "当前智能体没有订单写入能力"
+        elif tool_name == "hub_query" and effective is not None:
+            block_reason = "Hub 跨系统查询首期未开放给个人智能体"
         elif agent_calls >= lim["max_agent_calls"]:
             block_reason = (
                 f"智能体调用次数已达上限（{lim['max_agent_calls']} 次），"
@@ -715,6 +760,104 @@ async def run_reaction(
             messages.append(_tool_result_msg(tc.id, {"error": block_reason, "intercepted": True}))
             continue
 
+        # ── 任务工具：确认类先出确认卡，直接类立即执行 ──
+        if task_tools.is_task_tool(tool_name):
+            invalid = task_tools.validate_task_tool_input(tool_name, args)
+            if invalid:
+                step = _new_step(_next_step_id(), tool_name, args, status="blocked", error=invalid)
+                steps.append(step)
+                yield ("step_started", {"step": step})
+                yield ("step_completed", {"step": step})
+                messages.append(_assistant_tool_msg(result.text or "", [tc], result.thinking))
+                messages.append(_tool_result_msg(tc.id, {"error": invalid, "intercepted": True}))
+                continue
+
+            if task_tools.requires_confirmation(tool_name):
+                try:
+                    prepared = await task_tools.prepare_confirmation(db, agent_context, tool_name, args)
+                except TaskError as exc:
+                    step = _new_step(_next_step_id(), tool_name, args, status="blocked", error=exc.message)
+                    steps.append(step)
+                    yield ("step_started", {"step": step})
+                    yield ("step_completed", {"step": step})
+                    messages.append(_assistant_tool_msg(result.text or "", [tc], result.thinking))
+                    messages.append(_tool_result_msg(tc.id, {"error": exc.message, "intercepted": True}))
+                    continue
+                preview = prepared["preview"]
+                step = _new_step(
+                    _next_step_id(), tool_name, args,
+                    status="pending_confirmation",
+                    summary=preview.get("title") or tool_name,
+                )
+                steps.append(step)
+                yield ("step_started", {"step": step})
+                yield ("step_completed", {"step": step})
+                record = await write_confirmation.create_confirmation({
+                    "session_id": session_id,
+                    "trace_id": trace_id,
+                    "task_id": task_id,
+                    "user_id": user_id,
+                    "agent_id": agent_context.agent.id,
+                    "message": message,
+                    "action_type": tool_name,
+                    "action_data": prepared["action_data"],
+                    "preview": preview,
+                    "agent_task_id": agent_task_id,
+                    "model_override": model_override,
+                })
+                confirmation_payload = {
+                    "confirmation_id": record["confirmation_id"],
+                    "action_type": tool_name,
+                    "preview": preview,
+                    "created_at": record["created_at"],
+                    "expires_at": record["expires_at"],
+                    "status": "pending",
+                }
+                pre_text = _strip_think_tags(result.text or "") or (
+                    f"已生成「{preview.get('title') or tool_name}」确认卡，请核对后确认执行或取消。"
+                )
+                if pre_text:
+                    yield ("delta", {"text": pre_text})
+                yield ("confirmation_required", confirmation_payload)
+                yield ("done", _done_payload(pre_text, confirmation=confirmation_payload))
+                return
+
+            step = _new_step(
+                _next_step_id(), tool_name, args, status="running",
+                summary=_step_summary(tool_name, args),
+            )
+            steps.append(step)
+            yield ("step_started", {"step": step})
+            tool_start = time.perf_counter()
+            try:
+                task_result = await task_tools.execute_direct_tool(db, agent_context, tool_name, args)
+                outcome_ok = True
+                outcome_error = None
+            except Exception as exc:  # noqa: BLE001 — 工具失败不中断对话
+                task_result = None
+                outcome_ok = False
+                outcome_error = getattr(exc, "message", str(exc))
+            duration_ms = round((time.perf_counter() - tool_start) * 1000, 2)
+            step["duration_ms"] = duration_ms
+            step["status"] = "completed" if outcome_ok else "failed"
+            if outcome_error:
+                step["error"] = outcome_error
+            yield ("step_completed", {"step": step})
+            trimmed = (
+                trim_result(task_result or {}, max_items=lim["trim_max_items"], max_chars=lim["trim_max_chars"])
+                if outcome_ok else {"error": outcome_error}
+            )
+            diagnostics["tools"].append({
+                "name": tool_name, "status": step["status"], "duration_ms": duration_ms,
+            })
+            agent_calls += 1
+            consecutive_same_agent = consecutive_same_agent + 1 if tool_name == last_tool_name else 1
+            last_tool_name = tool_name
+            last_tool_key = tool_key
+            messages.append(_assistant_tool_msg(result.text or "", [tc], result.thinking))
+            messages.append(_tool_result_msg(tc.id, trimmed))
+            continue
+
         # ── 闸门 3：写操作确认 ──
         if tool_name == "call_order_agent":
             invalid = validate_tool_input(tool_name, args)
@@ -748,9 +891,14 @@ async def run_reaction(
             steps.append(step)
             yield ("step_started", {"step": step})
             step_start = time.perf_counter()
+            old_kwargs = {
+                "operator_user_id": user_id, "trace_id": session_id,
+                "task_id": task_id, "step_id": step["step_id"],
+            }
+            if actor_token:
+                old_kwargs["actor_token"] = actor_token
             old = await query_order_current_fields(
-                args.get("order_no") or "", operator_user_id=user_id, trace_id=session_id,
-                task_id=task_id, step_id=step["step_id"],
+                args.get("order_no") or "", **old_kwargs,
             )
             step["duration_ms"] = round((time.perf_counter() - step_start) * 1000, 2)
             yield ("step_completed", {"step": step})
@@ -775,6 +923,9 @@ async def run_reaction(
                 "old_values_missing": bool(old.get("missing")),
                 "biz_type": "order",
                 "action": "update",
+                "action_type": "order_update",
+                "agent_id": agent_context.agent.id if agent_context else None,
+                "agent_task_id": agent_task_id,
                 "old_row": old.get("row") or {},
                 "model_override": model_override,
             })
@@ -832,10 +983,13 @@ async def run_reaction(
             started_at=now_iso(), task_id=task_id, step_id=step["step_id"], tool=tool_name,
         )
         tool_start = time.perf_counter()
-        outcome = await execute_agent_tool(
-            tool_name, args, operator_user_id=user_id, trace_id=session_id,
-            task_id=task_id, step_id=step["step_id"],
-        )
+        tool_kwargs = {
+            "operator_user_id": user_id, "trace_id": session_id,
+            "task_id": task_id, "step_id": step["step_id"],
+        }
+        if actor_token:
+            tool_kwargs["actor_token"] = actor_token
+        outcome = await execute_agent_tool(tool_name, args, **tool_kwargs)
         duration_ms = round((time.perf_counter() - tool_start) * 1000, 2)
         step["duration_ms"] = duration_ms
         if outcome.get("ok"):
@@ -975,6 +1129,122 @@ async def _notify_write_result(
                        biz_type, biz_no, e)
 
 
+async def _prepare_order_write_actor(
+    db: Any, user_id: str, order_no: str, expected_agent_id: Optional[int] = None,
+) -> str:
+    """确认订单写操作前：校验智能体可用与订单可见，签发短时 actor token。"""
+    if db is None or not get_settings().AGENT_TASK_ENABLED:
+        return ""
+    user = await db.get(SysUser, int(user_id))
+    if not user:
+        return ""
+    ctx = await load_agent_context(db, user, use_cache=False)
+    if ctx.agent.status != "active":
+        raise TaskError("智能体已禁用，无法执行订单写操作", 403)
+    if expected_agent_id and int(ctx.agent.id) != int(expected_agent_id):
+        raise TaskError("确认单与当前智能体不匹配，请重新发起", 403)
+    await resolve_business_object(db, ctx.scope, "order", order_no)
+    return issue_actor_token(
+        user_id=int(user.id),
+        agent_id=int(ctx.agent.id),
+        username=user.username or "",
+        role=ctx.role_code,
+    )
+
+
+def _confirmation_success_text(action_type: str, result: Dict[str, Any]) -> str:
+    task = result.get("task") or {}
+    if action_type == "assign_task":
+        return f"任务已派发：{task.get('task_no', '')} {task.get('title', '')}，截止 {task.get('due_at') or ''}。"
+    if action_type == "update_task":
+        return f"任务 {task.get('task_no', '')} 已更新。"
+    if action_type == "reassign_task":
+        return f"任务 {task.get('task_no', '')} 已改派。"
+    if action_type == "cancel_task":
+        return f"任务 {task.get('task_no', '')} 已取消。"
+    if action_type == "return_task":
+        return f"任务 {task.get('task_no', '')} 已退回重做。"
+    if action_type == "submit_task_report":
+        return f"任务 {task.get('task_no', '')} 汇报已提交，任务已完成。"
+    if action_type == "add_subordinate":
+        subordinate = result.get("subordinate") or {}
+        return f"已添加直属成员：{subordinate.get('display_name') or subordinate.get('user_id')}。"
+    if action_type == "update_subordinate_agent":
+        return f"子智能体配置已更新（智能体 {result.get('agent_id')}），已通知对方。"
+    return "操作已执行。"
+
+
+async def _resolve_agent_task_confirmation(
+    db: Any,
+    record: Dict[str, Any],
+    action: str,
+    current_user_id: str,
+    action_type: str,
+) -> Dict[str, Any]:
+    """确认/取消任务类确认单；失败返回 code=0 + status=failed 供前端展示原因。"""
+    confirmation_id = str(record.get("confirmation_id") or "")
+    session_id = str(record.get("session_id") or "")
+    preview = record.get("preview") or {}
+    if action == "cancel":
+        text = f"已取消「{preview.get('title') or action_type}」，未产生任何变更。"
+        await _append_session_note(session_id, text)
+        return {
+            "code": 0,
+            "message": "已取消，未执行任何变更",
+            "data": {
+                "confirmation": {
+                    "confirmation_id": confirmation_id,
+                    "action_type": action_type,
+                    "preview": preview,
+                    "status": "cancelled",
+                },
+                "reply": {"text": text, "cards": [], "steps": [], "provider": "system"},
+            },
+        }
+
+    action_data = record.get("action_data") or {}
+    try:
+        result = await task_tools.execute_confirmed_action(
+            db, user_id=int(current_user_id), action_data=action_data,
+            expected_agent_id=record.get("agent_id"),
+        )
+    except Exception as exc:
+        error = getattr(exc, "message", str(exc))
+        text = f"确认执行失败：{error}"
+        await _append_session_note(session_id, text)
+        return {
+            "code": 0,
+            "message": error,
+            "data": {
+                "confirmation": {
+                    "confirmation_id": confirmation_id,
+                    "action_type": action_type,
+                    "preview": preview,
+                    "status": "failed",
+                    "error": error,
+                },
+                "reply": {"text": text, "cards": [], "steps": [], "provider": "system"},
+            },
+        }
+
+    text = _confirmation_success_text(action_type, result)
+    await _append_session_note(session_id, text)
+    return {
+        "code": 0,
+        "message": "操作已执行",
+        "data": {
+            "confirmation": {
+                "confirmation_id": confirmation_id,
+                "action_type": action_type,
+                "preview": preview,
+                "status": "executed",
+                "result": result,
+            },
+            "reply": {"text": text, "cards": [], "steps": [], "provider": "system"},
+        },
+    }
+
+
 async def resolve_confirmation(
     db: Any,
     confirmation_id: str,
@@ -994,6 +1264,12 @@ async def resolve_confirmation(
     record_user = str(record.get("user_id") or "")
     if record_user and str(current_user_id or "") and record_user != str(current_user_id):
         return {"code": 403, "message": "只有发起该写操作的用户才能确认或取消"}
+
+    action_type = str(record.get("action_type") or "order_update")
+    if action_type != "order_update":
+        return await _resolve_agent_task_confirmation(
+            db, record, action, current_user_id, action_type,
+        )
 
     session_id = str(record.get("session_id") or "")
     trace_id = str(record.get("trace_id") or "")
@@ -1050,6 +1326,30 @@ async def resolve_confirmation(
             },
         }
 
+    # 确认时重新校验智能体状态与订单范围，并签发新的 actor token
+    try:
+        actor_token = await _prepare_order_write_actor(
+            db, record_user or current_user_id, order_no, record.get("agent_id"),
+        )
+    except Exception as exc:
+        error = f"确认执行前校验失败：{getattr(exc, 'message', str(exc))}"
+        await _append_session_note(session_id, error)
+        return {
+            "code": 0,
+            "message": error,
+            "data": {
+                "confirmation": {
+                    "confirmation_id": confirmation_id,
+                    "action_type": "order_update",
+                    "order_no": order_no,
+                    "fields": fields_payload,
+                    "status": "failed",
+                    "error": error,
+                },
+                "reply": {"text": error, "cards": [], "steps": [], "provider": "system"},
+            },
+        }
+
     # 执行写入（不重试）
     started_at = now_iso()
     start = time.perf_counter()
@@ -1059,11 +1359,16 @@ async def resolve_confirmation(
         task_id=task_id, step_id=order_step_id, tool="call_order_agent",
         confirmation_id=confirmation_id,
     )
+    dispatch_kwargs = {
+        "timeout": TOOL_TIMEOUT_S["call_order_agent"],
+        "operator_user_id": record_user or current_user_id,
+    }
+    if actor_token:
+        dispatch_kwargs["actor_token"] = actor_token
     dispatch = await call_agent_run(
         AGENT_SPECS["order"],
         {"order_no": order_no, "fields": fields},
-        timeout=TOOL_TIMEOUT_S["call_order_agent"],
-        operator_user_id=record_user or current_user_id,
+        **dispatch_kwargs,
     )
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     if not dispatch.get("online"):
@@ -1102,6 +1407,7 @@ async def resolve_confirmation(
 
     confirmation_info = {
         "confirmation_id": confirmation_id,
+        "action_type": "order_update",
         "order_no": order_no,
         "fields": fields_payload,
         "status": "executed" if error is None else "failed",

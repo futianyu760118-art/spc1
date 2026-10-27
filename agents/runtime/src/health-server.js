@@ -48,6 +48,9 @@ async function handleLocalRun(req, res, { log, connection, capabilities, onLocal
   const operator = body && typeof body === "object" && body.operator && typeof body.operator === "object"
     ? body.operator
     : null;
+  const actorToken = body && typeof body === "object" && typeof body.actorToken === "string"
+    ? body.actorToken
+    : null;
   if (typeof capability !== "string" || !capabilities.some((c) => c.name === capability)) {
     send(400, { status: "unknown_capability" });
     return;
@@ -60,6 +63,10 @@ async function handleLocalRun(req, res, { log, connection, capabilities, onLocal
     send(409, { status: "busy" });
     return;
   }
+  if (!actorToken) {
+    send(400, { status: "missing_actor_token" });
+    return;
+  }
   if (typeof onLocalRun !== "function") {
     send(503, { status: "local_run_disabled" });
     return;
@@ -68,7 +75,7 @@ async function handleLocalRun(req, res, { log, connection, capabilities, onLocal
     typeof body.runId === "string" && body.runId.trim() ? body.runId.trim() : `local-${crypto.randomUUID()}`;
   log("info", "local_run_started", { runId, capability });
   try {
-    const result = await onLocalRun(runId, capability, input, operator);
+    const result = await onLocalRun(runId, capability, input, operator, actorToken);
     send(200, { ok: true, runId, result: result ?? {} });
   } catch (e) {
     log("info", "local_run_failed", {

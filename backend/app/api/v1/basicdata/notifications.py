@@ -48,6 +48,10 @@ TYPE_LABELS = {
     "assistant_create": "助手新增",
     "assistant_delete": "助手删除",
     "assistant_gap": "助手提醒",
+    "agent_task": "智能体任务",
+    "agent_analysis": "任务分析",
+    "agent_config": "智能体配置",
+    "agent_hierarchy": "团队关系",
 }
 
 

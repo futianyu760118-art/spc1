@@ -16,7 +16,7 @@ from app.schemas.common import ResponseModel
 from app.services.material.kitting_calc_service import KITTING_RESULT_SYNC_TYPES
 
 from ..common import ExternalDataPage, PageParamsMixin
-from ..deps import external_auth
+from ..deps import external_auth, get_actor_scope
 from ..freshness import freshness_meta, sync_only_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
@@ -108,6 +108,9 @@ async def kitting_results_list(
     if q.allocation_run_id:
         conditions.append(KittingResult.allocation_run_id == q.allocation_run_id)
     conditions.append(KittingResult.is_deleted == (1 if q.is_deleted else 0))
+    actor_scope = get_actor_scope(request)
+    if actor_scope is not None:
+        conditions.append(KittingResult.demand_no.in_(actor_scope.visible_order_no_select()))
     if q.updated_after:
         conditions.append(KittingResult.updated_at >= q.updated_after)
     for cond in conditions:
@@ -221,6 +224,9 @@ async def kitting_shortages_list(
     if q.alert_status:
         conditions.append(KittingShortage.alert_status.in_([s.strip() for s in q.alert_status.split(",") if s.strip()]))
     conditions.append(KittingShortage.is_deleted == (1 if q.is_deleted else 0))
+    actor_scope = get_actor_scope(request)
+    if actor_scope is not None:
+        conditions.append(KittingShortage.demand_no.in_(actor_scope.visible_order_no_select()))
     if q.updated_after:
         conditions.append(KittingShortage.updated_at >= q.updated_after)
     for cond in conditions:
@@ -348,6 +354,9 @@ async def kitting_demands_list(
         conditions.append(SaleOrderLine.product_code == q.product_code)
     if q.updated_after:
         conditions.append(SaleOrderLine.updated_at >= q.updated_after)
+    actor_scope = get_actor_scope(request)
+    if actor_scope is not None:
+        conditions.append(SaleOrderLine.order_no.in_(actor_scope.visible_order_no_select()))
     for cond in conditions:
         query = query.where(cond)
         count_query = count_query.where(cond)

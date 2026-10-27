@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.agent.context import AgentContext
+from app.services.agent.prompt import build_agent_system_prompt
 from app.services.ai import ai_service, ChatMessage, ChatOptions
 from app.services.ai_config import (
     ASSISTANT_CONFIG_DEFS,
@@ -48,9 +50,12 @@ INTENT_RECOGNITION_PROMPT = """你是一个意图识别助手。分析用户的�
    - "有哪些逾期的订单？"
    - "显示所有高风险订单"
    - "订单HJ202604-0018-0086齐套了吗？"
-   - "分析这个订单的交期风险"
-   - "把订单HJ202604-0018-0086的出货计划改到2026-11-01"
-   - "查一下这个产品的BOM明细"
+    - "分析这个订单的交期风险"
+    - "把订单HJ202604-0018-0086的出货计划改到2026-11-01"
+    - "查一下这个产品的BOM明细"
+    - "让张三跟进订单HJ202604-0018-0086的交期，周五前给我结论"
+    - "查看我的任务 / 团队这周怎么样 / 催办一下这个任务"
+    - "把李四加进我的团队，并给他配置订单查询能力"
 
 2. ANALYZE_HISTORY - 仅分析聊天历史中已有的数据（不需要调用智能体）
    示例：
@@ -68,6 +73,7 @@ INTENT_RECOGNITION_PROMPT = """你是一个意图识别助手。分析用户的�
 - 如果用户明确提到要"查询"、"搜索"、"显示"、"找"某个具体的订单号、供应商、物料等，判断为 QUERY_DATA
 - 如果用户要求"分析"、"评估"某业务对象的风险/交期/齐套/品质/生产，判断为 QUERY_DATA
 - 如果用户要求修改订单数据（出货计划、发货完成、验货、上线时间），判断为 QUERY_DATA
+- 如果用户提到任务、派活、团队成员、汇报、催办、改派、退回等主管/员工任务闭环操作，判断为 QUERY_DATA
 - 如果用户使用"这些"、"上面"、"刚才"等指代词，且要求对已有数据做分析、总结、对比，判断为 ANALYZE_HISTORY
 - 其他情况判断为 GENERAL_CHAT
 
@@ -100,7 +106,10 @@ async def _recognize_intent(
     model_override: Optional[str] = None,
 ) -> str:
     try:
-        messages = [ChatMessage(role="system", content=intent_prompt or INTENT_RECOGNITION_PROMPT)]
+        intent_system = intent_prompt or INTENT_RECOGNITION_PROMPT
+        if intent_prompt:
+            intent_system += "\n\n补充：涉及任务、派活、团队成员、汇报、催办、改派、退回等操作时判断为 QUERY_DATA。"
+        messages = [ChatMessage(role="system", content=intent_system)]
         recent_history = history[-6:] if len(history) > 6 else history
         for msg in recent_history:
             role = msg.get("role")
@@ -145,6 +154,10 @@ async def run(
     conversation_history: Optional[List[Dict[str, Any]]] = None,
     trace_id: str = "",
     user_id: str = "",
+    agent_context: Optional[AgentContext] = None,
+    agent_task_id: Optional[int] = None,
+    conversation_id: Optional[int] = None,
+    task_context_text: str = "",
 ) -> AssistantReply:
     """运行助手：意图识别 → 闲聊直答 / 任务交本地编排器（ReAct）"""
 
@@ -153,6 +166,8 @@ async def run(
     rt = await _load_runtime_config(db)
     disabled = set(rt.get("disabled_tools") or [])
     system_prompt = resolve_system_prompt(rt.get("system_prompt"), disabled)
+    if agent_context is not None:
+        system_prompt = build_agent_system_prompt(system_prompt, agent_context, task_context_text)
     intent_prompt = (rt.get("intent_prompt") or "").strip() or None
     model_override = (rt.get("model_name") or "").strip() or None
 
@@ -187,10 +202,11 @@ async def run(
                 text="AI 服务暂不可用，请联系管理员配置 AI 服务。",
                 suggestions=[],
                 provider="rule_based",
+                conversation_id=conversation_id,
             )
 
         if _check_cancelled(session_id, run_logger):
-            return AssistantReply(text="对话已取消。", provider=provider_name)
+            return AssistantReply(text="对话已取消。", provider=provider_name, conversation_id=conversation_id)
 
         history = conversation_history or []
         if session_id and not history:
@@ -240,6 +256,7 @@ async def run(
                     await run_logger.log("error", {"stage": "llm", "message": str(e)})
                 return AssistantReply(
                     text="AI 服务调用失败，请稍后重试。", suggestions=[], provider=provider_name,
+                    conversation_id=conversation_id,
                 )
             report_model_call(
                 session_id, "生成回复", provider=provider_name, model_override=model_override,
@@ -263,6 +280,7 @@ async def run(
                 cards=[],
                 suggestions=[],
                 provider=provider_name,
+                conversation_id=conversation_id,
                 diagnostics=diagnostics,
             )
 
@@ -282,6 +300,8 @@ async def run(
             disabled_tools=disabled, session_id=session_id, trace_id=trace_id, user_id=user_id,
             run_logger=run_logger, provider_name=provider_name,
             stream_final=False,
+            db=db, agent_context=agent_context, agent_task_id=agent_task_id,
+            task_context_text=task_context_text,
         ):
             if event == "delta":
                 text += data.get("text") or ""
@@ -310,7 +330,7 @@ async def run(
                 error_message = data.get("message")
 
         if cancelled_reason:
-            return AssistantReply(text="对话已取消。", provider=provider_name, diagnostics=diagnostics)
+            return AssistantReply(text="对话已取消。", provider=provider_name, diagnostics=diagnostics, conversation_id=conversation_id)
 
         if confirmation:
             text = text or "检测到订单写操作，已生成确认单：请核对「旧值 → 新值」后确认执行或取消。"
@@ -336,6 +356,7 @@ async def run(
             confirmation=confirmation,
             suggestions=[],
             provider=provider_name,
+            conversation_id=conversation_id,
             diagnostics=diagnostics,
         )
 

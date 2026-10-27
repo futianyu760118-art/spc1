@@ -27,7 +27,7 @@ from app.schemas.common import ResponseModel
 
 from ..common import ExternalDataPage, PageParamsMixin
 from ..freshness import freshness_meta, source_as_of
-from ..deps import external_auth
+from ..deps import external_auth, get_actor_scope
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -130,6 +130,12 @@ async def orders_list(
     page_size = min(max(q.page_size if q.page_size is not None else 20, 1), 200)
     query = select(SaleOrder)
     count_query = select(func.count()).select_from(SaleOrder)
+
+    actor_scope = get_actor_scope(request)
+    if actor_scope is not None:
+        scope_cond = actor_scope.order_condition()
+        query = query.where(scope_cond)
+        count_query = count_query.where(scope_cond)
 
     if q.order_no:
         query = query.where(SaleOrder.order_no == q.order_no)
@@ -286,6 +292,12 @@ async def order_details_list(
     ).outerjoin(SaleOrder, SaleOrderLine.sale_order_id == SaleOrder.id)
 
     count_query = select(func.count()).select_from(SaleOrderLine)
+
+    actor_scope = get_actor_scope(request)
+    if actor_scope is not None:
+        scope_cond = SaleOrderLine.order_no.in_(actor_scope.visible_order_no_select())
+        query = query.where(scope_cond)
+        count_query = count_query.where(scope_cond)
 
     if q.order_no:
         query = query.where(SaleOrderLine.order_no == q.order_no)

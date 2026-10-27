@@ -84,7 +84,7 @@ function createHttpClient(config, log) {
     }
   }
 
-  async function signedGet(path, endpointCode, params, { signal, timeoutMs = 15000 } = {}) {
+  async function signedGet(path, endpointCode, params, { signal, timeoutMs = 15000, headers = {} } = {}) {
     const queryString = buildQueryString(params);
     const url = `${config.platformBaseUrl}${path}${queryString ? `?${queryString}` : ""}`;
     let lastError;
@@ -92,7 +92,7 @@ function createHttpClient(config, log) {
       try {
         const response = await fetchOnce(
           url,
-          { method: "GET", headers: hmacHeaders(endpointCode, queryString) },
+          { method: "GET", headers: { ...hmacHeaders(endpointCode, queryString), ...headers } },
           timeoutMs,
           signal,
         );

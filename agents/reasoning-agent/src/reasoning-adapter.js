@@ -94,6 +94,7 @@ function createAdapter({ config, http, log }) {
       envelope = await http.signedPostEnvelope(ANALYZE_PATH, "reasoning.analyze", body, {
         signal: run.controller.signal,
         timeoutMs: config.reasoningTimeoutMs,
+        headers: run.actorToken ? { "X-Actor-Token": run.actorToken } : {},
       });
     } catch (e) {
       if (e.code === "ABORTED") return null;

@@ -101,7 +101,12 @@ async def call_agent_spec(
 
 
 async def call_agent_run(
-    spec: ExecutionAgentSpec, input: dict, *, timeout: float = 30.0, operator_user_id: str = ""
+    spec: ExecutionAgentSpec,
+    input: dict,
+    *,
+    timeout: float = 30.0,
+    operator_user_id: str = "",
+    actor_token: str = "",
 ) -> dict:
     """本地派单：POST /admin/run 同步执行一个 capability（不经 Hub）。
 
@@ -118,6 +123,8 @@ async def call_agent_run(
     payload: dict = {"capability": spec.capability, "input": input, "runId": f"local-{uuid4().hex}"}
     if operator_user_id:
         payload["operator"] = {"user_id": str(operator_user_id)}
+    if actor_token:
+        payload["actorToken"] = actor_token
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(

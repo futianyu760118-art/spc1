@@ -130,8 +130,18 @@ def _hub_query_tool_schema() -> Dict[str, Any]:
     }
 
 
-def build_agent_tools_schema(include_order: bool = True, exclude: Optional[set] = None) -> List[Dict[str, Any]]:
-    """生成 OpenAI function calling 工具清单；exclude 为运行时禁用工具名集合。"""
+def build_agent_tools_schema(
+    include_order: bool = True,
+    exclude: Optional[set] = None,
+    allowed_tools: Optional[set] = None,
+    query_paths: Optional[set] = None,
+    reasoning_types: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    """生成 OpenAI function calling 工具清单；exclude 为运行时禁用工具名集合。
+
+    allowed_tools / query_paths / reasoning_types 由 AgentContext 能力解析提供，
+    未提供时保持原有全量行为（兼容旧调用）。
+    """
     excluded = exclude or set()
     specs = [
         {
@@ -156,10 +166,21 @@ def build_agent_tools_schema(include_order: bool = True, exclude: Optional[set] 
             "description": "调用订单智能体：修改订单出货计划/发货完成/客户验货/上线时间。写操作不可撤销，执行前必须经用户确认，系统会先展示旧值→新值。",
             "parameters": _order_tool_schema(),
         })
+    if query_paths is not None:
+        for spec in specs:
+            if spec["name"] == "call_query_agent":
+                spec["parameters"] = _query_tool_schema()
+                spec["parameters"]["properties"]["path"]["enum"] = sorted(query_paths)
+    if reasoning_types is not None:
+        for spec in specs:
+            if spec["name"] == "call_reasoning_agent":
+                spec["parameters"] = _reasoning_tool_schema()
+                spec["parameters"]["properties"]["task_type"]["enum"] = sorted(reasoning_types)
     return [
         {"type": "function", "function": spec}
         for spec in specs
         if spec["name"] not in excluded
+        and (allowed_tools is None or spec["name"] in allowed_tools)
     ]
 
 
@@ -198,6 +219,7 @@ async def execute_agent_tool(
     trace_id: str = "",
     task_id: Optional[str] = None,
     step_id: Optional[int] = None,
+    actor_token: str = "",
 ) -> Dict[str, Any]:
     """直接执行只读智能体工具（query / reasoning）。
 
@@ -232,6 +254,7 @@ async def execute_agent_tool(
         task_input,
         timeout=TOOL_TIMEOUT_S[tool_name],
         operator_user_id=operator_user_id,
+        actor_token=actor_token,
     )
     duration_ms = round((time.perf_counter() - loop_start) * 1000, 2)
     if not dispatch.get("online"):
@@ -324,6 +347,7 @@ async def _run_hub_query(
 async def query_order_current_fields(
     order_no: str, *, operator_user_id: str = "", trace_id: str = "",
     task_id: Optional[str] = None, step_id: Optional[int] = None,
+    actor_token: str = "",
 ) -> Dict[str, Any]:
     """写确认前经查询智能体读取订单当前值（4 个可写字段）。
 
@@ -338,6 +362,7 @@ async def query_order_current_fields(
         trace_id=trace_id,
         task_id=task_id,
         step_id=step_id,
+        actor_token=actor_token,
     )
     if not outcome.get("ok"):
         return {"values": {f: None for f in ORDER_READBACK_FIELDS}, "missing": True,

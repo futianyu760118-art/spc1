@@ -133,6 +133,18 @@ test("admin run invokes onLocalRun and returns result", async () => {
   if (!server.listening) await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${port}`;
   try {
+    const missing = await fetch(`${baseUrl}/admin/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-token": "tok" },
+      body: JSON.stringify({
+        runId: "local-1",
+        capability: "query_control_platform",
+        input: { path: "/common/ping", params: {} },
+      }),
+    });
+    assert.equal(missing.status, 400);
+    assert.equal((await missing.json()).status, "missing_actor_token");
+
     const res = await fetch(`${baseUrl}/admin/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-admin-token": "tok" },
@@ -141,6 +153,7 @@ test("admin run invokes onLocalRun and returns result", async () => {
         capability: "query_control_platform",
         input: { path: "/common/ping", params: {} },
         operator: { user_id: "462" },
+        actorToken: "actor-test",
       }),
     });
     assert.equal(res.status, 200);
@@ -178,7 +191,11 @@ test("admin run maps adapter failure to 500 with code", async () => {
     const res = await fetch(`${baseUrl}/admin/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-admin-token": "tok" },
-      body: JSON.stringify({ capability: "query_control_platform", input: { path: "/x" } }),
+      body: JSON.stringify({
+        capability: "query_control_platform",
+        input: { path: "/x" },
+        actorToken: "actor-test",
+      }),
     });
     assert.equal(res.status, 500);
     const body = await res.json();

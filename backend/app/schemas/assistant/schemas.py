@@ -8,6 +8,8 @@ from pydantic import BaseModel
 class ChatMessageIn(BaseModel):
     message: str
     session_id: Optional[str] = None
+    conversation_id: Optional[int] = None
+    task_id: Optional[int] = None
     conversation_history: Optional[List[Dict[str, Any]]] = None
 
 
@@ -40,10 +42,12 @@ class WriteConfirmationField(BaseModel):
 
 
 class WriteConfirmationInfo(BaseModel):
-    """写操作确认单（前端确认卡片）"""
+    """写操作确认单（前端确认卡片；订单写与任务动作共用）"""
     confirmation_id: str
-    order_no: str
+    action_type: str = "order_update"
+    order_no: Optional[str] = None
     fields: List[WriteConfirmationField] = []
+    preview: Optional[Dict[str, Any]] = None
     created_at: str = ""
     expires_at: str = ""
     status: str = "pending"  # pending | confirmed | cancelled | executed | failed
@@ -58,6 +62,7 @@ class AssistantReply(BaseModel):
     cards: List[AssistantCard] = []
     suggestions: List[str] = []
     session_id: Optional[str] = None
+    conversation_id: Optional[int] = None
     provider: str = "rule_based"
     trace_id: Optional[str] = None
     steps: List[OrchestrationStep] = []
