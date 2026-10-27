@@ -35,6 +35,7 @@ async def test_provider_system_reads_catalog():
 
 def test_readable_error_maps_known_code():
     assert "借调单过多" in hub_client._readable_error("TOO_MANY_OPEN_ORDERS", "x")
+    assert "不能通过 Hub 调用本系统能力" in hub_client._readable_error("SELF_BORROW_FORBIDDEN", "x")
     assert "Hub 返回错误" in hub_client._readable_error("UNKNOWN_CODE", "x")
     assert hub_client._readable_error(None, "fallback") == "fallback"
 

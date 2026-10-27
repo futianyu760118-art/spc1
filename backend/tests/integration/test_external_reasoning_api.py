@@ -221,6 +221,7 @@ async def test_happy_path_with_evidence_validation(ext_client, external_keys, re
     # 用量透传（执行面 run_complete.usage → Hub 用量台账；假 LLM 用量为空 → 全 0）
     assert data["usage"]["modelId"] == data["llm"]["model"] or data["usage"]["modelId"] == ""
     assert set(data["usage"].keys()) == {"modelId", "tokensIn", "cachedTokens", "tokensOut"}
+    assert isinstance(data["duration_ms"], int)
 
     # 审计留痕：任务记录证明实际调用大模型（验收§五.2）
     from sqlalchemy import select
@@ -357,6 +358,7 @@ async def test_status_and_idempotent_cancel(ext_client, external_keys, reasoning
     assert view["status"] == "succeeded"
     assert view["llm_called"] is True
     assert view["summary"] == "存在缺料导致的延期风险"
+    assert isinstance(view["duration_ms"], int)
 
     # 已结束任务取消 → 幂等返回终态
     cancel_r = await signed_post(
@@ -399,6 +401,7 @@ async def test_duplicate_task_id_replays_succeeded(ext_client, external_keys, re
     assert body["data"]["idempotent_replay"] is True
     assert body["data"]["summary"] == first_data["summary"]
     assert body["data"]["request_id"] == "req-1"
+    assert isinstance(body["data"]["duration_ms"], int)
 
     count = (
         await db.execute(

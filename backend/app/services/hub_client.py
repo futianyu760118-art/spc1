@@ -27,6 +27,7 @@ _ERROR_MESSAGES = {
     "INVALID_ARGUMENT": "参数缺失或类型错误",
     "PAYLOAD_TOO_LARGE": "请求参数过大",
     "AUTH_REQUIRED": "Hub 系统鉴权失败",
+    "SELF_BORROW_FORBIDDEN": "不能通过 Hub 调用本系统能力",
     "SELF_INVOCATION_FORBIDDEN": "不能通过 Hub 调用本系统能力",
     "CAPABILITY_NOT_FOUND": "Hub 能力模板不存在",
     "ORDER_NOT_FOUND": "借调单不存在或无权查看",

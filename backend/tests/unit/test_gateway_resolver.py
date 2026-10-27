@@ -1,7 +1,8 @@
 """网关 resolver：agentId/userId/系统级/拒绝 + 审计行。"""
 
 import pytest
-from sqlalchemy import select
+import pytest_asyncio
+from sqlalchemy import delete, select
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
@@ -11,6 +12,14 @@ from app.services.agent.actor import decode_actor_token
 from app.services.agent.gateway_resolver import resolve_dispatch
 
 pytestmark = pytest.mark.usefixtures("_test_db")
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_dispatch_log(_test_db):
+    async with AsyncSessionLocal() as db:
+        await db.execute(delete(GatewayDispatchLog))
+        await db.commit()
+    yield
 
 
 @pytest.fixture
@@ -60,6 +69,49 @@ async def test_resolve_rejects_unknown_agent(user_id_field):
     assert result.ok is False
     assert result.reject_reason == "AGENT_NOT_FOUND"
     assert row.result == "rejected"
+
+
+async def test_resolve_rejects_unknown_user(user_id_field):
+    async with AsyncSessionLocal() as db:
+        result = await resolve_dispatch(
+            db, run_id="run-unknown-user", trace_id="trace-unknown-user",
+            capability="query_control_platform",
+            input_data={"path": "/external/orders/list"},
+            caller={"systemId": "control-platform", "userId": "999999999"},
+        )
+        await db.commit()
+        row = (await db.execute(
+            select(GatewayDispatchLog).where(GatewayDispatchLog.run_id == "run-unknown-user")
+        )).scalars().one()
+    assert result.ok is False
+    assert result.mode == "user"
+    assert result.reject_reason == "USER_NOT_FOUND"
+    assert result.user is None and result.agent is None
+    assert row.result == "rejected"
+    assert row.reject_reason == "USER_NOT_FOUND"
+    assert row.resolved_user_id is None
+
+
+async def test_unknown_agent_does_not_fall_back_to_user(user_id_field):
+    user_id = await _user_id_with_agent("qa_mgr")
+    async with AsyncSessionLocal() as db:
+        result = await resolve_dispatch(
+            db, run_id="run-agent-no-fallback", trace_id="trace-agent-no-fallback",
+            capability="query_control_platform",
+            input_data={"path": "/external/orders/list"},
+            caller={"systemId": "control-platform", "agentId": "AG-999999", "userId": str(user_id)},
+        )
+        await db.commit()
+        row = (await db.execute(
+            select(GatewayDispatchLog).where(GatewayDispatchLog.run_id == "run-agent-no-fallback")
+        )).scalars().one()
+    assert result.ok is False
+    assert result.mode == "user"
+    assert result.reject_reason == "AGENT_NOT_FOUND"
+    assert result.agent is None and result.user is None
+    assert row.result == "rejected"
+    assert row.reject_reason == "AGENT_NOT_FOUND"
+    assert row.resolved_user_id is None
 
 
 async def test_resolve_system_mode(user_id_field):

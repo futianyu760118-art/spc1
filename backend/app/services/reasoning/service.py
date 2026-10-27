@@ -667,7 +667,10 @@ async def _find_task_by_id(db: AsyncSession, task_id: str) -> Optional[Reasoning
 def _replay_existing_task(record: ReasoningTask) -> dict:
     """同 task_id 幂等回放：成功返回原结果；失败/取消/超时重放原错误；运行中拒绝重复执行。"""
     if record.status == "succeeded" and record.result_json:
-        return {**record.result_json, "idempotent_replay": True}
+        result = {**record.result_json, "idempotent_replay": True}
+        if result.get("duration_ms") is not None:
+            result["duration_ms"] = int(round(float(result["duration_ms"])))
+        return result
     if record.status == "running":
         raise TaskInProgressError(f"推理任务 {record.task_id} 正在执行中，请稍后查询状态")
     error = ReasoningError(
@@ -737,7 +740,7 @@ async def run_reasoning_task(
 
     async def _finalize(status: str, error: Optional[ReasoningError] = None):
         record.status = status
-        record.duration_ms = round((time.time() - started) * 1000, 1)
+        record.duration_ms = int(round((time.time() - started) * 1000))
         record.finished_at = datetime.now()
         record.evidence_json = evidence
         record.tool_calls_json = tool_calls
@@ -831,7 +834,7 @@ async def run_reasoning_task(
                 "cachedTokens": int(llm_usage.get("cached_tokens", 0) or 0),
                 "tokensOut": int(llm_usage.get("completion_tokens", 0) or 0),
             },
-            "duration_ms": round((time.time() - started) * 1000, 1),
+            "duration_ms": int(round((time.time() - started) * 1000)),
             "request_id": request_id,
         }
         await _finalize("succeeded")
@@ -865,7 +868,7 @@ def _serialize_record(record: ReasoningTask) -> dict:
         "llm_model": record.llm_model,
         "data_as_of": format_data_as_of(record.data_as_of),
         "data_confidence": record.data_confidence,
-        "duration_ms": float(record.duration_ms) if record.duration_ms is not None else None,
+        "duration_ms": int(round(float(record.duration_ms))) if record.duration_ms is not None else None,
         "created_at": record.created_at.isoformat() if record.created_at else None,
         "finished_at": record.finished_at.isoformat() if record.finished_at else None,
         "request_id": record.request_id,

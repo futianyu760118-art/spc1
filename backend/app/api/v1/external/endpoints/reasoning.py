@@ -102,7 +102,7 @@ class ReasoningResultOut(BaseModel):
     warnings: List[str] = []
     llm: Optional[ReasoningLLMMetaOut] = None
     usage: Optional[ReasoningUsageOut] = None
-    duration_ms: Optional[float] = None
+    duration_ms: Optional[int] = None
     idempotent_replay: bool = False
     request_id: Optional[str] = None
 
@@ -120,6 +120,7 @@ class ReasoningTaskViewOut(BaseModel):
     llm_provider: Optional[str] = None
     data_as_of: Optional[str] = None
     data_confidence: Optional[str] = None
+    duration_ms: Optional[int] = None
     cancellation_requested: Optional[bool] = None
 
 
