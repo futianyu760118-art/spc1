@@ -50,7 +50,7 @@ const buildUpphExplanation = (record: any) => {
   }
 
   if (source === 'formula') {
-    return `自动计算：${manpower} 人 x ${hourPrice} 元/小时 / ${gjje} = ${formulaUpph}`
+    return `每人 UPPH 自动计算：${hourPrice} 元/小时 ÷ ${gjje} = ${formulaUpph}；人数 ${manpower} 在排产时单独乘。`
   }
 
   if (source === 'oa') {
@@ -513,7 +513,7 @@ const ProductProcessCapacity: React.FC = () => {
         destroyOnHidden
       >
         <div style={{ marginBottom: 12, color: '#666' }}>
-          推荐按“车间 + 工序”配置人数和小时单价。保存后会自动重算相关产能并标记受影响排产。
+          UPPH 按“每人每小时”计算：小时单价 ÷ 工序单价。人数仅作参考，不参与 UPPH 公式；实际排产时按基础条件/排产弹窗的人数单独乘。保存后会自动重算相关产能并标记受影响排产。
         </div>
         <Space style={{ marginBottom: 12 }}>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAddConfig}>新增配置</Button>
@@ -544,7 +544,7 @@ const ProductProcessCapacity: React.FC = () => {
           <Form.Item name="process_type" label="工序" rules={[{ required: true, message: '请输入工序类型' }]}>
             <Input placeholder="如：组装、包装，填 * 表示该车间全部工序" />
           </Form.Item>
-          <Form.Item name="manpower" label="人数" rules={[{ required: true, message: '请输入人数' }]}>
+          <Form.Item name="manpower" label="参考人数（不参与 UPPH 计算）" rules={[{ required: true, message: '请输入人数' }]}>
             <InputNumber min={0.01} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="hour_price" label="小时单价" rules={[{ required: true, message: '请输入小时单价' }]}>

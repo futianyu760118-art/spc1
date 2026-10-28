@@ -60,16 +60,19 @@ def calculate_formula_upph(
     manpower: Any,
     hour_price: Any,
 ) -> float | None:
+    """计算每人每小时产量(UPPH).
+
+    注意: UPPH 是"每人每小时"口径, 人数不参与公式;
+    实际总工时 = 数量 / (UPPH × 排产人数), 人数由排产侧单独乘.
+    manpower 参数保留仅为兼容旧调用, 不参与计算.
+    """
     gjje_value = _normalize_float(gjje)
     hour_price_value = _normalize_float(hour_price)
     if gjje_value is None or gjje_value <= 0:
         return None
     if hour_price_value is None or hour_price_value <= 0:
         return None
-    manpower_value = _normalize_float(manpower)
-    if manpower_value is None or manpower_value <= 0:
-        manpower_value = 1.0
-    return round((manpower_value * hour_price_value) / gjje_value, 2)
+    return round(hour_price_value / gjje_value, 2)
 
 
 def resolve_capacity_upph(

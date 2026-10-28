@@ -62,6 +62,9 @@ class ProductProcessCapacitySyncService:
             if is_incremental:
                 sql_params["incremental_since"] = incremental_since.strftime("%Y-%m-%d %H:%M:%S")
             rows = await self.erp_service._execute_erp_sql(sql_text, sql_params)
+            # 数据已取完，立即关闭 OA 连接；后续本地逐条 upsert 可能耗时较久，
+            # 一直占着空闲 OA 连接会触发 TCP 超时（信号灯超时）。
+            self.erp_service._close_erp()
             stats["fetched"] = len(rows)
 
             if is_incremental:
