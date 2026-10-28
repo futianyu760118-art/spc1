@@ -23,6 +23,7 @@ function startStubPlatform({
   queryData = { items: [] },
   reasoningData = {},
   orderData = null,
+  writeData = {},
   queryDelayMs = 0,
 } = {}) {
   const requests = [];
@@ -68,6 +69,10 @@ function startStubPlatform({
       }
       if (req.method === "PUT" && path.startsWith("/external/orders/") && path.endsWith("/schedule") && orderData !== null) {
         sendJson(res, 200, { code: 0, data: orderData });
+        return;
+      }
+      if (req.method === "PUT" && path.startsWith("/external/orders/") && path.endsWith("/write")) {
+        sendJson(res, 200, { code: 0, data: writeData });
         return;
       }
       sendJson(res, 404, { code: 404, message: "not found" });

@@ -10,7 +10,7 @@
     "gateway-agent"
   ],
   "scripts": {
-    "test": "node --test runtime/test/bootstrap.test.js runtime/test/http-client.test.js runtime/test/protocol.test.js runtime/test/run-context.test.js runtime/test/run-result.test.js runtime/test/config.test.js runtime/test/remote-config.test.js runtime/test/health-server.test.js query-agent/test/query-adapter.test.js reasoning-agent/test/reasoning-adapter.test.js query-agent/test/agent-e2e.test.js reasoning-agent/test/agent-e2e.test.js order-agent/test/order-adapter.test.js order-agent/test/agent-e2e.test.js gateway-agent/test/agent-registry.test.js gateway-agent/test/resolver-client.test.js gateway-agent/test/hub-client.test.js gateway-agent/test/dispatch-e2e.test.js"
+    "test": "node --test runtime/test/bootstrap.test.js runtime/test/http-client.test.js runtime/test/protocol.test.js runtime/test/run-context.test.js runtime/test/run-result.test.js runtime/test/config.test.js runtime/test/remote-config.test.js runtime/test/health-server.test.js query-agent/test/query-adapter.test.js reasoning-agent/test/reasoning-adapter.test.js query-agent/test/agent-e2e.test.js reasoning-agent/test/agent-e2e.test.js order-agent/test/order-adapter.test.js order-agent/test/agent-e2e.test.js gateway-agent/test/agent-registry.test.js gateway-agent/test/order-write-adapter.test.js gateway-agent/test/resolver-client.test.js gateway-agent/test/hub-client.test.js gateway-agent/test/dispatch-e2e.test.js"
   },
   "engines": {
     "node": ">=20"

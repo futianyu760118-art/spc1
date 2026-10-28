@@ -15,13 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import log_audit
 from app.core.database import get_db
 from app.models.basicdata.data_supply import DataSupplyApiKey
-from app.models.basicdata.user import SysUser
 from app.models.order.sale_order import SaleOrder
 from app.schemas.common import ResponseModel
 
 from ..deps import external_auth
 from ..log_wrap import log_external_call
 from ..registry import register_external
+from .order_common import resolve_operator
 
 router = APIRouter(prefix="/orders", tags=["订单"])
 
@@ -43,19 +43,6 @@ class OrderScheduleFields(BaseModel):
 class OrderScheduleIn(BaseModel):
     fields: OrderScheduleFields
     request_id: Optional[str] = None
-
-
-async def _resolve_operator(db: AsyncSession, request: Request) -> str:
-    """审计操作人：助手代操作时落到真实登录用户（显示名/用户名），Hub 派单回退 order-agent:runId。"""
-    op_user_id = (request.headers.get("X-Operator-User-Id") or "").strip()
-    if op_user_id.isdigit():
-        user = (await db.execute(
-            select(SysUser).where(SysUser.id == int(op_user_id))
-        )).scalar_one_or_none()
-        name = (user.display_name or user.username) if user else f"user:{op_user_id}"
-        return f"{name}（智能体）"
-    run_id = request.headers.get("X-Agent-Run-Id", "")
-    return f"order-agent:{run_id}" if run_id else "order-agent"
 
 
 @router.put("/{order_no}/schedule", response_model=ResponseModel[dict],
@@ -88,7 +75,7 @@ async def order_schedule_update(
     if not fields:
         raise HTTPException(status_code=400, detail="fields 至少一个字段")
 
-    operator = await _resolve_operator(db, request)
+    operator = await resolve_operator(db, request)
     await log_audit(db, "sale_order", order.id, "update", old_obj=order, update_data=fields, operator=operator)
     for field_name, value in fields.items():
         setattr(order, field_name, value)

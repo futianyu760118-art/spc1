@@ -45,12 +45,27 @@ function buildConfigs() {
     },
   });
 
+  const orderWrite = createConfig({
+    agentKey: "order-write",
+    envPath: path.resolve(__dirname, "..", ".env"),
+    defaults: {
+      agentId: "gateway-control-platform",
+      agentName: "订单写适配器",
+      agentVersion: gateway.agentVersion,
+      appKeyEnv: "CONTROL_PLATFORM_ORDER_APP_KEY",
+      appSecretEnv: "CONTROL_PLATFORM_ORDER_APP_SECRET",
+      configDefaults: { writeTimeoutMs: 15000 },
+      envIntDefaults: { CONTROL_PLATFORM_ORDER_TIMEOUT_MS: "writeTimeoutMs" },
+    },
+  });
+
   // EXECUTION_AGENT_KEY 环境变量是 gateway，会被 createConfig 读成 gateway；
   // 适配器远程配置需要各自的 scope key。
   query.agentKey = "query";
   reasoning.agentKey = "reasoning";
+  orderWrite.agentKey = "order";
 
-  return { gateway, query, reasoning };
+  return { gateway, query, reasoning, orderWrite };
 }
 
 module.exports = { buildConfigs };

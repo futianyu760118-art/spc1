@@ -29,6 +29,8 @@ function gatewayEnv(hubPort, stubPort) {
     CONTROL_PLATFORM_QUERY_APP_SECRET: "sk",
     CONTROL_PLATFORM_REASONING_APP_KEY: "rak",
     CONTROL_PLATFORM_REASONING_APP_SECRET: "rsk",
+    CONTROL_PLATFORM_ORDER_APP_KEY: "oak",
+    CONTROL_PLATFORM_ORDER_APP_SECRET: "osk",
     GATEWAY_INTERNAL_TOKEN: "gw-token",
     AGENT_ADMIN_TOKEN: "admin-token",
     HEALTH_CHECK_PORT: "0",
@@ -49,7 +51,7 @@ test("gateway dispatches query and returns run_complete with caller/trace", asyn
     assert.equal(register.agentId, "gateway-control-platform");
     assert.deepEqual(
       register.capabilities.map((capability) => capability.name).sort(),
-      ["query_control_platform", "reason_control_platform"],
+      ["query_control_platform", "reason_control_platform", "write_control_platform"],
     );
 
     hub.send({
@@ -278,6 +280,107 @@ test("returns TARGET_AGENT_UNAVAILABLE for an unknown target_agent_ref", async (
       (message) => message.type === "run_failed" && message.runId === "exec-run-target-missing",
     );
     assert.equal(failed.error.code, "TARGET_AGENT_UNAVAILABLE");
+  } finally {
+    if (agent) await stopAgent(agent);
+    await hub.close();
+    await stub.close();
+  }
+});
+
+test("returns write result with handled_by and echoed request_id", async () => {
+  const hub = startHub();
+  const stub = startStubPlatform({
+    writeData: {
+      ok: true,
+      operation: "order.update_note",
+      target: { orderNo: "HJY-WRITE-1" },
+      before: { remark: "" },
+      after: { remark: "new note" },
+      appliedAt: "2026-10-28T13:00:00+08:00",
+      idempotent_replay: false,
+    },
+  });
+  let agent;
+  try {
+    const [hubPort, stubPort] = await Promise.all([hub.ready, stub.ready]);
+    agent = spawnAgent({ entry: ENTRY, env: gatewayEnv(hubPort, stubPort) });
+    await waitUntil(() => hub.messages.some((message) => message.type === "register"));
+
+    hub.send({
+      type: "dispatch",
+      runId: "exec-run-write-1",
+      capability: "write_control_platform",
+      input: {
+        operation: "order.update_note",
+        orderNo: "HJY-WRITE-1",
+        changes: { remark: "new note" },
+        idempotencyKey: "write-idem-1",
+      },
+      request_id: "dispatch-write-1",
+      caller: { systemId: "aeos-hub", agentId: "AG-000001", userId: "m01:user:1" },
+    });
+
+    await waitUntil(() =>
+      hub.messages.some((message) => message.type === "run_complete" && message.runId === "exec-run-write-1"),
+    );
+    const complete = hub.messages.find(
+      (message) => message.type === "run_complete" && message.runId === "exec-run-write-1",
+    );
+    assert.equal(complete.result.request_id, "dispatch-write-1");
+    assert.equal(complete.result.appliedAt, "2026-10-28T13:00:00+08:00");
+    assert.equal(complete.result.idempotent_replay, false);
+    assert.deepEqual(complete.result.handled_by, {
+      agentId: "spc-agent-order-write",
+      agentName: "订单写操作 Agent",
+      role: "order_write",
+    });
+
+    const writeRequest = stub.requests.find(
+      (request) => request.method === "PUT" && request.path.endsWith("/write"),
+    );
+    assert.ok(writeRequest);
+    assert.equal(writeRequest.body.operation, "order.update_note");
+    assert.equal(writeRequest.body.idempotencyKey, "write-idem-1");
+    assert.equal(writeRequest.body.request_id, "dispatch-write-1");
+  } finally {
+    if (agent) await stopAgent(agent);
+    await hub.close();
+    await stub.close();
+  }
+});
+
+test("returns CAPABILITY_UNSUPPORTED for an unknown write operation", async () => {
+  const hub = startHub();
+  const stub = startStubPlatform();
+  let agent;
+  try {
+    const [hubPort, stubPort] = await Promise.all([hub.ready, stub.ready]);
+    agent = spawnAgent({ entry: ENTRY, env: gatewayEnv(hubPort, stubPort) });
+    await waitUntil(() => hub.messages.some((message) => message.type === "register"));
+
+    hub.send({
+      type: "dispatch",
+      runId: "exec-run-write-unknown",
+      capability: "write_control_platform",
+      input: {
+        operation: "order.delete",
+        orderNo: "HJY-WRITE-1",
+        changes: {},
+        idempotencyKey: "write-idem-unknown",
+      },
+      request_id: "dispatch-write-unknown",
+      caller: { systemId: "aeos-hub", agentId: "AG-000001" },
+    });
+
+    await waitUntil(() =>
+      hub.messages.some(
+        (message) => message.type === "run_failed" && message.runId === "exec-run-write-unknown",
+      ),
+    );
+    const failed = hub.messages.find(
+      (message) => message.type === "run_failed" && message.runId === "exec-run-write-unknown",
+    );
+    assert.equal(failed.error.code, "CAPABILITY_UNSUPPORTED");
   } finally {
     if (agent) await stopAgent(agent);
     await hub.close();

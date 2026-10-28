@@ -11,17 +11,25 @@ const { createResolverClient } = require("./resolver-client");
 const { createHubClient } = require("./hub-client");
 
 async function main() {
-  const { gateway, query, reasoning } = buildConfigs();
+  const { gateway, query, reasoning, orderWrite } = buildConfigs();
   // 网关不参与 query/reasoning 的 DB 配置版本对比，避免状态页误报 pending restart
   gateway.configVersion = null;
   const log = createLogger(() => gateway.logLevel);
-  const adapters = await buildAdapters({ query, reasoning, log });
+  const adapters = await buildAdapters({ query, reasoning, orderWrite, log });
   const registry = buildAgentRegistry({
     queryAdapter: adapters.query,
     reasoningAdapter: adapters.reasoning,
+    orderWriteAdapter: adapters.orderWrite,
     log,
   });
-  const capabilities = [adapters.query.capability, adapters.reasoning.capability];
+  const capabilities = [
+    adapters.query.capability,
+    adapters.reasoning.capability,
+    adapters.orderWrite.capability,
+  ];
+  const localCapabilities = capabilities.filter(
+    (capability) => capability.name !== adapters.orderWrite.capability.name,
+  );
   const resolver = createResolverClient({ config: gateway, log });
   const hub = createHubClient({ config: gateway, log });
 
@@ -37,7 +45,9 @@ async function main() {
           ? `target_agent_ref 不可用：${run.targetAgentRef || ""}`
           : resolution.error === ERROR_CODES.INTERNAL_ERROR
             ? "内部 Agent 路由存在歧义"
-            : `没有可处理该请求的内部 Agent：capability=${run.capability}`;
+            : resolution.error === ERROR_CODES.CAPABILITY_UNSUPPORTED
+              ? `不支持的操作：capability=${run.capability}`
+              : `没有可处理该请求的内部 Agent：capability=${run.capability}`;
       throw new UpstreamError(resolution.error, message);
     }
     const agent = resolution.agent;
@@ -147,7 +157,7 @@ async function main() {
     config: gateway,
     log,
     connection,
-    capabilities,
+    capabilities: localCapabilities,
     agentKey: gateway.agentKey,
     onLocalRun,
     onHubProxy,

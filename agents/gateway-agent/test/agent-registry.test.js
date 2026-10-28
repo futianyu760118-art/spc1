@@ -20,6 +20,10 @@ function fakeAdapters() {
       invoke: async () => ({ result: {}, usage: {} }),
       cancel: () => {},
     },
+    orderWriteAdapter: {
+      capability: { name: "write_control_platform" },
+      invoke: async () => ({ ok: true }),
+    },
   };
 }
 
@@ -41,6 +45,61 @@ test("resolves each reasoning task type to its stable logical agent", () => {
     assert.equal(agent.agentName, agentName);
     assert.equal(agent.role, role);
   }
+});
+
+test("resolves write operations to the order write agent", () => {
+  const registry = buildAgentRegistry(fakeAdapters());
+  for (const operation of ["order.update_note", "order.update_status"]) {
+    const { agent, error } = registry.resolve({
+      capability: "write_control_platform",
+      input: { operation },
+    });
+    assert.equal(error, null);
+    assert.equal(agent.agentId, "spc-agent-order-write");
+    assert.equal(agent.agentName, "订单写操作 Agent");
+    assert.equal(agent.role, "order_write");
+  }
+});
+
+test("returns CAPABILITY_UNSUPPORTED for unknown write operations", () => {
+  const registry = buildAgentRegistry(fakeAdapters());
+  assert.equal(
+    registry.resolve({
+      capability: "write_control_platform",
+      input: { operation: "order.delete" },
+    }).error,
+    "CAPABILITY_UNSUPPORTED",
+  );
+});
+
+test("routes target_agent_ref for the order write agent", () => {
+  const registry = buildAgentRegistry(fakeAdapters());
+  const ok = registry.resolve({
+    capability: "write_control_platform",
+    input: { operation: "order.update_note" },
+    targetAgentRef: "spc-agent-order-write",
+  });
+  assert.equal(ok.error, null);
+  assert.equal(ok.agent.agentId, "spc-agent-order-write");
+
+  const wrongOperation = registry.resolve({
+    capability: "write_control_platform",
+    input: { operation: "order.delete" },
+    targetAgentRef: "spc-agent-order-write",
+  });
+  assert.equal(wrongOperation.error, "TARGET_AGENT_UNAVAILABLE");
+});
+
+test("attachResultMetadata covers the write agent without a model", () => {
+  const registry = buildAgentRegistry(fakeAdapters());
+  const agent = registry.byId.get("spc-agent-order-write");
+  const result = attachResultMetadata(agent, { requestId: "req-write" }, { ok: true });
+  assert.equal(result.request_id, "req-write");
+  assert.deepEqual(result.handled_by, {
+    agentId: "spc-agent-order-write",
+    agentName: "订单写操作 Agent",
+    role: "order_write",
+  });
 });
 
 test("returns AGENT_NOT_FOUND for unknown task types and capabilities", () => {
@@ -151,6 +210,14 @@ test("validateAgents rejects duplicate ids and routes", () => {
   );
   assert.throws(
     () => validateAgents([{ ...base, agentId: "a" }, { ...base, agentId: "b" }]),
+    /重复 Agent 路由/,
+  );
+  assert.throws(
+    () =>
+      validateAgents([
+        { ...base, agentId: "a", taskTypes: undefined, operations: ["op"] },
+        { ...base, agentId: "b", taskTypes: undefined, operations: ["op"] },
+      ]),
     /重复 Agent 路由/,
   );
 });

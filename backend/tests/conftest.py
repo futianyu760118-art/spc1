@@ -136,6 +136,7 @@ async def _test_db():
         PurchasePriceChangeItem,
     )
     from app.models.order.sale_order import SaleOrder, SaleOrderLine
+    from app.models.order.write_idempotency import OrderWriteIdempotency
     from app.models.production.base_condition import ProductionBaseCondition
     from app.models.production.capacity_slot import CapacitySlot
     from app.models.production.order_schedule_snapshot import ProductionOrderScheduleSnapshot
@@ -155,6 +156,7 @@ async def _test_db():
         Feedback.__table__,
         DataSupplyApiKey.__table__, DataSupplyCallLog.__table__,
         QualityIssue.__table__, SaleOrder.__table__, SaleOrderLine.__table__,
+        OrderWriteIdempotency.__table__,
         Bom.__table__, BomDetail.__table__, Supplier.__table__,
         ProductionTaskOrder.__table__, ProcessProgress.__table__,
         ProductionOrderScheduleSnapshot.__table__, ProductionDailyReport.__table__,
@@ -327,7 +329,8 @@ async def external_keys(_test_db):
 
     async with engine.begin() as conn:
         await conn.execute(text(
-            "TRUNCATE quality_issue, sale_order, sale_order_line, scm_bom, scm_bom_detail, "
+            "TRUNCATE quality_issue, sale_order, sale_order_line, order_write_idempotency, "
+            "scm_bom, scm_bom_detail, "
             "scm_material, scm_supplier, production_task_order, process_progress, "
             "production_order_schedule_snapshot, production_daily_report, "
             "production_capacity_slot, production_base_condition, "
@@ -352,7 +355,7 @@ async def external_keys(_test_db):
                 ('pytest-agent', 'ak_pytest_agent', TRUE,
                  '["agent.config"]', 0, :gak, :gas, NULL, 'pytest'),
                 ('pytest-order-agent', 'ak_pytest_order_agent', TRUE,
-                 '["orders.schedule.update"]', 0, :oak2, :oas2, NULL, 'pytest')
+                 '["orders.schedule.update", "orders.write"]', 0, :oak2, :oas2, NULL, 'pytest')
         """), {
             "qak": EXTERNAL_QUALITY_KEY["app_key"], "qas": EXTERNAL_QUALITY_KEY["app_secret"],
             "oak": EXTERNAL_ORDERS_KEY["app_key"], "oas": EXTERNAL_ORDERS_KEY["app_secret"],

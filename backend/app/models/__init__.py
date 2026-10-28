@@ -1,6 +1,7 @@
 # 订单交付中心
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.order.eta_update import ETAUpdate
+from app.models.order.write_idempotency import OrderWriteIdempotency
 
 # 物料齐套中心
 from app.models.material.material_demand import MaterialDemand
@@ -129,6 +130,7 @@ __all__ = [
     # 订单交付中心
     "SaleOrder",
     "SaleOrderLine",
+    "OrderWriteIdempotency",
     # 物料齐套中心
     "MaterialDemand",
     "PurchaseOrder",
