@@ -23,12 +23,13 @@ async def _seed_order(
     is_deleted=0,
     status="open",
     remark=None,
+    promised_date=None,
 ):
     await db.execute(
         text(
             "INSERT INTO sale_order "
-            "(order_no, line_no, status, erp_status, is_closed, is_deleted, remark, data_source) "
-            "VALUES (:no, '', :status, :erp, :closed, :deleted, :remark, 'manual')"
+            "(order_no, line_no, status, erp_status, is_closed, is_deleted, remark, promised_date, data_source) "
+            "VALUES (:no, '', :status, :erp, :closed, :deleted, :remark, :promised_date, 'manual')"
         ),
         {
             "no": order_no,
@@ -37,6 +38,7 @@ async def _seed_order(
             "closed": is_closed,
             "deleted": is_deleted,
             "remark": remark,
+            "promised_date": promised_date,
         },
     )
     await db.commit()
@@ -46,7 +48,7 @@ async def _get_order(db, order_no):
     return (
         await db.execute(
             text(
-                "SELECT status, is_closed, remark FROM sale_order "
+                "SELECT status, is_closed, remark, promised_date FROM sale_order "
                 "WHERE order_no = :no ORDER BY id DESC LIMIT 1"
             ),
             {"no": order_no},
@@ -173,6 +175,69 @@ async def test_update_status_close_and_reopen(ext_client, external_keys, db):
     assert body["data"]["after"] == {"status": "open", "is_closed": 0}
     row = await _get_order(db, "WRITE-003")
     assert row["status"] == "open" and row["is_closed"] == 0
+
+
+async def test_update_delivery_date_success_and_past_date(ext_client, external_keys, db):
+    await _seed_order(db, "WRITE-010", erp_status=1)
+    headers = _sig_headers(external_keys)
+    first = await ext_client.put(
+        "/api/v1/external/orders/WRITE-010/write",
+        json={
+            "operation": "order.update_delivery_date",
+            "changes": {"deliveryDate": "2026-11-10"},
+            "idempotencyKey": "idem-delivery-1",
+        },
+        headers=headers,
+    )
+    body = first.json()
+    assert body["code"] == 0, body
+    assert body["data"]["before"] == {"deliveryDate": None}
+    assert body["data"]["after"] == {"deliveryDate": "2026-11-10"}
+    row = await _get_order(db, "WRITE-010")
+    assert str(row["promised_date"]) == "2026-11-10"
+
+    past = await ext_client.put(
+        "/api/v1/external/orders/WRITE-010/write",
+        json={
+            "operation": "order.update_delivery_date",
+            "changes": {"deliveryDate": "2020-01-01"},
+            "idempotencyKey": "idem-delivery-2",
+        },
+        headers=headers,
+    )
+    body = past.json()
+    assert body["code"] == 0, body
+    assert body["data"]["after"] == {"deliveryDate": "2020-01-01"}
+    row = await _get_order(db, "WRITE-010")
+    assert str(row["promised_date"]) == "2020-01-01"
+
+
+async def test_delivery_date_blocked_for_erp_closed_and_invalid_format(ext_client, external_keys, db):
+    await _seed_order(db, "WRITE-011", erp_status=3, is_closed=1, status="closed")
+    headers = _sig_headers(external_keys)
+    blocked = await ext_client.put(
+        "/api/v1/external/orders/WRITE-011/write",
+        json={
+            "operation": "order.update_delivery_date",
+            "changes": {"deliveryDate": "2026-11-10"},
+            "idempotencyKey": "idem-delivery-3",
+        },
+        headers=headers,
+    )
+    body = blocked.json()
+    assert body["code"] == 400
+    assert "ERP 关闭" in body["message"]
+
+    invalid = await ext_client.put(
+        "/api/v1/external/orders/WRITE-011/write",
+        json={
+            "operation": "order.update_delivery_date",
+            "changes": {"deliveryDate": "2026-13-99"},
+            "idempotencyKey": "idem-delivery-4",
+        },
+        headers=headers,
+    )
+    assert invalid.json()["code"] == 400
 
 
 async def test_status_blocked_for_erp_closed(ext_client, external_keys, db):

@@ -2,10 +2,39 @@
 
 const { UpstreamError, mapCode } = require("@spc/execution-agent-runtime");
 
-const OPERATIONS = Object.freeze(["order.update_note", "order.update_status"]);
+const OPERATIONS = Object.freeze([
+  "order.update_note",
+  "order.update_status",
+  "order.update_delivery_date",
+]);
 const STATUS_VALUES = Object.freeze(["open", "closed"]);
 const REMARK_MAX_LENGTH = 2000;
 const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const OPERATIONS_METADATA = Object.freeze([
+  {
+    name: "order.update_note",
+    title: "修改订单备注",
+    keywords: ["备注", "说明"],
+    changesField: "changes",
+    fields: [{ name: "remark", label: "备注", type: "string", required: true }],
+  },
+  {
+    name: "order.update_status",
+    title: "修改订单状态",
+    keywords: ["状态"],
+    changesField: "changes",
+    fields: [{ name: "status", label: "状态", type: "string", required: true }],
+  },
+  {
+    name: "order.update_delivery_date",
+    title: "修改交付日期",
+    keywords: ["交付日期", "交期"],
+    changesField: "changes",
+    fields: [{ name: "deliveryDate", label: "交付日期", type: "date", required: true }],
+  },
+]);
 
 const inputSchema = Object.freeze({
   type: "object",
@@ -17,6 +46,7 @@ const inputSchema = Object.freeze({
       properties: {
         remark: { type: ["string", "null"], maxLength: REMARK_MAX_LENGTH },
         status: { type: "string", enum: [...STATUS_VALUES] },
+        deliveryDate: { type: "string", format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
       },
       additionalProperties: false,
     },
@@ -40,6 +70,17 @@ const outputSchema = Object.freeze({
   },
   required: ["ok", "operation", "target", "before", "after", "appliedAt", "idempotent_replay"],
 });
+
+function isValidIsoDate(value) {
+  if (typeof value !== "string" || !DATE_RE.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
 
 function validateInput(input, run) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -72,13 +113,24 @@ function validateInput(input, run) {
     if (typeof remark === "string" && remark.length > REMARK_MAX_LENGTH) {
       throw new UpstreamError("INVALID_ARGUMENT", `changes.remark 不能超过 ${REMARK_MAX_LENGTH} 字符`);
     }
-  } else {
+  } else if (operation === "order.update_status") {
     const keys = Object.keys(changes);
     if (keys.length !== 1 || keys[0] !== "status") {
       throw new UpstreamError("INVALID_ARGUMENT", "order.update_status 只允许 changes.status");
     }
     if (!STATUS_VALUES.includes(changes.status)) {
       throw new UpstreamError("INVALID_ARGUMENT", "changes.status 必须是 open 或 closed");
+    }
+  } else {
+    const keys = Object.keys(changes);
+    if (keys.length !== 1 || keys[0] !== "deliveryDate") {
+      throw new UpstreamError(
+        "INVALID_ARGUMENT",
+        "order.update_delivery_date 只允许 changes.deliveryDate",
+      );
+    }
+    if (!isValidIsoDate(changes.deliveryDate)) {
+      throw new UpstreamError("INVALID_ARGUMENT", "changes.deliveryDate 必须是 YYYY-MM-DD");
     }
   }
   const idempotencyKey = input.idempotencyKey || run.requestId;
@@ -110,7 +162,7 @@ function mapWriteError(code, message) {
 function createAdapter({ config, http, log }) {
   const capability = {
     name: "write_control_platform",
-    description: "中台受控写操作（订单备注/状态），仅接受 Hub 审批后的派单",
+    description: "中台受控写操作（订单备注/状态/交付日期），仅接受 Hub 审批后的派单",
     readOnly: false,
     constraints: {
       readOnly: false,
@@ -118,11 +170,10 @@ function createAdapter({ config, http, log }) {
       riskLevel: "low",
       idempotent: true,
       dryRun: false,
-      operations: [...OPERATIONS],
-      statusValues: [...STATUS_VALUES],
     },
     inputSchema,
     outputSchema,
+    operations: OPERATIONS_METADATA,
   };
 
   async function invoke(run, input) {
@@ -212,6 +263,7 @@ function createAdapter({ config, http, log }) {
 module.exports = {
   createAdapter,
   OPERATIONS,
+  OPERATIONS_METADATA,
   STATUS_VALUES,
   inputSchema,
   outputSchema,

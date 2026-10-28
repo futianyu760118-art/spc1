@@ -3,7 +3,7 @@
 import hashlib
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -15,12 +15,13 @@ from app.core.audit import log_audit
 from app.models.order.sale_order import SaleOrder
 from app.models.order.write_idempotency import OrderWriteIdempotency
 
-OPERATIONS = {"order.update_note", "order.update_status"}
+OPERATIONS = {"order.update_note", "order.update_status", "order.update_delivery_date"}
 STATUS_VALUES = {"open", "closed"}
 REMARK_MAX_LENGTH = 2000
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 IDEMPOTENCY_RETENTION_DAYS = 30
 ORDER_NO_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -69,6 +70,17 @@ def _validate_changes(operation: str, changes: Any) -> dict:
         if status not in STATUS_VALUES:
             raise OrderWriteError(400, "changes.status 必须是 open 或 closed")
         return {"status": status}
+    if operation == "order.update_delivery_date":
+        if keys != {"deliveryDate"}:
+            raise OrderWriteError(400, "order.update_delivery_date 只允许 changes.deliveryDate")
+        value = changes.get("deliveryDate")
+        if not isinstance(value, str) or not DATE_RE.match(value):
+            raise OrderWriteError(400, "changes.deliveryDate 必须是 YYYY-MM-DD")
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError:
+            raise OrderWriteError(400, "changes.deliveryDate 不是有效日期")
+        return {"deliveryDate": parsed.isoformat()}
     raise OrderWriteError(400, f"CAPABILITY_UNSUPPORTED: 不支持的操作 {operation}")
 
 
@@ -108,6 +120,12 @@ def _before_after(order: SaleOrder, operation: str, normalized_changes: dict):
         before = {"remark": order.remark or ""}
         after = {"remark": normalized_changes["remark"] or ""}
         return before, after
+    if operation == "order.update_delivery_date":
+        before = {
+            "deliveryDate": order.promised_date.isoformat() if order.promised_date else None,
+        }
+        after = {"deliveryDate": normalized_changes["deliveryDate"]}
+        return before, after
     before_status = "closed" if (order.is_closed == 1 or order.status == "closed") else "open"
     before = {"status": before_status, "is_closed": int(order.is_closed or 0)}
     after = {
@@ -120,6 +138,10 @@ def _before_after(order: SaleOrder, operation: str, normalized_changes: dict):
 def _update_values(order: SaleOrder, operation: str, normalized_changes: dict) -> dict:
     if operation == "order.update_note":
         return {"remark": normalized_changes["remark"]}
+    if operation == "order.update_delivery_date":
+        if order.erp_status == 3:
+            raise OrderWriteError(400, "订单已由 ERP 关闭，禁止修改交付日期")
+        return {"promised_date": date.fromisoformat(normalized_changes["deliveryDate"])}
     if order.erp_status == 3:
         raise OrderWriteError(400, "订单已由 ERP 关闭，禁止修改状态")
     return {

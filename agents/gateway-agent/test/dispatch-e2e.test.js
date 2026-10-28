@@ -53,6 +53,17 @@ test("gateway dispatches query and returns run_complete with caller/trace", asyn
       register.capabilities.map((capability) => capability.name).sort(),
       ["query_control_platform", "reason_control_platform", "write_control_platform"],
     );
+    const writeCapability = register.capabilities.find(
+      (capability) => capability.name === "write_control_platform",
+    );
+    assert.deepEqual(
+      writeCapability.operations.map((operation) => operation.name),
+      [
+        "order.update_note",
+        "order.update_status",
+        "order.update_delivery_date",
+      ],
+    );
 
     hub.send({
       type: "dispatch",
@@ -381,6 +392,69 @@ test("returns CAPABILITY_UNSUPPORTED for an unknown write operation", async () =
       (message) => message.type === "run_failed" && message.runId === "exec-run-write-unknown",
     );
     assert.equal(failed.error.code, "CAPABILITY_UNSUPPORTED");
+  } finally {
+    if (agent) await stopAgent(agent);
+    await hub.close();
+    await stub.close();
+  }
+});
+
+test("routes delivery date writes and returns before/after", async () => {
+  const hub = startHub();
+  const stub = startStubPlatform({
+    writeData: {
+      ok: true,
+      operation: "order.update_delivery_date",
+      target: { orderNo: "HJY-WRITE-2" },
+      before: { deliveryDate: null },
+      after: { deliveryDate: "2026-11-10" },
+      appliedAt: "2026-10-28T14:10:00+08:00",
+      idempotent_replay: false,
+    },
+  });
+  let agent;
+  try {
+    const [hubPort, stubPort] = await Promise.all([hub.ready, stub.ready]);
+    agent = spawnAgent({ entry: ENTRY, env: gatewayEnv(hubPort, stubPort) });
+    await waitUntil(() => hub.messages.some((message) => message.type === "register"));
+
+    hub.send({
+      type: "dispatch",
+      runId: "exec-run-write-delivery",
+      capability: "write_control_platform",
+      input: {
+        operation: "order.update_delivery_date",
+        orderNo: "HJY-WRITE-2",
+        changes: { deliveryDate: "2026-11-10" },
+        idempotencyKey: "write-delivery-idem",
+      },
+      request_id: "dispatch-write-delivery",
+      caller: { systemId: "aeos-hub", agentId: "AG-000001" },
+    });
+
+    await waitUntil(() =>
+      hub.messages.some(
+        (message) => message.type === "run_complete" && message.runId === "exec-run-write-delivery",
+      ),
+    );
+    const complete = hub.messages.find(
+      (message) => message.type === "run_complete" && message.runId === "exec-run-write-delivery",
+    );
+    assert.equal(complete.result.request_id, "dispatch-write-delivery");
+    assert.deepEqual(complete.result.before, { deliveryDate: null });
+    assert.deepEqual(complete.result.after, { deliveryDate: "2026-11-10" });
+    assert.deepEqual(complete.result.handled_by, {
+      agentId: "spc-agent-order-write",
+      agentName: "订单写操作 Agent",
+      role: "order_write",
+    });
+
+    const writeRequest = stub.requests.find(
+      (request) => request.method === "PUT" && request.path.endsWith("/write"),
+    );
+    assert.ok(writeRequest);
+    assert.equal(writeRequest.body.operation, "order.update_delivery_date");
+    assert.deepEqual(writeRequest.body.changes, { deliveryDate: "2026-11-10" });
   } finally {
     if (agent) await stopAgent(agent);
     await hub.close();

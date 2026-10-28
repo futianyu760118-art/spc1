@@ -31,7 +31,9 @@
 |---|---|---|
 | `order.update_note` | `{"remark": "..."}` | 覆盖写，≤2000 字符，空串/null 清空；允许已关闭订单，禁止已删除订单 |
 | `order.update_status` | `{"status": "open"\|"closed"}` | 同时写 `sale_order.status` + `is_closed`；`erp_status=3` 或已删除订单拒绝 |
+| `order.update_delivery_date` | `{"deliveryDate": "YYYY-MM-DD"}` | 写 `sale_order.promised_date`（合同交期）；允许过去日期纠错；`erp_status=3` 或已删除订单拒绝；不自动改出货计划/下游任务 |
 
+- 能力声明带顶层 `operations` 元数据（name/title/keywords/changesField/fields），Hub 对话按它解析操作、订单号与目标值；
 - 幂等：调用方必须传 `idempotencyKey`（缺省回退 `request_id`）；后端 `PUT /external/orders/{order_no}/write`（endpoint_code `orders.write`）用 `order_write_idempotency` 表保证同一 key 只执行一次，重复返回 `idempotent_replay=true`，内容不一致返回 `IDEMPOTENCY_CONFLICT`；
 - 返回：`ok` / `operation` / `target` / `before` / `after` / `appliedAt` / `idempotent_replay` / `handled_by` / `request_id`；
 - 该能力仅 Hub 派单；本地 `/admin/run` 不开放，避免绕过 Hub 审批（本地四日期写仍走 `order-agent`）；

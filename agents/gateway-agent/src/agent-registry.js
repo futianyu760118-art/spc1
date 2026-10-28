@@ -33,7 +33,11 @@ const WRITE_AGENT = Object.freeze({
   agentId: "spc-agent-order-write",
   agentName: "订单写操作 Agent",
   role: "order_write",
-  operations: ["order.update_note", "order.update_status"],
+  operations: [
+    "order.update_note",
+    "order.update_status",
+    "order.update_delivery_date",
+  ],
 });
 
 function taskTypeOf(input) {

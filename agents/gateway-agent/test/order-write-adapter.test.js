@@ -49,11 +49,24 @@ test("declares a writable idempotent capability", () => {
   assert.equal(capability.readOnly, false);
   assert.equal(capability.constraints.readOnly, false);
   assert.equal(capability.constraints.idempotent, true);
-  assert.deepEqual(capability.constraints.operations, [
-    "order.update_note",
-    "order.update_status",
+  assert.deepEqual(
+    capability.operations.map((operation) => operation.name),
+    [
+      "order.update_note",
+      "order.update_status",
+      "order.update_delivery_date",
+    ],
+  );
+  const delivery = capability.operations.find(
+    (operation) => operation.name === "order.update_delivery_date",
+  );
+  assert.deepEqual(delivery.fields, [
+    { name: "deliveryDate", label: "交付日期", type: "date", required: true },
   ]);
-  assert.deepEqual(capability.constraints.statusValues, ["open", "closed"]);
+  assert.deepEqual(capability.inputSchema.properties.changes.properties.status.enum, [
+    "open",
+    "closed",
+  ]);
 });
 
 test("sends a normalized write request and falls back to run.requestId", async () => {
@@ -73,6 +86,22 @@ test("sends a normalized write request and falls back to run.requestId", async (
   assert.equal(calls[0][3].request_id, "req-write-1");
   assert.equal(calls[0][4].timeoutMs, 12345);
   assert.equal(calls[0][4].headers["X-Hub-Caller-User-Id"], "m01:user:1");
+});
+
+test("sends delivery date requests", async () => {
+  const { ctx, calls } = createCtx(async () => ({
+    code: 0,
+    data: { ok: true, idempotent_replay: false },
+  }));
+  const adapter = createAdapter(ctx);
+  await adapter.invoke(runStub(), {
+    operation: "order.update_delivery_date",
+    orderNo: "HJY-1",
+    changes: { deliveryDate: "2026-11-10" },
+    idempotencyKey: "idem-delivery",
+  });
+  assert.equal(calls[0][3].operation, "order.update_delivery_date");
+  assert.equal(calls[0][3].changes.deliveryDate, "2026-11-10");
 });
 
 test("validates operation, changes and idempotency key", async () => {
@@ -100,6 +129,16 @@ test("validates operation, changes and idempotency key", async () => {
         runStub(),
         noteInput({ changes: { remark: "x".repeat(2001) } }),
       ),
+    (e) => e.code === "INVALID_ARGUMENT",
+  );
+  await assert.rejects(
+    () =>
+      adapter.invoke(runStub(), {
+        operation: "order.update_delivery_date",
+        orderNo: "HJY-1",
+        changes: { deliveryDate: "2026-13-99" },
+        idempotencyKey: "idem-delivery-bad",
+      }),
     (e) => e.code === "INVALID_ARGUMENT",
   );
 });

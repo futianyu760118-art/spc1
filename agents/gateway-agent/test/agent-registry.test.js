@@ -49,7 +49,11 @@ test("resolves each reasoning task type to its stable logical agent", () => {
 
 test("resolves write operations to the order write agent", () => {
   const registry = buildAgentRegistry(fakeAdapters());
-  for (const operation of ["order.update_note", "order.update_status"]) {
+  for (const operation of [
+    "order.update_note",
+    "order.update_status",
+    "order.update_delivery_date",
+  ]) {
     const { agent, error } = registry.resolve({
       capability: "write_control_platform",
       input: { operation },
