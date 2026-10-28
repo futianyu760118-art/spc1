@@ -1,6 +1,6 @@
 "use strict";
 
-const { UpstreamError } = require("@spc/execution-agent-runtime");
+const { UpstreamError, ERROR_CODES } = require("@spc/execution-agent-runtime");
 
 function createResolverClient({ config, log }) {
   async function resolveCaller({ runId, traceId, capability, input, caller }) {
@@ -31,10 +31,13 @@ function createResolverClient({ config, log }) {
     }
     if (!response.ok || body.code !== 0) {
       const reason = (body.data && body.data.reason) || body.message || `HTTP ${response.status}`;
-      throw new UpstreamError(
-        [400, 403, 422].includes(response.status) ? "INVALID_ARGUMENT" : "INTERNAL_ERROR",
-        `caller 路由失败：${reason}`,
-      );
+      const code =
+        reason === ERROR_CODES.AGENT_NOT_FOUND
+          ? ERROR_CODES.AGENT_NOT_FOUND
+          : [400, 403, 422].includes(response.status)
+            ? ERROR_CODES.INVALID_ARGUMENT
+            : ERROR_CODES.INTERNAL_ERROR;
+      throw new UpstreamError(code, `caller 路由失败：${reason}`);
     }
     log("info", "gateway_caller_resolved", {
       runId, traceId, mode: body.data?.mode, agentNo: body.data?.agentNo, userId: body.data?.userId,

@@ -139,8 +139,8 @@ test("admin run invokes onLocalRun and returns result", async () => {
     connection: { isRegistered: () => true, hubRun: null },
     capabilities: [{ name: "query_control_platform" }],
     agentKey: "query",
-    onLocalRun: async (runId, capability, input, operator, actorToken, traceId, caller) => {
-      calls.push({ runId, capability, input, operator, actorToken, traceId, caller });
+    onLocalRun: async (context) => {
+      calls.push(context);
       return { items: [], total: 0 };
     },
   });
@@ -169,6 +169,8 @@ test("admin run invokes onLocalRun and returns result", async () => {
         operator: { user_id: "462" },
         actorToken: "actor-test",
         traceId: "trace-local",
+        request_id: "req-local",
+        target_agent_ref: "spc-agent-query",
         caller: { systemId: "control-platform", agentId: "AG-000001", taskId: "AT-000123" },
       }),
     });
@@ -178,11 +180,14 @@ test("admin run invokes onLocalRun and returns result", async () => {
     assert.equal(body.runId, "local-1");
     assert.deepEqual(body.result, { items: [], total: 0 });
     assert.equal(calls.length, 1);
+    assert.equal(calls[0].runId, "local-1");
     assert.equal(calls[0].capability, "query_control_platform");
     assert.deepEqual(calls[0].input, { path: "/common/ping", params: {} });
     assert.deepEqual(calls[0].operator, { user_id: "462" });
     assert.equal(calls[0].actorToken, "actor-test");
     assert.equal(calls[0].traceId, "trace-local");
+    assert.equal(calls[0].requestId, "req-local");
+    assert.equal(calls[0].targetAgentRef, "spc-agent-query");
     assert.deepEqual(calls[0].caller, { systemId: "control-platform", agentId: "AG-000001", taskId: "AT-000123" });
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -293,6 +298,37 @@ test("admin run maps adapter failure to 500 with code", async () => {
     const body = await res.json();
     assert.equal(body.ok, false);
     assert.equal(body.code, "INVALID_ARGUMENT");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("admin run rejects non-string target_agent_ref", async () => {
+  const port = await getFreePort();
+  const config = { healthCheckPort: port, adminToken: "tok", configVersion: 0, agentId: "a" };
+  const server = startHealthServer({
+    config,
+    log: () => {},
+    connection: { isRegistered: () => true, hubRun: null },
+    capabilities: [{ name: "query_control_platform" }],
+    agentKey: "query",
+    onLocalRun: async () => ({}),
+  });
+  if (!server.listening) await once(server, "listening");
+  const baseUrl = `http://127.0.0.1:${port}`;
+  try {
+    const res = await fetch(`${baseUrl}/admin/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-token": "tok" },
+      body: JSON.stringify({
+        capability: "query_control_platform",
+        input: {},
+        actorToken: "actor-test",
+        target_agent_ref: 123,
+      }),
+    });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).status, "invalid_target_agent_ref");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

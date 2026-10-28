@@ -95,23 +95,29 @@ test("local run handler tracks the run in localRuns and carries caller/trace met
   const onLocalRun = createLocalRunHandler(adapter, connection, log);
   const caller = { systemId: "control-platform", agentId: "AG-000001", taskId: "AT-000123" };
 
-  const result = await onLocalRun(
-    "local-1",
-    "query_control_platform",
-    { path: "/x" },
-    { user_id: "462" },
-    "actor-test",
-    "trace-1",
+  const result = await onLocalRun({
+    runId: "local-1",
+    capability: "query_control_platform",
+    input: { path: "/x" },
+    operator: { user_id: "462" },
+    actorToken: "actor-test",
+    traceId: "trace-1",
+    requestId: "req-local-1",
+    targetAgentRef: null,
     caller,
-  );
+  });
 
   assert.deepEqual(result, { ok: true });
   assert.equal(seenMapSize, 1);
   assert.equal(seenRun.operator.user_id, "462");
   assert.equal(seenRun.actorToken, "actor-test");
-  assert.equal(seenRun.caller, caller);
+  assert.deepEqual(seenRun.caller, caller);
   assert.equal(seenRun.traceId, "trace-1");
   assert.equal(seenRun.taskId, "AT-000123");
+  assert.equal(seenRun.requestId, "req-local-1");
+  assert.equal(seenRun.source, "local");
+  assert.equal(typeof seenRun.report, "function");
+  assert.ok(seenRun.controller instanceof AbortController);
   assert.equal(connection.localRuns.size, 0);
   assert.equal(connection.hubRun, undefined);
 });
@@ -126,7 +132,16 @@ test("local run handler removes the run from localRuns after an adapter failure"
   };
   const onLocalRun = createLocalRunHandler(adapter, connection, log);
 
-  await assert.rejects(() => onLocalRun("local-2", "query_control_platform", {}, null, "actor"), /boom/);
+  await assert.rejects(
+    () =>
+      onLocalRun({
+        runId: "local-2",
+        capability: "query_control_platform",
+        input: {},
+        actorToken: "actor",
+      }),
+    /boom/,
+  );
   assert.equal(connection.localRuns.size, 0);
 });
 
@@ -143,8 +158,18 @@ test("local run handler allows concurrent local runs", async () => {
   };
   const onLocalRun = createLocalRunHandler(adapter, connection, log);
 
-  const first = onLocalRun("local-a", "query_control_platform", {}, null, "actor");
-  const second = onLocalRun("local-b", "query_control_platform", {}, null, "actor");
+  const first = onLocalRun({
+    runId: "local-a",
+    capability: "query_control_platform",
+    input: {},
+    actorToken: "actor",
+  });
+  const second = onLocalRun({
+    runId: "local-b",
+    capability: "query_control_platform",
+    input: {},
+    actorToken: "actor",
+  });
   await flushMicrotasks();
 
   assert.deepEqual(started.sort(), ["local-a", "local-b"]);

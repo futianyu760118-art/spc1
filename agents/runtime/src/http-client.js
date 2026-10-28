@@ -1,8 +1,13 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { ERROR_CODES } = require("./error-codes");
 
-const RETRYABLE = new Set(["UPSTREAM_TIMEOUT", "UPSTREAM_UNAVAILABLE", "RATE_LIMITED"]);
+const RETRYABLE = new Set([
+  ERROR_CODES.UPSTREAM_TIMEOUT,
+  ERROR_CODES.UPSTREAM_UNAVAILABLE,
+  ERROR_CODES.RATE_LIMITED,
+]);
 const MAX_ATTEMPTS = 2;
 const RETRY_BACKOFF_MS = 400;
 
@@ -14,14 +19,15 @@ class UpstreamError extends Error {
 }
 
 function mapCode(status) {
-  if (status === 400 || status === 422) return "INVALID_ARGUMENT";
-  if (status === 401) return "UNAUTHORIZED";
-  if (status === 403) return "FORBIDDEN";
-  if (status === 404) return "NOT_FOUND";
-  if (status === 429) return "RATE_LIMITED";
-  if (status === 504) return "UPSTREAM_TIMEOUT";
-  if (status >= 500) return "UPSTREAM_UNAVAILABLE";
-  return "INTERNAL_ERROR";
+  if (status === 400 || status === 422) return ERROR_CODES.INVALID_ARGUMENT;
+  if (status === 401) return ERROR_CODES.UNAUTHORIZED;
+  if (status === 403) return ERROR_CODES.FORBIDDEN;
+  if (status === 404) return ERROR_CODES.NOT_FOUND;
+  if (status === 409) return ERROR_CODES.AGENT_BUSY;
+  if (status === 429) return ERROR_CODES.RATE_LIMITED;
+  if (status === 504) return ERROR_CODES.UPSTREAM_TIMEOUT;
+  if (status >= 500) return ERROR_CODES.UPSTREAM_UNAVAILABLE;
+  return ERROR_CODES.INTERNAL_ERROR;
 }
 
 function unwrapEnvelope(body) {

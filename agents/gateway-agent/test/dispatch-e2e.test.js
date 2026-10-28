@@ -120,8 +120,164 @@ test("gateway returns run_failed when caller cannot be resolved", async () => {
     const failed = hub.messages.find(
       (message) => message.type === "run_failed" && message.runId === "exec-run-e2e-reject",
     );
-    assert.equal(failed.error.code, "INVALID_ARGUMENT");
+    assert.equal(failed.error.code, "AGENT_NOT_FOUND");
     assert.match(failed.error.message, /AGENT_NOT_FOUND/);
+  } finally {
+    if (agent) await stopAgent(agent);
+    await hub.close();
+    await stub.close();
+  }
+});
+
+test("returns handled_by and echoes request_id for reasoning runs", async () => {
+  const hub = startHub();
+  const stub = startStubPlatform({
+    reasoningData: {
+      task_id: "exec-run-e2e-r1",
+      task_type: "order_delivery_analysis",
+      status: "succeeded",
+      summary: "存在交付风险",
+      conclusions: [],
+      llm: { called: true, provider: "openai", model: "deepseek-flash", latency_ms: 10 },
+      request_id: null,
+      usage: { modelId: "deepseek-flash", tokensIn: 1, cachedTokens: 0, tokensOut: 1 },
+      duration_ms: 1234.6,
+    },
+  });
+  let agent;
+  try {
+    const [hubPort, stubPort] = await Promise.all([hub.ready, stub.ready]);
+    agent = spawnAgent({ entry: ENTRY, env: gatewayEnv(hubPort, stubPort) });
+    await waitUntil(() => hub.messages.some((message) => message.type === "register"));
+
+    hub.send({
+      type: "dispatch",
+      runId: "exec-run-e2e-r1",
+      capability: "reason_control_platform",
+      input: {
+        prompt: "分析订单交付风险",
+        task_type: "order_delivery_analysis",
+        context: { businessObjectRef: "business://order/O-1" },
+      },
+      traceId: "trace-e2e-r1",
+      request_id: "dispatch-req-1",
+      caller: {
+        systemId: "aeos-hub",
+        agentId: "AG-000001",
+        userId: "10086",
+        taskId: "AT-E2E-R1",
+        traceId: "trace-e2e-r1",
+      },
+    });
+
+    await waitUntil(() =>
+      hub.messages.some((message) => message.type === "run_complete" && message.runId === "exec-run-e2e-r1"),
+    );
+    const complete = hub.messages.find(
+      (message) => message.type === "run_complete" && message.runId === "exec-run-e2e-r1",
+    );
+    assert.equal(complete.result.request_id, "dispatch-req-1");
+    assert.deepEqual(complete.result.handled_by, {
+      agentId: "spc-agent-order-risk",
+      agentName: "订单风险分析 Agent",
+      role: "order_risk",
+      model: "deepseek-flash",
+    });
+    assert.equal(complete.result.duration_ms, 1235);
+    assert.deepEqual(complete.usage, {
+      modelId: "deepseek-flash",
+      tokensIn: 1,
+      cachedTokens: 0,
+      tokensOut: 1,
+    });
+
+    const reasoningRequest = stub.requests.find(
+      (request) => request.method === "POST" && request.path === "/external/reasoning/analyze",
+    );
+    assert.ok(reasoningRequest);
+    assert.equal(reasoningRequest.body.request_id, "dispatch-req-1");
+    assert.equal(reasoningRequest.body.task_type, "order_delivery_analysis");
+  } finally {
+    if (agent) await stopAgent(agent);
+    await hub.close();
+    await stub.close();
+  }
+});
+
+test("returns AGENT_BUSY when a second dispatch arrives during an active run", async () => {
+  const hub = startHub();
+  const stub = startStubPlatform({ queryData: { ok: true }, queryDelayMs: 300 });
+  let agent;
+  try {
+    const [hubPort, stubPort] = await Promise.all([hub.ready, stub.ready]);
+    agent = spawnAgent({ entry: ENTRY, env: gatewayEnv(hubPort, stubPort) });
+    await waitUntil(() => hub.messages.some((message) => message.type === "register"));
+
+    hub.send({
+      type: "dispatch",
+      runId: "exec-run-busy-1",
+      capability: "query_control_platform",
+      input: { path: "/external/orders/list", params: {} },
+      traceId: "trace-busy-1",
+    });
+    await waitUntil(() =>
+      hub.messages.some((message) => message.type === "run_update" && message.runId === "exec-run-busy-1"),
+    );
+
+    hub.send({
+      type: "dispatch",
+      runId: "exec-run-busy-2",
+      capability: "query_control_platform",
+      input: { path: "/external/orders/list", params: {} },
+    });
+    await waitUntil(() =>
+      hub.messages.some((message) => message.type === "run_failed" && message.runId === "exec-run-busy-2"),
+    );
+    const failed = hub.messages.find(
+      (message) => message.type === "run_failed" && message.runId === "exec-run-busy-2",
+    );
+    assert.equal(failed.error.code, "AGENT_BUSY");
+
+    await waitUntil(() =>
+      hub.messages.some((message) => message.type === "run_complete" && message.runId === "exec-run-busy-1"),
+    );
+  } finally {
+    if (agent) await stopAgent(agent);
+    await hub.close();
+    await stub.close();
+  }
+});
+
+test("returns TARGET_AGENT_UNAVAILABLE for an unknown target_agent_ref", async () => {
+  const hub = startHub();
+  const stub = startStubPlatform();
+  let agent;
+  try {
+    const [hubPort, stubPort] = await Promise.all([hub.ready, stub.ready]);
+    agent = spawnAgent({ entry: ENTRY, env: gatewayEnv(hubPort, stubPort) });
+    await waitUntil(() => hub.messages.some((message) => message.type === "register"));
+
+    hub.send({
+      type: "dispatch",
+      runId: "exec-run-target-missing",
+      capability: "reason_control_platform",
+      input: {
+        prompt: "分析订单交付风险",
+        task_type: "order_delivery_analysis",
+        context: { businessObjectRef: "business://order/O-1" },
+      },
+      request_id: "dispatch-req-target",
+      target_agent_ref: "spc-agent-missing",
+      caller: { systemId: "aeos-hub", agentId: "AG-000001" },
+    });
+
+    await waitUntil(() =>
+      hub.messages.some((message) => message.type === "run_failed" && message.runId === "exec-run-target-missing"),
+    );
+    const failed = hub.messages.find(
+      (message) => message.type === "run_failed" && message.runId === "exec-run-target-missing",
+    );
+    assert.equal(failed.error.code, "TARGET_AGENT_UNAVAILABLE");
   } finally {
     if (agent) await stopAgent(agent);
     await hub.close();

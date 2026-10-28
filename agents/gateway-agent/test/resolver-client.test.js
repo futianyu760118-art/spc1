@@ -41,10 +41,27 @@ test("resolveCaller sends X-Gateway-Token and caller", async () => {
   await stub.close();
 });
 
-test("resolveCaller maps 403 to INVALID_ARGUMENT", async () => {
+test("resolveCaller preserves AGENT_NOT_FOUND", async () => {
   const stub = startStub((req, res) => {
     res.writeHead(403, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ code: 403, message: "denied", data: { reason: "AGENT_NOT_FOUND" } }));
+  });
+  const port = await stub.ready;
+  const client = createResolverClient({
+    config: { backendInternalBaseUrl: `http://127.0.0.1:${port}`, gatewayInternalToken: "gw-token" },
+    log: () => {},
+  });
+  await assert.rejects(
+    () => client.resolveCaller({ runId: "r", capability: "query_control_platform", input: {}, caller: {} }),
+    (e) => e.code === "AGENT_NOT_FOUND",
+  );
+  await stub.close();
+});
+
+test("resolveCaller keeps other 403 reasons as INVALID_ARGUMENT", async () => {
+  const stub = startStub((req, res) => {
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ code: 403, message: "denied", data: { reason: "USER_NOT_FOUND" } }));
   });
   const port = await stub.ready;
   const client = createResolverClient({

@@ -2,9 +2,11 @@
 
 const {
   HubConnection, startHealthServer, createLogger, createLocalRunHandler, readJsonBody,
+  UpstreamError, ERROR_CODES, splitOutcome,
 } = require("@spc/execution-agent-runtime");
 const { buildConfigs } = require("./config");
-const { buildAdapters, ADAPTER_BY_CAPABILITY } = require("./adapters");
+const { buildAdapters } = require("./adapters");
+const { buildAgentRegistry, attachResultMetadata } = require("./agent-registry");
 const { createResolverClient } = require("./resolver-client");
 const { createHubClient } = require("./hub-client");
 
@@ -14,9 +16,63 @@ async function main() {
   gateway.configVersion = null;
   const log = createLogger(() => gateway.logLevel);
   const adapters = await buildAdapters({ query, reasoning, log });
+  const registry = buildAgentRegistry({
+    queryAdapter: adapters.query,
+    reasoningAdapter: adapters.reasoning,
+    log,
+  });
+  const capabilities = [adapters.query.capability, adapters.reasoning.capability];
   const resolver = createResolverClient({ config: gateway, log });
   const hub = createHubClient({ config: gateway, log });
-  const capabilities = [adapters.query.capability, adapters.reasoning.capability];
+
+  async function invokeAgent(run, input) {
+    const resolution = registry.resolve({
+      capability: run.capability,
+      input,
+      targetAgentRef: run.targetAgentRef,
+    });
+    if (!resolution.agent) {
+      const message =
+        resolution.error === ERROR_CODES.TARGET_AGENT_UNAVAILABLE
+          ? `target_agent_ref 不可用：${run.targetAgentRef || ""}`
+          : resolution.error === ERROR_CODES.INTERNAL_ERROR
+            ? "内部 Agent 路由存在歧义"
+            : `没有可处理该请求的内部 Agent：capability=${run.capability}`;
+      throw new UpstreamError(resolution.error, message);
+    }
+    const agent = resolution.agent;
+    log("info", "agent_resolved", {
+      runId: run.runId,
+      capability: run.capability,
+      agentId: agent.agentId,
+      requestId: run.requestId,
+      targetAgentRef: run.targetAgentRef,
+    });
+    try {
+      const outcome = await agent.invoke(run, input);
+      if (outcome === null || outcome === undefined) {
+        log("info", "agent_cancelled", { runId: run.runId, agentId: agent.agentId });
+        return outcome;
+      }
+      const { result, usage } = splitOutcome(outcome);
+      const withMeta = attachResultMetadata(agent, run, result);
+      log("info", "agent_completed", {
+        runId: run.runId,
+        agentId: agent.agentId,
+        requestId: run.requestId,
+        hasUsage: usage !== undefined,
+      });
+      return usage !== undefined ? { result: withMeta, usage } : withMeta;
+    } catch (e) {
+      log("warn", "agent_failed", {
+        runId: run.runId,
+        agentId: agent.agentId,
+        code: e && e.code,
+        message: e && e.message ? e.message : String(e),
+      });
+      throw e;
+    }
+  }
 
   const handlers = {
     capabilities,
@@ -29,22 +85,21 @@ async function main() {
         caller: run.caller,
       });
       if (resolved.mode === "user" && !resolved.actorToken) {
-        throw new Error("resolve-caller 未返回 actorToken，拒绝按系统级执行");
+        throw new UpstreamError(
+          ERROR_CODES.INTERNAL_ERROR,
+          "resolve-caller 未返回 actorToken，拒绝按系统级执行",
+        );
       }
       run.actorToken = resolved.mode === "user" ? resolved.actorToken : null;
-      return adapters[ADAPTER_BY_CAPABILITY[run.capability]].invoke(run, input);
+      return invokeAgent(run, input);
     },
-    onRecall: (runId) => {
-      for (const adapter of Object.values(adapters)) {
-        if (adapter.cancel) adapter.cancel(runId);
-      }
-    },
+    onRecall: (runId) => registry.cancel(runId),
   };
 
   const connection = new HubConnection({ config: gateway, log, handlers });
 
   const localAdapter = {
-    invoke: (run, input) => adapters[ADAPTER_BY_CAPABILITY[run.capability]].invoke(run, input),
+    invoke: (run, input) => invokeAgent(run, input),
   };
   const onLocalRun = createLocalRunHandler(localAdapter, connection, log);
 

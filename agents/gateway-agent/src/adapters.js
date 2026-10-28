@@ -30,9 +30,4 @@ async function buildAdapters({ query, reasoning, log }) {
   };
 }
 
-const ADAPTER_BY_CAPABILITY = Object.freeze({
-  query_control_platform: "query",
-  reason_control_platform: "reasoning",
-});
-
-module.exports = { buildAdapters, ADAPTER_BY_CAPABILITY };
+module.exports = { buildAdapters };

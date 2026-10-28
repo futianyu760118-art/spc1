@@ -6,6 +6,7 @@ const { createHttpClient } = require("./http-client");
 const { createRemoteConfig } = require("./remote-config");
 const { HubConnection } = require("./protocol");
 const { startHealthServer } = require("./health-server");
+const { buildRunContext } = require("./run-context");
 
 function safeCancel(adapter, config, log) {
   return (runId) => {
@@ -24,25 +25,26 @@ function safeCancel(adapter, config, log) {
 }
 
 function createLocalRunHandler(adapter, connection, log) {
-  return async (runId, capability, input, operator, actorToken, traceId, caller) => {
-    const run = {
-      runId,
-      capability,
-      operator: operator || null,
-      actorToken: actorToken || null,
-      caller: caller || null,
-      traceId: traceId || "",
-      taskId: (caller && caller.taskId) || null,
-      recalled: false,
-      controller: new AbortController(),
+  return async (context) => {
+    const run = buildRunContext({
+      ...context,
+      source: "local",
       report: (event, name, status, summary, detail, timings) =>
-        log("info", "local_run_event", { runId, event, name, status, summary, detail, timings }),
-    };
-    connection.localRuns.set(runId, run);
+        log("info", "local_run_event", {
+          runId: context.runId,
+          event,
+          name,
+          status,
+          summary,
+          detail,
+          timings,
+        }),
+    });
+    connection.localRuns.set(run.runId, run);
     try {
-      return await adapter.invoke(run, input);
+      return await adapter.invoke(run, run.input);
     } finally {
-      connection.localRuns.delete(runId);
+      connection.localRuns.delete(run.runId);
     }
   };
 }

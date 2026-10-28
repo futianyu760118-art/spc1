@@ -14,6 +14,7 @@ const {
 test("mapCode maps contract status codes", () => {
   assert.equal(mapCode(400), "INVALID_ARGUMENT");
   assert.equal(mapCode(404), "NOT_FOUND");
+  assert.equal(mapCode(409), "AGENT_BUSY");
   assert.equal(mapCode(429), "RATE_LIMITED");
   assert.equal(mapCode(504), "UPSTREAM_TIMEOUT");
   assert.equal(mapCode(500), "UPSTREAM_UNAVAILABLE");

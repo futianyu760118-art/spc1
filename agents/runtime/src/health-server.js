@@ -2,6 +2,7 @@
 
 const crypto = require("node:crypto");
 const http = require("node:http");
+const { normalizeRequestId, normalizeTargetAgentRef } = require("./run-context");
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -64,6 +65,14 @@ async function handleLocalRun(req, res, { log, capabilities, onLocalRun }) {
   const caller = body && typeof body === "object" && body.caller && typeof body.caller === "object"
     ? body.caller
     : null;
+  const requestId = normalizeRequestId(body);
+  let targetAgentRef;
+  try {
+    targetAgentRef = normalizeTargetAgentRef(body);
+  } catch (e) {
+    send(400, { status: "invalid_target_agent_ref", message: e.message });
+    return;
+  }
   if (typeof capability !== "string" || !capabilities.some((c) => c.name === capability)) {
     send(400, { status: "unknown_capability" });
     return;
@@ -82,9 +91,19 @@ async function handleLocalRun(req, res, { log, capabilities, onLocalRun }) {
   }
   const runId =
     typeof body.runId === "string" && body.runId.trim() ? body.runId.trim() : `local-${crypto.randomUUID()}`;
-  log("info", "local_run_started", { runId, capability });
+  log("info", "local_run_started", { runId, capability, requestId, targetAgentRef });
   try {
-    const result = await onLocalRun(runId, capability, input, operator, actorToken, traceId, caller);
+    const result = await onLocalRun({
+      runId,
+      capability,
+      input,
+      requestId,
+      traceId,
+      caller,
+      targetAgentRef,
+      operator,
+      actorToken,
+    });
     send(200, { ok: true, runId, result: result ?? {} });
   } catch (e) {
     log("info", "local_run_failed", {

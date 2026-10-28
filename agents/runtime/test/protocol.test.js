@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { HubConnection, normalizeResult, roundDurationMs } = require("../src/protocol");
+const { HubConnection } = require("../src/protocol");
 const { startHub } = require("./helpers/mock-hub");
 
 function createConfig(port, overrides = {}) {
@@ -35,14 +35,6 @@ function waitUntil(predicate, timeoutMs = 3000) {
 function registerMessages(hub) {
   return hub.messages.filter((m) => m.type === "register");
 }
-
-test("normalizes result.duration_ms and run_event durationMs to integers", () => {
-  assert.equal(roundDurationMs(20359.1), 20359);
-  assert.equal(roundDurationMs(20359.6), 20360);
-  assert.equal(roundDurationMs(null), null);
-  assert.deepEqual(normalizeResult({ ok: true, duration_ms: 20359.1 }), { ok: true, duration_ms: 20359 });
-  assert.deepEqual(normalizeResult({ ok: true }), { ok: true });
-});
 
 test("registers with identity and capabilities, dispatches, reports completion and ignores duplicate dispatch", async (t) => {
   const hub = startHub();
@@ -128,7 +120,7 @@ test("registers with identity and capabilities, dispatches, reports completion a
   hub.send({ type: "dispatch", runId: "run-2", capability: "query_control_platform", input: {} });
   await waitUntil(() => hub.messages.some((m) => m.type === "run_failed" && m.runId === "run-2"));
   const busy = hub.messages.find((m) => m.type === "run_failed" && m.runId === "run-2");
-  assert.equal(busy.error.code, "INTERNAL_ERROR");
+  assert.equal(busy.error.code, "AGENT_BUSY");
   assert.equal(busy.error.message, "agent busy");
 
   release();
@@ -414,4 +406,133 @@ test("falls back to legacy execution token headers without system config", async
   assert.equal(hub.systemHeaders[0].systemId, undefined);
   legacyConnection.stop();
   await hub.close();
+});
+
+test("carries request_id and target_agent_ref into the run context", async (t) => {
+  const hub = startHub();
+  const port = await hub.ready;
+  let dispatchedRun;
+  const connection = new HubConnection({
+    config: createConfig(port),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "reason_control_platform" }],
+      onDispatch: async (run) => {
+        dispatchedRun = run;
+        return { ok: true };
+      },
+      onRecall: () => {},
+    },
+  });
+  t.after(async () => {
+    connection.stop();
+    await hub.close();
+  });
+
+  connection.start();
+  await waitUntil(() => connection.isRegistered());
+  hub.send({
+    type: "dispatch",
+    runId: "run-meta",
+    capability: "reason_control_platform",
+    input: { task_type: "order_delivery_analysis" },
+    request_id: "dispatch-req-1",
+    target_agent_ref: "spc-agent-order-risk",
+    traceId: "trace-meta",
+  });
+  await waitUntil(() => hub.messages.some((m) => m.type === "run_complete" && m.runId === "run-meta"));
+
+  assert.equal(dispatchedRun.source, "hub");
+  assert.equal(dispatchedRun.requestId, "dispatch-req-1");
+  assert.equal(dispatchedRun.targetAgentRef, "spc-agent-order-risk");
+  const complete = hub.messages.find((m) => m.type === "run_complete" && m.runId === "run-meta");
+  assert.deepEqual(complete.result, { ok: true });
+});
+
+test("maps RATE_LIMITED to AGENT_BUSY in run_failed", async (t) => {
+  const hub = startHub();
+  const port = await hub.ready;
+  const connection = new HubConnection({
+    config: createConfig(port),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "query_control_platform" }],
+      onDispatch: async () => {
+        const error = new Error("too many");
+        error.code = "RATE_LIMITED";
+        throw error;
+      },
+      onRecall: () => {},
+    },
+  });
+  t.after(async () => {
+    connection.stop();
+    await hub.close();
+  });
+
+  connection.start();
+  await waitUntil(() => connection.isRegistered());
+  hub.send({ type: "dispatch", runId: "run-rate", capability: "query_control_platform", input: {} });
+  await waitUntil(() => hub.messages.some((m) => m.type === "run_failed" && m.runId === "run-rate"));
+
+  const failed = hub.messages.find((m) => m.type === "run_failed" && m.runId === "run-rate");
+  assert.equal(failed.error.code, "AGENT_BUSY");
+});
+
+test("rejects unknown capabilities with AGENT_NOT_FOUND", async (t) => {
+  const hub = startHub();
+  const port = await hub.ready;
+  const connection = new HubConnection({
+    config: createConfig(port),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "query_control_platform" }],
+      onDispatch: async () => ({ ok: true }),
+      onRecall: () => {},
+    },
+  });
+  t.after(async () => {
+    connection.stop();
+    await hub.close();
+  });
+
+  connection.start();
+  await waitUntil(() => connection.isRegistered());
+  hub.send({ type: "dispatch", runId: "run-unknown", capability: "nope", input: {} });
+  await waitUntil(() => hub.messages.some((m) => m.type === "run_failed" && m.runId === "run-unknown"));
+
+  const failed = hub.messages.find((m) => m.type === "run_failed" && m.runId === "run-unknown");
+  assert.equal(failed.error.code, "AGENT_NOT_FOUND");
+});
+
+test("rejects non-string target_agent_ref with INVALID_ARGUMENT", async (t) => {
+  const hub = startHub();
+  const port = await hub.ready;
+  const connection = new HubConnection({
+    config: createConfig(port),
+    log: () => {},
+    handlers: {
+      capabilities: [{ name: "query_control_platform" }],
+      onDispatch: async () => ({ ok: true }),
+      onRecall: () => {},
+    },
+  });
+  t.after(async () => {
+    connection.stop();
+    await hub.close();
+  });
+
+  connection.start();
+  await waitUntil(() => connection.isRegistered());
+  hub.send({
+    type: "dispatch",
+    runId: "run-bad-target",
+    capability: "query_control_platform",
+    input: {},
+    target_agent_ref: 123,
+  });
+  await waitUntil(() => hub.messages.some((m) => m.type === "run_failed" && m.runId === "run-bad-target"));
+
+  const failed = hub.messages.find((m) => m.type === "run_failed" && m.runId === "run-bad-target");
+  assert.equal(failed.error.code, "INVALID_ARGUMENT");
 });

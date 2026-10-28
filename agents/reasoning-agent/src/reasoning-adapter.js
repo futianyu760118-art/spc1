@@ -81,13 +81,14 @@ function createAdapter({ config, http, log }) {
     }
     const runId = run.runId;
     const taskType = input.task_type ?? "";
+    const requestId = run.requestId ?? input.request_id ?? input.requestId;
     const body = {
       prompt: input.prompt,
       task_type: input.task_type,
       context: input.context,
       constraints: Object.assign({ read_only: true, require_evidence: true }, input.constraints),
       task_id: runId,
-      request_id: input.request_id,
+      request_id: requestId,
     };
     const report = run.report;
     const startedAt = new Date().toISOString();

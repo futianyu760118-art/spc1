@@ -1,6 +1,14 @@
 "use strict";
 
 const WebSocket = require("ws");
+const {
+  normalizeCaller,
+  normalizeRequestId,
+  normalizeTargetAgentRef,
+  buildRunContext,
+} = require("./run-context");
+const { normalizeResult, roundDurationMs, splitOutcome } = require("./run-result");
+const { ERROR_CODES, normalizeRunErrorCode } = require("./error-codes");
 
 /**
  * AEOS Hub 执行面 WS 协议状态机 —— 信封对齐 execution-agent/src/ws-client.js
@@ -8,27 +16,15 @@ const WebSocket = require("ws");
  *
  * 连接：握手头 x-aeos-execution-token → register {agentId,name,version,sourceSystem?,capabilities}
  * Hub：registered {agentId,heartbeatIntervalMs} → 周期 heartbeat {status,currentRunId?}
- * 派单：dispatch {runId,capability,input} → run_update{running} → run_complete|run_failed
+ * 派单：dispatch {runId,capability,input,request_id?,target_agent_ref?} → run_update{running} → run_complete|run_failed
  * 步骤上报：run 期间以 run_event 上报 run_received/step_started/step_completed/error/run_summary，
  *   Hub 回 run_event_ack（仅排查用，不阻塞任务）
  * 召回：recall {runId} → 中止活动 run（含平台侧推理取消），不回报（契约 §5）
  * 断线：杀活动 run（不回报）→ 1/2/5/10/30s 阶梯 + ±20% 抖动重连后重新 register
- * 单活动 run：忙时新 dispatch 回 run_failed(INTERNAL_ERROR 'agent busy')（设计 §3 边界决策）
+ * 单活动 run：忙时新 dispatch 回 run_failed(AGENT_BUSY 'agent busy')（Hub 契约）
  */
 const RECONNECT_LADDER_MS = [1000, 2000, 5000, 10000, 30000];
 const DEFAULT_HEARTBEAT_MS = 5000;
-const CALLER_KEYS = ["systemId", "agentId", "userId", "taskId", "traceId"];
-
-function normalizeCaller(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const caller = {};
-  for (const key of CALLER_KEYS) {
-    const raw = value[key];
-    if (raw === undefined || raw === null || String(raw).trim() === "") continue;
-    caller[key] = String(raw).trim();
-  }
-  return Object.keys(caller).length ? caller : null;
-}
 
 function traceFields(run) {
   if (!run) return {};
@@ -36,17 +32,6 @@ function traceFields(run) {
   if (run.traceId) fields.traceId = run.traceId;
   if (run.taskId) fields.taskId = run.taskId;
   return fields;
-}
-
-function roundDurationMs(value) {
-  return typeof value === "number" && Number.isFinite(value) ? Math.round(value) : value;
-}
-
-/** Hub 契约要求 result.duration_ms 为整数；适配器返回值做一次兜底归一化。 */
-function normalizeResult(result) {
-  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
-  if (typeof result.duration_ms !== "number" || !Number.isFinite(result.duration_ms)) return result;
-  return { ...result, duration_ms: Math.round(result.duration_ms) };
 }
 
 class HubConnection {
@@ -182,37 +167,59 @@ class HubConnection {
   onDispatch(dispatch) {
     const { runId, capability } = dispatch ?? {};
     if (!runId) return;
+    let targetAgentRef;
+    try {
+      targetAgentRef = normalizeTargetAgentRef(dispatch);
+    } catch (e) {
+      this.send({
+        type: "run_failed",
+        runId,
+        error: { code: e.code || ERROR_CODES.INVALID_ARGUMENT, message: e.message },
+      });
+      return;
+    }
+    const caller = normalizeCaller(dispatch.caller);
+    const requestId = normalizeRequestId(dispatch);
+    const traceId = dispatch.traceId || (caller && caller.traceId) || runId;
     this.log("info", "dispatch_received", {
       runId,
       capability,
-      traceId: dispatch.traceId ?? null,
-      caller: normalizeCaller(dispatch.caller),
+      traceId,
+      requestId,
+      targetAgentRef,
+      caller,
     });
     if (this.hubRun) {
       this.log("warn", "dispatch_rejected", { runId, reason: "busy", currentRunId: this.hubRun.runId });
-      this.send({ type: "run_failed", runId, error: { code: "INTERNAL_ERROR", message: "agent busy" } });
+      this.send({
+        type: "run_failed",
+        runId,
+        error: { code: ERROR_CODES.AGENT_BUSY, message: "agent busy" },
+      });
       return;
     }
     if (!this.handlers.capabilities.some((c) => c.name === capability)) {
       this.log("warn", "dispatch_rejected", { runId, reason: "unknown_capability", capability });
-      this.send({ type: "run_failed", runId, error: { code: "INVALID_ARGUMENT", message: `未知 capability: ${capability}` } });
+      this.send({
+        type: "run_failed",
+        runId,
+        error: { code: ERROR_CODES.AGENT_NOT_FOUND, message: `未知 capability: ${capability}` },
+      });
       return;
     }
 
-    const caller = normalizeCaller(dispatch.caller);
-    const traceId = dispatch.traceId || (caller && caller.traceId) || runId;
-    const taskId = caller && caller.taskId ? caller.taskId : null;
-    const run = {
+    const run = buildRunContext({
+      source: "hub",
       runId,
       capability,
-      caller,
+      input: dispatch.input,
+      requestId,
       traceId,
-      taskId,
-      recalled: false,
-      controller: new AbortController(),
+      caller,
+      targetAgentRef,
       report: (event, name, status, summary, detail, timings) =>
         this.reportRunEvent(runId, event, name, status, summary, detail, timings),
-    };
+    });
     this.hubRun = run;
     this.runs.set(runId, run);
     this.reportRunEvent(runId, "run_received", "收到任务", "info", `capability=${capability}`, {
@@ -220,28 +227,38 @@ class HubConnection {
       path: dispatch.input?.path,
     });
     this.send({ type: "run_update", runId, ...traceFields(run), state: "running" });
-    this.log("info", "run_started", { runId, capability });
+    this.log("info", "run_started", { runId, capability, requestId, targetAgentRef });
 
     Promise.resolve()
       .then(() => this.handlers.onDispatch(run, dispatch.input))
       .then((outcome) => {
-        // null = 推理任务被召回/取消（契约 §5：召回不回报）；recalled 同样跳过
         if (run.recalled || outcome === null || outcome === undefined) return;
-        // 适配器可返回 { result, usage }（推理用量记 Hub 台账）；其余直接当 result
-        const withUsage =
-          outcome && typeof outcome === "object" && "usage" in outcome && outcome.usage != null;
-        const result = normalizeResult(withUsage ? outcome.result : outcome);
-        const usage = withUsage ? outcome.usage : undefined;
+        const { result, usage } = splitOutcome(outcome);
+        const normalized = normalizeResult(result);
         const summary = `任务完成：${capability}`;
         this.reportRunEvent(runId, "run_summary", "任务完成", "completed", summary);
-        this.send({ type: "run_complete", runId, ...traceFields(run), result, ...(usage ? { usage } : {}) });
-        this.log("info", "run_complete", { runId });
+        this.send({
+          type: "run_complete",
+          runId,
+          ...traceFields(run),
+          result: normalized,
+          ...(usage !== undefined ? { usage } : {}),
+        });
+        this.log("info", "run_complete", {
+          runId,
+          requestId,
+          agentId:
+            normalized && typeof normalized === "object"
+              ? normalized.handled_by?.agentId ?? null
+              : null,
+        });
       })
       .catch((e) => {
         if (run.recalled) return;
+        const code = normalizeRunErrorCode(e.code);
         this.reportRunEvent(runId, "run_summary", "任务失败", "failed", e.message);
-        this.send({ type: "run_failed", runId, error: { code: e.code || "INTERNAL_ERROR", message: e.message } });
-        this.log("info", "run_failed", { runId, code: e.code || "INTERNAL_ERROR" });
+        this.send({ type: "run_failed", runId, error: { code, message: e.message } });
+        this.log("info", "run_failed", { runId, code });
       })
       .finally(() => {
         if (this.hubRun === run) this.hubRun = null;

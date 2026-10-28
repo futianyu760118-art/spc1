@@ -6,6 +6,23 @@
 - `query-agent` / `reasoning-agent`：仅作为网关内部 adapter 复用，不再独立部署、不再直连 Hub。
 - `order-agent`：`update_control_platform_order`，仅本地 `/admin/run` 执行（`EXECUTION_WS_URL=""`），不连 Hub。**写操作不可撤销，召回只中止本地等待，不会回滚已写入的字段。**
 
+## 内部逻辑 Agent 与 Hub 归因
+
+`gateway-agent` 内部维护 Agent 注册表，按 `capability + input.task_type` 路由：
+
+| task_type | agentId | role |
+|---|---|---|
+| `order_delivery_analysis` | `spc-agent-order-risk` | `order_risk` |
+| `material_kitting_analysis` | `spc-agent-kitting-risk` | `kitting_risk` |
+| `quality_analysis` | `spc-agent-quality-risk` | `quality_risk` |
+| `production_analysis` | `spc-agent-production-risk` | `production_risk` |
+
+- 推理任务的 `run_complete.result.handled_by` 返回上述身份，`model` 取后端实际 `llm.model`；
+- 查询不返回 `handled_by`，Hub 记 null；
+- `request_id` 从 dispatch 顶层或 `input` 提取并原样回显；
+- `target_agent_ref` 为内部 `agentId`，找不到或不匹配返回 `TARGET_AGENT_UNAVAILABLE`；
+- 忙碌 / 并发上限返回 `AGENT_BUSY`，无匹配内部 Agent 返回 `AGENT_NOT_FOUND`。
+
 ## 本地运行
 
 依赖 Node 20，在 `agents/` 下安装 workspace 依赖：
