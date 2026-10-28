@@ -7,9 +7,7 @@ interface AgentState {
   loading: boolean
   enabled: boolean
   isSupervisor: boolean
-  openTasks: number
   fetchMe: () => Promise<void>
-  refreshTaskSummary: () => Promise<void>
 }
 
 export const useAgentStore = create<AgentState>((set, get) => ({
@@ -18,7 +16,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   loading: false,
   enabled: true,
   isSupervisor: false,
-  openTasks: 0,
 
   fetchMe: async () => {
     if (get().loading) return
@@ -32,23 +29,13 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         loading: false,
         enabled: !!data,
         isSupervisor: !!data?.is_supervisor,
-        openTasks: Number(data?.task_summary?.open || 0),
       })
     } catch (error: any) {
       const explicitlyDisabled = error?._apiData?.code === 403
       set({
         loaded: true, loading: false, enabled: !explicitlyDisabled,
-        me: null, isSupervisor: false, openTasks: 0,
+        me: null, isSupervisor: false,
       })
-    }
-  },
-
-  refreshTaskSummary: async () => {
-    try {
-      const res: any = await agentApi.myTasksSummary()
-      set({ openTasks: Number(res.data?.open || 0) })
-    } catch {
-      set({ openTasks: 0 })
     }
   },
 }))

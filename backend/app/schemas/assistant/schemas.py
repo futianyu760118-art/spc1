@@ -9,7 +9,6 @@ class ChatMessageIn(BaseModel):
     message: str
     session_id: Optional[str] = None
     conversation_id: Optional[int] = None
-    task_id: Optional[int] = None
     conversation_history: Optional[List[Dict[str, Any]]] = None
 
 

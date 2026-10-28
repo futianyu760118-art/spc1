@@ -111,25 +111,11 @@ CAPABILITIES: Dict[str, Capability] = {
         endpoint_codes=("orders.schedule.update",),
         description="修改订单出货计划/发货完成/客户验货/上线时间（必须人工确认）",
     ),
-    "task.assign": Capability(
-        code="task.assign", name="任务派发", category="task", read_only=False,
-        structural=True,
-        tool_names=("assign_task", "list_team_tasks", "team_task_summary", "update_task", "remind_task",
-                    "reassign_task", "cancel_task", "return_task"),
-        description="向直属子智能体派发与管控任务（有直属子智能体即具备）",
-    ),
-    "task.report": Capability(
-        code="task.report", name="任务执行与汇报", category="task", read_only=False,
-        structural=True,
-        tool_names=("list_my_tasks", "get_task_detail", "start_task", "block_task",
-                    "submit_task_report", "analyze_task"),
-        description="接收并处理分配给自己的任务（任务接收人具备）",
-    ),
     "team.manage": Capability(
         code="team.manage", name="团队管理", category="team", read_only=False,
         structural=True,
-        tool_names=("list_my_subordinates", "add_subordinate", "update_subordinate_agent"),
-        description="添加直属子智能体与配置其能力（有直属子智能体即具备）",
+        tool_names=("list_my_subordinates",),
+        description="查看直属子智能体并委派只读任务（有直属子智能体即具备）",
     ),
     "query.production": Capability(
         code="query.production", name="生产域查询（首期未开放）", category="query", read_only=True,
@@ -183,24 +169,23 @@ def resolve_capabilities(
     return (baseline | granted) - disabled
 
 
-def structural_tools(is_supervisor: bool, has_assigned_tasks: bool) -> Set[str]:
-    """结构性能力映射到工具：团队工具只看是否有直属子智能体，任务工具只看是否有任务。"""
+def structural_tools(is_supervisor: bool, can_manage_team: bool) -> Set[str]:
+    """结构性工具：内部用户可查看直属成员；有直属成员后可委派。"""
     names: Set[str] = set()
-    if has_assigned_tasks:
-        names |= set(CAPABILITIES["task.report"].tool_names)
+    if can_manage_team:
+        names.add("list_my_subordinates")
     if is_supervisor:
-        names |= set(CAPABILITIES["task.assign"].tool_names)
-        names |= set(CAPABILITIES["team.manage"].tool_names)
+        names.add("delegate_task")
     return names
 
 
-def allowed_tool_names(effective: Set[str], is_supervisor: bool, has_assigned_tasks: bool) -> Set[str]:
+def allowed_tool_names(effective: Set[str], is_supervisor: bool, can_manage_team: bool) -> Set[str]:
     names: Set[str] = set()
     for code in effective:
         cap = CONFIGURABLE_CAPABILITIES.get(code)
         if cap:
             names |= set(cap.tool_names)
-    names |= structural_tools(is_supervisor, has_assigned_tasks)
+    names |= structural_tools(is_supervisor, can_manage_team)
     return names
 
 

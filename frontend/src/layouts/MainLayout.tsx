@@ -138,10 +138,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   agent: <RobotOutlined />,
   'ai.agent.self': <RobotOutlined />,
   'ai.agent.self.me': <RobotOutlined />,
-  'ai.agent.self.tasks': <UnorderedListOutlined />,
   'ai.agent.team': <TeamOutlined />,
-  'ai.agent.team.tasks': <TeamOutlined />,
-  'ai.agent.team.config': <SettingOutlined />,
   'ai.agent.admin': <SafetyCertificateOutlined />,
 }
 
@@ -602,7 +599,6 @@ function getRequiredPermission(pathname: string, dynamicMap?: Record<string, str
   if (pathname.startsWith('/orders/')) return 'orders.list'
   if (pathname.startsWith('/stock-check/')) return 'materials.stock_check'
   if (pathname.startsWith('/approvals/create')) return 'approval.initiate'
-  if (pathname.startsWith('/agents/tasks/')) return 'ai.agent.self'
   if (pathname.startsWith('/agents/team')) return 'ai.agent.team'
   if (pathname.startsWith('/agents/admin')) return 'ai.agent.admin'
   if (pathname.startsWith('/agents')) return 'ai.agent.self'
@@ -613,8 +609,7 @@ export default function MainLayout() {
   const { currentUser, logout, hasPermission, isSupplierUser, isShareUser, getShareTargetPath, exitShare, originalToken, setAuth } = useAuthStore()
   const { tree: permTree, loaded: permLoaded, fetchTree, getPathToPermission, getPathToGroupKey } = usePermissionStore()
   const {
-    isSupervisor: agentIsSupervisor, enabled: agentEnabled, loaded: agentLoaded,
-    fetchMe: fetchAgentMe, refreshTaskSummary: refreshAgentTaskSummary,
+    enabled: agentEnabled, loaded: agentLoaded, fetchMe: fetchAgentMe,
   } = useAgentStore()
   const navigate = useNavigate()
   const location = useLocation()
@@ -640,12 +635,6 @@ export default function MainLayout() {
       fetchAgentMe()
     }
   }, [originalToken, isShareUser, hasPermission, fetchAgentMe])
-
-  useEffect(() => {
-    if (originalToken && !isShareUser() && hasPermission('ai.agent.self', 'read')) {
-      refreshAgentTaskSummary()
-    }
-  }, [originalToken, isShareUser, hasPermission, unreadTotal, refreshAgentTaskSummary])
 
   // 动态菜单项：优先使用 API 数据，fallback 到硬编码
   const dynamicMenuItems = useMemo(() => {
@@ -869,7 +858,6 @@ export default function MainLayout() {
     const pruneAgentTeam = (items: PermissionAwareItem[]): PermissionAwareItem[] => {
       return items.flatMap(item => {
         if (item.key === 'ai.agent.self' && agentLoaded && !agentEnabled) return []
-        if (item.key === 'ai.agent.team' && !agentIsSupervisor) return []
         const next = item.children ? { ...item, children: pruneAgentTeam(item.children) } : item
         if (next.children && next.children.length === 0 && !String(next.key).startsWith('/')) return []
         return [next]
@@ -881,7 +869,7 @@ export default function MainLayout() {
       tree.push({ key: '/notifications', icon: <BellOutlined />, label: '站内信' } as any)
     }
     return tree
-  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems, agentIsSupervisor, agentEnabled, agentLoaded])
+  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems, agentEnabled, agentLoaded])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
   // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（如仅授 ai.assistant_config 也能进 /ai-assistant）

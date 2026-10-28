@@ -38,7 +38,7 @@ function gatewayEnv(hubPort, stubPort) {
 
 test("gateway dispatches query and returns run_complete with caller/trace", async () => {
   const hub = startHub();
-  const stub = startStubPlatform({ queryData: { ok: true } });
+  const stub = startStubPlatform({ queryData: { ok: true, duration_ms: 20359.1 } });
   let agent;
   try {
     const [hubPort, stubPort] = await Promise.all([hub.ready, stub.ready]);
@@ -56,7 +56,7 @@ test("gateway dispatches query and returns run_complete with caller/trace", asyn
       type: "dispatch",
       runId: "exec-run-e2e-1",
       capability: "query_control_platform",
-      input: { path: "/common/ping", params: {} },
+      input: { path: "/external/orders/list", params: {} },
       traceId: "trace-e2e-1",
       caller: {
         systemId: "aeos-hub",
@@ -73,7 +73,8 @@ test("gateway dispatches query and returns run_complete with caller/trace", asyn
     const complete = hub.messages.find(
       (message) => message.type === "run_complete" && message.runId === "exec-run-e2e-1",
     );
-    assert.deepEqual(complete.result, { ok: true });
+    assert.equal(complete.result.ok, true);
+    assert.equal(complete.result.duration_ms, 20359);
     assert.equal(complete.traceId, "trace-e2e-1");
     assert.equal(complete.taskId, "AT-E2E-1");
 

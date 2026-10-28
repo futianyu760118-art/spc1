@@ -99,9 +99,6 @@ import ApprovalCreate from '../pages/ApprovalCenter/Create'
 import ApprovalCreateForm from '../pages/ApprovalCenter/Create/FormPage'
 import SubjectBalances from '../pages/FinanceCenter/SubjectBalances/index'
 import AgentMyAgent from '../pages/AgentCenter/MyAgent'
-import AgentMyTasks from '../pages/AgentCenter/MyTasks'
-import AgentTaskDetail from '../pages/AgentCenter/TaskDetail'
-import AgentTeamTasks from '../pages/AgentCenter/TeamTasks'
 import AgentTeamConfig from '../pages/AgentCenter/TeamConfig'
 import AgentAdmin from '../pages/AgentCenter/Admin'
 
@@ -212,10 +209,7 @@ export const contentRoutes = (
         <Route path="/approvals/create/:bizType/:id" element={<ApprovalCreateForm/>}/>
         <Route path="/finance/subject-balances" element={<SubjectBalances/>} key="finance-subject-balances"/>
         <Route path="/agents/me" element={<AgentMyAgent/>}/>
-        <Route path="/agents/tasks" element={<AgentMyTasks/>}/>
-        <Route path="/agents/tasks/:id" element={<AgentTaskDetail/>}/>
-        <Route path="/agents/team/config" element={<AgentTeamConfig/>}/>
-        <Route path="/agents/team" element={<AgentTeamTasks/>}/>
+        <Route path="/agents/team" element={<AgentTeamConfig/>}/>
         <Route path="/agents/admin" element={<AgentAdmin/>}/>
     </>
 )

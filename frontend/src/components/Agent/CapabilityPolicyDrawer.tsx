@@ -6,8 +6,7 @@ const { Text } = Typography
 
 interface Detail {
   agent?: { id: number; display_name: string; username?: string; status: string }
-  policy?: { granted: string[]; disabled: string[]; data_scope: { mode: string; org_ids: number[]; include_sub: boolean } }
-  scope?: { summary: string; org_names: string[] }
+  policy?: { granted: string[]; disabled: string[] }
   effective_capabilities?: AgentCapability[]
   role_baseline?: AgentCapability[]
   grantable?: AgentCapability[]
@@ -73,11 +72,6 @@ export const CapabilityPolicyDrawer: React.FC<Props> = ({ open, detail, loading,
       {loading ? <div style={{ padding: 24, textAlign: 'center' }}>加载中...</div> : !detail ? <Empty /> : (
         <>
           <Descriptions size="small" column={1} bordered>
-            <Descriptions.Item label="当前生效范围">{detail.scope?.summary || '本人数据'}</Descriptions.Item>
-            <Descriptions.Item label="数据范围配置">
-              {detail.policy?.data_scope?.mode || 'org'}
-              {detail.policy?.data_scope?.org_ids?.length ? `（额外组织 ${detail.policy.data_scope.org_ids.length} 个）` : ''}
-            </Descriptions.Item>
             <Descriptions.Item label="当前生效能力">
               {(detail.effective_capabilities || []).map(item => <Tag key={item.code} color="blue">{item.name}</Tag>)}
             </Descriptions.Item>
@@ -86,7 +80,7 @@ export const CapabilityPolicyDrawer: React.FC<Props> = ({ open, detail, loading,
             style={{ marginTop: 12 }}
             type="info"
             showIcon
-            message="P1 主管只能配置能力；数据范围由管理员配置。授予项不得超过主管自身能力。"
+            message="主管只能配置能力；授予项不得超过主管自身能力。"
           />
 
           <Divider orientation="left">角色已有能力（可禁用收紧）</Divider>

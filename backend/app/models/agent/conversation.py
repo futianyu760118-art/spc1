@@ -13,7 +13,7 @@ class AgentConversation(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     agent_id = Column(BigInteger, ForeignKey("agent.id"), nullable=False)
     user_id = Column(Integer, nullable=False)
-    task_id = Column(BigInteger, ForeignKey("agent_task.id"), nullable=True)
+    task_id = Column(BigInteger, nullable=True)
     title = Column(String(200), nullable=True)
     status = Column(String(16), nullable=False, default="active", server_default="active", comment="active|archived")
     last_message_at = Column(DateTime, nullable=True)

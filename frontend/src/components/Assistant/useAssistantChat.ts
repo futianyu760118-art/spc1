@@ -267,7 +267,7 @@ export function useAssistantChat() {
     }
   }, [appendFollowUpReply])
 
-  const send = useCallback(async (text: string, taskId?: number) => {
+  const send = useCallback(async (text: string) => {
     const trimmed = text.trim()
     if (!trimmed || loading) return
 
@@ -337,7 +337,6 @@ export function useAssistantChat() {
         sessionIdRef.current || undefined,
         conversationHistory,
         conversationIdRef.current || undefined,
-        taskId,
       )
 
       if (!response.ok) {
@@ -402,7 +401,7 @@ export function useAssistantChat() {
         const conversationHistory = messages.slice(-10)
         const res: any = await assistantApi.chat(
           trimmed, sessionIdRef.current || undefined, conversationHistory,
-          conversationIdRef.current || undefined, taskId,
+          conversationIdRef.current || undefined,
         )
         const data = res.data
         sessionIdRef.current = data.session_id || ''

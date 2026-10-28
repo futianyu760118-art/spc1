@@ -116,9 +116,8 @@ async def _test_db():
     from app.models.basicdata.employee import Employee
     from app.models.basicdata.organization import Organization
     from app.models.agent import (
-        Agent, AgentConfigLog, AgentConversation, AgentHierarchyLog,
-        AgentMessage, AgentTask, AgentTaskEvent, AgentTaskReport,
-        GatewayDispatchLog,
+        Agent, AgentCallLog, AgentConfigLog, AgentConversation, AgentHierarchyLog,
+        AgentMessage, GatewayDispatchLog,
     )
     from app.models.basicdata.reasoning import ReasoningTask
     from app.models.exception.quality_issue import QualityIssue
@@ -173,9 +172,8 @@ async def _test_db():
         AiAgentConfig.__table__, AssistantRun.__table__,
         CompletenessRule.__table__,
         Organization.__table__, Employee.__table__,
-        Agent.__table__, AgentConfigLog.__table__, AgentHierarchyLog.__table__,
-        AgentTask.__table__, AgentTaskEvent.__table__, AgentTaskReport.__table__,
-        AgentConversation.__table__, AgentMessage.__table__,
+        Agent.__table__, AgentCallLog.__table__, AgentConfigLog.__table__,
+        AgentHierarchyLog.__table__, AgentConversation.__table__, AgentMessage.__table__,
         GatewayDispatchLog.__table__,
     ]
     async with engine.begin() as conn:
@@ -278,7 +276,7 @@ async def client(_test_db):
             "purchase_order, approval_instance, approval_task, approval_record, "
             "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item, "
             "ai_agent_config, assistant_run, completeness_rule, "
-            "agent_message, agent_conversation, agent_task_report, agent_task_event, agent_task, "
+            "agent_message, agent_conversation, agent_call_log, "
             "agent_hierarchy_log, agent_config_log, agent, gateway_dispatch_log, "
             "scm_employee, scm_organization RESTART IDENTITY CASCADE"
         ))

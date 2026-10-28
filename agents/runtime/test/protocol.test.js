@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { HubConnection } = require("../src/protocol");
+const { HubConnection, normalizeResult, roundDurationMs } = require("../src/protocol");
 const { startHub } = require("./helpers/mock-hub");
 
 function createConfig(port, overrides = {}) {
@@ -35,6 +35,14 @@ function waitUntil(predicate, timeoutMs = 3000) {
 function registerMessages(hub) {
   return hub.messages.filter((m) => m.type === "register");
 }
+
+test("normalizes result.duration_ms and run_event durationMs to integers", () => {
+  assert.equal(roundDurationMs(20359.1), 20359);
+  assert.equal(roundDurationMs(20359.6), 20360);
+  assert.equal(roundDurationMs(null), null);
+  assert.deepEqual(normalizeResult({ ok: true, duration_ms: 20359.1 }), { ok: true, duration_ms: 20359 });
+  assert.deepEqual(normalizeResult({ ok: true }), { ok: true });
+});
 
 test("registers with identity and capabilities, dispatches, reports completion and ignores duplicate dispatch", async (t) => {
   const hub = startHub();

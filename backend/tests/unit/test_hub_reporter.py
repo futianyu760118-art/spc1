@@ -62,7 +62,7 @@ async def test_enabled_reports_fire_and_forget(settings_fixture, monkeypatch):
     assert payload["summary"] == "hello"
     assert payload["detail"] == {"length": 5}
     assert payload["startedAt"] == "2026-10-19T00:00:00+00:00"
-    assert payload["durationMs"] == 12.35
+    assert payload["durationMs"] == 12
     assert "endedAt" not in payload
     assert "usage" not in payload
 

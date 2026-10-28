@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import merge_role_permission_additions
 from app.models.agent.agent import Agent
-from app.models.agent.task import AgentTask
 from app.models.basicdata.user import SysRole, SysUser
 from app.services.agent import cache
 from app.services.agent.sequence import next_serial_id
@@ -18,7 +17,6 @@ from app.services.agent.capabilities import (
     allowed_tool_names,
     resolve_capabilities,
 )
-from app.services.agent.scope import ScopeContext, build_scope_context
 
 
 @dataclass
@@ -28,6 +26,7 @@ class SubordinateInfo:
     display_name: str
     username: str
     status: str
+    capabilities: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -38,15 +37,9 @@ class AgentContext:
     permissions: Dict[str, List[str]]
     children: List[SubordinateInfo] = field(default_factory=list)
     effective_capabilities: Set[str] = field(default_factory=set)
-    effective_org_ids: Set[int] = field(default_factory=set)
-    scope: Optional[ScopeContext] = None
-    has_assigned_tasks: bool = False
     is_supervisor: bool = False
+    can_manage_team: bool = False
     allowed_tools: Set[str] = field(default_factory=set)
-
-    @property
-    def can_manage_team(self) -> bool:
-        return self.is_supervisor
 
     @property
     def display_name(self) -> str:
@@ -98,7 +91,7 @@ async def get_or_create_agent(
                 user_id=user.id,
                 display_name=default_name[:64],
                 status="active",
-                capability_policy={"granted": [], "disabled": [], "data_scope": {"mode": "org", "org_ids": [], "include_sub": True, "include_self_owned": True}},
+                capability_policy={"granted": [], "disabled": []},
                 config_version=1,
                 created_by_user_id=created_by_user_id,
             )
@@ -156,31 +149,33 @@ async def _effective_capabilities(
     return effective
 
 
-async def list_subordinates(db: AsyncSession, agent: Agent) -> List[SubordinateInfo]:
+async def list_subordinates(
+    db: AsyncSession,
+    agent: Agent,
+    *,
+    use_cache: bool = True,
+) -> List[SubordinateInfo]:
     rows = (await db.execute(
         select(Agent, SysUser)
         .join(SysUser, SysUser.id == Agent.user_id)
         .where(Agent.parent_agent_id == agent.id)
         .order_by(Agent.id.asc())
     )).all()
-    return [
-        SubordinateInfo(
+    items: List[SubordinateInfo] = []
+    for child, child_user in rows:
+        _, child_permissions = await load_user_permissions(db, child_user)
+        child_caps = await _effective_capabilities(
+            db, child, child_user, child_permissions, use_cache=use_cache,
+        )
+        items.append(SubordinateInfo(
             agent_id=int(child.id),
             user_id=int(child.user_id),
             display_name=child.display_name or child_user.display_name or child_user.username,
             username=child_user.username,
             status=child.status,
-        )
-        for child, child_user in rows
-    ]
-
-
-async def _has_assigned_tasks(db: AsyncSession, agent_id: int) -> bool:
-    return bool((await db.execute(
-        select(AgentTask.id)
-        .where(AgentTask.assignee_agent_id == agent_id, AgentTask.status != "cancelled")
-        .limit(1)
-    )).first())
+            capabilities=sorted(child_caps),
+        ))
+    return items
 
 
 async def load_agent_context(
@@ -188,19 +183,17 @@ async def load_agent_context(
     user: SysUser,
     *,
     use_cache: bool = True,
-    with_scope: bool = True,
 ) -> AgentContext:
     """构建每轮对话/API 所需的 AgentContext。"""
     agent = await get_or_create_agent(db, user, created_by_user_id=user.id)
     role_code, permissions = await load_user_permissions(db, user)
-    children = await list_subordinates(db, agent)
+    children = await list_subordinates(db, agent, use_cache=use_cache)
     is_supervisor = any(c.status == "active" for c in children)
-    has_tasks = await _has_assigned_tasks(db, agent.id)
+    can_manage_team = role_code not in ("supplier", "api_caller", "share")
     effective = await _effective_capabilities(
         db, agent, user, permissions, use_cache=use_cache,
     )
-    scope = await build_scope_context(db, agent, user, use_cache=use_cache) if with_scope else None
-    tools = allowed_tool_names(effective, is_supervisor, has_tasks)
+    tools = allowed_tool_names(effective, is_supervisor, can_manage_team)
     return AgentContext(
         agent=agent,
         user=user,
@@ -208,9 +201,7 @@ async def load_agent_context(
         permissions=permissions,
         children=children,
         effective_capabilities=effective,
-        effective_org_ids=scope.org_ids if scope else set(),
-        scope=scope,
-        has_assigned_tasks=has_tasks,
         is_supervisor=is_supervisor,
+        can_manage_team=can_manage_team,
         allowed_tools=tools,
     )

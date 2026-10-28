@@ -752,15 +752,14 @@ export const feedbackApi = {
 
 // ============ 智能助手 ============
 export const assistantApi = {
-  chat: (message: string, sessionId?: string, conversationHistory?: any[], conversationId?: number, taskId?: number) =>
+  chat: (message: string, sessionId?: string, conversationHistory?: any[], conversationId?: number) =>
     api.post('/assistant/chat', {
       message,
       session_id: sessionId,
       conversation_id: conversationId,
-      task_id: taskId,
       conversation_history: conversationHistory,
     }),
-  chatStream: (message: string, sessionId?: string, conversationHistory?: any[], conversationId?: number, taskId?: number) => {
+  chatStream: (message: string, sessionId?: string, conversationHistory?: any[], conversationId?: number) => {
     const token = useAuthStore.getState().currentToken
     return fetch('/api/v1/assistant/chat/stream', {
       method: 'POST',
@@ -772,7 +771,6 @@ export const assistantApi = {
         message,
         session_id: sessionId,
         conversation_id: conversationId,
-        task_id: taskId,
         conversation_history: conversationHistory,
       }),
     })

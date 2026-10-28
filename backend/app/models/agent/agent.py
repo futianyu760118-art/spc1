@@ -16,7 +16,7 @@ class Agent(Base):
     display_name = Column(String(64), nullable=True)
     parent_agent_id = Column(BigInteger, ForeignKey("agent.id"), nullable=True, comment="直属上级智能体")
     status = Column(String(16), nullable=False, default="active", server_default="active", comment="active|disabled")
-    capability_policy = Column(JSONB, nullable=True, comment="granted/disabled/data_scope")
+    capability_policy = Column(JSONB, nullable=True, comment="granted/disabled")
     config_version = Column(Integer, nullable=False, default=1, server_default="1")
     created_by_user_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)

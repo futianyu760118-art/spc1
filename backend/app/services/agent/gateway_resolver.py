@@ -164,6 +164,19 @@ async def resolve_dispatch(
         await db.flush()
         return resolution
 
+    # 本系统 caller 必须携带可解析的 agentId/userId；空 caller 不允许回退到全量系统执行
+    if (
+        caller_system_id == local_system_id
+        and not _value(caller, "agentId")
+        and not _value(caller, "userId")
+    ):
+        resolution = DispatchResolution(
+            ok=False, mode="system", reject_reason="CALLER_REQUIRED",
+        )
+        _audit(db, audit_ctx, resolution)
+        await db.flush()
+        return resolution
+
     agent, user, mismatch, reason = await _resolve_agent(db, caller)
     is_system = not _value(caller, "agentId") and not _value(caller, "userId")
     agent_ctx = None

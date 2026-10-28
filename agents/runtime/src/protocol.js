@@ -38,6 +38,17 @@ function traceFields(run) {
   return fields;
 }
 
+function roundDurationMs(value) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.round(value) : value;
+}
+
+/** Hub 契约要求 result.duration_ms 为整数；适配器返回值做一次兜底归一化。 */
+function normalizeResult(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+  if (typeof result.duration_ms !== "number" || !Number.isFinite(result.duration_ms)) return result;
+  return { ...result, duration_ms: Math.round(result.duration_ms) };
+}
+
 class HubConnection {
   constructor({ config, log, handlers }) {
     this.config = config;
@@ -219,7 +230,7 @@ class HubConnection {
         // 适配器可返回 { result, usage }（推理用量记 Hub 台账）；其余直接当 result
         const withUsage =
           outcome && typeof outcome === "object" && "usage" in outcome && outcome.usage != null;
-        const result = withUsage ? outcome.result : outcome;
+        const result = normalizeResult(withUsage ? outcome.result : outcome);
         const usage = withUsage ? outcome.usage : undefined;
         const summary = `任务完成：${capability}`;
         this.reportRunEvent(runId, "run_summary", "任务完成", "completed", summary);
@@ -277,9 +288,10 @@ class HubConnection {
   reportRunEvent(runId, event, name, status, summary, detail = null, timings = {}) {
     const startedAt = timings.startedAt ?? null;
     const endedAt = timings.endedAt ?? (startedAt && status !== "started" ? new Date().toISOString() : null);
-    const durationMs =
+    const durationMs = roundDurationMs(
       timings.durationMs ??
-      (startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : null);
+      (startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : null),
+    );
     const seq = (this.runSeq.get(runId) ?? 0) + 1;
     this.runSeq.set(runId, seq);
     this.send({
@@ -329,4 +341,4 @@ class HubConnection {
   }
 }
 
-module.exports = { HubConnection, normalizeCaller };
+module.exports = { HubConnection, normalizeCaller, normalizeResult, roundDurationMs };

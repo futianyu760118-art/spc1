@@ -147,6 +147,47 @@ async def add_subordinate(db: AsyncSession, ctx: AgentContext, *, user_id: Optio
     }
 
 
+async def remove_subordinate(db: AsyncSession, ctx: AgentContext, agent_id: int) -> dict:
+    """主管移除直属成员：只解绑 parent_agent_id，用户与智能体保留。"""
+    if ctx.role_code == "supplier":
+        raise HierarchyError("供应商用户不能管理团队", 403)
+    if ctx.agent.status != "active":
+        raise HierarchyError("当前智能体已禁用", 403)
+    target = await db.get(Agent, int(agent_id))
+    if not target or int(target.parent_agent_id or 0) != int(ctx.agent.id):
+        raise HierarchyError("只能移除直属成员", 403)
+    target_user = await db.get(SysUser, target.user_id)
+    old_parent = target.parent_agent_id
+    target.parent_agent_id = None
+    db.add(AgentHierarchyLog(
+        agent_id=target.id,
+        old_parent_id=old_parent,
+        new_parent_id=None,
+        action="unbind",
+        actor_user_id=int(ctx.user.id),
+        reason=f"主管 {ctx.user.username} 移除直属成员",
+    ))
+    cache.invalidate_agent(target.id)
+    await db.flush()
+    if target_user:
+        await notify_user(
+            db,
+            user_id=target_user.id,
+            title="[智能体]你已被移出团队",
+            content=f"{ctx.user.display_name or ctx.user.username} 已将你从直属团队移除，立即生效",
+            notif_type="agent_hierarchy",
+            ref_type="agent",
+            ref_id=target.id,
+            sender_id=ctx.user.id,
+            sender_name=ctx.user.display_name or ctx.user.username,
+        )
+    return {
+        "agent_id": target.id,
+        "user_id": target.user_id,
+        "parent_agent_id": None,
+    }
+
+
 async def _is_ancestor(db: AsyncSession, candidate: Agent, node: Agent) -> bool:
     current: Optional[Agent] = node
     seen = set()

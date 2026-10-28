@@ -72,13 +72,11 @@ from app.models.basicdata.ai_agent import AiAgentConfig, AssistantRun  # noqa: F
 # 智能体中心（2026-10-26 多智能体层级与主管任务闭环）
 from app.models.agent import (  # noqa: F401
     Agent,
+    AgentCallLog,
     AgentConfigLog,
     AgentConversation,
     AgentHierarchyLog,
     AgentMessage,
-    AgentTask,
-    AgentTaskEvent,
-    AgentTaskReport,
     GatewayDispatchLog,
 )
 from app.models.purchase.price_change import (  # noqa: F401
@@ -183,13 +181,11 @@ __all__ = [
     "AiAgentConfig",
     "AssistantRun",
     "Agent",
+    "AgentCallLog",
     "AgentConfigLog",
     "AgentConversation",
     "AgentHierarchyLog",
     "AgentMessage",
-    "AgentTask",
-    "AgentTaskEvent",
-    "AgentTaskReport",
     "GatewayDispatchLog",
     "ApprovalConfig",
     "PriceChangeRuleConfig",

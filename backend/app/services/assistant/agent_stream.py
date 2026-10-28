@@ -59,9 +59,7 @@ async def run_stream(
     user_id: str = "",
     request: Optional[Request] = None,
     agent_context: Optional[AgentContext] = None,
-    agent_task_id: Optional[int] = None,
     conversation_id: Optional[int] = None,
-    task_context_text: str = "",
 ) -> AsyncIterator[str]:
     """流式运行助手：意图识别 → 闲聊直答 / 任务交本地编排器（ReAct 事件透传）"""
 
@@ -71,7 +69,7 @@ async def run_stream(
     disabled = set(rt.get("disabled_tools") or [])
     system_prompt = resolve_system_prompt(rt.get("system_prompt"), disabled)
     if agent_context is not None:
-        system_prompt = build_agent_system_prompt(system_prompt, agent_context, task_context_text)
+        system_prompt = build_agent_system_prompt(system_prompt, agent_context)
     intent_prompt = (rt.get("intent_prompt") or "").strip() or None
     model_override = (rt.get("model_name") or "").strip() or None
 
@@ -231,8 +229,7 @@ async def run_stream(
             disabled_tools=disabled, session_id=session_id, trace_id=trace_id, user_id=user_id,
             run_logger=run_logger, provider_name=provider_name,
             stream_final=True,
-            db=db, agent_context=agent_context, agent_task_id=agent_task_id,
-            task_context_text=task_context_text,
+            db=db, agent_context=agent_context,
         ):
             if event == "delta":
                 stream_text += data.get("text") or ""

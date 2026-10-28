@@ -11,16 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, get_db
 from app.core.security import PermissionChecker
 from app.models.basicdata.ai_agent import AssistantRun
 from app.models.basicdata.user import SysUser
 from app.schemas.assistant.schemas import ChatMessageIn, AssistantReply, ToolInfo
 from app.services.agent import conversation as agent_conversation
-from app.services.agent import task_tools
 from app.services.agent.context import load_agent_context
-from app.services.agent.task_service import TaskError, build_task_context
 
 import app.services.assistant.agent_tools  # noqa: F401 — 触发智能体工具注册
 from app.services.assistant import agent
@@ -66,9 +63,7 @@ async def _record_run(
     is_success: bool,
     error_message: Optional[str],
     agent_id: Optional[int] = None,
-    task_id: Optional[int] = None,
     conversation_id: Optional[int] = None,
-    trigger: str = "chat",
 ) -> None:
     """用量审计落库；失败仅告警不影响对话主流程。
 
@@ -91,9 +86,8 @@ async def _record_run(
                 is_success=is_success,
                 error_message=error_message,
                 agent_id=agent_id,
-                task_id=task_id,
                 conversation_id=conversation_id,
-                trigger=trigger,
+                trigger="chat",
             ))
             await session.commit()
     except Exception as exc:
@@ -111,9 +105,7 @@ async def _prepare_agent_chat(
     user_id: str,
     body: ChatMessageIn,
 ):
-    """构建 AgentContext / 持久化会话 / 任务上下文；功能关闭时返回 None。"""
-    if not get_settings().AGENT_TASK_ENABLED:
-        return None
+    """构建 AgentContext / 持久化会话。"""
     user = await db.get(SysUser, int(user_id))
     if not user:
         raise HTTPException(status_code=401, detail="用户不存在")
@@ -121,33 +113,26 @@ async def _prepare_agent_chat(
     if ctx.agent.status != "active":
         raise HTTPException(status_code=403, detail="智能体已禁用，请联系管理员启用")
     # 旧客户端仍传 session_id：保留原会话语义，但把会话键绑定到 user+agent，避免跨用户读取。
-    if not body.conversation_id and body.session_id and not body.task_id:
+    if not body.conversation_id and body.session_id:
         prefix = f"{user.id}:{ctx.agent.id}:"
         session_id = body.session_id
         if not session_id.startswith(prefix):
             session_id = f"{prefix}{session_id}"
-        return ctx, None, session_id, body.conversation_history, ""
+        return ctx, None, session_id, body.conversation_history
     try:
         conversation = await agent_conversation.resolve_conversation(
             db,
             agent=ctx.agent,
             user_id=user.id,
             conversation_id=body.conversation_id,
-            task_id=body.task_id,
         )
     except agent_conversation.ConversationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
-    task_context_text = ""
-    if body.task_id:
-        try:
-            task_context_text = await build_task_context(db, body.task_id, user.id)
-        except TaskError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message)
     history = body.conversation_history
     if not history:
         history = await agent_conversation.load_recent_messages(db, conversation.id, limit=20)
     session_id = f"{user.id}:{ctx.agent.id}:{conversation.id}"
-    return ctx, conversation, session_id, history, task_context_text
+    return ctx, conversation, session_id, history
 
 
 def _diag_tools(diagnostics: Optional[dict]) -> list:
@@ -175,9 +160,8 @@ async def chat(
 
     prepared = await _prepare_agent_chat(db, user_id, body)
     ctx = conversation = None
-    task_context_text = ""
     if prepared:
-        ctx, conversation, session_id, history, task_context_text = prepared
+        ctx, conversation, session_id, history = prepared
         if conversation:
             await agent_conversation.append_message(
                 db, conversation, role="user", content=body.message, trace_id=trace_id,
@@ -186,7 +170,10 @@ async def chat(
         session_id = body.session_id or str(uuid.uuid4())
         history = body.conversation_history
 
-    _report_turn_start(session_id, user_id, body.message, is_new_session=not body.session_id)
+    _report_turn_start(
+        session_id, user_id, body.message,
+        is_new_session=not body.session_id and not body.conversation_id,
+    )
     if session_id:
         await CancellationRegistry.get_or_create(session_id)
 
@@ -215,9 +202,7 @@ async def chat(
                 trace_id=trace_id,
                 user_id=str(user_id) if user_id else "",
                 agent_context=ctx,
-                agent_task_id=body.task_id,
                 conversation_id=conversation.id if conversation else None,
-                task_context_text=task_context_text,
             )
         except Exception as e:
             if conversation:
@@ -231,9 +216,7 @@ async def chat(
                 duration_ms=round((time.perf_counter() - request_start) * 1000, 2),
                 is_success=False, error_message=str(e),
                 agent_id=ctx.agent.id if ctx else None,
-                task_id=body.task_id,
                 conversation_id=conversation.id if conversation else None,
-                trigger="task_chat" if body.task_id else "chat",
             )
             report_assistant_event(
                 session_id, "error", "助手异常", "failed", str(e)[:200], started_at=now_iso(),
@@ -267,9 +250,7 @@ async def chat(
             is_success=not errors,
             error_message=errors[0].get("message") if errors else None,
             agent_id=ctx.agent.id if ctx else None,
-            task_id=body.task_id,
             conversation_id=conversation.id if conversation else None,
-            trigger="task_chat" if body.task_id else "chat",
         )
         for err in errors:
             report_assistant_event(
@@ -347,9 +328,8 @@ async def chat_stream(
                     return
                 ctx = conversation = None
                 history = body.conversation_history
-                task_context_text = ""
                 if prepared:
-                    ctx, conversation, session_id, history, task_context_text = prepared
+                    ctx, conversation, session_id, history = prepared
                     run_info["agent_id"] = ctx.agent.id
                     if conversation:
                         run_info["conversation_id"] = conversation.id
@@ -358,7 +338,8 @@ async def chat_stream(
                         )
                         await stream_db.commit()
                 _report_turn_start(
-                    session_id, user_id, body.message, is_new_session=not body.session_id,
+                    session_id, user_id, body.message,
+                    is_new_session=not body.session_id and not body.conversation_id,
                 )
                 yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'trace_id': trace_id, 'conversation_id': run_info['conversation_id']}, ensure_ascii=False)}\n\n"
                 try:
@@ -371,9 +352,7 @@ async def chat_stream(
                         user_id=str(user_id) if user_id else "",
                         request=request,
                         agent_context=ctx,
-                        agent_task_id=body.task_id,
                         conversation_id=conversation.id if conversation else None,
-                        task_context_text=task_context_text,
                     ):
                         _track(event)
                         yield event
@@ -407,9 +386,7 @@ async def chat_stream(
                 is_success=run_info["done"] and not run_info["error"],
                 error_message=run_info["error"] or (None if run_info["done"] else "stream_interrupted"),
                 agent_id=run_info["agent_id"],
-                task_id=body.task_id,
                 conversation_id=run_info["conversation_id"],
-                trigger="task_chat" if body.task_id else "chat",
             ))
             if run_info["error"]:
                 report_assistant_event(
@@ -466,8 +443,6 @@ async def cancel_write(
 
 
 async def _current_agent_context(db: AsyncSession, current_user):
-    if not get_settings().AGENT_TASK_ENABLED:
-        return None
     user = await db.get(SysUser, int(_current_user_id(current_user)))
     if not user:
         return None
@@ -489,8 +464,11 @@ async def list_tools(
     """返回当前智能体可用工具（按能力过滤）"""
     ctx = await _current_agent_context(db, current_user)
     data = [ToolInfo(name=t.name, description=t.description).model_dump() for t in _visible_tools(ctx)]
-    if ctx is not None:
-        data.extend(task_tools.task_tool_infos(ctx.allowed_tools))
+    if ctx is not None and "delegate_task" in ctx.allowed_tools:
+        data.append(ToolInfo(
+            name="delegate_task",
+            description="把只读子任务委派给具备对应能力的直属子智能体",
+        ).model_dump())
     return {"code": 0, "data": data}
 
 

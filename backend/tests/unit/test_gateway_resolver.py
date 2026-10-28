@@ -126,6 +126,23 @@ async def test_resolve_system_mode(user_id_field):
     assert result.actor_token is None
 
 
+async def test_control_platform_empty_caller_rejected_with_audit():
+    async with AsyncSessionLocal() as db:
+        result = await resolve_dispatch(
+            db, run_id="run-empty-caller", trace_id="trace-empty-caller",
+            capability="query_control_platform", input_data={},
+            caller={"systemId": "control-platform"},
+        )
+        await db.commit()
+        row = (await db.execute(
+            select(GatewayDispatchLog).where(GatewayDispatchLog.run_id == "run-empty-caller")
+        )).scalars().one()
+    assert result.ok is False
+    assert result.reject_reason == "CALLER_REQUIRED"
+    assert row.result == "rejected"
+    assert row.reject_reason == "CALLER_REQUIRED"
+
+
 async def test_external_caller_keeps_metadata_but_runs_as_system():
     caller = {
         "systemId": "aeos-hub",

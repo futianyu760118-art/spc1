@@ -18,10 +18,6 @@ from app.services.basicdata.rate_limiter import check_rate_limit, RATE_LIMITED_M
 from app.services.basicdata.data_supply_service import log_call
 
 
-def get_actor_scope(request: Request):
-    return getattr(request.state, "actor_scope", None)
-
-
 async def _apply_actor_token(request: Request, db: AsyncSession, endpoint_code: str) -> None:
     """助手发起的请求携带 X-Actor-Token：校验身份/能力并把数据范围挂到 request.state。"""
     token = (request.headers.get("X-Actor-Token") or "").strip()
@@ -48,7 +44,6 @@ async def _apply_actor_token(request: Request, db: AsyncSession, endpoint_code: 
     ctx = await load_agent_context(db, user, use_cache=use_cache)
     if not (endpoint_caps & ctx.effective_capabilities):
         raise HTTPException(status_code=403, detail="当前智能体缺少该接口能力")
-    request.state.actor_scope = ctx.scope
     request.state.actor_capabilities = set(ctx.effective_capabilities)
     request.state.actor_agent_id = int(agent.id)
     request.state.actor_user_id = int(user.id)

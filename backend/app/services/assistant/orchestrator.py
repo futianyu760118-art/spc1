@@ -17,20 +17,16 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from sqlalchemy import select
-
 from app.core.config import get_settings
-from app.models.agent.task import AgentTask
 from app.models.basicdata.user import SysUser
 from app.services.ai import ai_service, ChatMessage, ChatOptions
 from app.services.ai_config import ASSISTANT_SCOPE, get_scope_config, render_system_prompt
-from app.services.agent import task_tools
+from app.services.agent import delegation_tools
 from app.services.agent.actor import issue_actor_token
 from app.services.agent.business import resolve_business_object
 from app.services.agent.caller import build_caller
 from app.services.agent.capabilities import allowed_query_paths, allowed_reasoning_types
 from app.services.agent.context import AgentContext, load_agent_context
-from app.services.agent.task_service import TaskError
 from app.services.assistant import session_store, write_confirmation
 from app.services.assistant.agent_tools import (
     AGENT_TOOL_LABELS,
@@ -367,8 +363,8 @@ def _step_summary(tool_name: str, args: Dict[str, Any]) -> str:
         return f"分析 {args.get('task_type') or ''}"
     if tool_name == "hub_query":
         return f"查询外部系统 {args.get('capability') or ''}"
-    if task_tools.is_task_tool(tool_name):
-        return f"执行任务操作 {tool_name}"
+    if delegation_tools.is_delegation_tool(tool_name):
+        return delegation_tools.step_summary(tool_name, args)
     return f"修改订单 {args.get('order_no') or ''}"
 
 
@@ -525,8 +521,8 @@ async def run_reaction(
     gap_notify: bool = True,
     db: Any = None,
     agent_context: Optional[AgentContext] = None,
-    agent_task_id: Optional[int] = None,
-    task_context_text: str = "",
+    delegation_depth: int = 0,
+    max_delegation_depth: Optional[int] = None,
 ) -> AsyncIterator[Tuple[str, Dict[str, Any]]]:
     """AI 自主 ReAct 循环：LLM 逐步决定调用哪个智能体，编排器负责校验、执行、拦截与审计。
 
@@ -541,20 +537,16 @@ async def run_reaction(
     lim = {**DEFAULT_LIMITS, **(limits or {})}
     lim["max_llm_rounds"] = max(1, min(int(max_tool_rounds), lim["max_llm_rounds"]))
     lim["max_agent_calls"] = max(1, min(int(max_agent_calls), lim["max_agent_calls"]))
+    if max_delegation_depth is None:
+        max_delegation_depth = int(get_settings().AGENT_DELEGATION_MAX_DEPTH)
     provider = provider_name or ai_service.current_provider()
     task_id = task_id or f"task-{uuid4().hex}"
-
-    caller_task_no = ""
-    if db is not None and agent_task_id:
-        row = await db.execute(select(AgentTask.task_no).where(AgentTask.id == int(agent_task_id)))
-        caller_task_no = row.scalar_one_or_none() or ""
 
     caller = None
     if agent_context is not None:
         caller = build_caller(
             user=agent_context.user,
             agent=agent_context.agent,
-            task_no=caller_task_no,
             trace_id=trace_id,
         )
     logger.info(f"[orchestrator:{trace_id}] session_id={session_id} task_id={task_id}")
@@ -587,7 +579,11 @@ async def run_reaction(
         reasoning_types=allowed_reasoning_types(effective) if effective is not None else None,
     )
     if agent_context is not None:
-        tools_schema.extend(task_tools.build_task_tools_schema(agent_context.allowed_tools))
+        tools_schema.extend(delegation_tools.build_delegation_tools_schema(
+            agent_context,
+            delegation_depth=delegation_depth,
+            max_delegation_depth=max_delegation_depth,
+        ))
 
     messages: List[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
     for msg in history[-10:]:
@@ -729,10 +725,10 @@ async def run_reaction(
         # ── 闸门 2：步数与循环 ──
         tool_key = f"{tool_name}:{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}"
         block_reason: Optional[str] = None
-        if tool_name not in CAPABILITY_BY_TOOL and not task_tools.is_task_tool(tool_name):
+        if tool_name not in CAPABILITY_BY_TOOL and not delegation_tools.is_delegation_tool(tool_name):
             block_reason = f"工具 {tool_name} 不在能力目录内，请改用系统提供的智能体工具"
-        elif task_tools.is_task_tool(tool_name) and (db is None or agent_context is None):
-            block_reason = "任务工具仅在智能体中心启用时可用"
+        elif delegation_tools.is_delegation_tool(tool_name) and (db is None or agent_context is None):
+            block_reason = "子智能体调用仅在智能体中心启用时可用"
         elif tool_name == "call_query_agent" and effective is not None:
             if args.get("path") not in allowed_query_paths(effective):
                 block_reason = "当前智能体没有该查询路径的能力，请更换查询范围"
@@ -778,9 +774,9 @@ async def run_reaction(
             messages.append(_tool_result_msg(tc.id, {"error": block_reason, "intercepted": True}))
             continue
 
-        # ── 任务工具：确认类先出确认卡，直接类立即执行 ──
-        if task_tools.is_task_tool(tool_name):
-            invalid = task_tools.validate_task_tool_input(tool_name, args)
+        # ── 子智能体调用：list_my_subordinates / delegate_task ──
+        if delegation_tools.is_delegation_tool(tool_name):
+            invalid = delegation_tools.validate_delegation_input(tool_name, args)
             if invalid:
                 step = _new_step(_next_step_id(), tool_name, args, status="blocked", error=invalid)
                 steps.append(step)
@@ -790,69 +786,32 @@ async def run_reaction(
                 messages.append(_tool_result_msg(tc.id, {"error": invalid, "intercepted": True}))
                 continue
 
-            if task_tools.requires_confirmation(tool_name):
-                try:
-                    prepared = await task_tools.prepare_confirmation(db, agent_context, tool_name, args)
-                except TaskError as exc:
-                    step = _new_step(_next_step_id(), tool_name, args, status="blocked", error=exc.message)
-                    steps.append(step)
-                    yield ("step_started", {"step": step})
-                    yield ("step_completed", {"step": step})
-                    messages.append(_assistant_tool_msg(result.text or "", [tc], result.thinking))
-                    messages.append(_tool_result_msg(tc.id, {"error": exc.message, "intercepted": True}))
-                    continue
-                preview = prepared["preview"]
-                step = _new_step(
-                    _next_step_id(), tool_name, args,
-                    status="pending_confirmation",
-                    summary=preview.get("title") or tool_name,
-                )
-                steps.append(step)
-                yield ("step_started", {"step": step})
-                yield ("step_completed", {"step": step})
-                record = await write_confirmation.create_confirmation({
-                    "session_id": session_id,
-                    "trace_id": trace_id,
-                    "task_id": task_id,
-                    "user_id": user_id,
-                    "agent_id": agent_context.agent.id,
-                    "message": message,
-                    "action_type": tool_name,
-                    "action_data": prepared["action_data"],
-                    "preview": preview,
-                    "agent_task_id": agent_task_id,
-                    "model_override": model_override,
-                })
-                confirmation_payload = {
-                    "confirmation_id": record["confirmation_id"],
-                    "action_type": tool_name,
-                    "preview": preview,
-                    "created_at": record["created_at"],
-                    "expires_at": record["expires_at"],
-                    "status": "pending",
-                }
-                pre_text = _strip_think_tags(result.text or "") or (
-                    f"已生成「{preview.get('title') or tool_name}」确认卡，请核对后确认执行或取消。"
-                )
-                if pre_text:
-                    yield ("delta", {"text": pre_text})
-                yield ("confirmation_required", confirmation_payload)
-                yield ("done", _done_payload(pre_text, confirmation=confirmation_payload))
-                return
-
             step = _new_step(
                 _next_step_id(), tool_name, args, status="running",
-                summary=_step_summary(tool_name, args),
+                summary=delegation_tools.step_summary(tool_name, args),
             )
             steps.append(step)
             yield ("step_started", {"step": step})
+            report_assistant_event(
+                session_id, "step_started", AGENT_TOOL_LABELS.get(tool_name, tool_name), "started",
+                f"调用{AGENT_TOOL_LABELS.get(tool_name, tool_name)}", {"step": step},
+                started_at=now_iso(), task_id=task_id, step_id=step["step_id"], tool=tool_name,
+            )
             tool_start = time.perf_counter()
             try:
-                task_result = await task_tools.execute_direct_tool(db, agent_context, tool_name, args)
-                outcome_ok = True
-                outcome_error = None
-            except Exception as exc:  # noqa: BLE001 — 工具失败不中断对话
-                task_result = None
+                delegated = await delegation_tools.execute_delegation_tool(
+                    db,
+                    agent_context,
+                    tool_name,
+                    args,
+                    delegation_depth=delegation_depth,
+                    max_delegation_depth=max_delegation_depth,
+                    trace_id=trace_id,
+                )
+                outcome_ok = bool(delegated.get("ok", True))
+                outcome_error = delegated.get("error")
+            except Exception as exc:  # noqa: BLE001 — 子智能体失败不中断父对话
+                delegated = None
                 outcome_ok = False
                 outcome_error = getattr(exc, "message", str(exc))
             duration_ms = round((time.perf_counter() - tool_start) * 1000, 2)
@@ -860,9 +819,17 @@ async def run_reaction(
             step["status"] = "completed" if outcome_ok else "failed"
             if outcome_error:
                 step["error"] = outcome_error
+                step["summary"] = outcome_error[:200]
             yield ("step_completed", {"step": step})
+            report_assistant_event(
+                session_id, "step_completed", AGENT_TOOL_LABELS.get(tool_name, tool_name),
+                "completed" if outcome_ok else "failed",
+                step.get("summary") or "", {"step": step},
+                started_at=now_iso(), duration_ms=duration_ms,
+                task_id=task_id, step_id=step["step_id"], tool=tool_name,
+            )
             trimmed = (
-                trim_result(task_result or {}, max_items=lim["trim_max_items"], max_chars=lim["trim_max_chars"])
+                trim_result(delegated or {}, max_items=lim["trim_max_items"], max_chars=lim["trim_max_chars"])
                 if outcome_ok else {"error": outcome_error}
             )
             diagnostics["tools"].append({
@@ -943,7 +910,6 @@ async def run_reaction(
                 "action": "update",
                 "action_type": "order_update",
                 "agent_id": agent_context.agent.id if agent_context else None,
-                "agent_task_id": agent_task_id,
                 "old_row": old.get("row") or {},
                 "model_override": model_override,
             })
@@ -1152,116 +1118,23 @@ async def _prepare_order_write_actor(
     db: Any, user_id: str, order_no: str, expected_agent_id: Optional[int] = None,
 ) -> str:
     """确认订单写操作前：校验智能体可用与订单可见，签发短时 actor token。"""
-    if db is None or not get_settings().AGENT_TASK_ENABLED:
+    if db is None:
         return ""
     user = await db.get(SysUser, int(user_id))
     if not user:
         return ""
     ctx = await load_agent_context(db, user, use_cache=False)
     if ctx.agent.status != "active":
-        raise TaskError("智能体已禁用，无法执行订单写操作", 403)
+        raise ValueError("智能体已禁用，无法执行订单写操作")
     if expected_agent_id and int(ctx.agent.id) != int(expected_agent_id):
-        raise TaskError("确认单与当前智能体不匹配，请重新发起", 403)
-    await resolve_business_object(db, ctx.scope, "order", order_no)
+        raise ValueError("确认单与当前智能体不匹配，请重新发起")
+    await resolve_business_object(db, "order", order_no)
     return issue_actor_token(
         user_id=int(user.id),
         agent_id=int(ctx.agent.id),
         username=user.username or "",
         role=ctx.role_code,
     )
-
-
-def _confirmation_success_text(action_type: str, result: Dict[str, Any]) -> str:
-    task = result.get("task") or {}
-    if action_type == "assign_task":
-        return f"任务已派发：{task.get('task_no', '')} {task.get('title', '')}，截止 {task.get('due_at') or ''}。"
-    if action_type == "update_task":
-        return f"任务 {task.get('task_no', '')} 已更新。"
-    if action_type == "reassign_task":
-        return f"任务 {task.get('task_no', '')} 已改派。"
-    if action_type == "cancel_task":
-        return f"任务 {task.get('task_no', '')} 已取消。"
-    if action_type == "return_task":
-        return f"任务 {task.get('task_no', '')} 已退回重做。"
-    if action_type == "submit_task_report":
-        return f"任务 {task.get('task_no', '')} 汇报已提交，任务已完成。"
-    if action_type == "add_subordinate":
-        subordinate = result.get("subordinate") or {}
-        return f"已添加直属成员：{subordinate.get('display_name') or subordinate.get('user_id')}。"
-    if action_type == "update_subordinate_agent":
-        return f"子智能体配置已更新（智能体 {result.get('agent_id')}），已通知对方。"
-    return "操作已执行。"
-
-
-async def _resolve_agent_task_confirmation(
-    db: Any,
-    record: Dict[str, Any],
-    action: str,
-    current_user_id: str,
-    action_type: str,
-) -> Dict[str, Any]:
-    """确认/取消任务类确认单；失败返回 code=0 + status=failed 供前端展示原因。"""
-    confirmation_id = str(record.get("confirmation_id") or "")
-    session_id = str(record.get("session_id") or "")
-    preview = record.get("preview") or {}
-    if action == "cancel":
-        text = f"已取消「{preview.get('title') or action_type}」，未产生任何变更。"
-        await _append_session_note(session_id, text)
-        return {
-            "code": 0,
-            "message": "已取消，未执行任何变更",
-            "data": {
-                "confirmation": {
-                    "confirmation_id": confirmation_id,
-                    "action_type": action_type,
-                    "preview": preview,
-                    "status": "cancelled",
-                },
-                "reply": {"text": text, "cards": [], "steps": [], "provider": "system"},
-            },
-        }
-
-    action_data = record.get("action_data") or {}
-    try:
-        result = await task_tools.execute_confirmed_action(
-            db, user_id=int(current_user_id), action_data=action_data,
-            expected_agent_id=record.get("agent_id"),
-        )
-    except Exception as exc:
-        error = getattr(exc, "message", str(exc))
-        text = f"确认执行失败：{error}"
-        await _append_session_note(session_id, text)
-        return {
-            "code": 0,
-            "message": error,
-            "data": {
-                "confirmation": {
-                    "confirmation_id": confirmation_id,
-                    "action_type": action_type,
-                    "preview": preview,
-                    "status": "failed",
-                    "error": error,
-                },
-                "reply": {"text": text, "cards": [], "steps": [], "provider": "system"},
-            },
-        }
-
-    text = _confirmation_success_text(action_type, result)
-    await _append_session_note(session_id, text)
-    return {
-        "code": 0,
-        "message": "操作已执行",
-        "data": {
-            "confirmation": {
-                "confirmation_id": confirmation_id,
-                "action_type": action_type,
-                "preview": preview,
-                "status": "executed",
-                "result": result,
-            },
-            "reply": {"text": text, "cards": [], "steps": [], "provider": "system"},
-        },
-    }
 
 
 async def resolve_confirmation(
@@ -1286,9 +1159,7 @@ async def resolve_confirmation(
 
     action_type = str(record.get("action_type") or "order_update")
     if action_type != "order_update":
-        return await _resolve_agent_task_confirmation(
-            db, record, action, current_user_id, action_type,
-        )
+        return {"code": 400, "message": f"不支持的确认单类型：{action_type}"}
 
     session_id = str(record.get("session_id") or "")
     trace_id = str(record.get("trace_id") or "")
@@ -1482,13 +1353,6 @@ async def resolve_confirmation(
                 except Exception as e:
                     logger.warning(f"[orchestrator] 续跑加载智能体上下文失败: {e}")
 
-    continuation_task_id = record.get("agent_task_id")
-    if continuation_task_id is not None:
-        try:
-            continuation_task_id = int(continuation_task_id)
-        except (TypeError, ValueError):
-            continuation_task_id = None
-
     text, cards, steps_out = "", [], []
     try:
         async for event, data in run_reaction(
@@ -1503,7 +1367,6 @@ async def resolve_confirmation(
             task_id=task_id, step_id_base=order_step_id,
             gap_notify=False,
             db=db, agent_context=continuation_context,
-            agent_task_id=continuation_task_id,
         ):
             if event == "delta":
                 text += data.get("text") or ""

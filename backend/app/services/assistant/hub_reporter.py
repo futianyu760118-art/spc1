@@ -112,7 +112,7 @@ def report_assistant_event(
     usage: Optional[Dict[str, Any]] = None,
     started_at: Optional[str] = None,
     ended_at: Optional[str] = None,
-    duration_ms: Optional[float] = None,
+    duration_ms: Optional[int] = None,
     task_id: Optional[str] = None,
     step_id: Optional[int] = None,
     tool: Optional[str] = None,
@@ -135,7 +135,7 @@ def report_assistant_event(
         "usage": usage,
         "startedAt": started_at,
         "endedAt": ended_at,
-        "durationMs": round(duration_ms, 2) if duration_ms is not None else None,
+        "durationMs": int(round(duration_ms)) if duration_ms is not None else None,
         "taskId": task_id,
         "stepId": step_id,
         "tool": tool,
@@ -156,7 +156,7 @@ def report_model_call(
     model_override: Optional[str] = None,
     token_usage: Optional[Any] = None,
     started_at: Optional[str] = None,
-    duration_ms: Optional[float] = None,
+    duration_ms: Optional[int] = None,
 ) -> None:
     """上报一次大模型调用；rule_based（未接真实模型）不报。"""
     if not trace_id or provider == "rule_based":

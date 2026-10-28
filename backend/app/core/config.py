@@ -159,17 +159,10 @@ class Settings(BaseSettings):
     change_detect_enabled: bool = True
     change_detect_interval_hours: int = 1
 
-    # 智能体中心（主管任务闭环，2026-10-26）
-    AGENT_TASK_ENABLED: bool = True
-    AGENT_TASK_ANALYSIS_CONCURRENCY: int = 2
-    AGENT_TASK_ANALYSIS_TIMEOUT_SECONDS: int = 60
-    AGENT_TASK_ANALYSIS_MAX_ATTEMPTS: int = 3
-    AGENT_TASK_REMINDER_INTERVAL_SECONDS: int = 60
-    AGENT_TASK_DUE_SOON_HOURS: int = 24
-    AGENT_TASK_OVERDUE_ESCALATION_HOURS: int = 24
-    AGENT_TASK_MAX_OPEN_PER_USER: int = 20
-    AGENT_TASK_REANALYZE_LIMIT_PER_HOUR: int = 3
+    # 智能体中心（层级 + 能力 + 委派，2026-10-27）
     AGENT_SCOPE_CACHE_TTL_SECONDS: int = 300
+    AGENT_DELEGATION_MAX_DEPTH: int = 3
+    AGENT_DELEGATION_TIMEOUT_SECONDS: int = 120
 
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 

@@ -35,6 +35,8 @@ AGENT_TOOL_LABELS = {
     "call_reasoning_agent": "推理智能体",
     "call_order_agent": "订单智能体",
     "hub_query": "Hub 外部查询",
+    "list_my_subordinates": "直属子智能体",
+    "delegate_task": "子智能体调用",
 }
 
 CAPABILITY_BY_TOOL = {

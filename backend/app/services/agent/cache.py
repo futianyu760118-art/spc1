@@ -1,4 +1,4 @@
-"""智能体能力/范围读路径缓存（进程内 TTL）。
+"""智能体能力读路径缓存（进程内 TTL）。
 
 权限配置写入后调用 invalidate_agent 失效本实例；多实例下其它实例最多在
 AGENT_SCOPE_CACHE_TTL_SECONDS 后自然过期，符合设计「读路径 5 分钟 TTL」。

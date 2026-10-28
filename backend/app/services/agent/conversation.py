@@ -35,13 +35,12 @@ async def create_conversation(
     *,
     agent: Agent,
     user_id: int,
-    task_id: Optional[int] = None,
     title: Optional[str] = None,
 ) -> AgentConversation:
     conversation = AgentConversation(
         agent_id=agent.id,
         user_id=int(user_id),
-        task_id=task_id,
+        task_id=None,
         title=(title or "")[:200] or None,
         status="active",
         last_message_at=datetime.now(),
@@ -51,53 +50,16 @@ async def create_conversation(
     return conversation
 
 
-async def get_or_create_task_conversation(
-    db: AsyncSession,
-    *,
-    agent: Agent,
-    user_id: int,
-    task_id: int,
-) -> AgentConversation:
-    existing = (await db.execute(
-        select(AgentConversation)
-        .where(
-            AgentConversation.agent_id == agent.id,
-            AgentConversation.user_id == int(user_id),
-            AgentConversation.task_id == int(task_id),
-            AgentConversation.status == "active",
-        )
-        .order_by(AgentConversation.last_message_at.desc().nullslast(), AgentConversation.id.desc())
-        .limit(1)
-    )).scalars().first()
-    if existing:
-        return existing
-    return await create_conversation(
-        db, agent=agent, user_id=user_id, task_id=int(task_id),
-        title=f"任务会话 #{task_id}",
-    )
-
-
 async def resolve_conversation(
     db: AsyncSession,
     *,
     agent: Agent,
     user_id: int,
     conversation_id: Optional[int] = None,
-    task_id: Optional[int] = None,
 ) -> AgentConversation:
     if conversation_id:
-        conversation = await get_owned_conversation(
+        return await get_owned_conversation(
             db, conversation_id, user_id=user_id, agent_id=agent.id,
-        )
-        if task_id and int(conversation.task_id or 0) != int(task_id):
-            # 不复用旧普通会话/其它任务会话，避免任务上下文串线。
-            return await get_or_create_task_conversation(
-                db, agent=agent, user_id=user_id, task_id=int(task_id),
-            )
-        return conversation
-    if task_id:
-        return await get_or_create_task_conversation(
-            db, agent=agent, user_id=user_id, task_id=int(task_id),
         )
     return await create_conversation(db, agent=agent, user_id=user_id)
 

@@ -1096,6 +1096,41 @@ class DatabaseInitializer:
             except Exception as e:
                 print(f"  sys_user.permissions migration skipped: {e}")
 
+    async def migrate_agent_center_permissions(self):
+        """智能体中心从「任务闭环」收敛为「层级 + 能力 + 委派」：清理旧菜单权限。"""
+        print("Migrating agent center permissions...")
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "DELETE FROM sys_permission WHERE code IN ("
+                    "'ai.agent.self.tasks','ai.agent.team.tasks','ai.agent.team.config'"
+                    ")"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '智能体中心' WHERE code = 'ai.agent.self'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '我的智能体', parent_code = 'ai.agent.self', "
+                    "route_path = '/agents/me', actions = '[\"read\"]'::jsonb "
+                    "WHERE code = 'ai.agent.self.me'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '我的团队', parent_code = 'ai.agent.self', "
+                    "route_path = '/agents/team', actions = '[\"read\"]'::jsonb "
+                    "WHERE code = 'ai.agent.team'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '智能体管理', parent_code = 'ai.agent.self' "
+                    "WHERE code = 'ai.agent.admin'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_role SET permissions = permissions "
+                    "- 'ai.agent.self.tasks' - 'ai.agent.team.tasks' - 'ai.agent.team.config'"
+                ))
+                print("  agent center permissions migrated")
+            except Exception as e:
+                print(f"  agent center permissions migration skipped: {e}")
+
     async def rebuild_mrp_plan_order(self):
         """按 PRD 重建 mrp_plan_order 表（销售订单ID + 物料ID 联合主键）。
         若检测到旧结构（存在自增 id 列）则 DROP 后按 ORM 模型重建；
@@ -2553,6 +2588,7 @@ ORDER BY b.FDate DESC, b.FBillNo, e.FEntryID
             await self.backfill_sale_order_id()
             await self.backfill_sys_user_scm_employee_id()
             await self.migrate_stock_check_permission()
+            await self.migrate_agent_center_permissions()
             await self.seed_roles()
             await self.seed_completeness_rules()
             await self.seed_users()

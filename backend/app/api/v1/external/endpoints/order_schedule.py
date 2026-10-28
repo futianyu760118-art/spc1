@@ -19,7 +19,7 @@ from app.models.basicdata.user import SysUser
 from app.models.order.sale_order import SaleOrder
 from app.schemas.common import ResponseModel
 
-from ..deps import external_auth, get_actor_scope
+from ..deps import external_auth
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -74,15 +74,10 @@ async def order_schedule_update(
     key: DataSupplyApiKey = Depends(external_auth("orders.schedule.update")),
 ):
     order_stmt = select(SaleOrder).where(SaleOrder.order_no == order_no)
-    actor_scope = get_actor_scope(request)
-    if actor_scope is not None:
-        order_stmt = order_stmt.where(actor_scope.order_condition())
     order = (await db.execute(
         order_stmt.order_by(SaleOrder.id.desc()).limit(1)
     )).scalar_one_or_none()
     if not order:
-        if actor_scope is not None:
-            raise HTTPException(status_code=403, detail="订单不在当前智能体数据范围内")
         raise HTTPException(status_code=404, detail="订单不存在")
     if order.erp_status == 3:
         raise HTTPException(status_code=400, detail="订单已关闭，禁止写入")

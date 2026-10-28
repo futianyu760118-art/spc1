@@ -12,21 +12,14 @@ from app.services.agent.capabilities import ALL_CONFIGURABLE_CODES
 from app.services.agent.context import AgentContext
 from app.services.agent.errors import AgentError
 from app.services.agent.notify import notify_user
-from app.services.agent.scope import resolve_effective_org_ids
 
 logger = logging.getLogger(__name__)
+
 
 DEFAULT_POLICY = {
     "granted": [],
     "disabled": [],
-    "data_scope": {
-        "mode": "org",
-        "org_ids": [],
-        "include_sub": True,
-        "include_self_owned": True,
-    },
 }
-
 
 class PolicyError(AgentError):
     pass
@@ -34,11 +27,9 @@ class PolicyError(AgentError):
 
 def normalize_policy(policy: Optional[dict]) -> dict:
     value = dict(policy or {})
-    data_scope = {**DEFAULT_POLICY["data_scope"], **(value.get("data_scope") or {})}
     return {
         "granted": sorted({str(x) for x in (value.get("granted") or []) if x}),
         "disabled": sorted({str(x) for x in (value.get("disabled") or []) if x}),
-        "data_scope": data_scope,
     }
 
 
@@ -55,7 +46,6 @@ async def update_agent_policy(
     target_agent: Agent,
     granted: Optional[List[str]] = None,
     disabled: Optional[List[str]] = None,
-    data_scope: Optional[dict] = None,
     reason: str = "",
     is_admin: bool = False,
 ) -> dict:
@@ -68,14 +58,10 @@ async def update_agent_policy(
     if is_admin:
         # 管理员默认全量能力；管理员自身能力仍作为授予上限
         grant_ceiling = set(operator_ctx.effective_capabilities) or set(ALL_CONFIGURABLE_CODES)
-        org_ceiling: Optional[Set[int]] = None
     else:
         if target_agent.parent_agent_id != operator_ctx.agent.id:
             raise PolicyError("只能配置直属子智能体", 403)
         grant_ceiling = set(operator_ctx.effective_capabilities)
-        org_ceiling = await resolve_effective_org_ids(
-            db, operator_ctx.agent, operator_ctx.user, use_cache=False,
-        )
 
     policy = normalize_policy(target_agent.capability_policy)
     if granted is not None:
@@ -88,27 +74,6 @@ async def update_agent_policy(
         disabled_set = {str(x) for x in disabled if x}
         _validate_codes(disabled_set, "disabled")
         policy["disabled"] = sorted(disabled_set)
-
-    if data_scope is not None:
-        if not is_admin:
-            raise PolicyError("P1 数据范围由管理员配置", 403)
-        mode = data_scope.get("mode") or "org"
-        if mode not in ("self", "org", "custom"):
-            raise PolicyError("data_scope.mode 非法", 400)
-        org_ids = []
-        for value in data_scope.get("org_ids") or []:
-            try:
-                org_ids.append(int(value))
-            except (TypeError, ValueError):
-                raise PolicyError("data_scope.org_ids 必须是整数", 400)
-        if org_ceiling is not None and not set(org_ids) <= org_ceiling:
-            raise PolicyError("数据范围超出当前可授权组织", 403)
-        policy["data_scope"] = {
-            "mode": mode,
-            "org_ids": sorted(set(org_ids)),
-            "include_sub": bool(data_scope.get("include_sub", True)),
-            "include_self_owned": True,
-        }
 
     old_policy = target_agent.capability_policy or {}
     target_agent.capability_policy = policy

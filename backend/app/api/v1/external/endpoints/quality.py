@@ -23,7 +23,7 @@ from app.schemas.common import ResponseModel
 
 from ..common import ExternalDataPage, PageParamsMixin
 from ..freshness import freshness_meta, table_max_as_of
-from ..deps import external_auth, get_actor_scope
+from ..deps import external_auth
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -162,9 +162,6 @@ async def quality_issues_list(
     page = max(q.page or 1, 1)
     page_size = min(max(q.page_size if q.page_size is not None else 20, 1), 200)
     conditions = _quality_conditions(q)
-    actor_scope = get_actor_scope(request)
-    if actor_scope is not None:
-        conditions.append(actor_scope.quality_condition())
 
     total = (await db.execute(select(func.count(QualityIssue.id)).where(*conditions))).scalar() or 0
     data_as_of = (await db.execute(select(func.max(QualityIssue.updated_at)))).scalar()
@@ -234,9 +231,6 @@ async def quality_trace_list(
         "batch_no": SaleOrderLine.batch_no,
     }[anchor]
     line_stmt = select(SaleOrderLine).where(line_column == anchor_value)
-    actor_scope = get_actor_scope(request)
-    if actor_scope is not None:
-        line_stmt = line_stmt.where(SaleOrderLine.order_no.in_(actor_scope.visible_order_no_select()))
     lines = (await db.execute(line_stmt)).scalars().all()
 
     if anchor == "order_no":
@@ -251,12 +245,9 @@ async def quality_trace_list(
         issue_relation = "via_batch_order"
     issues: list = []
     if issue_where:
-        scope_where = []
-        if actor_scope is not None:
-            scope_where.append(actor_scope.quality_condition())
         issues = (
             await db.execute(
-                select(QualityIssue).where(QualityIssue.is_deleted == False, *issue_where, *scope_where)
+                select(QualityIssue).where(QualityIssue.is_deleted == False, *issue_where)
             )
         ).scalars().all()
 

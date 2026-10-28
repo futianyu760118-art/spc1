@@ -1,4 +1,4 @@
-"""业务对象解析：订单 / 物料缺料 / 品质异常，带数据范围可见性校验。"""
+"""业务对象解析：订单 / 物料缺料 / 品质异常（不做数据范围校验）。"""
 
 from typing import Optional
 
@@ -9,7 +9,6 @@ from app.models.exception.quality_issue import QualityIssue
 from app.models.material.kitting import KittingShortage
 from app.models.order.sale_order import SaleOrder
 from app.services.agent.errors import AgentError
-from app.services.agent.scope import ScopeContext
 
 SUPPORTED_BIZ_TYPES = ("order", "material_shortage", "quality_issue")
 
@@ -20,12 +19,11 @@ class BusinessObjectError(AgentError):
 
 async def resolve_business_object(
     db: AsyncSession,
-    scope: ScopeContext,
     biz_type: str,
     identifier: str,
     context: Optional[dict] = None,
 ) -> dict:
-    """解析业务对象并校验当前范围；解析不到按 fail-closed 拒绝。"""
+    """解析业务对象；解析不到按 fail-closed 拒绝。"""
     biz_type = (biz_type or "").strip()
     identifier = str(identifier or "").strip()
     if biz_type not in SUPPORTED_BIZ_TYPES:
@@ -34,27 +32,23 @@ async def resolve_business_object(
         raise BusinessObjectError("业务对象编号不能为空")
 
     if biz_type == "order":
-        return await _resolve_order(db, scope, identifier)
+        return await _resolve_order(db, identifier)
     if biz_type == "quality_issue":
-        return await _resolve_quality_issue(db, scope, identifier)
-    return await _resolve_material_shortage(db, scope, identifier, context or {})
+        return await _resolve_quality_issue(db, identifier)
+    return await _resolve_material_shortage(db, identifier, context or {})
 
 
-async def _resolve_order(db: AsyncSession, scope: ScopeContext, identifier: str) -> dict:
-    conditions = [SaleOrder.order_no == identifier, scope.order_condition()]
+async def _resolve_order(db: AsyncSession, identifier: str) -> dict:
+    conditions = [SaleOrder.order_no == identifier]
     if identifier.isdigit():
         conditions = [
             (SaleOrder.order_no == identifier) | (SaleOrder.id == int(identifier)),
-            scope.order_condition(),
         ]
     row = (await db.execute(
         select(SaleOrder).where(*conditions).order_by(SaleOrder.id.asc()).limit(1)
     )).scalars().first()
     if not row:
-        raise BusinessObjectError(
-            "订单不存在或不在你的数据范围内，无法派发该业务任务；可先由管理员调整数据范围或改用通用待办",
-            403,
-        )
+        raise BusinessObjectError("订单不存在", 404)
     title = f"订单 {row.order_no}"
     if row.customer:
         title += f" · {row.customer}"
@@ -78,8 +72,8 @@ async def _resolve_order(db: AsyncSession, scope: ScopeContext, identifier: str)
     }
 
 
-async def _resolve_quality_issue(db: AsyncSession, scope: ScopeContext, identifier: str) -> dict:
-    conditions = [QualityIssue.is_deleted == False, scope.quality_condition()]  # noqa: E712
+async def _resolve_quality_issue(db: AsyncSession, identifier: str) -> dict:
+    conditions = [QualityIssue.is_deleted == False]  # noqa: E712
     if identifier.isdigit():
         conditions.append((QualityIssue.issue_no == identifier) | (QualityIssue.id == int(identifier)))
     else:
@@ -88,10 +82,7 @@ async def _resolve_quality_issue(db: AsyncSession, scope: ScopeContext, identifi
         select(QualityIssue).where(*conditions).order_by(QualityIssue.id.desc()).limit(1)
     )).scalars().first()
     if not row:
-        raise BusinessObjectError(
-            "品质异常不存在或不在你的数据范围内，无法派发该业务任务",
-            403,
-        )
+        raise BusinessObjectError("品质异常不存在", 404)
     return {
         "biz_type": "quality_issue",
         "biz_id": str(row.id),
@@ -113,14 +104,10 @@ async def _resolve_quality_issue(db: AsyncSession, scope: ScopeContext, identifi
 
 async def _resolve_material_shortage(
     db: AsyncSession,
-    scope: ScopeContext,
     identifier: str,
     context: dict,
 ) -> dict:
-    conditions = [
-        KittingShortage.is_deleted == 0,
-        KittingShortage.demand_no.in_(scope.visible_order_no_select()),
-    ]
+    conditions = [KittingShortage.is_deleted == 0]
     order_no = str(context.get("order_no") or "").strip()
     if order_no:
         conditions.append(KittingShortage.demand_no == order_no)
@@ -132,10 +119,7 @@ async def _resolve_material_shortage(
         select(KittingShortage).where(*conditions).order_by(KittingShortage.id.desc()).limit(1)
     )).scalars().first()
     if not row:
-        raise BusinessObjectError(
-            "缺料记录不存在或不在你的数据范围内，无法派发该业务任务",
-            403,
-        )
+        raise BusinessObjectError("缺料记录不存在", 404)
     return {
         "biz_type": "material_shortage",
         "biz_id": str(row.id),

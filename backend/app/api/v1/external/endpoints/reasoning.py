@@ -22,7 +22,7 @@ from app.services import reasoning as reasoning_service
 from app.services.agent.capabilities import CONFIGURABLE_CAPABILITIES
 
 from ..common import ExternalEnvelopeError
-from ..deps import external_auth, get_actor_scope
+from ..deps import external_auth
 from ..log_wrap import log_external_call
 from ..registry import register_external
 
@@ -167,7 +167,6 @@ async def reasoning_analyze(
             api_key_name=key.key_name,
             app_key=key.app_key,
             request_id=payload.request_id,
-            scope=get_actor_scope(request),
         )
     except reasoning_service.ReasoningError as e:
         raise ExternalEnvelopeError(e.code, e.message)

@@ -5,7 +5,7 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import Date, String, cast, false, func, literal, or_, select, union_all
+from sqlalchemy import Date, String, cast, func, literal, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -20,7 +20,7 @@ from app.models.material.transfer_order import TransferOrder
 from app.schemas.common import ResponseModel
 
 from ..common import ExternalDataPage, PageParamsMixin
-from ..deps import external_auth, get_actor_scope
+from ..deps import external_auth
 from ..freshness import freshness_meta, sync_only_as_of
 from ..log_wrap import log_external_call
 from ..registry import register_external
@@ -72,7 +72,6 @@ async def material_supplies_list(
 ):
     page = max(q.page or 1, 1)
     page_size = min(max(q.page_size if q.page_size is not None else 20, 1), 200)
-    actor_scope = get_actor_scope(request)
 
     po_q = select(
         literal("PURCHASE").label("supply_type"),
@@ -167,17 +166,6 @@ async def material_supplies_list(
         literal(None, String).label("quality_status"),
         TransferOrder.updated_at.label("updated_at"),
     ).where(TransferOrder.is_deleted == 0)
-
-    if actor_scope is not None:
-        po_q = po_q.where(or_(
-            PurchaseOrder.owner_id.in_(sorted(actor_scope.member_user_ids)),
-            PurchaseOrder.owner.in_(sorted(actor_scope.member_usernames)),
-            PurchaseOrder.order_no.in_(actor_scope.visible_order_no_select()),
-        ))
-        mrp_q = mrp_q.where(MrpPlanOrder.sale_order_no.in_(actor_scope.visible_order_no_select()))
-        # 委外/调拨没有可靠的订单归属字段：个人智能体下 fail closed。
-        sub_q = sub_q.where(false())
-        tr_q = tr_q.where(false())
 
     union_q = union_all(po_q, sub_q, mrp_q, tr_q).subquery()
 
