@@ -75,6 +75,7 @@ export default function BatchScheduleModal({ open, orderRows, onClose, onSuccess
       form.setFieldsValue({
         department: '生产',
         plan_date: null,
+        merge_same_order: false,
         manpower: base?.default_manpower ?? undefined,
         daily_work_hours: singleBucket
           ? (base?.daily_work_hours ?? getRecommendedDailyWorkHours(singleBucket))
@@ -97,11 +98,13 @@ export default function BatchScheduleModal({ open, orderRows, onClose, onSuccess
         daily_work_hours: values.daily_work_hours ?? undefined,
         manpower: values.manpower || undefined,
         include_sunday: values.include_sunday ?? undefined,
+        merge_same_order: !!values.merge_same_order,
         owner: values.owner,
         items: schedulableRows.map((row) => ({
           order_no: row.order_no,
           line_no: row.line_no,
           upph: row.schedule_bucket === 'lean' ? row.upph : undefined,
+          schedule_bucket: row.schedule_bucket || undefined,
         })),
       })
       const result = res.data || {}
@@ -225,6 +228,16 @@ export default function BatchScheduleModal({ open, orderRows, onClose, onSuccess
             </Col>
             <Col span={8}>
               <Form.Item name="include_sunday" label="周日排产" valuePropName="checked">
+                <Switch checkedChildren="开" unCheckedChildren="关" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="merge_same_order"
+                label="同订单优先合并"
+                valuePropName="checked"
+                tooltip="同一订单的组装/包装行优先合并到同一天，只用当天剩余产能，不推其他订单；混合订单暂不合并"
+              >
                 <Switch checkedChildren="开" unCheckedChildren="关" />
               </Form.Item>
             </Col>

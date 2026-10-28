@@ -822,7 +822,8 @@ class BatchAutoScheduleItemIn(BaseModel):
     order_no: str
     line_no: str
     upph: Optional[float] = None
-    manpower: Optional[int] = None  # 班组人数(可空, 默认走基础条件)
+    manpower: Optional[int] = None  # 本行人数(可空, 默认走基础条件)
+    schedule_bucket: Optional[str] = None
 
 
 class BatchAutoScheduleRequest(BaseModel):
@@ -832,6 +833,7 @@ class BatchAutoScheduleRequest(BaseModel):
     owner: Optional[str] = None
     manpower: Optional[int] = None  # 批量统一人数(可被 item.manpower 覆盖)
     include_sunday: Optional[bool] = None  # 批量统一周日排产(可被 item 覆盖)
+    merge_same_order: bool = False  # 同订单优先合并: 组装/包装分别合并, 只用当天剩余产能
     items: List[BatchAutoScheduleItemIn]
 
 
