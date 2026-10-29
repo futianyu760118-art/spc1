@@ -56,7 +56,7 @@ ADJUSTABLE_STATUSES = {"planned", "in_progress", "delayed"}
 @router.post("/batch", response_model=ResponseModel[ManualDateAdjustResponse])
 async def batch_adjust_schedule_dates(
     payload: ManualDateAdjustRequest,
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "update")),
+    current_user: dict = Depends(PermissionChecker("production.schedule_date_adjust", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     """批量改排产日期（硬排）.
@@ -180,7 +180,7 @@ async def batch_adjust_schedule_dates(
 @router.post("/insert", response_model=ResponseModel[InsertSchedulePlanResponse])
 async def insert_plan(
     payload: InsertSchedulePlanRequest,
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "update")),
+    current_user: dict = Depends(PermissionChecker("production.schedule_date_adjust", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     """插入一条计划（订单池新单或同订单返单），同段后续计划整体顺延."""
@@ -275,7 +275,7 @@ async def insert_plan(
 @router.post("/split", response_model=ResponseModel[SplitSchedulePlanResponse])
 async def split_plan(
     payload: SplitSchedulePlanRequest,
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "update")),
+    current_user: dict = Depends(PermissionChecker("production.schedule_date_adjust", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     """把一个计划按数量拆成多批（支持只生产一部分）."""
@@ -348,7 +348,7 @@ async def split_plan(
 async def list_schedule_remainders(
     department: Optional[str] = Query(None),
     schedule_bucket: Optional[str] = Query(None),
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "read")),
+    current_user: dict = Depends(PermissionChecker("production.schedule_date_adjust", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     """已排计划未覆盖完的剩余量（拆单少排 / 只生产一部分）."""

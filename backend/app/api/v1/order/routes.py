@@ -752,6 +752,8 @@ ORDER_EXPORT_COLUMNS = [
     ExportColumn('order_date', '下单时间', 12),
     ExportColumn('promised_date', '合同交期', 12),
     ExportColumn('shipping_plan', '出货计划', 12),
+    ExportColumn('inbound_date', '入库时间', 12),
+    ExportColumn('outbound_date', '出库时间', 12),
     ExportColumn('customer_inspection_date', '客户验货时间', 14),
     ExportColumn('planned_start_date', '上线时间', 12),
     ExportColumn('inspection_result', '客检结果', 10),

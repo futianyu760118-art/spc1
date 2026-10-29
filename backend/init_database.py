@@ -160,6 +160,8 @@ class DatabaseInitializer:
                 "extra_data": "JSONB",
                 "data_source": "VARCHAR(32)",
                 "delivery_completed_date": "DATE",
+                "inbound_date": "DATE",
+                "outbound_date": "DATE",
                 "customer_grade": "VARCHAR(16)",
                 "shipping_plan": "DATE",
                 "customer_inspection_date": "DATE",
@@ -1163,6 +1165,7 @@ class DatabaseInitializer:
                             "production.packaging": ["create", "read", "update", "delete", "import"],
                             "production.exceptions": ["create", "read", "update", "delete", "import"],
                             "production.schedule_plans": ["create", "read", "update", "delete"],
+                            "production.schedule_date_adjust": ["read", "update"],
                             "production.daily_report": ["create", "read", "update", "delete"],
                             "exceptions.pool": ["create", "read", "update", "delete", "import"],
                             "exceptions.quality": ["create", "read", "update", "delete", "import"],
@@ -1216,6 +1219,7 @@ class DatabaseInitializer:
                             "production.packaging": ["read", "update", "import"],
                             "production.exceptions": ["read", "update", "import"],
                             "production.schedule_plans": ["read", "update"],
+                            "production.schedule_date_adjust": ["read", "update"],
                             "exceptions.pool": ["read"],
                             "exceptions.quality": ["read"],
                             "exceptions.product_samples": ["read", "update"],
@@ -1289,6 +1293,7 @@ class DatabaseInitializer:
                             "production.lean": ["read", "update"],
                             "production.assembly": ["read", "update"],
                             "production.packaging": ["read", "update"],
+                            "production.schedule_date_adjust": ["read", "update"],
                             "production.exceptions": ["read", "update"],
                             "exceptions.pool": ["read", "update"],
                             "exceptions.quality": ["read", "update"],
@@ -2415,6 +2420,151 @@ ORDER BY b.FDate DESC, b.FBillNo, e.FEntryID
                 print(f"Error seeding sync SQL config: {e}")
                 raise
 
+    @staticmethod
+    def _find_top_level_order_by(sql_text: str) -> int:
+        """返回最后一个顶层 ORDER BY 的位置（忽略括号内和字符串内的 ORDER BY）"""
+        depth = 0
+        in_quote = False
+        upper = sql_text.upper()
+        last_pos = -1
+        i = 0
+        while i < len(sql_text):
+            ch = sql_text[i]
+            if ch == "'":
+                if in_quote and i + 1 < len(sql_text) and sql_text[i + 1] == "'":
+                    i += 2
+                    continue
+                in_quote = not in_quote
+            elif not in_quote:
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth = max(0, depth - 1)
+                elif depth == 0 and upper.startswith("ORDER BY", i):
+                    prev = sql_text[i - 1] if i > 0 else " "
+                    if not (prev.isalnum() or prev == "_"):
+                        last_pos = i
+            i += 1
+        return last_pos
+
+    @classmethod
+    def _strip_trailing_order_by(cls, sql_text: str) -> str:
+        """去掉 SQL 末尾的顶层 ORDER BY（子查询内 ORDER BY 不合法）"""
+        pos = cls._find_top_level_order_by(sql_text)
+        base = sql_text[:pos] if pos >= 0 else sql_text
+        return base.rstrip().rstrip(";").rstrip()
+
+    @staticmethod
+    def _mapping_source_alias(mapping: dict, target: str) -> str | None:
+        for key, value in mapping.items():
+            mapped = value.get("target") if isinstance(value, dict) else value
+            if mapped == target:
+                return key
+        return None
+
+    @staticmethod
+    def _build_orders_warehouse_dates_sql(base_sql: str, k3_prefix: str, aliases: dict) -> str:
+        """在现有 orders SQL 外层追加 K3 入库/出库日期聚合列"""
+        safe_erp_alias = aliases["erp"].replace("]", "]]")
+        safe_order_alias = aliases["order"].replace("]", "]]")
+        return f"""SELECT base.*, wh.inbound_date AS 入库时间, wh.outbound_date AS 出库时间
+FROM (
+{base_sql}
+) base
+LEFT JOIN (
+  SELECT erp_id, MAX(inbound_date) AS inbound_date, MAX(outbound_date) AS outbound_date
+  FROM (
+    SELECT so.FInterID AS erp_id, MAX(h.FDate) AS inbound_date, CAST(NULL AS datetime) AS outbound_date
+    FROM {k3_prefix}.dbo.ICStockBill h
+    JOIN {k3_prefix}.dbo.ICStockBillEntry e ON e.FInterID = h.FInterID
+    JOIN {k3_prefix}.dbo.ICMO m ON m.FInterID = e.FICMOInterID
+    JOIN {k3_prefix}.dbo.SEOrder so ON so.FInterID = m.FOrderInterID
+    JOIN {k3_prefix}.dbo.SEOrderEntry soe ON soe.FInterID = so.FInterID AND soe.FItemID = e.FItemID
+    WHERE h.FTranType = 2 AND h.FCheckerID > 0 AND ISNULL(h.FCancellation, 0) = 0
+    GROUP BY so.FInterID
+    UNION ALL
+    SELECT so.FInterID AS erp_id, CAST(NULL AS datetime) AS inbound_date, MAX(h.FDate) AS outbound_date
+    FROM {k3_prefix}.dbo.ICStockBill h
+    JOIN {k3_prefix}.dbo.ICStockBillEntry e ON e.FInterID = h.FInterID
+    JOIN {k3_prefix}.dbo.SEOrder so ON so.FInterID = e.FOrderInterID
+    WHERE h.FTranType = 21 AND h.FCheckerID > 0 AND ISNULL(h.FCancellation, 0) = 0
+    GROUP BY so.FInterID
+  ) u
+  GROUP BY erp_id
+) wh ON wh.erp_id = base.[{safe_erp_alias}]
+WHERE 1 = 1
+ORDER BY [{safe_order_alias}]
+"""
+
+    async def migrate_orders_sync_warehouse_dates(self):
+        """幂等扩展线上 orders 同步 SQL，追加 K3 产品入库/销售出库日期。
+
+        线上 orders SQL 由管理员在同步SQL配置页维护，seed 不会覆盖；
+        这里保留原 SQL 原样作为子查询，外层追加聚合列与字段映射。
+        """
+        print("Migrating orders sync SQL for warehouse dates...")
+        async with AsyncSessionLocal() as session:
+            try:
+                import re
+                from app.models.basicdata.sync_sql_config import SyncSqlConfig
+
+                result = await session.execute(
+                    select(SyncSqlConfig).where(SyncSqlConfig.sync_type == "orders")
+                )
+                config = result.scalar_one_or_none()
+                if not config:
+                    print("Orders sync config not found, skip warehouse date migration")
+                    return
+
+                sql_text = config.sql_text or ""
+                if "入库时间" in sql_text or "inbound_date" in sql_text.lower():
+                    print("Orders sync config already contains warehouse dates")
+                    return
+
+                mapping = {}
+                if config.field_mapping_json:
+                    try:
+                        mapping = json.loads(config.field_mapping_json)
+                    except json.JSONDecodeError:
+                        print("Orders sync field mapping JSON is invalid, skip warehouse date migration")
+                        return
+
+                erp_alias = self._mapping_source_alias(mapping, "erp_id")
+                if not erp_alias:
+                    print("Orders sync mapping has no erp_id source, skip warehouse date migration")
+                    return
+
+                order_alias = self._mapping_source_alias(mapping, "order_no") or "FContractNo"
+
+                if sql_text.lstrip().upper().startswith("WITH"):
+                    print("Orders sync SQL starts with CTE, skip warehouse date migration")
+                    return
+
+                match = re.search(r"([A-Za-z0-9_\[\]\.]+)\.dbo\.SEOrder", sql_text, re.IGNORECASE)
+                if not match:
+                    print("Orders sync SQL has no K3 SEOrder prefix, skip warehouse date migration")
+                    return
+
+                config.sql_text = self._build_orders_warehouse_dates_sql(
+                    self._strip_trailing_order_by(sql_text),
+                    match.group(1),
+                    {"erp": erp_alias, "order": order_alias},
+                )
+                mapping.setdefault(
+                    "入库时间", {"target": "inbound_date", "remark": "K3 产品入库单最后审核日期"}
+                )
+                mapping.setdefault(
+                    "出库时间", {"target": "outbound_date", "remark": "K3 销售出库单最后审核日期"}
+                )
+                config.field_mapping_json = json.dumps(mapping, ensure_ascii=False, indent=2)
+                await session.commit()
+                print("Orders sync SQL extended with K3 inbound/outbound dates")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error migrating orders sync SQL: {e}")
+                raise
+
     async def seed_default_writeback_configs(self):
         """Seed default writeback SQL configurations (idempotent)."""
         print("Seeding default writeback SQL configs...")
@@ -2557,6 +2707,7 @@ ORDER BY b.FDate DESC, b.FBillNo, e.FEntryID
             await self.seed_normal_order_standards()
             await self.seed_base_conditions()
             await self.seed_sync_sql_config()
+            await self.migrate_orders_sync_warehouse_dates()
             await self.seed_default_writeback_configs()
             await self.seed_sample_data()
             

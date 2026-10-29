@@ -112,7 +112,7 @@ async def list_rework_orders(
     date_start: Optional[date] = Query(None),
     date_end: Optional[date] = Query(None),
     only_with_hours: bool = Query(False),
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "read")),
+    current_user: dict = Depends(PermissionChecker("production.schedule_date_adjust", "read")),
     db: AsyncSession = Depends(get_db),
 ):
     conditions = []
@@ -171,7 +171,7 @@ async def list_rework_orders(
 
 @router.post("/sync", response_model=ResponseModel[dict])
 async def sync_oa_rework_orders(
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "update")),
+    current_user: dict = Depends(PermissionChecker("production.schedule_date_adjust", "update")),
     db: AsyncSession = Depends(get_db),
 ):
     stats = await sync_rework_orders(db)
