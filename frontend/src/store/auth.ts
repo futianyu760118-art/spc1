@@ -86,6 +86,7 @@ const sharePathToPermission: Record<string, string> = {
   '/closure-tracking': 'exceptions.closure',
   '/production-overview': 'production.overview',
   '/schedule-plans': 'production.schedule_plans',
+  '/schedule-date-adjust': 'production.schedule_date_adjust',
   '/front-process': 'production.front_process',
   '/smt': 'production.smt',
   '/lean': 'production.lean',

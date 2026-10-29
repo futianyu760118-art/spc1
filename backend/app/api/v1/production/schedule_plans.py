@@ -189,8 +189,9 @@ async def _check_production_schedule_permission_fast(
     token: str,
     db: AsyncSession,
     action: str = "read",
+    any_of: Optional[list[tuple[str, str]]] = None,
 ) -> tuple[dict, dict[str, object]]:
-    checker = PermissionChecker("production.schedule_plans", action)
+    checker = PermissionChecker("production.schedule_plans", action, any_of=any_of)
     timings: dict[str, object] = {}
 
     decode_started_at = perf_counter()
@@ -251,24 +252,14 @@ async def _check_production_schedule_permission_fast(
     timings["merge_role_permissions"] = round((perf_counter() - permission_merge_started_at) * 1000, 2)
 
     permission_eval_started_at = perf_counter()
-    for resource in checker._resource_candidates():
-        allowed_actions = permissions.get(resource, [])
-        if checker.action in allowed_actions:
-            timings["permission_eval"] = round((perf_counter() - permission_eval_started_at) * 1000, 2)
-            return payload, timings
-    for resource in checker._resource_candidates():
-        if "." not in resource:
-            continue
-        parent = resource.split(".")[0]
-        parent_actions = permissions.get(parent, [])
-        if checker.action in parent_actions:
-            timings["permission_eval"] = round((perf_counter() - permission_eval_started_at) * 1000, 2)
-            return payload, timings
+    if checker._has_any_permission(permissions):
+        timings["permission_eval"] = round((perf_counter() - permission_eval_started_at) * 1000, 2)
+        return payload, timings
 
     timings["permission_eval"] = round((perf_counter() - permission_eval_started_at) * 1000, 2)
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"缺少 {checker.resource}.{checker.action} 权限",
+        detail=checker._forbidden_detail(),
     )
 
 
@@ -276,7 +267,12 @@ async def _check_production_schedule_read_permission_fast(
     token: str,
     db: AsyncSession,
 ) -> tuple[dict, dict[str, object]]:
-    return await _check_production_schedule_permission_fast(token, db, "read")
+    return await _check_production_schedule_permission_fast(
+        token,
+        db,
+        "read",
+        any_of=[("production.schedule_date_adjust", "read")],
+    )
 
 
 async def _get_production_schedule_read_context(
@@ -5114,7 +5110,13 @@ async def delete_schedule_plan(
 @router.post("/batch-delete", response_model=ResponseModel[dict])
 async def batch_delete_plans(
     data: dict,
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "update")),
+    current_user: dict = Depends(
+        PermissionChecker(
+            "production.schedule_plans",
+            "update",
+            any_of=[("production.schedule_date_adjust", "update")],
+        )
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """批量删除排产计划（简化版：不走补位逻辑，直接删 plan + slot + 重置 snapshot）
