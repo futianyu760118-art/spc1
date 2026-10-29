@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     EXECUTION_AGENT_BASE_URL: str = ""   # legacy 单 Agent 管理代理（已停用，仅旧端点兼容）
     EXECUTION_QUERY_AGENT_BASE_URL: str = ""
     EXECUTION_REASONING_AGENT_BASE_URL: str = ""
-    EXECUTION_ORDER_AGENT_BASE_URL: str = ""
+    EXECUTION_WRITE_AGENT_BASE_URL: str = ""
     AGENT_ADMIN_TOKEN: str = ""          # 与 agent .env 的 AGENT_ADMIN_TOKEN 一致
 
     # SPC 单一网关（Hub 执行面/出站统一出口）
@@ -159,10 +159,8 @@ class Settings(BaseSettings):
     change_detect_enabled: bool = True
     change_detect_interval_hours: int = 1
 
-    # 智能体中心（层级 + 能力 + 委派，2026-10-27）
+    # 智能体中心（上下文缓存 TTL）
     AGENT_SCOPE_CACHE_TTL_SECONDS: int = 300
-    AGENT_DELEGATION_MAX_DEPTH: int = 3
-    AGENT_DELEGATION_TIMEOUT_SECONDS: int = 120
 
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 

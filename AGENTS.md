@@ -24,7 +24,7 @@ npm run build      # = tsc -b && vite build，唯一 typecheck，交付前必跑
 
 - 本地开发（仓库根）：`docker-compose up -d` —— backend :8000、frontend :3000。
 - 生产部署（部署脚本使用）：`docker compose -f docker-compose-prod.yml up -d` —— 自带 postgres/redis，backend :18085、frontend :18084。
-- AEOS 执行面（`aeos` profile）：`docker compose --profile aeos up -d aeos-gateway aeos-order-agent` —— 单一网关 + 本地订单 Agent；网关必须单副本。
+- AEOS 执行面（`aeos` profile）：`docker compose --profile aeos up -d aeos-gateway` —— 单一网关即唯一执行面（Hub 派单与 SPC 助手共用）；网关必须单副本。
 - backend 容器启动命令：生产为 `python init_database.py && uvicorn ...`（每次启动自动迁移）；本地 dev compose 只跑 uvicorn，需手动执行 `python init_database.py`。
 
 ### 部署（Windows 本机，多服务器并行）
@@ -34,7 +34,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteracti
 ```
 
 - 服务器列表/角色（full=全套含 postgres/redis，app=仅应用连主库）/各台 .env 在 `scripts/deploy-config.ps1` 的 `$DEPLOY_SERVERS` 数组；`-Servers main,app1` 只部署部分，`-KeepRemoteEnv` 保留远程 .env。
-- 部署脚本会构建并随镜像包上传 `aeos-gateway:latest`，并把 `backend/certs/caddy-root.crt` 随配置包上传（网关只读挂载）；网关属于 `aeos` profile，部署后需在 full 服务器按需启动（`docker compose --profile aeos up -d aeos-gateway aeos-order-agent`），保持单副本。
+- 部署脚本会构建并随镜像包上传 `aeos-gateway:latest`，并把 `backend/certs/caddy-root.crt` 随配置包上传（网关只读挂载）；backend 镜像构建经 `--build-context agents_shared=agents\shared` 注入订单写操作注册表；网关属于 `aeos` profile，部署后需在 full 服务器按需启动（`docker compose --profile aeos up -d aeos-gateway`），保持单副本。
 - 版本回退：`powershell -File scripts\manage-version.ps1 -Server <名称> list | rollback <版本名> | cleanup`。
 - `.env`（含数据库/Redis/ERP 密码）与 SSH 密钥永不进仓库。
 
@@ -90,6 +90,7 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-remote.ps1 -NonInteracti
 模型位于 `backend/app/models/<domain>/`。`alembic/env.py` 通过 import `app.models` 把所有表注册到 `Base.metadata`；新增模型模块必须在那里（或经包 `__init__`）被 import，否则 `create_all` 看不到。
 
 - 应用代码走**异步** SQLAlchemy（asyncpg），用 `app/core/database.py` 的 `get_db()`：**成功自动 commit、异常自动 rollback** —— 端点内不要手动 commit，除非自己接管 session。
+- 关键写路径用 `get_write_db()`（独立 async 写池，5+5），读接口优先 `get_read_only_db()`；`resolve-caller`、`orders.write` 已使用写池，避免读流量/慢查询把写请求饿死。
 - Alembic / `init_database.py` / ERP 读取走**同步**引擎（psycopg2、pyodbc）。
 
 ## 环境与配置
@@ -129,13 +130,13 @@ ERP 集成是 SQL 驱动的：同步 SQL 与字段映射存在 `sync_sql_config`
 ### 执行面（AEOS 单一网关）
 
 - **唯一 Hub 身份**：`agents/gateway-agent` 以 `gateway-control-platform` 注册，是 SPC 唯一的 Hub WS 连接；能力固定 `query_control_platform` / `reason_control_platform` / `write_control_platform`。网关必须单副本（多副本会重复注册同一 `agentId`）。
-- **旧 Agent 收敛**：`query-agent` / `reasoning-agent` 仅作为网关内部 adapter 复用，不再独立部署或直连 Hub；`order-agent` 仅本地 `/admin/run`（`EXECUTION_WS_URL=""`），不连 Hub。
+- **旧 Agent 收敛**：`query-agent` / `reasoning-agent` / 订单写 adapter 仅作为网关内部 adapter 复用，不再独立部署或直连 Hub；order-agent 已退役删除。
 - **内部逻辑 Agent**：`agents/gateway-agent/src/agent-registry.js` 按 `capability + input.task_type` 路由；推理结果在 `run_complete.result.handled_by` 返回 `spc-agent-order-risk` / `spc-agent-kitting-risk` / `spc-agent-quality-risk` / `spc-agent-production-risk`（`model` 取实际 `llm.model`）；查询不返回 `handled_by`。`request_id` 从 dispatch 顶层或 `input` 提取并原样回显；`target_agent_ref` 为内部 `agentId`，找不到或不匹配返回 `TARGET_AGENT_UNAVAILABLE`。
 - **错误码**：忙碌/并发上限 `AGENT_BUSY`（可重试）；无匹配内部 Agent `AGENT_NOT_FOUND`；显式 target 不可用 `TARGET_AGENT_UNAVAILABLE`；不得回退全量数据或静默成功。
-- **写能力**：`write_control_platform` 仅由 Hub 审批后派单，本地 `/admin/run` 不开放该能力；操作白名单 `order.update_note` / `order.update_status` / `order.update_delivery_date`，网关内部路由到 `spc-agent-order-write`（`role=order_write`）。`order.update_status` 仅 `open`/`closed`，同时写 `sale_order.status` + `is_closed`；`order.update_delivery_date` 写 `sale_order.promised_date`（`YYYY-MM-DD`，允许过去日期纠错，不自动改出货计划/下游任务）；`erp_status=3` 或已删除订单拒绝状态/交付日期修改。备注为覆盖写、≤2000 字符、允许已关闭订单。能力声明带顶层 `operations` 元数据（name/title/keywords/changesField/fields）供 Hub 对话解析。后端 `PUT /external/orders/{order_no}/write`（endpoint_code `orders.write`）用 `order_write_idempotency` 保证同一 `idempotencyKey` 只执行一次，内容不一致返回 `IDEMPOTENCY_CONFLICT`；`orders.write` 必须在数据供给 Key 中授权。
+- **写能力**：`write_control_platform` 由网关内部订单写 Agent `spc-agent-order-write` 执行，Hub 审批派单（WS dispatch）与 SPC 助手人工确认（网关本地 `/admin/run` + actor token，不占 Hub 派单槽位）路由到同一宿主。**操作注册表唯一源 `agents/shared/order-write-operations.json`**：`audiences`（hub/assistant）、字段→列映射、校验、ERP 守卫声明驱动；adapter / 网关路由 / 后端 write_service / 助手工具四端共同消费，新增字段写入类操作只改注册表。Hub 操作 `order.update_note` / `order.update_status` / `order.update_delivery_date`；助手操作 `order.update_schedule_fields`（五日期字段含 `promised_date`）。`order.update_status` 仅 `open`/`closed`，同时写 `sale_order.status` + `is_closed`；`order.update_delivery_date` 写 `sale_order.promised_date`（`YYYY-MM-DD`，允许过去日期纠错，不自动改出货计划/下游任务）；`erp_status=3` 或已删除订单拒绝状态/交付日期修改。备注为覆盖写、≤2000 字符、允许已关闭订单。能力声明带顶层 `operations` 元数据（注册表 hub 项自动生成）供 Hub 对话解析。后端 `PUT /external/orders/{order_no}/write`（endpoint_code `orders.write`）用 `order_write_idempotency` 保证同一 `idempotencyKey` 只执行一次，内容不一致返回 `IDEMPOTENCY_CONFLICT`；`orders.write` 必须在数据供给 Key 中授权。
 - **出站边界**：所有 Hub HTTP（借调、能力目录、assistant-events）统一经网关白名单代理 `/internal/hub/*`；backend `hub_client` / `hub_reporter` 只能走 `app/services/gateway_client.py`，不得恢复直连 Hub 的第二出口。
 - **入站 caller 路由**：网关调内网 `POST /api/v1/internal/gateway/resolve-caller`（`X-Gateway-Token` 鉴权）解析 `caller` 并签发 actor token；审计写 `gateway_dispatch_log`，fail-closed。`caller.userId` 按 `GATEWAY_CALLER_USER_ID_FIELD` 解析，默认 `emp_code`。`caller.systemId` 非空且不等于 `control-platform`（如 Hub 页面派单的 `aeos-hub`）按外部 caller 处理：保留元数据、按系统级执行，不映射 SPC 用户。nginx 对 `/api/v1/internal/` 一律 deny，仅 Docker 内网可达。
-- **关键 env**：backend `GATEWAY_BASE_URL` / `GATEWAY_INTERNAL_TOKEN` / `GATEWAY_CALLER_USER_ID_FIELD`；gateway `GATEWAY_AGENT_ID` / `GATEWAY_AGENT_NAME` / `BACKEND_INTERNAL_BASE_URL` / `AEOS_HUB_BASE` / `AEOS_SYSTEM_ID` / `AEOS_SYSTEM_TOKEN` / `AEOS_HUB_CA_CERT` / `NODE_EXTRA_CA_CERTS` / `CONTROL_PLATFORM_ORDER_APP_KEY` / `CONTROL_PLATFORM_ORDER_APP_SECRET` / `CONTROL_PLATFORM_ORDER_TIMEOUT_MS`；`EXECUTION_QUERY_AGENT_BASE_URL` / `EXECUTION_REASONING_AGENT_BASE_URL` 均指向网关。
+- **关键 env**：backend `GATEWAY_BASE_URL` / `GATEWAY_INTERNAL_TOKEN` / `GATEWAY_CALLER_USER_ID_FIELD`；gateway `GATEWAY_AGENT_ID` / `GATEWAY_AGENT_NAME` / `BACKEND_INTERNAL_BASE_URL` / `AEOS_HUB_BASE` / `AEOS_SYSTEM_ID` / `AEOS_SYSTEM_TOKEN` / `AEOS_HUB_CA_CERT` / `NODE_EXTRA_CA_CERTS` / `CONTROL_PLATFORM_ORDER_APP_KEY` / `CONTROL_PLATFORM_ORDER_APP_SECRET` / `CONTROL_PLATFORM_ORDER_TIMEOUT_MS`；`EXECUTION_QUERY_AGENT_BASE_URL` / `EXECUTION_REASONING_AGENT_BASE_URL` / `EXECUTION_WRITE_AGENT_BASE_URL` 均指向网关。**网关看门狗**（`watchdog.js`，"在线但无响应"自愈，触发即 exit(1) 由 Docker restart 拉起）：`WATCHDOG_RUN_MAX_MS`（默认 900000，卡死 run 占坑）/ `WATCHDOG_SELF_PING_*`（健康口自检，默认 30s/5s/3 次）/ `WATCHDOG_LOOP_STALL_MS`（默认 10000，事件循环停摆）；0 关闭对应项。
 - **命令**：`docker build -f agents/gateway-agent/Dockerfile -t aeos-gateway:latest agents`；`cd agents && npm install && npm test`。改网关 / resolver / 审批中心代码后跑 `python -m pytest` 与 `npm test`。
 
 ### 审批中心（approval）

@@ -1,4 +1,4 @@
-"""网关派单解析：caller -> 用户 Agent，能力校验，审计，actor token。"""
+"""网关派单解析：caller -> 用户，团队能力校验，审计，actor token。"""
 
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -7,12 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.agent.agent import Agent
 from app.models.agent.gateway import GatewayDispatchLog
 from app.models.basicdata.user import SysUser
 from app.services.agent.actor import issue_actor_token
 from app.services.agent.capabilities import allowed_query_paths, allowed_reasoning_types
-from app.services.agent.context import load_agent_context
+from app.services.agent.context import load_user_context
 
 USER_COLUMNS = {
     "emp_code": SysUser.emp_code,
@@ -28,7 +27,6 @@ DEFAULT_SYSTEM_ID = "control-platform"
 class DispatchResolution:
     ok: bool
     mode: str
-    agent: Optional[Agent] = None
     user: Optional[SysUser] = None
     actor_token: Optional[str] = None
     reject_reason: Optional[str] = None
@@ -56,41 +54,18 @@ async def _user_by_external_id(db: AsyncSession, value: str) -> Optional[SysUser
     return (await db.execute(select(SysUser).where(column == str(value)))).scalars().first()
 
 
-async def _resolve_agent(
+async def _resolve_user(
     db: AsyncSession, caller: Dict[str, Any]
-) -> Tuple[Optional[Agent], Optional[SysUser], bool, Optional[str]]:
-    agent_no = _value(caller, "agentId")
+) -> Tuple[Optional[SysUser], Optional[str]]:
     external_user_id = _value(caller, "userId")
-
-    if agent_no:
-        agent = (await db.execute(select(Agent).where(Agent.agent_no == agent_no))).scalars().first()
-        if not agent:
-            return None, None, False, "AGENT_NOT_FOUND"
-        user = await db.get(SysUser, int(agent.user_id))
-        if not user or not user.is_active:
-            return agent, user, False, "USER_DISABLED"
-        if agent.status != "active":
-            return agent, user, False, "AGENT_DISABLED"
-        mismatch = False
-        if external_user_id:
-            other = await _user_by_external_id(db, external_user_id)
-            mismatch = bool(other and int(other.id) != int(user.id))
-        return agent, user, mismatch, None
-
-    if external_user_id:
-        user = await _user_by_external_id(db, external_user_id)
-        if not user:
-            return None, None, False, "USER_NOT_FOUND"
-        if not user.is_active:
-            return None, user, False, "USER_DISABLED"
-        agent = (await db.execute(select(Agent).where(Agent.user_id == user.id))).scalars().first()
-        if not agent:
-            return None, user, False, "AGENT_NOT_FOUND"
-        if agent.status != "active":
-            return agent, user, False, "AGENT_DISABLED"
-        return agent, user, False, None
-
-    return None, None, False, None
+    if not external_user_id:
+        return None, None
+    user = await _user_by_external_id(db, external_user_id)
+    if not user:
+        return None, "USER_NOT_FOUND"
+    if not user.is_active:
+        return user, "USER_DISABLED"
+    return user, None
 
 
 def _capability_reject(ctx, capability: str, input_data: Dict[str, Any]) -> Optional[str]:
@@ -130,8 +105,6 @@ def _audit(db: AsyncSession, ctx: AuditContext, resolution: DispatchResolution) 
         caller_user_id=_value(ctx.caller, "userId"),
         caller_task_id=_value(ctx.caller, "taskId"),
         caller_trace_id=_value(ctx.caller, "traceId"),
-        resolved_agent_id=int(resolution.agent.id) if resolution.agent else None,
-        resolved_agent_no=resolution.agent.agent_no if resolution.agent else None,
         resolved_user_id=int(resolution.user.id) if resolution.user else None,
         mode=resolution.mode,
         result="routed" if resolution.ok else "rejected",
@@ -164,12 +137,8 @@ async def resolve_dispatch(
         await db.flush()
         return resolution
 
-    # 本系统 caller 必须携带可解析的 agentId/userId；空 caller 不允许回退到全量系统执行
-    if (
-        caller_system_id == local_system_id
-        and not _value(caller, "agentId")
-        and not _value(caller, "userId")
-    ):
+    # 本系统 caller 必须携带可解析的 userId；空 caller 不允许回退到全量系统执行
+    if caller_system_id == local_system_id and not _value(caller, "userId"):
         resolution = DispatchResolution(
             ok=False, mode="system", reject_reason="CALLER_REQUIRED",
         )
@@ -177,39 +146,35 @@ async def resolve_dispatch(
         await db.flush()
         return resolution
 
-    agent, user, mismatch, reason = await _resolve_agent(db, caller)
-    is_system = not _value(caller, "agentId") and not _value(caller, "userId")
-    agent_ctx = None
+    user, reason = await _resolve_user(db, caller)
+    is_system = not _value(caller, "userId")
+    user_ctx = None
 
     resolution: DispatchResolution
     if reason:
         resolution = DispatchResolution(
-            ok=False, mode="user", agent=agent, user=user,
-            reject_reason=reason, caller_user_mismatch=mismatch,
+            ok=False, mode="user", user=user,
+            reject_reason=reason,
         )
     elif is_system:
         resolution = DispatchResolution(ok=True, mode="system")
     else:
-        agent_ctx = await load_agent_context(db, user)
-        reason = _capability_reject(agent_ctx, capability, input_data)
+        user_ctx = await load_user_context(db, user)
+        reason = _capability_reject(user_ctx, capability, input_data)
         if reason:
             resolution = DispatchResolution(
-                ok=False, mode="user", agent=agent, user=user,
-                reject_reason=reason, caller_user_mismatch=mismatch,
+                ok=False, mode="user", user=user,
+                reject_reason=reason,
             )
         else:
-            resolution = DispatchResolution(
-                ok=True, mode="user", agent=agent, user=user,
-                caller_user_mismatch=mismatch,
-            )
+            resolution = DispatchResolution(ok=True, mode="user", user=user)
 
     _audit(db, audit_ctx, resolution)
     await db.flush()
     if resolution.ok and resolution.mode == "user":
         resolution.actor_token = issue_actor_token(
             user_id=int(user.id),
-            agent_id=int(agent.id),
             username=user.username or "",
-            role=agent_ctx.role_code,
+            role=user_ctx.role_code,
         )
     return resolution

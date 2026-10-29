@@ -17,8 +17,6 @@ class GatewayDispatchLog(Base):
     caller_user_id = Column(String(64), nullable=True)
     caller_task_id = Column(String(64), nullable=True)
     caller_trace_id = Column(String(128), nullable=True)
-    resolved_agent_id = Column(BigInteger, nullable=True)
-    resolved_agent_no = Column(String(32), nullable=True)
     resolved_user_id = Column(Integer, nullable=True)
     mode = Column(String(16), nullable=False, comment="user|system")
     result = Column(String(16), nullable=False, comment="routed|rejected")

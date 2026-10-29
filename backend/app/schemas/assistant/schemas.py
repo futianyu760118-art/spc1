@@ -32,6 +32,7 @@ class OrchestrationStep(BaseModel):
     error: Optional[str] = None
     item_count: Optional[int] = None
     duration_ms: Optional[float] = None
+    handled_by: Optional[str] = None  # 承接该步骤的团队成员名称
 
 
 class WriteConfirmationField(BaseModel):

@@ -1,21 +1,28 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Empty, Popconfirm, Space, Table, Tag, Typography, message } from 'antd'
+import { Button, Card, Drawer, Empty, Input, List, Popconfirm, Space, Table, Tag, Typography, message } from 'antd'
 import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
-import { agentApi } from '../../../services/agent'
-import { AddMemberModal } from '../../../components/Agent/AddMemberModal'
-import { CapabilityPolicyDrawer } from '../../../components/Agent/CapabilityPolicyDrawer'
+import { agentApi, TeamMember } from '../../../services/agent'
+import { CapabilityTags } from '../../../components/Agent/CapabilityTags'
 
 const { Text } = Typography
 
+interface Candidate {
+  id: number
+  agent_no: string
+  name: string
+  capabilities: Array<{ code: string; name: string }>
+  description?: string | null
+}
+
 export default function TeamConfig() {
-  const [rows, setRows] = useState<any[]>([])
+  const [rows, setRows] = useState<TeamMember[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [addOpen, setAddOpen] = useState(false)
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const [drawerLoading, setDrawerLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [detail, setDetail] = useState<any>(null)
+  const [keyword, setKeyword] = useState('')
+  const [candidates, setCandidates] = useState<Candidate[]>([])
+  const [loadingCandidates, setLoadingCandidates] = useState(false)
+  const [addingId, setAddingId] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -30,35 +37,36 @@ export default function TeamConfig() {
     }
   }, [])
 
+  const loadCandidates = useCallback(async (value: string) => {
+    setLoadingCandidates(true)
+    try {
+      const res: any = await agentApi.candidates(value)
+      setCandidates(res.data?.items || [])
+    } finally {
+      setLoadingCandidates(false)
+    }
+  }, [])
+
   useEffect(() => { load() }, [load])
 
-  const openConfig = async (agentId: number) => {
-    setDrawerOpen(true)
-    setDrawerLoading(true)
-    try {
-      const res: any = await agentApi.teamMember(agentId)
-      setDetail(res.data)
-    } finally {
-      setDrawerLoading(false)
-    }
-  }
+  useEffect(() => {
+    if (addOpen) loadCandidates(keyword)
+  }, [addOpen, keyword, loadCandidates])
 
-  const savePolicy = async (data: { granted: string[]; disabled: string[] }) => {
-    if (!detail?.agent?.id) return
-    setSaving(true)
+  const addMember = async (agentId: number) => {
+    setAddingId(agentId)
     try {
-      await agentApi.updatePolicy(detail.agent.id, data)
-      message.success('配置已保存并通知对方，最多 5 分钟内生效')
-      setDrawerOpen(false)
-      await load()
+      await agentApi.addMember(agentId)
+      message.success('已加入团队')
+      await Promise.all([load(), loadCandidates(keyword)])
     } finally {
-      setSaving(false)
+      setAddingId(null)
     }
   }
 
   const removeMember = async (agentId: number) => {
     await agentApi.removeMember(agentId)
-    message.success('已移除并通知对方')
+    message.success('已移出团队')
     await load()
   }
 
@@ -79,14 +87,14 @@ export default function TeamConfig() {
         )}
       >
         <div className="ac-team-toolbar">
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            直属成员 {rows.length} 人。子智能体具备哪些只读能力，父智能体就可以把对应任务委派给它。
+          <Text type="secondary" className="ac-fs-xs">
+            团队成员 {rows.length} 个。团队成员的能力决定了智能助手能帮你做什么。
           </Text>
         </div>
         {error ? (
           <Empty description={error}><Button onClick={load}>重试</Button></Empty>
         ) : rows.length === 0 && !loading ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有直属成员">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有团队成员">
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>添加第一个成员</Button>
           </Empty>
         ) : (
@@ -99,50 +107,35 @@ export default function TeamConfig() {
             pagination={{ pageSize: 7, size: 'small', showSizeChanger: false }}
             columns={[
               {
-                title: '成员', dataIndex: 'name', width: 230,
-                render: (value: string, row: any) => (
-                  <div>
-                    <div style={{ fontWeight: 500 }}>{value || row.username}</div>
-                    <Text type="secondary" style={{ fontSize: 11 }}>{row.username} · {row.agent_no}</Text>
-                  </div>
-                ),
+                title: '名称', dataIndex: 'name', width: 200, ellipsis: true,
+                render: (value: string) => <span style={{ fontWeight: 500 }}>{value}</span>,
+              },
+              { title: '编号', dataIndex: 'agent_no', width: 150, ellipsis: true },
+              {
+                title: '能力', dataIndex: 'capabilities', width: 220,
+                render: (value: TeamMember['capabilities']) => <CapabilityTags items={value} max={2} />,
               },
               {
                 title: '状态', dataIndex: 'status', width: 86,
-                render: (value: string) => <Tag color={value === 'active' ? 'green' : 'default'}>{value === 'active' ? '启用' : '禁用'}</Tag>,
+                render: (value: string) => <Tag color={value === 'active' ? 'green' : 'default'}>{value === 'active' ? '启用' : '停用'}</Tag>,
               },
               {
-                title: '可委派能力', dataIndex: 'capabilities',
-                render: (caps: Array<{ code: string; name: string }>) => {
-                  const list = caps || []
-                  const text = list.map(cap => cap.name).join('、') || '暂无'
-                  return (
-                    <div title={text} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {list.slice(0, 2).map(cap => (
-                        <Tag key={cap.code} style={{ marginInlineEnd: 4 }}>{cap.name}</Tag>
-                      ))}
-                      {list.length > 2 && <Tag>+{list.length - 2}</Tag>}
-                      {list.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>暂无</Text>}
-                    </div>
-                  )
-                },
+                title: '说明', dataIndex: 'description', ellipsis: true,
+                render: (value: string | null) => value || <Text type="secondary">-</Text>,
               },
               {
-                title: '操作', width: 170,
-                render: (_: any, row: any) => (
-                  <Space size={0}>
-                    <Button type="link" size="small" onClick={() => openConfig(row.id)}>配置能力</Button>
-                    <Popconfirm
-                      title="移除直属成员？"
-                      description="仅解除团队关系，用户和智能体保留。"
-                      okText="移除"
-                      cancelText="取消"
-                      okButtonProps={{ danger: true }}
-                      onConfirm={() => removeMember(row.id)}
-                    >
-                      <Button type="link" size="small" danger>移除</Button>
-                    </Popconfirm>
-                  </Space>
+                title: '操作', width: 80,
+                render: (_: any, row: TeamMember) => (
+                  <Popconfirm
+                    title="移除该成员？"
+                    description="移除后智能助手将失去该成员对应的能力。"
+                    okText="移除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => removeMember(row.id)}
+                  >
+                    <Button type="link" size="small" danger>移除</Button>
+                  </Popconfirm>
                 ),
               },
             ]}
@@ -150,15 +143,52 @@ export default function TeamConfig() {
         )}
       </Card>
 
-      <AddMemberModal open={addOpen} onClose={() => setAddOpen(false)} onAdded={load} />
-      <CapabilityPolicyDrawer
-        open={drawerOpen}
-        detail={detail}
-        loading={drawerLoading}
-        saving={saving}
-        onClose={() => setDrawerOpen(false)}
-        onSave={savePolicy}
-      />
+      <Drawer
+        title="添加成员"
+        width={520}
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        destroyOnClose
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Input.Search
+            placeholder="搜索名称 / 编号"
+            allowClear
+            value={keyword}
+            onChange={e => setKeyword(e.target.value)}
+          />
+          <List
+            loading={loadingCandidates}
+            dataSource={candidates}
+            locale={{ emptyText: '没有可添加的智能体' }}
+            renderItem={(item: Candidate) => (
+              <List.Item
+                actions={[
+                  <Button
+                    key="add"
+                    type="link"
+                    size="small"
+                    loading={addingId === item.id}
+                    onClick={() => addMember(item.id)}
+                  >
+                    加入
+                  </Button>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={<span>{item.name} <Text type="secondary" className="ac-fs-xs">{item.agent_no}</Text></span>}
+                  description={(
+                    <Space size={4} wrap>
+                      <CapabilityTags items={item.capabilities} max={3} />
+                      {item.description && <Text type="secondary" className="ac-fs-xs">{item.description}</Text>}
+                    </Space>
+                  )}
+                />
+              </List.Item>
+            )}
+          />
+        </Space>
+      </Drawer>
     </div>
   )
 }

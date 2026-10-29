@@ -65,6 +65,7 @@ function buildRunContext({
     runId,
     capability,
     input,
+    startedAt: new Date(),
     requestId: normalizeText(requestId),
     traceId: normalizeText(traceId),
     taskId: normalizedCaller && normalizedCaller.taskId ? normalizedCaller.taskId : null,

@@ -2740,7 +2740,14 @@ a.si-wh-link:hover { color: #4c4dc2; }
   flex-direction: column;
   gap: 12px;
   overflow: hidden;
+  /* 统一字体大小令牌：页面内文字一律用 .ac-fs-* 工具类，禁止内联裸字号 */
+  --ac-fs-xs: 12px;
+  --ac-fs-sm: 13px;
+  --ac-fs-md: 14px;
 }
+.agent-center-page .ac-fs-xs { font-size: var(--ac-fs-xs); }
+.agent-center-page .ac-fs-sm { font-size: var(--ac-fs-sm); }
+.agent-center-page .ac-fs-md { font-size: var(--ac-fs-md); }
 .agent-center-page .ant-card { border-radius: 12px; }
 .agent-center-page .ant-card-head { min-height: 40px; padding: 0 14px; }
 .agent-center-page .ant-card-head-title { padding: 8px 0; font-size: 13px; }

@@ -1,6 +1,7 @@
 """订单受控写接口：备注/状态、幂等、状态机与 HMAC 授权。"""
 
 import time
+from datetime import date
 
 from sqlalchemy import text
 
@@ -238,6 +239,68 @@ async def test_delivery_date_blocked_for_erp_closed_and_invalid_format(ext_clien
         headers=headers,
     )
     assert invalid.json()["code"] == 400
+
+
+async def test_update_schedule_fields_success_and_operator(ext_client, external_keys, db):
+    await _seed_order(db, "WRITE-012", erp_status=1, promised_date=date(2026, 1, 1))
+    user_id = (await db.execute(text("SELECT id FROM sys_user WHERE username='admin'"))).scalar()
+    assert user_id
+    headers = {**_sig_headers(external_keys), "X-Operator-User-Id": str(user_id)}
+    r = await ext_client.put(
+        "/api/v1/external/orders/WRITE-012/write",
+        json={
+            "operation": "order.update_schedule_fields",
+            "changes": {
+                "fields": {
+                    "promised_date": "2026-11-15",
+                    "shipping_plan": "2026-11-20",
+                    "delivery_completed_date": None,
+                }
+            },
+            "idempotencyKey": "idem-schedule-1",
+        },
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0, body
+    assert body["data"]["before"] == {
+        "promised_date": "2026-01-01",
+        "shipping_plan": None,
+        "delivery_completed_date": None,
+    }
+    assert body["data"]["after"] == {
+        "promised_date": "2026-11-15",
+        "shipping_plan": "2026-11-20",
+        "delivery_completed_date": None,
+    }
+    row = await _get_order(db, "WRITE-012")
+    assert str(row["promised_date"]) == "2026-11-15"
+    operator = (
+        await db.execute(
+            text(
+                "SELECT operator FROM audit_log WHERE table_name='sale_order' "
+                "AND record_id=(SELECT id FROM sale_order WHERE order_no='WRITE-012' LIMIT 1) "
+                "ORDER BY id DESC LIMIT 1"
+            )
+        )
+    ).scalar_one()
+    assert operator == "admin（智能体）"
+
+
+async def test_schedule_fields_blocked_for_erp_closed(ext_client, external_keys, db):
+    await _seed_order(db, "WRITE-013", erp_status=3, is_closed=1, status="closed")
+    r = await ext_client.put(
+        "/api/v1/external/orders/WRITE-013/write",
+        json={
+            "operation": "order.update_schedule_fields",
+            "changes": {"fields": {"shipping_plan": "2026-11-20"}},
+            "idempotencyKey": "idem-schedule-2",
+        },
+        headers=_sig_headers(external_keys),
+    )
+    body = r.json()
+    assert body["code"] == 400
+    assert "ERP 关闭" in body["message"]
 
 
 async def test_status_blocked_for_erp_closed(ext_client, external_keys, db):

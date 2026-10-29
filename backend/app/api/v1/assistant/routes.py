@@ -17,7 +17,7 @@ from app.models.basicdata.ai_agent import AssistantRun
 from app.models.basicdata.user import SysUser
 from app.schemas.assistant.schemas import ChatMessageIn, AssistantReply, ToolInfo
 from app.services.agent import conversation as agent_conversation
-from app.services.agent.context import load_agent_context
+from app.services.agent.context import load_user_context
 
 import app.services.assistant.agent_tools  # noqa: F401 — 触发智能体工具注册
 from app.services.assistant import agent
@@ -62,7 +62,6 @@ async def _record_run(
     duration_ms: Optional[float],
     is_success: bool,
     error_message: Optional[str],
-    agent_id: Optional[int] = None,
     conversation_id: Optional[int] = None,
 ) -> None:
     """用量审计落库；失败仅告警不影响对话主流程。
@@ -85,7 +84,6 @@ async def _record_run(
                 duration_ms=duration_ms,
                 is_success=is_success,
                 error_message=error_message,
-                agent_id=agent_id,
                 conversation_id=conversation_id,
                 trigger="chat",
             ))
@@ -105,33 +103,27 @@ async def _prepare_agent_chat(
     user_id: str,
     body: ChatMessageIn,
 ):
-    """构建 AgentContext / 持久化会话。"""
+    """构建 UserContext / 持久化会话。"""
     user = await db.get(SysUser, int(user_id))
     if not user:
         raise HTTPException(status_code=401, detail="用户不存在")
-    ctx = await load_agent_context(db, user)
-    if ctx.agent.status != "active":
-        raise HTTPException(status_code=403, detail="智能体已禁用，请联系管理员启用")
-    # 旧客户端仍传 session_id：保留原会话语义，但把会话键绑定到 user+agent，避免跨用户读取。
+    ctx = await load_user_context(db, user)
     if not body.conversation_id and body.session_id:
-        prefix = f"{user.id}:{ctx.agent.id}:"
+        prefix = f"{user.id}:"
         session_id = body.session_id
         if not session_id.startswith(prefix):
             session_id = f"{prefix}{session_id}"
         return ctx, None, session_id, body.conversation_history
     try:
         conversation = await agent_conversation.resolve_conversation(
-            db,
-            agent=ctx.agent,
-            user_id=user.id,
-            conversation_id=body.conversation_id,
+            db, user_id=user.id, conversation_id=body.conversation_id,
         )
     except agent_conversation.ConversationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message)
     history = body.conversation_history
     if not history:
         history = await agent_conversation.load_recent_messages(db, conversation.id, limit=20)
-    session_id = f"{user.id}:{ctx.agent.id}:{conversation.id}"
+    session_id = f"{user.id}:{conversation.id}"
     return ctx, conversation, session_id, history
 
 
@@ -201,7 +193,7 @@ async def chat(
                 conversation_history=history,
                 trace_id=trace_id,
                 user_id=str(user_id) if user_id else "",
-                agent_context=ctx,
+                user_context=ctx,
                 conversation_id=conversation.id if conversation else None,
             )
         except Exception as e:
@@ -215,7 +207,6 @@ async def chat(
                 intent=None, tools_called=[], tool_rounds=None, total_tokens=None,
                 duration_ms=round((time.perf_counter() - request_start) * 1000, 2),
                 is_success=False, error_message=str(e),
-                agent_id=ctx.agent.id if ctx else None,
                 conversation_id=conversation.id if conversation else None,
             )
             report_assistant_event(
@@ -249,7 +240,6 @@ async def chat(
             duration_ms=total_duration_ms,
             is_success=not errors,
             error_message=errors[0].get("message") if errors else None,
-            agent_id=ctx.agent.id if ctx else None,
             conversation_id=conversation.id if conversation else None,
         )
         for err in errors:
@@ -291,7 +281,7 @@ async def chat_stream(
         run_info: Dict[str, Any] = {
             "tools": [], "stats": None, "intent": None, "error": None,
             "done": False, "text": "", "steps": [],
-            "agent_id": None, "conversation_id": None,
+            "conversation_id": None,
         }
         session_id = body.session_id or str(uuid.uuid4())
 
@@ -330,7 +320,6 @@ async def chat_stream(
                 history = body.conversation_history
                 if prepared:
                     ctx, conversation, session_id, history = prepared
-                    run_info["agent_id"] = ctx.agent.id
                     if conversation:
                         run_info["conversation_id"] = conversation.id
                         await agent_conversation.append_message(
@@ -351,7 +340,7 @@ async def chat_stream(
                         trace_id=trace_id,
                         user_id=str(user_id) if user_id else "",
                         request=request,
-                        agent_context=ctx,
+                        user_context=ctx,
                         conversation_id=conversation.id if conversation else None,
                     ):
                         _track(event)
@@ -385,7 +374,6 @@ async def chat_stream(
                 duration_ms=duration_ms,
                 is_success=run_info["done"] and not run_info["error"],
                 error_message=run_info["error"] or (None if run_info["done"] else "stream_interrupted"),
-                agent_id=run_info["agent_id"],
                 conversation_id=run_info["conversation_id"],
             ))
             if run_info["error"]:
@@ -442,11 +430,11 @@ async def cancel_write(
     return {"code": 0, "message": outcome.get("message", ""), "data": outcome.get("data")}
 
 
-async def _current_agent_context(db: AsyncSession, current_user):
+async def _current_user_context(db: AsyncSession, current_user):
     user = await db.get(SysUser, int(_current_user_id(current_user)))
     if not user:
         return None
-    return await load_agent_context(db, user)
+    return await load_user_context(db, user)
 
 
 def _visible_tools(ctx) -> list:
@@ -461,14 +449,9 @@ async def list_tools(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(PermissionChecker("topbar.ai_search", "read")),
 ):
-    """返回当前智能体可用工具（按能力过滤）"""
-    ctx = await _current_agent_context(db, current_user)
+    """返回当前用户可用工具（按团队能力过滤）"""
+    ctx = await _current_user_context(db, current_user)
     data = [ToolInfo(name=t.name, description=t.description).model_dump() for t in _visible_tools(ctx)]
-    if ctx is not None and "delegate_task" in ctx.allowed_tools:
-        data.append(ToolInfo(
-            name="delegate_task",
-            description="把只读子任务委派给具备对应能力的直属子智能体",
-        ).model_dump())
     return {"code": 0, "data": data}
 
 
@@ -477,8 +460,8 @@ async def list_skills(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(PermissionChecker("topbar.ai_search", "read")),
 ):
-    """兼容旧接口：返回工具清单（以 skill 格式，按当前智能体能力过滤）"""
-    ctx = await _current_agent_context(db, current_user)
+    """兼容旧接口：返回工具清单（以 skill 格式，按当前用户团队能力过滤）"""
+    ctx = await _current_user_context(db, current_user)
     skill_items = [
         {
             "intent": t.name,

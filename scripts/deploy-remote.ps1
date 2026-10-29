@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 # 一键部署 SPC-v2 到远程 Docker（多服务器并行，带版本管理）
 # 支持 1 台 full 服务器（postgres/redis/backend/frontend）+ N 台 app 服务器（仅 backend/frontend，
 # 连 full 服务器的数据库/Redis）。每次完整部署所有目标服务器共用同一版本号 vN-时间戳
@@ -148,7 +148,7 @@ try {
 if (-not $SkipUpload) {
     Write-Host "[2/6] 构建镜像 (SkipBuild=$SkipBuild) ..."
     if (-not $SkipBuild) {
-        & docker build -t spc-v2-backend:latest -t "spc-v2-backend:$Version" (Join-Path $RepoRoot "backend")
+        & docker build --build-context "agents_shared=$(Join-Path $RepoRoot "agents\shared")" -t spc-v2-backend:latest -t "spc-v2-backend:$Version" (Join-Path $RepoRoot "backend")
         if ($LASTEXITCODE -ne 0) { throw "backend 镜像构建失败" }
         & docker build -t spc-v2-frontend:latest -t "spc-v2-frontend:$Version" (Join-Path $RepoRoot "frontend")
         if ($LASTEXITCODE -ne 0) { throw "frontend 镜像构建失败" }

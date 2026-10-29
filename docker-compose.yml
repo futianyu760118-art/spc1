@@ -1,6 +1,10 @@
 ﻿services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      additional_contexts:
+        # 订单写操作注册表唯一源（agents/shared），构建时注入 backend 镜像
+        agents_shared: ./agents/shared
     ports:
       - "8000:8000"
     environment:
@@ -55,11 +59,11 @@
       GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN:-}
       GATEWAY_CALLER_USER_ID_FIELD: ${GATEWAY_CALLER_USER_ID_FIELD:-emp_code}
       GATEWAY_HUB_TIMEOUT_S: ${GATEWAY_HUB_TIMEOUT_S:-20}
-      # 执行面智能体 admin 面代理地址（query/reasoning 均由网关承载）
+      # 执行面智能体 admin 面代理地址（query/reasoning/写 均由网关承载）
       AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
       EXECUTION_QUERY_AGENT_BASE_URL: ${EXECUTION_QUERY_AGENT_BASE_URL:-http://aeos-gateway:8790}
       EXECUTION_REASONING_AGENT_BASE_URL: ${EXECUTION_REASONING_AGENT_BASE_URL:-http://aeos-gateway:8790}
-      EXECUTION_ORDER_AGENT_BASE_URL: ${EXECUTION_ORDER_AGENT_BASE_URL:-http://aeos-order-agent:8790}
+      EXECUTION_WRITE_AGENT_BASE_URL: ${EXECUTION_WRITE_AGENT_BASE_URL:-http://aeos-gateway:8790}
       # AEOS Hub 助手观测上报（assistant-events，中台智能助手调用留痕；缺一即停用）
       AEOS_HUB_BASE: ${AEOS_HUB_BASE:-}
       AEOS_SYSTEM_ID: ${AEOS_SYSTEM_ID:-}
@@ -126,7 +130,8 @@
       AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
       CONTROL_PLATFORM_TIMEOUT_MS: ${CONTROL_PLATFORM_TIMEOUT_MS:-15000}
       CONTROL_PLATFORM_REASONING_TIMEOUT_MS: ${CONTROL_PLATFORM_REASONING_TIMEOUT_MS:-180000}
-      CONTROL_PLATFORM_ORDER_TIMEOUT_MS: ${CONTROL_PLATFORM_ORDER_TIMEOUT_MS:-15000}
+      CONTROL_PLATFORM_ORDER_TIMEOUT_MS: ${CONTROL_PLATFORM_ORDER_TIMEOUT_MS:-30000}
+      GATEWAY_RESOLVER_TIMEOUT_MS: ${GATEWAY_RESOLVER_TIMEOUT_MS:-30000}
       HEALTH_CHECK_PORT: "8790"
       LOG_LEVEL: ${LOG_LEVEL:-info}
       AEOS_HUB_CA_CERT: ${AEOS_HUB_CA_CERT:-/app/certs/caddy-root.crt}
@@ -135,35 +140,3 @@
       - "aeos-hub.test:${AEOS_HUB_IP:-192.168.0.23}"
     volumes:
       - ./backend/certs/caddy-root.crt:/app/certs/caddy-root.crt:ro
-
-  # AEOS Hub 执行面订单智能体（agents/order-agent，只注册 update_control_platform_order，写订单四日期字段）：
-  # 启动：docker compose --profile aeos up -d
-  aeos-order-agent:
-    build:
-      context: ./agents
-      dockerfile: order-agent/Dockerfile
-    image: aeos-order-agent:latest
-    profiles: ["aeos"]
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
-    environment:
-      TZ: Asia/Shanghai
-      EXECUTION_AGENT_KEY: order
-      # 首期订单智能体仅中台本地使用（Hub 允许列表不含 order）：置空走本地模式，不连 Hub
-      EXECUTION_WS_URL: ""
-      EXECUTION_PLANE_TOKEN: ${EXECUTION_PLANE_TOKEN:-}
-      EXECUTION_AGENT_ID: ${EXECUTION_ORDER_AGENT_ID:-runtime-control-platform-order}
-      EXECUTION_AGENT_NAME: ${EXECUTION_ORDER_AGENT_NAME:-公司中台订单智能体}
-      EXECUTION_SOURCE_SYSTEM: ${EXECUTION_SOURCE_SYSTEM:-}
-      CONTROL_PLATFORM_BASE_URL: ${CONTROL_PLATFORM_BASE_URL:-}
-      CONTROL_PLATFORM_ORDER_APP_KEY: ${CONTROL_PLATFORM_ORDER_APP_KEY:-}
-      CONTROL_PLATFORM_ORDER_APP_SECRET: ${CONTROL_PLATFORM_ORDER_APP_SECRET:-}
-      CONTROL_PLATFORM_TIMEOUT_MS: ${CONTROL_PLATFORM_TIMEOUT_MS:-15000}
-      HEALTH_CHECK_PORT: "8790"
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
-      # 每系统令牌握手（Hub system-token 鉴权；配置后优先于 legacy 根令牌）
-      EXECUTION_SYSTEM_ID: ${EXECUTION_SYSTEM_ID:-}
-      EXECUTION_SYSTEM_TOKEN: ${EXECUTION_SYSTEM_TOKEN:-}

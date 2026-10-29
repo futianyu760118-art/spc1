@@ -18,15 +18,19 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from app.core.config import get_settings
+from app.models.agent.call import AgentCallLog
 from app.models.basicdata.user import SysUser
 from app.services.ai import ai_service, ChatMessage, ChatOptions
 from app.services.ai_config import ASSISTANT_SCOPE, get_scope_config, render_system_prompt
-from app.services.agent import delegation_tools
 from app.services.agent.actor import issue_actor_token
 from app.services.agent.business import resolve_business_object
 from app.services.agent.caller import build_caller
-from app.services.agent.capabilities import allowed_query_paths, allowed_reasoning_types
-from app.services.agent.context import AgentContext, load_agent_context
+from app.services.agent.capabilities import (
+    CONFIGURABLE_CAPABILITIES,
+    allowed_query_paths,
+    allowed_reasoning_types,
+)
+from app.services.agent.context import UserContext, load_user_context
 from app.services.assistant import session_store, write_confirmation
 from app.services.assistant.agent_tools import (
     AGENT_TOOL_LABELS,
@@ -58,6 +62,7 @@ from app.services.assistant.task_router import (
     trim_result,
 )
 from app.services.execution_agents import AGENT_SPECS, call_agent_run
+from app.services.order.write_registry import DEFAULT_ASSISTANT_OPERATION
 from app.services.notification.assistant_notify import (
     BIZ_NOTIFY_CONFIG,
     notify_agent_change,
@@ -363,8 +368,6 @@ def _step_summary(tool_name: str, args: Dict[str, Any]) -> str:
         return f"分析 {args.get('task_type') or ''}"
     if tool_name == "hub_query":
         return f"查询外部系统 {args.get('capability') or ''}"
-    if delegation_tools.is_delegation_tool(tool_name):
-        return delegation_tools.step_summary(tool_name, args)
     return f"修改订单 {args.get('order_no') or ''}"
 
 
@@ -520,9 +523,7 @@ async def run_reaction(
     step_id_base: int = 0,
     gap_notify: bool = True,
     db: Any = None,
-    agent_context: Optional[AgentContext] = None,
-    delegation_depth: int = 0,
-    max_delegation_depth: Optional[int] = None,
+    user_context: Optional[UserContext] = None,
 ) -> AsyncIterator[Tuple[str, Dict[str, Any]]]:
     """AI 自主 ReAct 循环：LLM 逐步决定调用哪个智能体，编排器负责校验、执行、拦截与审计。
 
@@ -537,16 +538,13 @@ async def run_reaction(
     lim = {**DEFAULT_LIMITS, **(limits or {})}
     lim["max_llm_rounds"] = max(1, min(int(max_tool_rounds), lim["max_llm_rounds"]))
     lim["max_agent_calls"] = max(1, min(int(max_agent_calls), lim["max_agent_calls"]))
-    if max_delegation_depth is None:
-        max_delegation_depth = int(get_settings().AGENT_DELEGATION_MAX_DEPTH)
     provider = provider_name or ai_service.current_provider()
     task_id = task_id or f"task-{uuid4().hex}"
 
     caller = None
-    if agent_context is not None:
+    if user_context is not None:
         caller = build_caller(
-            user=agent_context.user,
-            agent=agent_context.agent,
+            user=user_context.user,
             trace_id=trace_id,
         )
     logger.info(f"[orchestrator:{trace_id}] session_id={session_id} task_id={task_id}")
@@ -560,30 +558,23 @@ async def run_reaction(
     stats: Dict[str, Any] = {"tools_called": [], "tool_rounds": 0, "total_tokens": None}
 
     actor_token = ""
-    if agent_context is not None:
+    if user_context is not None:
         actor_token = issue_actor_token(
-            user_id=int(agent_context.user.id),
-            agent_id=int(agent_context.agent.id),
-            username=agent_context.user.username or "",
-            role=agent_context.role_code,
+            user_id=int(user_context.user.id),
+            username=user_context.user.username or "",
+            role=user_context.role_code,
         )
-    effective = agent_context.effective_capabilities if agent_context else None
+    effective = user_context.effective_capabilities if user_context else None
     include_order = include_order_tool and (
         effective is None or "write.order_schedule" in effective
     )
     tools_schema = build_agent_tools_schema(
         include_order=include_order,
         exclude=disabled_tools or set(),
-        allowed_tools=agent_context.allowed_tools if agent_context else None,
+        allowed_tools=user_context.allowed_tools if user_context else None,
         query_paths=allowed_query_paths(effective) if effective is not None else None,
         reasoning_types=allowed_reasoning_types(effective) if effective is not None else None,
     )
-    if agent_context is not None:
-        tools_schema.extend(delegation_tools.build_delegation_tools_schema(
-            agent_context,
-            delegation_depth=delegation_depth,
-            max_delegation_depth=max_delegation_depth,
-        ))
 
     messages: List[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
     for msg in history[-10:]:
@@ -722,19 +713,53 @@ async def run_reaction(
         if tool_name not in stats["tools_called"]:
             stats["tools_called"].append(tool_name)
 
+        # ── 成员路由：query/reasoning 工具按团队成员定位承接者（调用审计与 handled_by 展示用）──
+        member = None
+        member_error = None
+        member_capability = None
+        if user_context is not None and tool_name in ("call_query_agent", "call_reasoning_agent"):
+            capability_codes = {
+                code for code, cap in CONFIGURABLE_CAPABILITIES.items()
+                if tool_name in cap.tool_names
+            }
+            # 按 agent_id 排序去重保证多成员时默认承接者稳定（与提示词"取编号最小"契约一致）；
+            # 多能力成员只出现一次
+            candidates = sorted(
+                {m.agent_id: m for code in capability_codes for m in user_context.members_by_capability(code)}.values(),
+                key=lambda m: m.agent_id,
+            )
+            requested_id = args.get("member_id")
+            if requested_id:
+                try:
+                    candidate = user_context.member_by_id(int(requested_id))
+                except (TypeError, ValueError):
+                    candidate = None
+                if candidate is None or candidate not in candidates:
+                    member_error = "member_id 不在你的团队或能力不匹配"
+                else:
+                    member = candidate
+            elif candidates:
+                member = candidates[0]
+            if member is not None:
+                # 审计记录本次调用命中的那个能力（多能力成员取目录序首个交集）
+                member_capability = next(
+                    (code for code in sorted(capability_codes) if code in member.capabilities),
+                    None,
+                )
+
         # ── 闸门 2：步数与循环 ──
         tool_key = f"{tool_name}:{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}"
         block_reason: Optional[str] = None
-        if tool_name not in CAPABILITY_BY_TOOL and not delegation_tools.is_delegation_tool(tool_name):
+        if tool_name not in CAPABILITY_BY_TOOL:
             block_reason = f"工具 {tool_name} 不在能力目录内，请改用系统提供的智能体工具"
-        elif delegation_tools.is_delegation_tool(tool_name) and (db is None or agent_context is None):
-            block_reason = "子智能体调用仅在智能体中心启用时可用"
-        elif tool_name == "call_query_agent" and effective is not None:
-            if args.get("path") not in allowed_query_paths(effective):
-                block_reason = "当前智能体没有该查询路径的能力，请更换查询范围"
-        elif tool_name == "call_reasoning_agent" and effective is not None:
-            if args.get("task_type") not in allowed_reasoning_types(effective):
-                block_reason = "当前智能体没有该推理能力，请更换分析类型"
+        elif tool_name == "call_query_agent" and effective is not None \
+                and args.get("path") not in allowed_query_paths(effective):
+            block_reason = "当前智能体没有该查询路径的能力，请更换查询范围"
+        elif tool_name == "call_reasoning_agent" and effective is not None \
+                and args.get("task_type") not in allowed_reasoning_types(effective):
+            block_reason = "当前智能体没有该推理能力，请更换分析类型"
+        elif member_error:
+            block_reason = member_error
         elif tool_name == "call_order_agent" and effective is not None and "write.order_schedule" not in effective:
             block_reason = "当前智能体没有订单写入能力"
         elif tool_name == "hub_query" and effective is not None:
@@ -772,75 +797,6 @@ async def run_reaction(
                 await run_logger.log("gate_block", {"round": round_idx, "tool": tool_name, "reason": block_reason})
             messages.append(_assistant_tool_msg(result.text or "", [tc], result.thinking))
             messages.append(_tool_result_msg(tc.id, {"error": block_reason, "intercepted": True}))
-            continue
-
-        # ── 子智能体调用：list_my_subordinates / delegate_task ──
-        if delegation_tools.is_delegation_tool(tool_name):
-            invalid = delegation_tools.validate_delegation_input(tool_name, args)
-            if invalid:
-                step = _new_step(_next_step_id(), tool_name, args, status="blocked", error=invalid)
-                steps.append(step)
-                yield ("step_started", {"step": step})
-                yield ("step_completed", {"step": step})
-                messages.append(_assistant_tool_msg(result.text or "", [tc], result.thinking))
-                messages.append(_tool_result_msg(tc.id, {"error": invalid, "intercepted": True}))
-                continue
-
-            step = _new_step(
-                _next_step_id(), tool_name, args, status="running",
-                summary=delegation_tools.step_summary(tool_name, args),
-            )
-            steps.append(step)
-            yield ("step_started", {"step": step})
-            report_assistant_event(
-                session_id, "step_started", AGENT_TOOL_LABELS.get(tool_name, tool_name), "started",
-                f"调用{AGENT_TOOL_LABELS.get(tool_name, tool_name)}", {"step": step},
-                started_at=now_iso(), task_id=task_id, step_id=step["step_id"], tool=tool_name,
-            )
-            tool_start = time.perf_counter()
-            try:
-                delegated = await delegation_tools.execute_delegation_tool(
-                    db,
-                    agent_context,
-                    tool_name,
-                    args,
-                    delegation_depth=delegation_depth,
-                    max_delegation_depth=max_delegation_depth,
-                    trace_id=trace_id,
-                )
-                outcome_ok = bool(delegated.get("ok", True))
-                outcome_error = delegated.get("error")
-            except Exception as exc:  # noqa: BLE001 — 子智能体失败不中断父对话
-                delegated = None
-                outcome_ok = False
-                outcome_error = getattr(exc, "message", str(exc))
-            duration_ms = round((time.perf_counter() - tool_start) * 1000, 2)
-            step["duration_ms"] = duration_ms
-            step["status"] = "completed" if outcome_ok else "failed"
-            if outcome_error:
-                step["error"] = outcome_error
-                step["summary"] = outcome_error[:200]
-            yield ("step_completed", {"step": step})
-            report_assistant_event(
-                session_id, "step_completed", AGENT_TOOL_LABELS.get(tool_name, tool_name),
-                "completed" if outcome_ok else "failed",
-                step.get("summary") or "", {"step": step},
-                started_at=now_iso(), duration_ms=duration_ms,
-                task_id=task_id, step_id=step["step_id"], tool=tool_name,
-            )
-            trimmed = (
-                trim_result(delegated or {}, max_items=lim["trim_max_items"], max_chars=lim["trim_max_chars"])
-                if outcome_ok else {"error": outcome_error}
-            )
-            diagnostics["tools"].append({
-                "name": tool_name, "status": step["status"], "duration_ms": duration_ms,
-            })
-            agent_calls += 1
-            consecutive_same_agent = consecutive_same_agent + 1 if tool_name == last_tool_name else 1
-            last_tool_name = tool_name
-            last_tool_key = tool_key
-            messages.append(_assistant_tool_msg(result.text or "", [tc], result.thinking))
-            messages.append(_tool_result_msg(tc.id, trimmed))
             continue
 
         # ── 闸门 3：写操作确认 ──
@@ -909,7 +865,6 @@ async def run_reaction(
                 "biz_type": "order",
                 "action": "update",
                 "action_type": "order_update",
-                "agent_id": agent_context.agent.id if agent_context else None,
                 "old_row": old.get("row") or {},
                 "model_override": model_override,
             })
@@ -959,6 +914,7 @@ async def run_reaction(
 
         # ── 只读工具直接执行 ──
         step = _new_step(_next_step_id(), tool_name, args, status="running", summary=_step_summary(tool_name, args))
+        step["handled_by"] = member.display_name if member else None
         steps.append(step)
         yield ("step_started", {"step": step})
         report_assistant_event(
@@ -977,6 +933,22 @@ async def run_reaction(
         outcome = await execute_agent_tool(tool_name, args, **tool_kwargs)
         duration_ms = round((time.perf_counter() - tool_start) * 1000, 2)
         step["duration_ms"] = duration_ms
+        if db is not None and user_context is not None and tool_name in ("call_query_agent", "call_reasoning_agent"):
+            try:
+                db.add(AgentCallLog(
+                    trace_id=trace_id,
+                    caller_user_id=int(user_context.user.id),
+                    callee_agent_id=int(member.agent_id) if member else None,
+                    capability=member_capability or CAPABILITY_BY_TOOL.get(tool_name, ""),
+                    instruction_summary=json.dumps(args, ensure_ascii=False, default=str)[:500],
+                    status="completed" if outcome.get("ok") else "failed",
+                    result_summary=f"返回 {outcome.get('item_count') or 0} 条" if outcome.get("ok") else None,
+                    error=outcome.get("error"),
+                    duration_ms=int(duration_ms),
+                ))
+                await db.flush()
+            except Exception as e:
+                logger.warning(f"[orchestrator:{trace_id}] 调用审计落库失败: {e}")
         if outcome.get("ok"):
             step["status"] = "completed"
             step["item_count"] = outcome.get("item_count")
@@ -997,6 +969,8 @@ async def run_reaction(
             step["status"] = "failed"
             step["error"] = outcome.get("error")
             trimmed = {"error": outcome.get("error")}
+        if member is not None:
+            trimmed = {**trimmed, "handled_by": member.display_name}
         yield ("step_completed", {"step": step})
         report_assistant_event(
             session_id, "step_completed", AGENT_TOOL_LABELS.get(tool_name, tool_name),
@@ -1115,23 +1089,21 @@ async def _notify_write_result(
 
 
 async def _prepare_order_write_actor(
-    db: Any, user_id: str, order_no: str, expected_agent_id: Optional[int] = None,
+    db: Any, user_id: str, order_no: str,
 ) -> str:
-    """确认订单写操作前：校验智能体可用与订单可见，签发短时 actor token。"""
+    """确认订单写操作前：校验用户与订单可见，签发短时 actor token。
+
+    用户不存在时抛错而非返回空 token：空 token 会让写端点退化为仅 API-Key 鉴权。
+    """
     if db is None:
-        return ""
+        raise ValueError("确认写操作需要数据库会话")
     user = await db.get(SysUser, int(user_id))
     if not user:
-        return ""
-    ctx = await load_agent_context(db, user, use_cache=False)
-    if ctx.agent.status != "active":
-        raise ValueError("智能体已禁用，无法执行订单写操作")
-    if expected_agent_id and int(ctx.agent.id) != int(expected_agent_id):
-        raise ValueError("确认单与当前智能体不匹配，请重新发起")
+        raise ValueError("确认用户不存在或已删除")
+    ctx = await load_user_context(db, user, use_cache=False)
     await resolve_business_object(db, "order", order_no)
     return issue_actor_token(
         user_id=int(user.id),
-        agent_id=int(ctx.agent.id),
         username=user.username or "",
         role=ctx.role_code,
     )
@@ -1216,10 +1188,10 @@ async def resolve_confirmation(
             },
         }
 
-    # 确认时重新校验智能体状态与订单范围，并签发新的 actor token
+    # 确认时重新校验用户与订单范围，并签发新的 actor token
     try:
         actor_token = await _prepare_order_write_actor(
-            db, record_user or current_user_id, order_no, record.get("agent_id"),
+            db, record_user or current_user_id, order_no,
         )
     except Exception as exc:
         error = f"确认执行前校验失败：{getattr(exc, 'message', str(exc))}"
@@ -1258,7 +1230,12 @@ async def resolve_confirmation(
         dispatch_kwargs["actor_token"] = actor_token
     dispatch = await call_agent_run(
         AGENT_SPECS["order"],
-        {"order_no": order_no, "fields": fields},
+        {
+            "operation": DEFAULT_ASSISTANT_OPERATION,
+            "orderNo": order_no,
+            "changes": {"fields": fields},
+            "idempotencyKey": confirmation_id,
+        },
         **dispatch_kwargs,
     )
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
@@ -1349,9 +1326,9 @@ async def resolve_confirmation(
             continuation_user = await db.get(SysUser, continuation_user_id)
             if continuation_user:
                 try:
-                    continuation_context = await load_agent_context(db, continuation_user)
+                    continuation_context = await load_user_context(db, continuation_user)
                 except Exception as e:
-                    logger.warning(f"[orchestrator] 续跑加载智能体上下文失败: {e}")
+                    logger.warning(f"[orchestrator] 续跑加载用户上下文失败: {e}")
 
     text, cards, steps_out = "", [], []
     try:
@@ -1366,7 +1343,7 @@ async def resolve_confirmation(
             limits=CONTINUATION_LIMITS, include_order_tool=False, stream_final=False,
             task_id=task_id, step_id_base=order_step_id,
             gap_notify=False,
-            db=db, agent_context=continuation_context,
+            db=db, user_context=continuation_context,
         ):
             if event == "delta":
                 text += data.get("text") or ""

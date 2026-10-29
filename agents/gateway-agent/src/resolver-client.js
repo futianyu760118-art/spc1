@@ -6,7 +6,12 @@ function createResolverClient({ config, log }) {
   async function resolveCaller({ runId, traceId, capability, input, caller }) {
     const url = `${config.backendInternalBaseUrl.replace(/\/+$/, "")}/api/v1/internal/gateway/resolve-caller`;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10000);
+    const timeoutMs = config.resolverTimeoutMs || 30000;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     let response;
     try {
       response = await fetch(url, {
@@ -19,7 +24,14 @@ function createResolverClient({ config, log }) {
         body: JSON.stringify({ runId, traceId, capability, input, caller }),
       });
     } catch (e) {
-      throw new UpstreamError("INTERNAL_ERROR", `resolve-caller 不可达：${e.message}`);
+      const code =
+        timedOut || e.name === "AbortError"
+          ? ERROR_CODES.UPSTREAM_TIMEOUT
+          : ERROR_CODES.UPSTREAM_UNAVAILABLE;
+      throw new UpstreamError(
+        code,
+        `resolve-caller ${timedOut ? "超时" : "不可达"}：${e.message}`,
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -36,7 +48,11 @@ function createResolverClient({ config, log }) {
           ? ERROR_CODES.AGENT_NOT_FOUND
           : [400, 403, 422].includes(response.status)
             ? ERROR_CODES.INVALID_ARGUMENT
-            : ERROR_CODES.INTERNAL_ERROR;
+            : response.status === 504
+              ? ERROR_CODES.UPSTREAM_TIMEOUT
+              : response.status >= 500
+                ? ERROR_CODES.UPSTREAM_UNAVAILABLE
+                : ERROR_CODES.INTERNAL_ERROR;
       throw new UpstreamError(code, `caller 路由失败：${reason}`);
     }
     log("info", "gateway_caller_resolved", {

@@ -6,7 +6,7 @@ COPY package.json package-lock.json ./
 COPY runtime/package.json ./runtime/package.json
 COPY query-agent/package.json ./query-agent/package.json
 COPY reasoning-agent/package.json ./reasoning-agent/package.json
-COPY order-agent/package.json ./order-agent/package.json
+COPY shared/order-write-operations.json ./shared/order-write-operations.json
 COPY gateway-agent/package.json ./gateway-agent/package.json
 RUN npm ci --omit=dev
 

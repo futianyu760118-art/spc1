@@ -51,7 +51,7 @@ TYPE_LABELS = {
     "agent_task": "智能体任务",
     "agent_analysis": "任务分析",
     "agent_config": "智能体配置",
-    "agent_hierarchy": "团队关系",
+    "agent_team": "我的团队",
 }
 
 

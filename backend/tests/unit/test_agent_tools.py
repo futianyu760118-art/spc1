@@ -37,6 +37,11 @@ class TestBuildAgentToolsSchema:
         assert len(enum) == len(QUERY_CATALOG) == 17
         assert enum == [c["path"] for c in QUERY_CATALOG]
 
+    def test_order_schema_includes_promised_date(self):
+        schema = next(s for s in build_agent_tools_schema() if s["function"]["name"] == "call_order_agent")
+        fields = schema["function"]["parameters"]["properties"]["fields"]["properties"]
+        assert "promised_date" in fields
+
 
 class TestValidateToolInput:
     def test_query_valid(self):
@@ -69,6 +74,11 @@ class TestValidateToolInput:
     def test_order_valid(self):
         assert validate_tool_input(
             "call_order_agent", {"order_no": "HJ-1", "fields": {"shipping_plan": "2026-11-01"}}
+        ) is None
+
+    def test_order_promised_date_valid(self):
+        assert validate_tool_input(
+            "call_order_agent", {"order_no": "HJ-1", "fields": {"promised_date": "2026-11-15"}}
         ) is None
 
     def test_order_field_not_allowed(self):

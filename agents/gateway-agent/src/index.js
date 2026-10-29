@@ -9,6 +9,7 @@ const { buildAdapters } = require("./adapters");
 const { buildAgentRegistry, attachResultMetadata } = require("./agent-registry");
 const { createResolverClient } = require("./resolver-client");
 const { createHubClient } = require("./hub-client");
+const { startWatchdog } = require("./watchdog");
 
 async function main() {
   const { gateway, query, reasoning, orderWrite } = buildConfigs();
@@ -27,9 +28,8 @@ async function main() {
     adapters.reasoning.capability,
     adapters.orderWrite.capability,
   ];
-  const localCapabilities = capabilities.filter(
-    (capability) => capability.name !== adapters.orderWrite.capability.name,
-  );
+  // 本地 /admin/run 与 Hub 派单共用全部能力：助手写走本地 run（不占 Hub 槽位），审批域在调用方
+  const localCapabilities = capabilities;
   const resolver = createResolverClient({ config: gateway, log });
   const hub = createHubClient({ config: gateway, log });
 
@@ -164,6 +164,7 @@ async function main() {
   });
 
   connection.start();
+  const watchdog = startWatchdog({ log, gateway, connection });
   log("info", "gateway_starting", {
     agentId: gateway.agentId,
     hub: gateway.wsUrl,
@@ -171,6 +172,7 @@ async function main() {
   });
 
   const shutdown = () => {
+    watchdog.stop();
     connection.stop();
     if (healthServer) healthServer.close();
     setTimeout(() => process.exit(0), 200).unref();

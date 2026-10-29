@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import get_write_db
 from app.services.agent.gateway_resolver import resolve_dispatch
 
 router = APIRouter()
@@ -48,7 +48,7 @@ def _error(status_code: int, message: str, reason: str) -> JSONResponse:
 
 
 @router.post("/resolve-caller", dependencies=[Depends(_verify_token)])
-async def resolve_caller(body: ResolveCallerIn, db: AsyncSession = Depends(get_db)):
+async def resolve_caller(body: ResolveCallerIn, db: AsyncSession = Depends(get_write_db)):
     caller = body.caller.model_dump() if body.caller else None
     result = await resolve_dispatch(
         db,
@@ -66,8 +66,6 @@ async def resolve_caller(body: ResolveCallerIn, db: AsyncSession = Depends(get_d
         "message": "ok",
         "data": {
             "mode": result.mode,
-            "agentId": int(result.agent.id) if result.agent else None,
-            "agentNo": result.agent.agent_no if result.agent else None,
             "userId": int(result.user.id) if result.user else None,
             "actorToken": result.actor_token,
             "expiresIn": 300 if result.actor_token else None,

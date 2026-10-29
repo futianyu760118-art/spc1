@@ -47,6 +47,7 @@ const TYPE_DEFS = [
   { key: 'agent_task', label: '智能体任务', icon: InboxOutlined, color: '#4c4dc2', bg: '#eef0fe' },
   { key: 'agent_analysis', label: '任务分析', icon: BellOutlined, color: '#0f766e', bg: '#f0fdfa' },
   { key: 'agent_config', label: '智能体配置', icon: SettingOutlined, color: '#0284c7', bg: '#f0f9ff' },
+  { key: 'agent_team', label: '我的团队', icon: AuditOutlined, color: '#15803d', bg: '#f0fdf4' },
   { key: 'agent_hierarchy', label: '团队关系', icon: AuditOutlined, color: '#15803d', bg: '#f0fdf4' },
 ]
 

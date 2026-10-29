@@ -5,21 +5,10 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=False,
-    pool_size=50,
-    max_overflow=50,
-    pool_timeout=30,
-    # 空闲池连接可能被防火墙/NAT 静默丢弃:pre_ping 挡"已关闭",recycle 挡"静默死"
-    pool_pre_ping=True,
-    pool_recycle=settings.DB_POOL_RECYCLE,
-    # 服务端兜底超时(毫秒)。此前服务端三者全为 0,任何锁冲突/泄漏事务都会无限等待,
-    # 是"整库卡死"的直接推手:
-    #   lock_timeout=15s            行锁等待超过 15s 报错,而不是把请求挂死
-    #   idle_in_txn_timeout=5min    事务开着却 5 分钟不发语句(泄漏事务)自动断开
-    #   statement_timeout=10min     单条语句跑超 10 分钟终止,防止拖垮整库
-    connect_args={
+
+def _connect_args() -> dict:
+    # 空闲池连接可能被防火墙/NAT 静默丢弃：pre_ping；服务端兜底超时防止锁冲突/泄漏事务拖垮整库。
+    return {
         "timeout": 10,
         "command_timeout": 600,
         "server_settings": {
@@ -27,11 +16,40 @@ engine = create_async_engine(
             "idle_in_transaction_session_timeout": "300000",
             "statement_timeout": "600000",
         },
-    },
+    }
+
+
+# 主池服务读请求与一般请求；写路径独立池，避免读流量/慢查询把关键写请求饿死。
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    pool_size=40,
+    max_overflow=40,
+    pool_timeout=30,
+    pool_pre_ping=True,
+    pool_recycle=settings.DB_POOL_RECYCLE,
+    connect_args=_connect_args(),
+)
+
+write_engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    pool_size=5,
+    max_overflow=5,
+    pool_timeout=15,
+    pool_pre_ping=True,
+    pool_recycle=settings.DB_POOL_RECYCLE,
+    connect_args=_connect_args(),
 )
 
 AsyncSessionLocal = async_sessionmaker(
     engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+AsyncWriteSessionLocal = async_sessionmaker(
+    write_engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
@@ -43,6 +61,17 @@ class Base(DeclarativeBase):
 
 async def get_db() -> AsyncSession:
     async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def get_write_db() -> AsyncSession:
+    """关键写路径专用 session：独立连接池，避免被读流量/慢查询挤占。"""
+    async with AsyncWriteSessionLocal() as session:
         try:
             yield session
             await session.commit()

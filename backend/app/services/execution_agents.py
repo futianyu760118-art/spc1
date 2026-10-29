@@ -47,8 +47,8 @@ AGENT_SPECS: Dict[str, ExecutionAgentSpec] = {
         key="order",
         label="订单智能体",
         scope=EXECUTION_ORDER_SCOPE,
-        capability="update_control_platform_order",
-        base_url_setting="EXECUTION_ORDER_AGENT_BASE_URL",
+        capability="write_control_platform",
+        base_url_setting="EXECUTION_WRITE_AGENT_BASE_URL",
     ),
 }
 

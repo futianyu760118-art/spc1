@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Card, Descriptions, Drawer, Empty, List, Row, Col, Space, Statistic, Table, Tag, Typography,
+  Button, Card, Drawer, Empty, List, Row, Col, Space, Statistic, Table, Tag, Typography,
 } from 'antd'
-import { MessageOutlined, PlusOutlined, RobotOutlined, TeamOutlined } from '@ant-design/icons'
+import { MessageOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { agentApi, AgentCall } from '../../../services/agent'
 import Markdown from '../../../components/Markdown'
@@ -71,8 +71,8 @@ export default function MyAgent() {
     return <div className="agent-center-page"><Card loading={loading}>加载中...</Card></div>
   }
 
-  const agent = data.agent || {}
   const calls: AgentCall[] = data.recent_calls || []
+  const capabilities = data.effective_capabilities || []
 
   return (
     <div className="agent-center-page">
@@ -89,52 +89,41 @@ export default function MyAgent() {
           </Col>
           <Col flex="auto">
             <Title level={4} style={{ margin: 0 }}>{data.display_name}</Title>
-            <Space size={8} wrap style={{ marginTop: 4 }}>
-              <Tag color={agent.status === 'active' ? 'green' : 'default'}>
-                {agent.status === 'active' ? '启用' : '禁用'}
-              </Tag>
-              <Text type="secondary" style={{ fontSize: 12 }}>{agent.agent_no}</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>绑定用户 {agent.username}</Text>
-              {data.is_supervisor && <Tag color="blue" icon={<TeamOutlined />}>主管</Tag>}
-            </Space>
+            <Text type="secondary" className="ac-fs-xs">智能助手的能力来自你的团队成员</Text>
           </Col>
           <Col>
             <Space>
-              {!data.is_supervisor && (
-                <Button onClick={() => navigate('/agents/team')}>添加成员</Button>
-              )}
               <Button icon={<MessageOutlined />} onClick={openAssistant}>打开助手</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={newConversation}>新建对话</Button>
             </Space>
           </Col>
         </Row>
         <Row gutter={16} style={{ marginTop: 10 }}>
-          <Col span={6}><Statistic title="直属成员" value={data.children_count || 0} /></Col>
+          <Col span={6}><Statistic title="团队成员" value={data.team_size || 0} /></Col>
           <Col span={6}><Statistic title="近 7 天对话" value={data.usage_7d?.runs || 0} /></Col>
           <Col span={6}><Statistic title="近 7 天 Token" value={data.usage_7d?.total_tokens || 0} /></Col>
-          <Col span={6}><Statistic title="最近委派" value={calls.length} /></Col>
+          <Col span={6}><Statistic title="最近调用" value={calls.length} /></Col>
         </Row>
       </Card>
 
       <div className="ac-grid" style={{ gridTemplateColumns: '0.95fr 1.15fr 0.9fr' }}>
         <div className="ac-col">
-          <Card title="智能体概况">
-            <Descriptions column={1} size="small" colon={false}>
-              <Descriptions.Item label="上级">{data.parent_display_name || '无'}</Descriptions.Item>
-            </Descriptions>
-            <div style={{ marginTop: 6, fontSize: 12, color: '#94a3b8' }}>有效能力</div>
-            <Space wrap size={[4, 4]} style={{ marginTop: 4 }}>
-              {(data.effective_capabilities || []).map((cap: any) => (
+          <Card
+            title="我的团队能力"
+            extra={<Button size="small" onClick={() => navigate('/agents/team')}>去勾选成员</Button>}
+          >
+            <Space wrap size={[4, 4]}>
+              {capabilities.map((cap: { code: string; name: string }) => (
                 <Tag key={cap.code} color="blue" style={{ marginInlineEnd: 0 }}>{cap.name}</Tag>
               ))}
-              {(!data.effective_capabilities || data.effective_capabilities.length === 0) && <Text type="secondary">无</Text>}
+              {capabilities.length === 0 && <Text type="secondary">暂无能力，先去勾选团队成员</Text>}
             </Space>
           </Card>
         </div>
 
         <div className="ac-col">
-          <Card title="最近委派" extra={<Text type="secondary" style={{ fontSize: 12 }}>父 Agent → 直属子 Agent</Text>}>
-            {calls.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无委派" /> : (
+          <Card title="最近调用">
+            {calls.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无调用" /> : (
               <Table
                 size="small"
                 rowKey="id"
@@ -143,11 +132,8 @@ export default function MyAgent() {
                 pagination={{ pageSize: 4, size: 'small', showSizeChanger: false }}
                 columns={[
                   {
-                    title: '子智能体', key: 'target', width: 110, ellipsis: true,
-                    render: (_: any, row: AgentCall) => {
-                      const target = row.direction === 'outgoing' ? row.callee : row.caller
-                      return target?.name || target?.username || target?.agent_id || '-'
-                    },
+                    title: '成员', dataIndex: 'callee', width: 110, ellipsis: true,
+                    render: (callee: AgentCall['callee']) => callee?.name || '-',
                   },
                   { title: '能力', dataIndex: 'capability', width: 120, ellipsis: true },
                   { title: '状态', dataIndex: 'status', width: 76, render: (value: string) => <Tag>{value}</Tag> },
@@ -209,7 +195,7 @@ export default function MyAgent() {
           locale={{ emptyText: '暂无消息' }}
           renderItem={(item: any) => (
             <List.Item style={{ display: 'block' }}>
-              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>
+              <div className="ac-fs-xs" style={{ color: '#94a3b8', marginBottom: 4 }}>
                 {item.role === 'user' ? '我' : '智能体'} · {item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : ''}
               </div>
               {item.role === 'assistant'

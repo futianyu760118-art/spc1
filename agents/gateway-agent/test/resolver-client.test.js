@@ -14,7 +14,14 @@ function startStub(handler) {
   const ready = new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve(server.address().port));
   });
-  return { ready, close: () => new Promise((resolve) => server.close(resolve)) };
+  return {
+    ready,
+    close: () =>
+      new Promise((resolve) => {
+        server.close(resolve);
+        server.closeAllConnections();
+      }),
+  };
 }
 
 test("resolveCaller sends X-Gateway-Token and caller", async () => {
@@ -71,6 +78,41 @@ test("resolveCaller keeps other 403 reasons as INVALID_ARGUMENT", async () => {
   await assert.rejects(
     () => client.resolveCaller({ runId: "r", capability: "query_control_platform", input: {}, caller: {} }),
     (e) => e.code === "INVALID_ARGUMENT",
+  );
+  await stub.close();
+});
+
+test("resolveCaller maps a timeout to UPSTREAM_TIMEOUT", async () => {
+  const stub = startStub(() => {});
+  const port = await stub.ready;
+  const client = createResolverClient({
+    config: {
+      backendInternalBaseUrl: `http://127.0.0.1:${port}`,
+      gatewayInternalToken: "gw-token",
+      resolverTimeoutMs: 50,
+    },
+    log: () => {},
+  });
+  await assert.rejects(
+    () => client.resolveCaller({ runId: "r", capability: "query_control_platform", input: {}, caller: {} }),
+    (e) => e.code === "UPSTREAM_TIMEOUT",
+  );
+  await stub.close();
+});
+
+test("resolveCaller maps 5xx to UPSTREAM_UNAVAILABLE", async () => {
+  const stub = startStub((req, res) => {
+    res.writeHead(500, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ code: 500, message: "boom" }));
+  });
+  const port = await stub.ready;
+  const client = createResolverClient({
+    config: { backendInternalBaseUrl: `http://127.0.0.1:${port}`, gatewayInternalToken: "gw-token" },
+    log: () => {},
+  });
+  await assert.rejects(
+    () => client.resolveCaller({ runId: "r", capability: "query_control_platform", input: {}, caller: {} }),
+    (e) => e.code === "UPSTREAM_UNAVAILABLE",
   );
   await stub.close();
 });

@@ -1,53 +1,40 @@
 "use strict";
 
-const { UpstreamError, mapCode } = require("@spc/execution-agent-runtime");
+const { UpstreamError, mapCode } = require("./http-client");
+const REGISTRY = require("../../shared/order-write-operations.json");
 
-const OPERATIONS = Object.freeze([
-  "order.update_note",
-  "order.update_status",
-  "order.update_delivery_date",
-]);
-const STATUS_VALUES = Object.freeze(["open", "closed"]);
-const REMARK_MAX_LENGTH = 2000;
+const OPERATIONS_BY_NAME = new Map(REGISTRY.operations.map((op) => [op.name, op]));
+const OPERATIONS = Object.freeze(REGISTRY.operations.map((op) => op.name));
+const HUB_OPERATIONS = Object.freeze(
+  OPERATIONS.filter((name) => OPERATIONS_BY_NAME.get(name).audiences.includes("hub")),
+);
 const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const OPERATIONS_METADATA = Object.freeze([
-  {
-    name: "order.update_note",
-    title: "修改订单备注",
-    keywords: ["备注", "说明"],
-    changesField: "changes",
-    fields: [{ name: "remark", label: "备注", type: "string", required: true }],
-  },
-  {
-    name: "order.update_status",
-    title: "修改订单状态",
-    keywords: ["状态"],
-    changesField: "changes",
-    fields: [{ name: "status", label: "状态", type: "string", required: true }],
-  },
-  {
-    name: "order.update_delivery_date",
-    title: "修改交付日期",
-    keywords: ["交付日期", "交期"],
-    changesField: "changes",
-    fields: [{ name: "deliveryDate", label: "交付日期", type: "date", required: true }],
-  },
-]);
+const OPERATIONS_METADATA = Object.freeze(
+  REGISTRY.operations
+    .filter((op) => op.audiences.includes("hub"))
+    .map((op) => ({
+      name: op.name,
+      title: op.title,
+      keywords: op.keywords,
+      changesField: "changes",
+      fields: op.hubFields,
+    })),
+);
 
 const inputSchema = Object.freeze({
   type: "object",
   properties: {
-    operation: { type: "string", enum: [...OPERATIONS] },
+    operation: { type: "string", enum: [...HUB_OPERATIONS] },
     orderNo: { type: "string", minLength: 1, maxLength: 64 },
     changes: {
       type: "object",
-      properties: {
-        remark: { type: ["string", "null"], maxLength: REMARK_MAX_LENGTH },
-        status: { type: "string", enum: [...STATUS_VALUES] },
-        deliveryDate: { type: "string", format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
-      },
+      properties: Object.fromEntries(
+        REGISTRY.operations
+          .filter((op) => op.audiences.includes("hub"))
+          .map((op) => [op.changesKey, schemaProperty(op.value)]),
+      ),
       additionalProperties: false,
     },
     idempotencyKey: { type: "string", maxLength: IDEMPOTENCY_KEY_MAX_LENGTH },
@@ -71,6 +58,19 @@ const outputSchema = Object.freeze({
   required: ["ok", "operation", "target", "before", "after", "appliedAt", "idempotent_replay"],
 });
 
+function schemaProperty(value) {
+  if (value.type === "string_or_null") {
+    return { type: ["string", "null"], maxLength: value.maxLength };
+  }
+  if (value.type === "enum") {
+    return { type: "string", enum: value.values };
+  }
+  if (value.type === "date_map") {
+    return { type: "object", additionalProperties: { type: ["string", "null"] } };
+  }
+  return { type: "string", format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" };
+}
+
 function isValidIsoDate(value) {
   if (typeof value !== "string" || !DATE_RE.test(value)) return false;
   const [year, month, day] = value.split("-").map(Number);
@@ -82,12 +82,37 @@ function isValidIsoDate(value) {
   );
 }
 
+function validateScalarValue(kind, key, value, spec) {
+  if (kind === "string_or_null") {
+    if (value !== null && typeof value !== "string") {
+      throw new UpstreamError("INVALID_ARGUMENT", `changes.${key} 必须是字符串或 null`);
+    }
+    if (typeof value === "string" && value.length > spec.maxLength) {
+      throw new UpstreamError("INVALID_ARGUMENT", `changes.${key} 不能超过 ${spec.maxLength} 字符`);
+    }
+    return;
+  }
+  if (kind === "enum") {
+    if (!spec.values.includes(value)) {
+      throw new UpstreamError(
+        "INVALID_ARGUMENT",
+        `changes.${key} 必须是 ${spec.values.join(" 或 ")}`,
+      );
+    }
+    return;
+  }
+  if (!isValidIsoDate(value)) {
+    throw new UpstreamError("INVALID_ARGUMENT", `changes.${key} 必须是 YYYY-MM-DD`);
+  }
+}
+
 function validateInput(input, run) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new UpstreamError("INVALID_ARGUMENT", "input 必须是对象");
   }
   const operation = input.operation;
-  if (!OPERATIONS.includes(operation)) {
+  const op = OPERATIONS_BY_NAME.get(operation);
+  if (!op) {
     throw new UpstreamError("CAPABILITY_UNSUPPORTED", `不支持的操作：${operation}`);
   }
   if (typeof input.orderNo !== "string" || !input.orderNo.trim()) {
@@ -101,37 +126,33 @@ function validateInput(input, run) {
   if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
     throw new UpstreamError("INVALID_ARGUMENT", "input.changes 必须是对象");
   }
-  if (operation === "order.update_note") {
-    const keys = Object.keys(changes);
-    if (keys.length !== 1 || keys[0] !== "remark") {
-      throw new UpstreamError("INVALID_ARGUMENT", "order.update_note 只允许 changes.remark");
+  const keys = Object.keys(changes);
+  const key = op.changesKey;
+  if (keys.length !== 1 || keys[0] !== key) {
+    throw new UpstreamError("INVALID_ARGUMENT", `${operation} 只允许 changes.${key}`);
+  }
+  const kind = op.value.type;
+  if (kind === "date_map") {
+    const fields = changes[key];
+    if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
+      throw new UpstreamError("INVALID_ARGUMENT", `changes.${key} 必须是对象`);
     }
-    const remark = changes.remark;
-    if (remark !== null && typeof remark !== "string") {
-      throw new UpstreamError("INVALID_ARGUMENT", "changes.remark 必须是字符串或 null");
+    const allowed = new Set(op.fields.map((field) => field.wire));
+    const fieldKeys = Object.keys(fields);
+    if (fieldKeys.length === 0) {
+      throw new UpstreamError("INVALID_ARGUMENT", `changes.${key} 至少一个字段`);
     }
-    if (typeof remark === "string" && remark.length > REMARK_MAX_LENGTH) {
-      throw new UpstreamError("INVALID_ARGUMENT", `changes.remark 不能超过 ${REMARK_MAX_LENGTH} 字符`);
-    }
-  } else if (operation === "order.update_status") {
-    const keys = Object.keys(changes);
-    if (keys.length !== 1 || keys[0] !== "status") {
-      throw new UpstreamError("INVALID_ARGUMENT", "order.update_status 只允许 changes.status");
-    }
-    if (!STATUS_VALUES.includes(changes.status)) {
-      throw new UpstreamError("INVALID_ARGUMENT", "changes.status 必须是 open 或 closed");
+    for (const fieldKey of fieldKeys) {
+      if (!allowed.has(fieldKey)) {
+        throw new UpstreamError("INVALID_ARGUMENT", `字段不在白名单：${fieldKey}`);
+      }
+      const value = fields[fieldKey];
+      if (value !== null && !isValidIsoDate(value)) {
+        throw new UpstreamError("INVALID_ARGUMENT", `字段 ${fieldKey} 必须是 YYYY-MM-DD 或 null`);
+      }
     }
   } else {
-    const keys = Object.keys(changes);
-    if (keys.length !== 1 || keys[0] !== "deliveryDate") {
-      throw new UpstreamError(
-        "INVALID_ARGUMENT",
-        "order.update_delivery_date 只允许 changes.deliveryDate",
-      );
-    }
-    if (!isValidIsoDate(changes.deliveryDate)) {
-      throw new UpstreamError("INVALID_ARGUMENT", "changes.deliveryDate 必须是 YYYY-MM-DD");
-    }
+    validateScalarValue(kind, key, changes[key], op.value);
   }
   const idempotencyKey = input.idempotencyKey || run.requestId;
   if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
@@ -161,8 +182,8 @@ function mapWriteError(code, message) {
 
 function createAdapter({ config, http, log }) {
   const capability = {
-    name: "write_control_platform",
-    description: "中台受控写操作（订单备注/状态/交付日期），仅接受 Hub 审批后的派单",
+    name: REGISTRY.capability,
+    description: REGISTRY.capabilityDescription,
     readOnly: false,
     constraints: {
       readOnly: false,
@@ -262,9 +283,10 @@ function createAdapter({ config, http, log }) {
 
 module.exports = {
   createAdapter,
+  REGISTRY,
+  HUB_OPERATIONS,
   OPERATIONS,
   OPERATIONS_METADATA,
-  STATUS_VALUES,
   inputSchema,
   outputSchema,
   mapWriteError,

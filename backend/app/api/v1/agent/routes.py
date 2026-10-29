@@ -1,11 +1,11 @@
-"""智能体中心 API：我的智能体、团队层级、能力配置与委派调用记录。"""
+"""智能体中心 API：智能体目录管理、我的团队勾选、会话与调用记录。"""
 
 import logging
 from datetime import datetime, timedelta
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,16 +15,17 @@ from app.core.security import PermissionChecker
 from app.models.agent.agent import Agent
 from app.models.agent.call import AgentCallLog
 from app.models.agent.conversation import AgentConversation
+from app.models.agent.team import AgentTeamMember
 from app.models.basicdata.ai_agent import AssistantRun
 from app.models.basicdata.user import SysUser
 from app.services.agent import conversation as conversation_service
-from app.services.agent import hierarchy, policy
+from app.services.agent import sequence, team as team_service
 from app.services.agent.capabilities import (
+    ALL_CONFIGURABLE_CODES,
     CONFIGURABLE_CAPABILITIES,
-    baseline_capabilities,
     public_catalog,
 )
-from app.services.agent.context import load_agent_context
+from app.services.agent.context import load_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -58,16 +59,23 @@ def _capture(exc: Exception) -> dict:
     return _err(message, int(status or 400))
 
 
-def _agent_brief(agent: Agent, user: SysUser) -> dict:
+def _agent_brief(agent: Agent) -> dict:
+    capabilities = [
+        {"code": code, "name": (
+            CONFIGURABLE_CAPABILITIES[code].name
+            if code in CONFIGURABLE_CAPABILITIES else code
+        )}
+        for code in (agent.capability_codes or [])
+    ]
     return {
         "id": agent.id,
         "agent_no": agent.agent_no,
-        "user_id": agent.user_id,
-        "username": user.username,
-        "display_name": agent.display_name,
+        "name": agent.display_name,
+        "capabilities": capabilities,
+        "scope_type": agent.scope_type,
+        "scope_role_ids": agent.scope_role_ids or [],
+        "description": agent.description,
         "status": agent.status,
-        "parent_agent_id": agent.parent_agent_id,
-        "config_version": agent.config_version,
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
     }
 
@@ -80,61 +88,58 @@ def _capability_items(capabilities: set) -> List[dict]:
     ]
 
 
-async def _agent_label(db: AsyncSession, agent_id: Optional[int]) -> dict:
-    if not agent_id:
-        return {}
-    agent = await db.get(Agent, int(agent_id))
-    if not agent:
-        return {"agent_id": int(agent_id)}
-    user = await db.get(SysUser, int(agent.user_id))
-    return {
-        "agent_id": int(agent.id),
-        "name": agent.display_name or (user.display_name if user else None) or (user.username if user else None),
-        "username": user.username if user else None,
-        "user_id": int(agent.user_id),
-    }
-
-
-async def _call_items(db: AsyncSession, rows: List[AgentCallLog], current_agent_id: int) -> List[dict]:
+async def _call_items(db: AsyncSession, rows: List[AgentCallLog]) -> List[dict]:
+    agent_ids = {int(row.callee_agent_id) for row in rows if row.callee_agent_id}
+    agents = {}
+    if agent_ids:
+        for agent in (await db.execute(
+            select(Agent).where(Agent.id.in_(agent_ids))
+        )).scalars().all():
+            agents[int(agent.id)] = agent.display_name
     items = []
     for row in rows:
-        caller = await _agent_label(db, row.caller_agent_id)
-        callee = await _agent_label(db, row.callee_agent_id)
         items.append({
             "id": row.id,
             "trace_id": row.trace_id,
-            "caller": caller,
-            "callee": callee,
-            "direction": (
-                "outgoing" if int(row.caller_agent_id) == int(current_agent_id) else "incoming"
-            ) if current_agent_id else "",
+            "callee": {
+                "agent_id": int(row.callee_agent_id) if row.callee_agent_id else None,
+                "name": agents.get(int(row.callee_agent_id)) if row.callee_agent_id else None,
+            },
             "capability": row.capability,
             "instruction_summary": row.instruction_summary,
             "status": row.status,
             "result_summary": row.result_summary,
             "error": row.error,
             "duration_ms": row.duration_ms,
-            "depth": row.depth,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         })
     return items
 
 
-class AddMemberIn(BaseModel):
-    user_id: Optional[int] = None
-    username: Optional[str] = None
+class TeamCheckIn(BaseModel):
+    agent_id: int
 
 
-class PolicyIn(BaseModel):
-    granted: Optional[List[str]] = None
-    disabled: Optional[List[str]] = None
-    reason: str = ""
+class AgentUpsertIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    capabilities: List[str]
+    scope_type: str = "all"
+    scope_role_ids: Optional[List[int]] = None
+    description: Optional[str] = Field(default=None, max_length=500)
+    status: str = "active"
 
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("智能体名称不能为空白")
+        return stripped
 
-class HierarchyIn(BaseModel):
-    action: str
-    new_parent_id: Optional[int] = None
-    reason: str = ""
+    @field_validator("capabilities")
+    @classmethod
+    def capabilities_normalized(cls, value: List[str]) -> List[str]:
+        return list(dict.fromkeys(code.strip() for code in value if code.strip()))
 
 
 # ───────────────────────────── 我的 ─────────────────────────────
@@ -146,37 +151,29 @@ async def my_agent(
 ):
     try:
         user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user, use_cache=False)
+        ctx = await load_user_context(db, user, use_cache=False)
         week_start = datetime.now() - timedelta(days=7)
         usage = (await db.execute(
             select(func.count(AssistantRun.id), func.coalesce(func.sum(AssistantRun.total_tokens), 0))
             .where(AssistantRun.user_id == str(user.id), AssistantRun.created_at >= week_start)
         )).first()
-        parent = await db.get(Agent, ctx.agent.parent_agent_id) if ctx.agent.parent_agent_id else None
         calls = (await db.execute(
             select(AgentCallLog)
-            .where(or_(
-                AgentCallLog.caller_agent_id == ctx.agent.id,
-                AgentCallLog.callee_agent_id == ctx.agent.id,
-            ))
+            .where(AgentCallLog.caller_user_id == user.id)
             .order_by(AgentCallLog.id.desc())
             .limit(5)
         )).scalars().all()
         return _ok({
-            "agent": _agent_brief(ctx.agent, user),
+            "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
             "display_name": ctx.display_name,
-            "parent_agent_id": ctx.agent.parent_agent_id,
-            "parent_display_name": parent.display_name if parent else None,
-            "is_supervisor": ctx.is_supervisor,
-            "children_count": len(ctx.children),
+            "team_size": len(ctx.members),
             "effective_capabilities": _capability_items(ctx.effective_capabilities),
-            "policy": policy.normalize_policy(ctx.agent.capability_policy),
             "usage_7d": {
                 "runs": int(usage[0] or 0) if usage else 0,
                 "total_tokens": int(usage[1] or 0) if usage else 0,
             },
             "capability_catalog": public_catalog(),
-            "recent_calls": await _call_items(db, calls, int(ctx.agent.id)),
+            "recent_calls": await _call_items(db, calls),
         })
     except Exception as exc:
         return _capture(exc)
@@ -190,17 +187,13 @@ async def my_calls(
 ):
     try:
         user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user)
         rows = (await db.execute(
             select(AgentCallLog)
-            .where(or_(
-                AgentCallLog.caller_agent_id == ctx.agent.id,
-                AgentCallLog.callee_agent_id == ctx.agent.id,
-            ))
+            .where(AgentCallLog.caller_user_id == user.id)
             .order_by(AgentCallLog.id.desc())
             .limit(limit)
         )).scalars().all()
-        return _ok({"items": await _call_items(db, rows, int(ctx.agent.id))})
+        return _ok({"items": await _call_items(db, rows)})
     except Exception as exc:
         return _capture(exc)
 
@@ -214,9 +207,8 @@ async def my_conversations(
 ):
     try:
         user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user)
         return _ok(await conversation_service.list_conversations(
-            db, agent_id=ctx.agent.id, user_id=user.id, page=page, page_size=page_size,
+            db, user_id=user.id, page=page, page_size=page_size,
         ))
     except Exception as exc:
         return _capture(exc)
@@ -231,9 +223,8 @@ async def my_conversation_detail(
 ):
     try:
         user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user)
         conversation = await conversation_service.get_owned_conversation(
-            db, conversation_id, user_id=user.id, agent_id=ctx.agent.id,
+            db, conversation_id, user_id=user.id,
         )
         return _ok(await conversation_service.conversation_messages(db, conversation, limit))
     except Exception as exc:
@@ -248,9 +239,8 @@ async def archive_conversation(
 ):
     try:
         user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user)
         conversation = await conversation_service.get_owned_conversation(
-            db, conversation_id, user_id=user.id, agent_id=ctx.agent.id,
+            db, conversation_id, user_id=user.id,
         )
         return _ok(await conversation_service.archive_conversation(db, conversation))
     except Exception as exc:
@@ -266,41 +256,35 @@ async def my_team(
 ):
     try:
         user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user)
-        items = []
-        for child in ctx.children:
-            child_user = await db.get(SysUser, child.user_id)
-            child_agent = await db.get(Agent, child.agent_id)
-            if not child_user or not child_agent:
-                continue
-            items.append({
-                **_agent_brief(child_agent, child_user),
-                "name": child.display_name,
-                "username": child.username,
-                "capabilities": [
-                    {"code": code, "name": CONFIGURABLE_CAPABILITIES[code].name}
-                    for code in child.capabilities
-                    if code in CONFIGURABLE_CAPABILITIES
-                ],
-            })
+        items = await team_service.list_my_team(db, user.id)
         return _ok({"items": items, "total": len(items)})
+    except Exception as exc:
+        return _capture(exc)
+
+
+@router.get("/me/team/candidates")
+async def team_candidates(
+    keyword: str = "",
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(PermissionChecker("ai.agent.team", "read")),
+):
+    try:
+        user = await _load_user(db, current_user)
+        return _ok({"items": await team_service.list_candidates(db, user, keyword)})
     except Exception as exc:
         return _capture(exc)
 
 
 @router.post("/me/team")
 async def add_team_member(
-    body: AddMemberIn,
+    body: TeamCheckIn,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(PermissionChecker("ai.agent.team", "read")),
 ):
     try:
         user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user, use_cache=False)
-        result = await hierarchy.add_subordinate(
-            db, ctx, user_id=body.user_id, username=body.username or "",
-        )
-        return _ok(result, "已添加并通知对方")
+        result = await team_service.check_member(db, user, body.agent_id)
+        return _ok(result, "已加入团队")
     except Exception as exc:
         return _capture(exc)
 
@@ -313,103 +297,44 @@ async def remove_team_member(
 ):
     try:
         user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user, use_cache=False)
-        result = await hierarchy.remove_subordinate(db, ctx, agent_id)
-        return _ok(result, "已移除并通知对方")
+        result = await team_service.uncheck_member(db, user.id, agent_id)
+        return _ok(result, "已移出团队")
     except Exception as exc:
         return _capture(exc)
 
 
-@router.get("/me/team/candidates")
-async def team_candidates(
-    keyword: str = "",
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.team", "read")),
+# ───────────────────────────── 能力目录 ─────────────────────────────
+
+@router.get("/capabilities")
+async def capability_catalog(
+    current_user=Depends(PermissionChecker("ai.agent.self", "read")),
 ):
-    try:
-        await _load_user(db, current_user)
-        return _ok({"items": await hierarchy.list_candidates(db, keyword)})
-    except Exception as exc:
-        return _capture(exc)
-
-
-@router.get("/me/team/{agent_id}")
-async def team_member_detail(
-    agent_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.team", "read")),
-):
-    try:
-        user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user)
-        child = await db.get(Agent, agent_id)
-        if not child or int(child.parent_agent_id or 0) != int(ctx.agent.id):
-            return _err("只能查看直属子智能体", 403)
-        return _ok(await _agent_detail(db, child, ctx))
-    except Exception as exc:
-        return _capture(exc)
-
-
-@router.put("/me/team/{agent_id}/policy")
-async def update_team_policy(
-    agent_id: int,
-    body: PolicyIn,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.team", "read")),
-):
-    try:
-        user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user, use_cache=False)
-        target = await db.get(Agent, agent_id)
-        if not target:
-            return _err("智能体不存在", 404)
-        saved = await policy.update_agent_policy(
-            db, operator_ctx=ctx, target_agent=target,
-            granted=body.granted, disabled=body.disabled,
-            reason=body.reason, is_admin=False,
-        )
-        return _ok(saved, "配置已保存并通知对方")
-    except Exception as exc:
-        return _capture(exc)
+    return _ok({"items": public_catalog()})
 
 
 # ───────────────────────────── 管理员 ─────────────────────────────
 
-async def _agent_detail(db: AsyncSession, target: Agent, viewer_ctx) -> dict:
-    target_user = await db.get(SysUser, target.user_id)
-    if not target_user:
-        raise ValueError("目标用户不存在")
-    target_ctx = await load_agent_context(db, target_user, use_cache=False)
-    target_policy = policy.normalize_policy(target.capability_policy)
-    role_baseline = baseline_capabilities(target_ctx.permissions)
-    effective = target_ctx.effective_capabilities
-    catalog = []
-    for item in public_catalog():
-        code = item["code"]
-        if not item.get("grantable"):
-            continue
-        catalog.append({
-            **item,
-            "role_owned": code in role_baseline,
-            "granted": code in (target_policy.get("granted") or []),
-            "disabled": code in (target_policy.get("disabled") or []),
-            "effective": code in effective,
-            "grantable_now": code in viewer_ctx.effective_capabilities,
-        })
-    return {
-        "agent": _agent_brief(target, target_user),
-        "policy": target_policy,
-        "effective_capabilities": _capability_items(effective),
-        "role_baseline": _capability_items(role_baseline),
-        "grantable": _capability_items(viewer_ctx.effective_capabilities),
-        "catalog": catalog,
-    }
+def _validate_upsert(body: AgentUpsertIn) -> Optional[str]:
+    if not body.capabilities:
+        return "至少选择一个能力"
+    unknown = [code for code in body.capabilities if code not in ALL_CONFIGURABLE_CODES]
+    if unknown:
+        return f"未知能力：{'、'.join(unknown)}"
+    if body.scope_type not in ("all", "roles"):
+        return "scope_type 只能为 all 或 roles"
+    if body.scope_type == "roles" and not body.scope_role_ids:
+        return "scope_type=roles 时必须提供 scope_role_ids"
+    if body.status not in ("active", "disabled"):
+        return "status 只能为 active 或 disabled"
+    return None
 
 
 @router.get("/admin/agents")
 async def admin_agents(
     keyword: str = "",
+    capability: str = "",
     status: str = "",
+    scope: str = "",
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -419,47 +344,95 @@ async def admin_agents(
         conditions = []
         if status:
             conditions.append(Agent.status == status)
+        if capability:
+            conditions.append(Agent.capability_codes.contains([capability]))
+        if scope:
+            conditions.append(Agent.scope_type == scope)
         if keyword:
             like = f"%{keyword.strip()}%"
-            conditions.append(or_(SysUser.username.ilike(like), SysUser.display_name.ilike(like),
-                                  Agent.agent_no.ilike(like)))
+            conditions.append(or_(Agent.display_name.ilike(like), Agent.agent_no.ilike(like)))
         total = int((await db.execute(
-            select(func.count(Agent.id)).select_from(Agent)
-            .join(SysUser, SysUser.id == Agent.user_id).where(*conditions)
+            select(func.count(Agent.id)).where(*conditions)
         )).scalar() or 0)
         rows = (await db.execute(
-            select(Agent, SysUser).join(SysUser, SysUser.id == Agent.user_id)
-            .where(*conditions).order_by(Agent.id.asc())
+            select(Agent).where(*conditions).order_by(Agent.id.asc())
             .offset((page - 1) * page_size).limit(page_size)
-        )).all()
+        )).scalars().all()
         items = []
-        for agent, user in rows:
-            child_count = int((await db.execute(
-                select(func.count(Agent.id)).where(Agent.parent_agent_id == agent.id)
+        for agent in rows:
+            teams_count = int((await db.execute(
+                select(func.count(AgentTeamMember.id)).where(AgentTeamMember.agent_id == agent.id)
             )).scalar() or 0)
-            items.append({
-                **_agent_brief(agent, user),
-                "children_count": child_count,
-                "policy": policy.normalize_policy(agent.capability_policy),
-            })
+            items.append({**_agent_brief(agent), "teams_count": teams_count})
         return _ok({"items": items, "total": total, "page": page, "page_size": page_size})
     except Exception as exc:
         return _capture(exc)
 
 
-@router.get("/admin/agents/{agent_id}")
-async def admin_agent_detail(
-    agent_id: int,
+@router.post("/admin/agents")
+async def create_agent(
+    body: AgentUpsertIn,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.admin", "read")),
+    current_user=Depends(PermissionChecker("ai.agent.admin", "update")),
 ):
     try:
-        actor = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, actor, use_cache=False)
-        target = await db.get(Agent, agent_id)
-        if not target:
+        invalid = _validate_upsert(body)
+        if invalid:
+            return _err(invalid)
+        operator = await _load_user(db, current_user)
+        dup = (await db.execute(
+            select(Agent).where(Agent.display_name == body.name.strip())
+        )).scalars().first()
+        if dup:
+            return _err("已存在同名智能体")
+        next_id = await sequence.next_serial_id(db, "agent")
+        agent = Agent(
+            id=next_id,
+            agent_no=f"AG-{next_id:06d}",
+            display_name=body.name.strip(),
+            capability_codes=body.capabilities,
+            scope_type=body.scope_type,
+            scope_role_ids=body.scope_role_ids if body.scope_type == "roles" else None,
+            description=body.description,
+            status=body.status,
+            created_by_user_id=operator.id,
+        )
+        db.add(agent)
+        await db.flush()
+        await log_audit(db, "agent", agent.id, "create", operator=operator.username)
+        return _ok(_agent_brief(agent), "已创建")
+    except Exception as exc:
+        return _capture(exc)
+
+
+@router.put("/admin/agents/{agent_id}")
+async def update_agent(
+    agent_id: int,
+    body: AgentUpsertIn,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(PermissionChecker("ai.agent.admin", "update")),
+):
+    try:
+        invalid = _validate_upsert(body)
+        if invalid:
+            return _err(invalid)
+        agent = await db.get(Agent, agent_id)
+        if not agent:
             return _err("智能体不存在", 404)
-        return _ok(await _agent_detail(db, target, ctx))
+        dup = (await db.execute(
+            select(Agent).where(Agent.display_name == body.name.strip(), Agent.id != agent_id)
+        )).scalars().first()
+        if dup:
+            return _err("已存在同名智能体")
+        agent.display_name = body.name.strip()
+        agent.capability_codes = body.capabilities
+        agent.scope_type = body.scope_type
+        agent.scope_role_ids = body.scope_role_ids if body.scope_type == "roles" else None
+        agent.description = body.description
+        agent.status = body.status
+        agent.config_version = int(agent.config_version or 1) + 1
+        await db.flush()
+        return _ok(_agent_brief(agent), "已保存")
     except Exception as exc:
         return _capture(exc)
 
@@ -493,7 +466,7 @@ async def admin_calls(
             .offset((page - 1) * page_size).limit(page_size)
         )).scalars().all()
         return _ok({
-            "items": await _call_items(db, rows, 0),
+            "items": await _call_items(db, rows),
             "total": total, "page": page, "page_size": page_size,
         })
     except Exception as exc:
@@ -518,47 +491,6 @@ async def admin_stats(
             "active_agents": active_agents,
             "calls_by_status": {row[0]: int(row[1]) for row in call_rows},
         })
-    except Exception as exc:
-        return _capture(exc)
-
-
-@router.put("/admin/agents/{agent_id}/hierarchy")
-async def admin_hierarchy(
-    agent_id: int,
-    body: HierarchyIn,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.admin", "update")),
-):
-    try:
-        actor = await _load_user(db, current_user)
-        result = await hierarchy.admin_change_hierarchy(
-            db, actor=actor, target_agent_id=agent_id,
-            action=body.action, new_parent_id=body.new_parent_id, reason=body.reason,
-        )
-        return _ok(result)
-    except Exception as exc:
-        return _capture(exc)
-
-
-@router.put("/admin/agents/{agent_id}/policy")
-async def admin_policy(
-    agent_id: int,
-    body: PolicyIn,
-    db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.admin", "update")),
-):
-    try:
-        user = await _load_user(db, current_user)
-        ctx = await load_agent_context(db, user, use_cache=False)
-        target = await db.get(Agent, agent_id)
-        if not target:
-            return _err("智能体不存在", 404)
-        saved = await policy.update_agent_policy(
-            db, operator_ctx=ctx, target_agent=target,
-            granted=body.granted, disabled=body.disabled,
-            reason=body.reason, is_admin=True,
-        )
-        return _ok(saved, "配置已保存并通知对方")
     except Exception as exc:
         return _capture(exc)
 

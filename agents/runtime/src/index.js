@@ -15,6 +15,7 @@ const {
 } = require("./run-context");
 const { roundDurationMs, normalizeResult, splitOutcome } = require("./run-result");
 const { ERROR_CODES, normalizeRunErrorCode } = require("./error-codes");
+const { createAdapter: createOrderWriteAdapter } = require("./order-write-adapter");
 
 module.exports = {
   createAgent: startAgent,
@@ -32,6 +33,7 @@ module.exports = {
   splitOutcome,
   ERROR_CODES,
   normalizeRunErrorCode,
+  createOrderWriteAdapter,
   startHealthServer,
   readJsonBody,
   createConfig,

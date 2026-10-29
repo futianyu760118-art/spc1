@@ -70,14 +70,13 @@ from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa
 from app.models.basicdata.backup import BackupConfig, BackupRecord  # noqa: F401
 from app.models.basicdata.ai_agent import AiAgentConfig, AssistantRun  # noqa: F401
 
-# 智能体中心（2026-10-26 多智能体层级与主管任务闭环）
+# 智能体中心（2026-10-29 团队制：智能体目录 + 勾选式平铺团队）
 from app.models.agent import (  # noqa: F401
     Agent,
     AgentCallLog,
-    AgentConfigLog,
     AgentConversation,
-    AgentHierarchyLog,
     AgentMessage,
+    AgentTeamMember,
     GatewayDispatchLog,
 )
 from app.models.purchase.price_change import (  # noqa: F401
@@ -183,10 +182,9 @@ __all__ = [
     "AiAgentConfig",
     "AssistantRun",
     "Agent",
+    "AgentTeamMember",
     "AgentCallLog",
-    "AgentConfigLog",
     "AgentConversation",
-    "AgentHierarchyLog",
     "AgentMessage",
     "GatewayDispatchLog",
     "ApprovalConfig",

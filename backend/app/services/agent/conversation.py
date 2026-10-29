@@ -6,7 +6,6 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.agent.agent import Agent
 from app.models.agent.conversation import AgentConversation, AgentMessage
 from app.services.agent.errors import AgentError
 
@@ -20,12 +19,11 @@ async def get_owned_conversation(
     conversation_id: int,
     *,
     user_id: int,
-    agent_id: int,
 ) -> AgentConversation:
     conversation = await db.get(AgentConversation, int(conversation_id))
     if not conversation:
         raise ConversationError("会话不存在", 404)
-    if int(conversation.user_id) != int(user_id) or int(conversation.agent_id) != int(agent_id):
+    if int(conversation.user_id) != int(user_id):
         raise ConversationError("无权访问该会话", 403)
     return conversation
 
@@ -33,12 +31,10 @@ async def get_owned_conversation(
 async def create_conversation(
     db: AsyncSession,
     *,
-    agent: Agent,
     user_id: int,
     title: Optional[str] = None,
 ) -> AgentConversation:
     conversation = AgentConversation(
-        agent_id=agent.id,
         user_id=int(user_id),
         task_id=None,
         title=(title or "")[:200] or None,
@@ -53,15 +49,12 @@ async def create_conversation(
 async def resolve_conversation(
     db: AsyncSession,
     *,
-    agent: Agent,
     user_id: int,
     conversation_id: Optional[int] = None,
 ) -> AgentConversation:
     if conversation_id:
-        return await get_owned_conversation(
-            db, conversation_id, user_id=user_id, agent_id=agent.id,
-        )
-    return await create_conversation(db, agent=agent, user_id=user_id)
+        return await get_owned_conversation(db, conversation_id, user_id=user_id)
+    return await create_conversation(db, user_id=user_id)
 
 
 async def append_message(
@@ -121,14 +114,13 @@ async def load_recent_messages(
 async def list_conversations(
     db: AsyncSession,
     *,
-    agent_id: int,
     user_id: int,
     page: int = 1,
     page_size: int = 20,
 ) -> dict:
     from sqlalchemy import func
 
-    conditions = [AgentConversation.agent_id == agent_id, AgentConversation.user_id == int(user_id)]
+    conditions = [AgentConversation.user_id == int(user_id)]
     total = int((await db.execute(
         select(func.count(AgentConversation.id)).where(*conditions)
     )).scalar() or 0)

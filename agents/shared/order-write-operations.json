@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "capability": "write_control_platform",
+  "capabilityDescription": "中台受控写操作（订单备注/状态/日期字段），Hub 审批派单或 SPC 助手人工确认后调用",
+  "operations": [
+    {
+      "name": "order.update_note",
+      "audiences": ["hub"],
+      "kind": "custom",
+      "handler": "update_note",
+      "title": "修改订单备注",
+      "keywords": ["备注", "说明"],
+      "changesKey": "remark",
+      "value": { "type": "string_or_null", "maxLength": 2000 },
+      "hubFields": [
+        { "name": "remark", "label": "备注", "type": "string", "required": true }
+      ]
+    },
+    {
+      "name": "order.update_status",
+      "audiences": ["hub"],
+      "kind": "custom",
+      "handler": "update_status",
+      "title": "修改订单状态",
+      "keywords": ["状态"],
+      "changesKey": "status",
+      "value": { "type": "enum", "values": ["open", "closed"] },
+      "hubFields": [
+        { "name": "status", "label": "状态", "type": "string", "required": true }
+      ],
+      "guards": {
+        "erpClosedBlocked": true,
+        "erpClosedMessage": "订单已由 ERP 关闭，禁止修改状态"
+      }
+    },
+    {
+      "name": "order.update_delivery_date",
+      "audiences": ["hub"],
+      "kind": "field_set",
+      "title": "修改交付日期",
+      "keywords": ["交付日期", "交期"],
+      "changesKey": "deliveryDate",
+      "value": { "type": "date" },
+      "fields": [
+        { "wire": "deliveryDate", "column": "promised_date", "label": "交付日期" }
+      ],
+      "hubFields": [
+        { "name": "deliveryDate", "label": "交付日期", "type": "date", "required": true }
+      ],
+      "guards": {
+        "erpClosedBlocked": true,
+        "erpClosedMessage": "订单已由 ERP 关闭，禁止修改交付日期"
+      }
+    },
+    {
+      "name": "order.update_schedule_fields",
+      "audiences": ["assistant"],
+      "kind": "field_set",
+      "title": "修改订单计划日期",
+      "keywords": ["计划日期", "出货计划"],
+      "changesKey": "fields",
+      "value": { "type": "date_map", "clearable": true },
+      "fields": [
+        { "wire": "promised_date", "column": "promised_date", "label": "合同交期" },
+        { "wire": "shipping_plan", "column": "shipping_plan", "label": "出货计划" },
+        { "wire": "delivery_completed_date", "column": "delivery_completed_date", "label": "发货完成时间" },
+        { "wire": "customer_inspection_date", "column": "customer_inspection_date", "label": "客户验货时间" },
+        { "wire": "planned_start_date", "column": "planned_start_date", "label": "上线时间" }
+      ],
+      "hubFields": [],
+      "guards": {
+        "erpClosedBlocked": true,
+        "erpClosedMessage": "订单已由 ERP 关闭，禁止修改订单计划字段"
+      }
+    }
+  ]
+}

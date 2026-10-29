@@ -453,7 +453,7 @@ declare_permission(
     route_path="/purchase-requisitions", sort_order=15,
 )
 
-# 智能体中心（2026-10-27）— 一人一智能体、层级委派、能力与范围
+# 智能体中心 — 智能体目录、勾选式团队、团队能力门控
 declare_permission(
     "ai.agent.self", "智能体中心",
     module="agent", actions=["read"], sort_order=15,

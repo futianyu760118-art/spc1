@@ -6,7 +6,6 @@ interface AgentState {
   loaded: boolean
   loading: boolean
   enabled: boolean
-  isSupervisor: boolean
   fetchMe: () => Promise<void>
 }
 
@@ -15,7 +14,6 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   loaded: false,
   loading: false,
   enabled: true,
-  isSupervisor: false,
 
   fetchMe: async () => {
     if (get().loading) return
@@ -28,13 +26,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         loaded: true,
         loading: false,
         enabled: !!data,
-        isSupervisor: !!data?.is_supervisor,
       })
     } catch (error: any) {
       const explicitlyDisabled = error?._apiData?.code === 403
       set({
         loaded: true, loading: false, enabled: !explicitlyDisabled,
-        me: null, isSupervisor: false,
+        me: null,
       })
     }
   },

@@ -2,7 +2,9 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createAdapter, mapWriteError } = require("../src/order-write-adapter");
+const {
+  createAdapter, HUB_OPERATIONS, OPERATIONS, OPERATIONS_METADATA, REGISTRY, mapWriteError,
+} = require("../src/order-write-adapter");
 
 function createCtx(post) {
   const calls = [];
@@ -69,6 +71,24 @@ test("declares a writable idempotent capability", () => {
   ]);
 });
 
+test("derives operations from the shared registry by audience", () => {
+  const registryNames = REGISTRY.operations.map((operation) => operation.name);
+  assert.deepEqual([...OPERATIONS], registryNames);
+  assert.deepEqual(
+    [...HUB_OPERATIONS],
+    registryNames.filter((name) =>
+      REGISTRY.operations.find((operation) => operation.name === name).audiences.includes("hub"),
+    ),
+  );
+  assert.deepEqual(
+    OPERATIONS_METADATA.map((operation) => operation.name),
+    [...HUB_OPERATIONS],
+  );
+  // assistant 专属操作不暴露给 Hub 元数据，但同宿主可执行
+  assert.ok(!HUB_OPERATIONS.includes("order.update_schedule_fields"));
+  assert.ok(OPERATIONS.includes("order.update_schedule_fields"));
+});
+
 test("sends a normalized write request and falls back to run.requestId", async () => {
   const { ctx, calls } = createCtx(async () => ({
     code: 0,
@@ -102,6 +122,32 @@ test("sends delivery date requests", async () => {
   });
   assert.equal(calls[0][3].operation, "order.update_delivery_date");
   assert.equal(calls[0][3].changes.deliveryDate, "2026-11-10");
+});
+
+test("sends local schedule field updates through the shared write capability", async () => {
+  const { ctx, calls } = createCtx(async () => ({
+    code: 0,
+    data: { ok: true, idempotent_replay: false },
+  }));
+  const adapter = createAdapter(ctx);
+  await adapter.invoke(runStub(), {
+    operation: "order.update_schedule_fields",
+    orderNo: "HJY-1",
+    changes: {
+      fields: {
+        promised_date: "2026-11-15",
+        shipping_plan: "2026-11-20",
+        delivery_completed_date: null,
+      },
+    },
+    idempotencyKey: "idem-schedule",
+  });
+  assert.equal(calls[0][3].operation, "order.update_schedule_fields");
+  assert.deepEqual(calls[0][3].changes.fields, {
+    promised_date: "2026-11-15",
+    shipping_plan: "2026-11-20",
+    delivery_completed_date: null,
+  });
 });
 
 test("validates operation, changes and idempotency key", async () => {

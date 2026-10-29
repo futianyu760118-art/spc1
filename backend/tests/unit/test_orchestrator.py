@@ -383,13 +383,23 @@ class TestResolveConfirmation:
         )
         dispatched = []
 
-        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id="", trace_id="", caller=None):
-            dispatched.append((input, operator_user_id))
+        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id="", trace_id="",
+                                caller=None, actor_token=""):
+            dispatched.append((input, operator_user_id, actor_token))
             return {"online": True, "ok": True, "runId": "r1", "result": {
-                "order_no": input["order_no"],
-                "fields": {"shipping_plan": "2026-11-01"},
+                "ok": True,
+                "operation": "order.update_schedule_fields",
+                "target": {"orderNo": input["orderNo"]},
+                "before": {"shipping_plan": "2026-10-28"},
+                "after": {"shipping_plan": "2026-11-01"},
+                "appliedAt": "2026-10-28T00:00:00+00:00",
+                "idempotent_replay": False,
             }}
 
+        async def fake_prepare(db, user_id, order_no):
+            return "actor-token-1"
+
+        monkeypatch.setattr(orchestrator, "_prepare_order_write_actor", fake_prepare)
         monkeypatch.setattr(orchestrator, "call_agent_run", fake_dispatch)
 
         async def fake_reaction(*args, **kwargs):
@@ -406,11 +416,17 @@ class TestResolveConfirmation:
         outcome = await orchestrator.resolve_confirmation(None, "wc-1", "confirm", "u1")
         assert outcome["code"] == 0
         assert len(dispatched) == 1
-        assert dispatched[0][0] == {"order_no": "HJ-1", "fields": {"shipping_plan": "2026-11-01"}}
+        assert dispatched[0][0] == {
+            "operation": "order.update_schedule_fields",
+            "orderNo": "HJ-1",
+            "changes": {"fields": {"shipping_plan": "2026-11-01"}},
+            "idempotencyKey": "wc-1",
+        }
         assert dispatched[0][1] == "u1"
+        assert dispatched[0][2] == "actor-token-1"
         conf = outcome["data"]["confirmation"]
         assert conf["status"] == "executed"
-        assert conf["write_result"]["order_no"] == "HJ-1"
+        assert conf["write_result"]["target"] == {"orderNo": "HJ-1"}
         assert outcome["data"]["reply"]["text"] == "已回查验证成功"
         assert any("已回查验证成功" in m["content"] for m in appended)
 
@@ -421,10 +437,15 @@ class TestResolveConfirmation:
         )
         dispatched = []
 
-        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id="", trace_id="", caller=None):
+        async def fake_dispatch(spec, input, *, timeout=30.0, operator_user_id="", trace_id="",
+                                caller=None, actor_token=""):
             dispatched.append(input)
             return {"online": True, "ok": False, "reason": "订单已关闭"}
 
+        async def fake_prepare(db, user_id, order_no):
+            return "actor-token-2"
+
+        monkeypatch.setattr(orchestrator, "_prepare_order_write_actor", fake_prepare)
         monkeypatch.setattr(orchestrator, "call_agent_run", fake_dispatch)
         reaction_called = {"v": False}
 

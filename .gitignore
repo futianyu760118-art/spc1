@@ -93,3 +93,6 @@ docs/
 scripts/ai-feedback-runner/config.local.json
 scripts/ai-feedback-runner/runs/
 scripts/ai-feedback-runner/.runner.lock
+
+# 订单写操作注册表构建产物（唯一源 agents/shared/order-write-operations.json）
+backend/app/services/order/write_operations.json

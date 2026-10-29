@@ -1,6 +1,7 @@
 "use strict";
 
 const { ERROR_CODES } = require("@spc/execution-agent-runtime");
+const WRITE_OPERATIONS_REGISTRY = require("../../shared/order-write-operations.json");
 
 const REASONING_AGENTS = Object.freeze([
   {
@@ -33,11 +34,7 @@ const WRITE_AGENT = Object.freeze({
   agentId: "spc-agent-order-write",
   agentName: "订单写操作 Agent",
   role: "order_write",
-  operations: [
-    "order.update_note",
-    "order.update_status",
-    "order.update_delivery_date",
-  ],
+  operations: WRITE_OPERATIONS_REGISTRY.operations.map((operation) => operation.name),
 });
 
 function taskTypeOf(input) {

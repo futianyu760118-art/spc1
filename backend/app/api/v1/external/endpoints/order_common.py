@@ -8,7 +8,7 @@ from app.models.basicdata.user import SysUser
 
 
 async def resolve_operator(db: AsyncSession, request: Request) -> str:
-    """审计操作人：SPC 用户优先；Hub caller 次之；最后回退 order-agent:runId。"""
+    """审计操作人：SPC 用户优先；Hub caller 次之；最后回退 execution-gateway:runId。"""
     op_user_id = (request.headers.get("X-Operator-User-Id") or "").strip()
     if op_user_id.isdigit():
         user = (
@@ -20,4 +20,4 @@ async def resolve_operator(db: AsyncSession, request: Request) -> str:
     if hub_caller_id:
         return f"hub:{hub_caller_id}"[:64]
     run_id = request.headers.get("X-Agent-Run-Id", "")
-    return f"order-agent:{run_id}" if run_id else "order-agent"
+    return f"execution-gateway:{run_id}" if run_id else "execution-gateway"

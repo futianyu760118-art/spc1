@@ -116,8 +116,8 @@ async def _test_db():
     from app.models.basicdata.employee import Employee
     from app.models.basicdata.organization import Organization
     from app.models.agent import (
-        Agent, AgentCallLog, AgentConfigLog, AgentConversation, AgentHierarchyLog,
-        AgentMessage, GatewayDispatchLog,
+        Agent, AgentCallLog, AgentConversation, AgentMessage,
+        AgentTeamMember, GatewayDispatchLog,
     )
     from app.models.basicdata.reasoning import ReasoningTask
     from app.models.exception.quality_issue import QualityIssue
@@ -174,11 +174,21 @@ async def _test_db():
         AiAgentConfig.__table__, AssistantRun.__table__,
         CompletenessRule.__table__,
         Organization.__table__, Employee.__table__,
-        Agent.__table__, AgentCallLog.__table__, AgentConfigLog.__table__,
-        AgentHierarchyLog.__table__, AgentConversation.__table__, AgentMessage.__table__,
-        GatewayDispatchLog.__table__,
+        Agent.__table__, AgentCallLog.__table__, AgentConversation.__table__,
+        AgentMessage.__table__, AgentTeamMember.__table__, GatewayDispatchLog.__table__,
     ]
     async with engine.begin() as conn:
+        # 旧结构测试库（agent 表仍含 user_id 或单值 capability_code 列）：agent 域表整体重建——
+        # create_all 只建缺失表、不改既有列，与 init_database 的 legacy 判断同模式
+        legacy_agent = (await conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'agent' AND column_name IN ('user_id', 'capability_code')"
+        ))).first()
+        if legacy_agent:
+            await conn.execute(text(
+                "DROP TABLE IF EXISTS agent_team_member, agent_hierarchy_log, agent_config_log, "
+                "agent_call_log, agent_conversation, agent_message, gateway_dispatch_log, agent CASCADE"
+            ))
         await conn.run_sync(Base.metadata.create_all, tables=tables)
         # 既有测试库补列：create_all 只建缺失表不加列（同 init_database 的 migrate_columns 模式）
         await conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS ai_result JSONB"))
@@ -279,7 +289,7 @@ async def client(_test_db):
             "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item, "
             "ai_agent_config, assistant_run, completeness_rule, "
             "agent_message, agent_conversation, agent_call_log, "
-            "agent_hierarchy_log, agent_config_log, agent, gateway_dispatch_log, "
+            "agent_team_member, agent, gateway_dispatch_log, "
             "scm_employee, scm_organization RESTART IDENTITY CASCADE"
         ))
         # 审批配置恢复默认链与启用态（配置/停用类用例会改，不能污染后续用例）
@@ -354,8 +364,8 @@ async def external_keys(_test_db):
                  0, :rak, :ras, NULL, 'pytest'),
                 ('pytest-agent', 'ak_pytest_agent', TRUE,
                  '["agent.config"]', 0, :gak, :gas, NULL, 'pytest'),
-                ('pytest-order-agent', 'ak_pytest_order_agent', TRUE,
-                 '["orders.schedule.update", "orders.write"]', 0, :oak2, :oas2, NULL, 'pytest')
+                ('pytest-order-write', 'ak_pytest_order_agent', TRUE,
+                 '["orders.write"]', 0, :oak2, :oas2, NULL, 'pytest')
         """), {
             "qak": EXTERNAL_QUALITY_KEY["app_key"], "qas": EXTERNAL_QUALITY_KEY["app_secret"],
             "oak": EXTERNAL_ORDERS_KEY["app_key"], "oas": EXTERNAL_ORDERS_KEY["app_secret"],
@@ -390,3 +400,74 @@ async def login(client: AsyncClient, username: str, password: str = TEST_PASSWOR
     body = r.json()
     assert body.get("code") == 0, f"login {username} failed: {body}"
     return {"Authorization": f"Bearer {body['data']['access_token']}"}
+
+
+# ----------------------------- 智能体目录/团队测试辅助 -----------------------------
+
+async def insert_catalog_agent(
+    db, *, agent_no: str, name: str, capabilities,
+    scope_type: str = "all", scope_role_ids=None, status: str = "active",
+) -> int:
+    """向 agent 目录插入一行（capabilities 为能力码列表），返回 id。"""
+    from app.models.agent.agent import Agent
+
+    agent = Agent(
+        agent_no=agent_no, display_name=name, capability_codes=list(capabilities),
+        scope_type=scope_type, scope_role_ids=scope_role_ids, status=status,
+    )
+    db.add(agent)
+    await db.flush()
+    return int(agent.id)
+
+
+async def check_team_member(db, *, user_id: int, agent_id: int) -> None:
+    """勾选团队成员（幂等：已勾选则跳过）。"""
+    from sqlalchemy import select
+
+    from app.models.agent.team import AgentTeamMember
+
+    exists = (await db.execute(
+        select(AgentTeamMember.id).where(
+            AgentTeamMember.user_id == int(user_id),
+            AgentTeamMember.agent_id == int(agent_id),
+        )
+    )).scalars().first()
+    if exists:
+        return
+    db.add(AgentTeamMember(
+        user_id=int(user_id), agent_id=int(agent_id), created_by_user_id=int(user_id),
+    ))
+    await db.flush()
+
+
+async def get_user_id_by_username(username: str) -> int:
+    from sqlalchemy import select
+
+    from app.core.database import AsyncSessionLocal
+    from app.models.basicdata.user import SysUser
+
+    async with AsyncSessionLocal() as session:
+        return int((await session.execute(
+            select(SysUser.id).where(SysUser.username == username)
+        )).scalar_one())
+
+
+async def seed_query_agent_for_user(username: str) -> int:
+    """为用户准备 query.orders 团队成员（幂等），返回 user id（网关路由用例辅助）。"""
+    from sqlalchemy import select
+
+    from app.core.database import AsyncSessionLocal
+    from app.models.agent.agent import Agent
+
+    user_id = await get_user_id_by_username(username)
+    async with AsyncSessionLocal() as session:
+        agent = (await session.execute(
+            select(Agent).where(Agent.agent_no == "AG-TEST-QUERY-ORDERS")
+        )).scalars().first()
+        agent_id = int(agent.id) if agent else await insert_catalog_agent(
+            session, agent_no="AG-TEST-QUERY-ORDERS", name="订单查询员",
+            capabilities=["query.orders"],
+        )
+        await check_team_member(session, user_id=user_id, agent_id=agent_id)
+        await session.commit()
+    return user_id

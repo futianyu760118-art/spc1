@@ -1,4 +1,8 @@
-"""Hub 审批后的订单受控写操作（备注/状态）与幂等控制。"""
+"""订单受控写操作（Hub 审批 / 助手确认共用）与幂等控制。
+
+操作清单、字段映射、校验与 ERP 守卫全部由 write_registry（agents/shared/
+order-write-operations.json）声明驱动；仅备注/状态两类特殊语义保留 custom handler。
+"""
 
 import hashlib
 import json
@@ -14,14 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import log_audit
 from app.models.order.sale_order import SaleOrder
 from app.models.order.write_idempotency import OrderWriteIdempotency
+from app.services.order.write_registry import OPERATION_MAP, OPERATION_NAMES, normalize_changes
 
-OPERATIONS = {"order.update_note", "order.update_status", "order.update_delivery_date"}
-STATUS_VALUES = {"open", "closed"}
-REMARK_MAX_LENGTH = 2000
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 IDEMPOTENCY_RETENTION_DAYS = 30
 ORDER_NO_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -49,39 +50,10 @@ def _normalize_idempotency_key(value: Optional[str], request_id: Optional[str]) 
 
 
 def _validate_changes(operation: str, changes: Any) -> dict:
-    if not isinstance(changes, dict):
-        raise OrderWriteError(400, "changes 必须是对象")
-    keys = set(changes)
-    if operation == "order.update_note":
-        if keys != {"remark"}:
-            raise OrderWriteError(400, "order.update_note 只允许 changes.remark")
-        remark = changes.get("remark")
-        if remark is not None and not isinstance(remark, str):
-            raise OrderWriteError(400, "changes.remark 必须是字符串或 null")
-        if isinstance(remark, str) and len(remark) > REMARK_MAX_LENGTH:
-            raise OrderWriteError(400, f"changes.remark 不能超过 {REMARK_MAX_LENGTH} 字符")
-        if isinstance(remark, str):
-            return {"remark": remark.strip() or None}
-        return {"remark": None}
-    if operation == "order.update_status":
-        if keys != {"status"}:
-            raise OrderWriteError(400, "order.update_status 只允许 changes.status")
-        status = changes.get("status")
-        if status not in STATUS_VALUES:
-            raise OrderWriteError(400, "changes.status 必须是 open 或 closed")
-        return {"status": status}
-    if operation == "order.update_delivery_date":
-        if keys != {"deliveryDate"}:
-            raise OrderWriteError(400, "order.update_delivery_date 只允许 changes.deliveryDate")
-        value = changes.get("deliveryDate")
-        if not isinstance(value, str) or not DATE_RE.match(value):
-            raise OrderWriteError(400, "changes.deliveryDate 必须是 YYYY-MM-DD")
-        try:
-            parsed = date.fromisoformat(value)
-        except ValueError:
-            raise OrderWriteError(400, "changes.deliveryDate 不是有效日期")
-        return {"deliveryDate": parsed.isoformat()}
-    raise OrderWriteError(400, f"CAPABILITY_UNSUPPORTED: 不支持的操作 {operation}")
+    normalized, error = normalize_changes(operation, changes)
+    if error:
+        raise OrderWriteError(400, error)
+    return normalized
 
 
 def _request_hash(operation: str, order_no: str, changes: dict) -> str:
@@ -115,39 +87,74 @@ async def _cleanup_expired(db: AsyncSession) -> None:
     )
 
 
-def _before_after(order: SaleOrder, operation: str, normalized_changes: dict):
-    if operation == "order.update_note":
-        before = {"remark": order.remark or ""}
-        after = {"remark": normalized_changes["remark"] or ""}
-        return before, after
-    if operation == "order.update_delivery_date":
-        before = {
-            "deliveryDate": order.promised_date.isoformat() if order.promised_date else None,
-        }
-        after = {"deliveryDate": normalized_changes["deliveryDate"]}
-        return before, after
+def _custom_before_after(handler: str, order: SaleOrder, normalized_changes: dict):
+    if handler == "update_note":
+        return (
+            {"remark": order.remark or ""},
+            {"remark": normalized_changes["remark"] or ""},
+        )
     before_status = "closed" if (order.is_closed == 1 or order.status == "closed") else "open"
-    before = {"status": before_status, "is_closed": int(order.is_closed or 0)}
-    after = {
-        "status": normalized_changes["status"],
-        "is_closed": 1 if normalized_changes["status"] == "closed" else 0,
-    }
-    return before, after
+    return (
+        {"status": before_status, "is_closed": int(order.is_closed or 0)},
+        {
+            "status": normalized_changes["status"],
+            "is_closed": 1 if normalized_changes["status"] == "closed" else 0,
+        },
+    )
 
 
-def _update_values(order: SaleOrder, operation: str, normalized_changes: dict) -> dict:
-    if operation == "order.update_note":
+def _field_set_before_after(spec: dict, order: SaleOrder, normalized_changes: dict):
+    def read(entry):
+        value = getattr(order, entry["column"])
+        return value.isoformat() if value else None
+
+    if spec["value"]["type"] == "date_map":
+        requested = normalized_changes["fields"]
+        before = {entry["wire"]: read(entry) for entry in spec["fields"] if entry["wire"] in requested}
+        after = dict(requested)
+        return before, after
+    entry = spec["fields"][0]
+    return {entry["wire"]: read(entry)}, {entry["wire"]: normalized_changes[spec["changesKey"]]}
+
+
+def _before_after(order: SaleOrder, operation: str, normalized_changes: dict):
+    spec = OPERATION_MAP[operation]
+    if spec["kind"] == "custom":
+        return _custom_before_after(spec["handler"], order, normalized_changes)
+    return _field_set_before_after(spec, order, normalized_changes)
+
+
+def _custom_update_values(handler: str, order: SaleOrder, normalized_changes: dict) -> dict:
+    if handler == "update_note":
         return {"remark": normalized_changes["remark"]}
-    if operation == "order.update_delivery_date":
-        if order.erp_status == 3:
-            raise OrderWriteError(400, "订单已由 ERP 关闭，禁止修改交付日期")
-        return {"promised_date": date.fromisoformat(normalized_changes["deliveryDate"])}
     if order.erp_status == 3:
-        raise OrderWriteError(400, "订单已由 ERP 关闭，禁止修改状态")
+        raise OrderWriteError(400, OPERATION_MAP["order.update_status"]["guards"]["erpClosedMessage"])
     return {
         "status": normalized_changes["status"],
         "is_closed": 1 if normalized_changes["status"] == "closed" else 0,
     }
+
+
+def _field_set_update_values(spec: dict, order: SaleOrder, normalized_changes: dict) -> dict:
+    guards = spec.get("guards") or {}
+    if guards.get("erpClosedBlocked") and order.erp_status == 3:
+        raise OrderWriteError(400, guards["erpClosedMessage"])
+    if spec["value"]["type"] == "date_map":
+        requested = normalized_changes["fields"]
+        return {
+            entry["column"]: date.fromisoformat(requested[entry["wire"]]) if requested[entry["wire"]] else None
+            for entry in spec["fields"]
+            if entry["wire"] in requested
+        }
+    entry = spec["fields"][0]
+    return {entry["column"]: date.fromisoformat(normalized_changes[spec["changesKey"]])}
+
+
+def _update_values(order: SaleOrder, operation: str, normalized_changes: dict) -> dict:
+    spec = OPERATION_MAP[operation]
+    if spec["kind"] == "custom":
+        return _custom_update_values(spec["handler"], order, normalized_changes)
+    return _field_set_update_values(spec, order, normalized_changes)
 
 
 async def execute_order_write(
@@ -160,7 +167,7 @@ async def execute_order_write(
     request_id: Optional[str],
     operator: str,
 ) -> dict:
-    if operation not in OPERATIONS:
+    if operation not in OPERATION_NAMES:
         raise OrderWriteError(400, f"CAPABILITY_UNSUPPORTED: 不支持的操作 {operation}")
     normalized_order_no = _normalize_order_no(order_no)
     normalized_changes = _validate_changes(operation, changes)

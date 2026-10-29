@@ -89,7 +89,7 @@ api_router.include_router(common.files_router, prefix="/files", tags=["文件"])
 api_router.include_router(common.health.router, prefix="/common", tags=["common"])
 api_router.include_router(assistant.assistant_router, prefix="/assistant", tags=["智能助手"])
 
-# 智能体中心（一人一智能体 + 主管任务闭环）
+# 智能体中心（智能体目录 + 勾选式团队）
 api_router.include_router(agent.router, prefix="/agents", tags=["智能体中心"])
 
 # Purchase center

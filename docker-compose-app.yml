@@ -57,7 +57,8 @@ services:
       GATEWAY_HUB_TIMEOUT_S: ${GATEWAY_HUB_TIMEOUT_S:-20}
       EXECUTION_QUERY_AGENT_BASE_URL: ${EXECUTION_QUERY_AGENT_BASE_URL:-}
       EXECUTION_REASONING_AGENT_BASE_URL: ${EXECUTION_REASONING_AGENT_BASE_URL:-}
-      # app 端本地助手仍通过网关 /admin/run 调 query/reasoning，需与主服务器一致
+      EXECUTION_WRITE_AGENT_BASE_URL: ${EXECUTION_WRITE_AGENT_BASE_URL:-}
+      # app 端本地助手仍通过网关 /admin/run 调 query/reasoning/写，需与主服务器一致
       AGENT_ADMIN_TOKEN: ${AGENT_ADMIN_TOKEN:-}
     extra_hosts:
       - "aeos-hub.test:${AEOS_HUB_IP:-192.168.0.23}"

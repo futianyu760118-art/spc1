@@ -28,6 +28,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# 订单写操作注册表唯一源在 agents/shared（构建时经 --build-context agents_shared 注入）
+COPY --from=agents_shared order-write-operations.json /app/app/services/order/write_operations.json
+
 # 文件存储目录（会被 docker-compose volume 挂载覆盖）
 RUN mkdir -p /app/uploads
 

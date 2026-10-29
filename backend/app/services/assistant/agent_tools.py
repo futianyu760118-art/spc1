@@ -21,6 +21,11 @@ from app.services.hub_client import (
 )
 from app.services.assistant.tool_registry import register_tool
 from app.services.assistant.hub_reporter import now_iso, report_assistant_event
+from app.services.order.write_registry import (
+    ASSISTANT_FIELDS,
+    ASSISTANT_OPERATIONS,
+    DEFAULT_ASSISTANT_OPERATION,
+)
 from app.services.assistant.task_router import (
     ORDER_ALLOWED_FIELDS,
     QUERY_CATALOG,
@@ -35,14 +40,12 @@ AGENT_TOOL_LABELS = {
     "call_reasoning_agent": "推理智能体",
     "call_order_agent": "订单智能体",
     "hub_query": "Hub 外部查询",
-    "list_my_subordinates": "直属子智能体",
-    "delegate_task": "子智能体调用",
 }
 
 CAPABILITY_BY_TOOL = {
     "call_query_agent": "query_control_platform",
     "call_reasoning_agent": "reason_control_platform",
-    "call_order_agent": "update_control_platform_order",
+    "call_order_agent": "write_control_platform",
     "hub_query": "hub_query",
 }
 
@@ -60,7 +63,7 @@ TOOL_TIMEOUT_S = {
     "hub_query": 30.0,
 }
 
-# 写确认前读取订单当前值的 4 个字段（与订单智能体字段白名单一致）
+# 写确认前读取订单当前值的字段（注册表 assistant 操作字段白名单）
 ORDER_READBACK_FIELDS = list(ORDER_ALLOWED_FIELDS)
 
 
@@ -76,6 +79,10 @@ def _query_tool_schema() -> Dict[str, Any]:
             "params": {
                 "type": "object",
                 "description": "查询参数，只放用户消息中可确定的筛选条件，不要编造",
+            },
+            "member_id": {
+                "type": "integer",
+                "description": "团队内承接该任务的智能体编号；同能力仅一个成员时可省略",
             },
         },
         "required": ["path"],
@@ -96,26 +103,50 @@ def _reasoning_tool_schema() -> Dict[str, Any]:
                 "type": "string",
                 "description": "业务对象锚点，格式 business://order/<订单号>（品质分析用 business://batch/<批次号>）",
             },
+            "member_id": {
+                "type": "integer",
+                "description": "团队内承接该任务的智能体编号；同能力仅一个成员时可省略",
+            },
         },
         "required": ["task_type", "prompt", "businessObjectRef"],
     }
 
 
+def _order_tool_titles() -> str:
+    return "、".join(op["title"] for op in ASSISTANT_OPERATIONS)
+
+
+def _order_tool_description() -> str:
+    return (
+        f"调用订单智能体：{_order_tool_titles()}。"
+        "写操作不可撤销，执行前必须经用户确认，系统会先展示旧值→新值。"
+    )
+
+
 def _order_tool_schema() -> Dict[str, Any]:
+    field_properties = {
+        field["wire"]: {"type": ["string", "null"], "description": "YYYY-MM-DD 或 null"}
+        for field in ASSISTANT_FIELDS
+    }
+    operation_labels = "；".join(
+        f"{op['name']}（{op['title']}）" for op in ASSISTANT_OPERATIONS
+    )
     return {
         "type": "object",
         "properties": {
+            "operation": {
+                "type": "string",
+                "enum": [op["name"] for op in ASSISTANT_OPERATIONS],
+                "description": f"写操作类型：{operation_labels}",
+            },
             "order_no": {"type": "string", "description": "销售订单号"},
             "fields": {
                 "type": "object",
                 "description": "要修改的字段，值必须是 YYYY-MM-DD 或 null（清空）；只允许白名单字段",
-                "properties": {
-                    field: {"type": ["string", "null"], "description": "YYYY-MM-DD 或 null"}
-                    for field in ORDER_ALLOWED_FIELDS
-                },
+                "properties": field_properties,
             },
         },
-        "required": ["order_no", "fields"],
+        "required": ["operation", "order_no", "fields"],
     }
 
 
@@ -146,7 +177,7 @@ def build_agent_tools_schema(
 ) -> List[Dict[str, Any]]:
     """生成 OpenAI function calling 工具清单；exclude 为运行时禁用工具名集合。
 
-    allowed_tools / query_paths / reasoning_types 由 AgentContext 能力解析提供，
+    allowed_tools / query_paths / reasoning_types 由 UserContext 团队能力解析提供，
     未提供时保持原有全量行为（兼容旧调用）。
     """
     excluded = exclude or set()
@@ -170,7 +201,7 @@ def build_agent_tools_schema(
     if include_order:
         specs.append({
             "name": "call_order_agent",
-            "description": "调用订单智能体：修改订单出货计划/发货完成/客户验货/上线时间。写操作不可撤销，执行前必须经用户确认，系统会先展示旧值→新值。",
+            "description": _order_tool_description(),
             "parameters": _order_tool_schema(),
         })
     if query_paths is not None:
@@ -202,7 +233,11 @@ def normalize_tool_input(tool_name: str, args: Optional[Dict[str, Any]]) -> Dict
             "constraints": {"read_only": True, "require_evidence": True},
         }
     if tool_name == "call_order_agent":
-        return {"order_no": args.get("order_no", ""), "fields": args.get("fields") or {}}
+        return {
+            "operation": args.get("operation") or DEFAULT_ASSISTANT_OPERATION,
+            "orderNo": args.get("order_no", ""),
+            "changes": {"fields": args.get("fields") or {}},
+        }
     return {"path": args.get("path"), "params": args.get("params") or {}}
 
 
@@ -427,10 +462,10 @@ def register_agent_tools() -> None:
     )(_noop_execute)
     register_tool(
         "call_order_agent",
-        "调用订单智能体：修改订单出货计划/发货完成/客户验货/上线时间（执行前需用户确认）",
+        f"调用订单智能体：{_order_tool_titles()}（执行前需用户确认）",
         _order_tool_schema(),
         display_name="订单智能体",
-        keywords=["修改", "写入", "出货计划", "交期"],
+        keywords=["修改", "写入", "合同交期", "承诺交期", "交期", "出货计划"],
         category="agent",
         read_only=False,
         requires_confirmation=True,

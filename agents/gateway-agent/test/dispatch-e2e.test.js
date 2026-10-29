@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const net = require("node:net");
 const path = require("node:path");
 const { startHub } = require("../../runtime/test/helpers/mock-hub");
 const {
@@ -13,7 +14,18 @@ const {
 
 const ENTRY = path.resolve(__dirname, "../src/index.js");
 
-function gatewayEnv(hubPort, stubPort) {
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address();
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+function gatewayEnv(hubPort, stubPort, adminPort = 0) {
   return {
     EXECUTION_AGENT_KEY: "gateway",
     EXECUTION_WS_URL: `ws://127.0.0.1:${hubPort}/execution-agent`,
@@ -33,7 +45,7 @@ function gatewayEnv(hubPort, stubPort) {
     CONTROL_PLATFORM_ORDER_APP_SECRET: "osk",
     GATEWAY_INTERNAL_TOKEN: "gw-token",
     AGENT_ADMIN_TOKEN: "admin-token",
-    HEALTH_CHECK_PORT: "0",
+    HEALTH_CHECK_PORT: String(adminPort),
     LOG_LEVEL: "error",
   };
 }
@@ -353,6 +365,71 @@ test("returns write result with handled_by and echoed request_id", async () => {
     assert.equal(writeRequest.body.operation, "order.update_note");
     assert.equal(writeRequest.body.idempotencyKey, "write-idem-1");
     assert.equal(writeRequest.body.request_id, "dispatch-write-1");
+  } finally {
+    if (agent) await stopAgent(agent);
+    await hub.close();
+    await stub.close();
+  }
+});
+
+test("admin local run executes write capability for the assistant", async () => {
+  const hub = startHub();
+  const stub = startStubPlatform({
+    writeData: {
+      ok: true,
+      operation: "order.update_schedule_fields",
+      target: { orderNo: "O-9" },
+      before: { promised_date: null },
+      after: { promised_date: "2026-11-20" },
+      appliedAt: "2026-10-28T16:00:00+08:00",
+      idempotent_replay: false,
+    },
+  });
+  let agent;
+  try {
+    const [hubPort, stubPort, adminPort] = await Promise.all([
+      hub.ready, stub.ready, freePort(),
+    ]);
+    agent = spawnAgent({ entry: ENTRY, env: gatewayEnv(hubPort, stubPort, adminPort) });
+    await waitUntil(() => hub.messages.some((message) => message.type === "register"));
+    await waitUntil(async () => {
+      try {
+        const res = await fetch(`http://127.0.0.1:${adminPort}/healthz`);
+        return res.status === 200 || res.status === 503;
+      } catch {
+        return false;
+      }
+    });
+
+    const response = await fetch(`http://127.0.0.1:${adminPort}/admin/run`, {
+      method: "POST",
+      headers: { "x-admin-token": "admin-token", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        capability: "write_control_platform",
+        input: {
+          operation: "order.update_schedule_fields",
+          orderNo: "O-9",
+          changes: { fields: { promised_date: "2026-11-20" } },
+          idempotencyKey: "assistant-idem-1",
+        },
+        actorToken: "assistant-actor-token",
+        requestId: "assistant-req-1",
+      }),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 200, `admin/run 失败：${JSON.stringify(payload)}`);
+    assert.equal(payload.ok, true);
+    assert.equal(payload.result.operation, "order.update_schedule_fields");
+    assert.deepEqual(payload.result.after, { promised_date: "2026-11-20" });
+
+    const writeRequest = stub.requests.find(
+      (request) => request.method === "PUT" && request.path.endsWith("/write"),
+    );
+    assert.ok(writeRequest);
+    assert.equal(writeRequest.body.operation, "order.update_schedule_fields");
+    assert.deepEqual(writeRequest.body.changes, { fields: { promised_date: "2026-11-20" } });
+    assert.equal(writeRequest.body.idempotencyKey, "assistant-idem-1");
+    assert.equal(writeRequest.body.request_id, "assistant-req-1");
   } finally {
     if (agent) await stopAgent(agent);
     await hub.close();

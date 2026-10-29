@@ -1,9 +1,12 @@
 "use strict";
 
-const { createHttpClient, createRemoteConfig } = require("@spc/execution-agent-runtime");
+const {
+  createHttpClient,
+  createRemoteConfig,
+  createOrderWriteAdapter,
+} = require("@spc/execution-agent-runtime");
 const { createAdapter: createQueryAdapter } = require("../../query-agent/src/query-adapter");
 const { createAdapter: createReasoningAdapter } = require("../../reasoning-agent/src/reasoning-adapter");
-const { createAdapter: createOrderWriteAdapter } = require("./order-write-adapter");
 
 async function buildAdapters({ query, reasoning, orderWrite, log }) {
   const queryHttp = createHttpClient(query, log);

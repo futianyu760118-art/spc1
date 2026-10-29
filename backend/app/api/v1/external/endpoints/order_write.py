@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_write_db
 from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.schemas.common import ResponseModel
 from app.services.order.write_service import OrderWriteError, execute_order_write
@@ -43,7 +43,7 @@ async def order_write(
     order_no: str,
     body: OrderWriteIn,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_write_db),
     key: DataSupplyApiKey = Depends(external_auth("orders.write")),
 ):
     operator = await resolve_operator(db, request)

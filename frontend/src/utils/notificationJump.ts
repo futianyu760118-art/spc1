@@ -28,8 +28,8 @@ export function notificationJump(item: NotificationJumpItem): NotificationJumpTa
       path: `/orders/${encodeURIComponent(refNo)}`,
     }
   }
-  if (item.type === 'agent_config' || item.type === 'agent_hierarchy') {
-    return { label: '我的智能体', path: '/agents/me' }
+  if (item.type === 'agent_config' || item.type === 'agent_hierarchy' || item.type === 'agent_team') {
+    return { label: '智能体中心', path: '/agents/team' }
   }
   return null
 }

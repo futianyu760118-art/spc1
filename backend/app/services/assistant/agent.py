@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.agent.context import AgentContext
+from app.services.agent.context import UserContext
 from app.services.agent.prompt import build_agent_system_prompt
 from app.services.ai import ai_service, ChatMessage, ChatOptions
 from app.services.ai_config import (
@@ -50,12 +50,9 @@ INTENT_RECOGNITION_PROMPT = """你是一个意图识别助手。分析用户的�
    - "有哪些逾期的订单？"
    - "显示所有高风险订单"
    - "订单HJ202604-0018-0086齐套了吗？"
-    - "分析这个订单的交期风险"
-    - "把订单HJ202604-0018-0086的出货计划改到2026-11-01"
-    - "查一下这个产品的BOM明细"
-    - "让张三跟进订单HJ202604-0018-0086的交期，周五前给我结论"
-    - "查看我的任务 / 团队这周怎么样 / 催办一下这个任务"
-    - "把李四加进我的团队，并给他配置订单查询能力"
+   - "分析这个订单的交期风险"
+   - "把订单HJ202604-0018-0086的出货计划改到2026-11-01"
+   - "查一下这个产品的BOM明细"
 
 2. ANALYZE_HISTORY - 仅分析聊天历史中已有的数据（不需要调用智能体）
    示例：
@@ -73,7 +70,6 @@ INTENT_RECOGNITION_PROMPT = """你是一个意图识别助手。分析用户的�
 - 如果用户明确提到要"查询"、"搜索"、"显示"、"找"某个具体的订单号、供应商、物料等，判断为 QUERY_DATA
 - 如果用户要求"分析"、"评估"某业务对象的风险/交期/齐套/品质/生产，判断为 QUERY_DATA
 - 如果用户要求修改订单数据（出货计划、发货完成、验货、上线时间），判断为 QUERY_DATA
-- 如果用户提到任务、派活、团队成员、汇报、催办、改派、退回等主管/员工任务闭环操作，判断为 QUERY_DATA
 - 如果用户使用"这些"、"上面"、"刚才"等指代词，且要求对已有数据做分析、总结、对比，判断为 ANALYZE_HISTORY
 - 其他情况判断为 GENERAL_CHAT
 
@@ -107,8 +103,6 @@ async def _recognize_intent(
 ) -> str:
     try:
         intent_system = intent_prompt or INTENT_RECOGNITION_PROMPT
-        if intent_prompt:
-            intent_system += "\n\n补充：涉及任务、派活、团队成员、汇报、催办、改派、退回等操作时判断为 QUERY_DATA。"
         messages = [ChatMessage(role="system", content=intent_system)]
         recent_history = history[-6:] if len(history) > 6 else history
         for msg in recent_history:
@@ -154,7 +148,7 @@ async def run(
     conversation_history: Optional[List[Dict[str, Any]]] = None,
     trace_id: str = "",
     user_id: str = "",
-    agent_context: Optional[AgentContext] = None,
+    user_context: Optional[UserContext] = None,
     conversation_id: Optional[int] = None,
 ) -> AssistantReply:
     """运行助手：意图识别 → 闲聊直答 / 任务交本地编排器（ReAct）"""
@@ -164,8 +158,8 @@ async def run(
     rt = await _load_runtime_config(db)
     disabled = set(rt.get("disabled_tools") or [])
     system_prompt = resolve_system_prompt(rt.get("system_prompt"), disabled)
-    if agent_context is not None:
-        system_prompt = build_agent_system_prompt(system_prompt, agent_context)
+    if user_context is not None:
+        system_prompt = build_agent_system_prompt(system_prompt, user_context)
     intent_prompt = (rt.get("intent_prompt") or "").strip() or None
     model_override = (rt.get("model_name") or "").strip() or None
 
@@ -298,7 +292,7 @@ async def run(
             disabled_tools=disabled, session_id=session_id, trace_id=trace_id, user_id=user_id,
             run_logger=run_logger, provider_name=provider_name,
             stream_final=False,
-            db=db, agent_context=agent_context,
+            db=db, user_context=user_context,
         ):
             if event == "delta":
                 text += data.get("text") or ""

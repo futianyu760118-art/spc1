@@ -1,4 +1,4 @@
-"""智能体会话与消息持久化（SQL 为事实来源，Redis 为热缓存）。"""
+"""用户会话与消息持久化（SQL 为事实来源，Redis 为热缓存）。"""
 
 from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -11,7 +11,6 @@ class AgentConversation(Base):
     __tablename__ = "agent_conversation"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    agent_id = Column(BigInteger, ForeignKey("agent.id"), nullable=False)
     user_id = Column(Integer, nullable=False)
     task_id = Column(BigInteger, nullable=True)
     title = Column(String(200), nullable=True)
@@ -21,7 +20,7 @@ class AgentConversation(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     __table_args__ = (
-        Index("ix_agent_conversation_agent_last", "agent_id", "last_message_at"),
+        Index("ix_agent_conversation_user_last", "user_id", "last_message_at"),
         Index("ix_agent_conversation_task", "task_id"),
     )
 

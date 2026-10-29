@@ -13,7 +13,25 @@ function buildConfigs() {
       agentVersion: require("../package.json").version,
       appKeyEnv: "CONTROL_PLATFORM_QUERY_APP_KEY",
       appSecretEnv: "CONTROL_PLATFORM_QUERY_APP_SECRET",
-      configDefaults: { queryTimeoutMs: 15000, reasoningTimeoutMs: 180000 },
+      configDefaults: {
+        queryTimeoutMs: 15000,
+        reasoningTimeoutMs: 180000,
+        resolverTimeoutMs: 30000,
+        // 看门狗：0 关闭对应检测项（自愈靠 Docker restart 策略拉起）
+        watchdogRunMaxMs: 900000,
+        watchdogSelfPingIntervalMs: 30000,
+        watchdogSelfPingTimeoutMs: 5000,
+        watchdogSelfPingMaxFailures: 3,
+        watchdogLoopStallMs: 10000,
+      },
+      envIntDefaults: {
+        GATEWAY_RESOLVER_TIMEOUT_MS: "resolverTimeoutMs",
+        WATCHDOG_RUN_MAX_MS: "watchdogRunMaxMs",
+        WATCHDOG_SELF_PING_INTERVAL_MS: "watchdogSelfPingIntervalMs",
+        WATCHDOG_SELF_PING_TIMEOUT_MS: "watchdogSelfPingTimeoutMs",
+        WATCHDOG_SELF_PING_MAX_FAILURES: "watchdogSelfPingMaxFailures",
+        WATCHDOG_LOOP_STALL_MS: "watchdogLoopStallMs",
+      },
     },
   });
 
@@ -54,7 +72,7 @@ function buildConfigs() {
       agentVersion: gateway.agentVersion,
       appKeyEnv: "CONTROL_PLATFORM_ORDER_APP_KEY",
       appSecretEnv: "CONTROL_PLATFORM_ORDER_APP_SECRET",
-      configDefaults: { writeTimeoutMs: 15000 },
+      configDefaults: { writeTimeoutMs: 30000 },
       envIntDefaults: { CONTROL_PLATFORM_ORDER_TIMEOUT_MS: "writeTimeoutMs" },
     },
   });
