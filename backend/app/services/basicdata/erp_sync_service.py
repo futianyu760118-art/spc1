@@ -1473,16 +1473,33 @@ class ERPSyncService:
                         select(Material).where(Material.material_code == material_code)
                     )
                     existing = result.scalar_one_or_none()
+                    # ERP 可能修改物料编码，此时按编码查不到旧行；用稳定的
+                    # erp_material_id 兜底匹配，否则插入会撞 erp_material_id 唯一约束。
+                    matched_by_erp_id = False
+                    if existing is None and row_dict.get("erp_material_id") is not None:
+                        result = await self.spc_db.execute(
+                            select(Material).where(
+                                Material.erp_material_id == row_dict["erp_material_id"]
+                            )
+                        )
+                        existing = result.scalar_one_or_none()
+                        matched_by_erp_id = existing is not None
 
                     if existing:
                         if getattr(existing, "data_source", None) in ("erp", None, ""):
+                            old_code = existing.material_code
                             for k, v in row_dict.items():
-                                if k == "material_code":
+                                if k == "material_code" and not matched_by_erp_id:
                                     continue
                                 if getattr(existing, k, None) != v and v is not None:
                                     setattr(existing, k, v)
                             if hasattr(existing, "data_source"):
                                 existing.data_source = "erp"
+                            if matched_by_erp_id and old_code != material_code:
+                                logger.info(
+                                    f"物料编码变更: {old_code} -> {material_code} "
+                                    f"(erp_material_id={row_dict.get('erp_material_id')})"
+                                )
                             stats["updated"] += 1
                         else:
                             stats["skipped"] += 1
