@@ -25,8 +25,9 @@ const WIN_HEIGHT = 620
 const FloatingAssistant: React.FC = () => {
   const [open, setOpen] = useState(false)
   const [conversationList, setConversationList] = useState<any[]>([])
+  const [teamAgents, setTeamAgents] = useState<Array<{ id: number; name: string; capabilities?: Array<{ code: string; name: string }> }>>([])
   const {
-    messages, loading, send, skills, loadSkills, clearMessages, stopStreaming,
+    messages, loading, send, clearMessages, stopStreaming,
     confirmWrite, cancelWrite, loadConversation,
   } = useAssistantChat()
 
@@ -40,10 +41,11 @@ const FloatingAssistant: React.FC = () => {
   const idleTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
-    if (open && skills.length === 0) {
-      loadSkills()
-    }
-  }, [open, skills.length, loadSkills])
+    if (!open) return
+    agentApi.team()
+      .then((res: any) => setTeamAgents(res.data?.items || []))
+      .catch(() => setTeamAgents([]))
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -256,7 +258,7 @@ const FloatingAssistant: React.FC = () => {
             <ChatPanel
               messages={messages}
               loading={loading}
-              skills={skills}
+              teamAgents={teamAgents}
               onSend={(text) => send(text)}
               onClear={clearMessages}
               onStop={stopStreaming}

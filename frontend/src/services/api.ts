@@ -775,7 +775,6 @@ export const assistantApi = {
       }),
     })
   },
-  listSkills: () => api.get('/assistant/skills'),
   confirmConfirmation: (confirmationId: string) =>
     api.post(`/assistant/confirmations/${confirmationId}/confirm`, null, { timeout: 180000 }),
   cancelConfirmation: (confirmationId: string) =>

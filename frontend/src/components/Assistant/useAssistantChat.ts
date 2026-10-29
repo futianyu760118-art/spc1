@@ -62,13 +62,6 @@ export interface WriteConfirmation {
   error?: string
 }
 
-export interface Skill {
-  intent: string
-  name: string
-  description: string
-  keywords: string[]
-}
-
 const CONFIRM_COMMANDS = new Set(['确认', '确认执行', '确定', '确定执行'])
 const CANCEL_COMMANDS = new Set(['取消', '取消操作', '不确认'])
 const NO_PENDING_CONFIRMATION_REPLY = '当前没有待确认的操作。如需修改订单或执行任务动作，请先发起。'
@@ -95,7 +88,6 @@ function mergeConfirmation(
 export function useAssistantChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(false)
-  const [skills, setSkills] = useState<Skill[]>([])
   const sessionIdRef = useRef<string>('')
   const conversationIdRef = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -447,13 +439,6 @@ export function useAssistantChat() {
     }
   }, [loading, messages, confirmWrite, cancelWrite, handleSSEEvent])
 
-  const loadSkills = useCallback(async () => {
-    try {
-      const res: any = await assistantApi.listSkills()
-      setSkills(res.data || [])
-    } catch { /* ignore */ }
-  }, [])
-
   const loadConversation = useCallback(async (conversationId: number) => {
     const res: any = await agentApi.conversation(conversationId)
     const historyMessages = (res.data?.messages || [])
@@ -493,7 +478,7 @@ export function useAssistantChat() {
   }, [])
 
   return {
-    messages, loading, send, skills, loadSkills, clearMessages, stopStreaming,
+    messages, loading, send, clearMessages, stopStreaming,
     confirmWrite, cancelWrite, loadConversation,
   }
 }

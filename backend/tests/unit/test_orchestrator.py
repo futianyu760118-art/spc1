@@ -579,3 +579,15 @@ async def test_notify_write_result_create_uses_write_result_biz_no(monkeypatch):
         biz_type="order", action="create", biz_no="", operator_user_id="u1",
     )
     assert calls and calls[0]["biz_no"] == "HJ-NEW"
+
+
+def test_new_step_prefers_member_label_and_falls_back_to_tool_label():
+    """团队制：成员路由命中时步骤展示承接成员名，未命中回退工具类型标签。"""
+    step = orchestrator._new_step(
+        1, "call_query_agent", {"path": "/external/orders/list"},
+        status="running", summary="查询 销售订单列表", agent_label="订单专员",
+    )
+    assert step["agent_label"] == "订单专员"
+
+    fallback = orchestrator._new_step(2, "call_query_agent", {}, status="blocked")
+    assert fallback["agent_label"] == "查询智能体"

@@ -82,7 +82,7 @@ export default function MyAgent() {
             <div style={{
               width: 52, height: 52, borderRadius: 15, display: 'flex', alignItems: 'center',
               justifyContent: 'center', background: 'linear-gradient(135deg,#6366f1,#a855f7)', color: '#fff',
-              fontSize: 24,
+              fontSize: 'var(--ac-icon-lg)',
             }}>
               <RobotOutlined />
             </div>

@@ -342,11 +342,13 @@ def _new_step(
     error: Optional[str] = None,
     item_count: Optional[int] = None,
     duration_ms: Optional[float] = None,
+    agent_label: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         "step_id": step_id,
         "tool": tool_name,
-        "agent_label": AGENT_TOOL_LABELS.get(tool_name, tool_name),
+        # 团队制：成员路由命中时展示承接成员名，否则回退工具类型标签
+        "agent_label": agent_label or AGENT_TOOL_LABELS.get(tool_name, tool_name),
         "capability": CAPABILITY_BY_TOOL.get(tool_name, ""),
         "path": args.get("path") if tool_name == "call_query_agent" else None,
         "task_type": args.get("task_type") if tool_name == "call_reasoning_agent" else None,
@@ -778,7 +780,10 @@ async def run_reaction(
             )
 
         if block_reason:
-            step = _new_step(_next_step_id(), tool_name, args, status="blocked", error=block_reason)
+            step = _new_step(
+                _next_step_id(), tool_name, args, status="blocked", error=block_reason,
+                agent_label=member.display_name if member else None,
+            )
             steps.append(step)
             yield ("step_started", {"step": step})
             yield ("step_completed", {"step": step})
@@ -913,7 +918,10 @@ async def run_reaction(
             return
 
         # ── 只读工具直接执行 ──
-        step = _new_step(_next_step_id(), tool_name, args, status="running", summary=_step_summary(tool_name, args))
+        step = _new_step(
+            _next_step_id(), tool_name, args, status="running", summary=_step_summary(tool_name, args),
+            agent_label=member.display_name if member else None,
+        )
         step["handled_by"] = member.display_name if member else None
         steps.append(step)
         yield ("step_started", {"step": step})

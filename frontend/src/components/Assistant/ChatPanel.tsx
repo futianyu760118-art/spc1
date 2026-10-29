@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react'
 import { Input, Button, Space, Tag, Typography, Collapse, Descriptions, Tooltip, Alert } from 'antd'
-import { SendOutlined, ClearOutlined, ThunderboltOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined } from '@ant-design/icons'
+import { SendOutlined, ClearOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined } from '@ant-design/icons'
 import Markdown from '../Markdown'
-import { ChatMessage, Skill, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
+import { ChatMessage, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
 
 const { Text } = Typography
 
@@ -29,10 +29,16 @@ const getProviderLabel = (provider?: string) => {
   return labels[provider] || provider
 }
 
+interface TeamAgent {
+  id: number
+  name: string
+  capabilities?: Array<{ code: string; name: string }>
+}
+
 interface Props {
   messages: ChatMessage[]
   loading: boolean
-  skills: Skill[]
+  teamAgents: TeamAgent[]
   onSend: (text: string) => void
   onClear: () => void
   onStop?: () => void
@@ -198,8 +204,9 @@ const ConfirmationCard: React.FC<{
   )
 }
 
-const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear, onStop, onConfirm, onCancelConfirmation }) => {
+const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onClear, onStop, onConfirm, onCancelConfirmation }) => {
   const [inputValue, setInputValue] = useState('')
+  const inputRef = useRef<any>(null)
   const shouldAutoScrollRef = useRef(true)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -264,60 +271,29 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
       >
         {messages.length === 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100%', textAlign: 'center', padding: '24px 8px' }}>
-            <div style={{
-              width: 64, height: 64, borderRadius: 20,
-              background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 12px 28px rgba(59,130,246,.35)',
-              marginBottom: 16,
-            }}>
-              <RobotOutlined style={{ fontSize: 32, color: '#fff' }} />
-            </div>
             <div style={{ fontSize: 16, fontWeight: 600, color: '#1e293b' }}>您好，我是 AI 智能助手</div>
             <div style={{ fontSize: 12, marginTop: 6, color: '#94a3b8' }}>
               不仅能查询数据，还能给出行动建议
             </div>
 
-            {/* 推荐提问 */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 18, width: '100%', maxWidth: 320 }}>
-              {[
-                { icon: '📋', text: '今日简报', q: '今天有什么需要关注的？' },
-                { icon: '⚠️', text: '逾期订单', q: '有哪些逾期订单？' },
-                { icon: '🔔', text: '采购预警', q: '采购有什么风险？' },
-              ].map(item => (
-                <div
-                  key={item.text}
-                  onClick={() => onSend(item.q)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '10px 12px', borderRadius: 12,
-                    background: '#fff', border: '1px solid #e2e8f0',
-                    cursor: 'pointer', textAlign: 'left',
-                    transition: 'all .15s ease',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#93c5fd'; e.currentTarget.style.background = '#f0f9ff' }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.background = '#fff' }}
-                >
-                  <span style={{ fontSize: 18 }}>{item.icon}</span>
-                  <span style={{ fontSize: 13, color: '#334155' }}>{item.text}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* 技能快捷指令 */}
-            {skills.length > 0 && (
+            {/* 我的团队成员：点击填入并聚焦输入框 */}
+            {teamAgents.length > 0 && (
               <>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 18, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <ThunderboltOutlined style={{ color: '#f59e0b' }} /> 快捷指令
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 18, marginBottom: 8 }}>
+                  我的团队成员
                 </div>
                 <Space wrap size={[6, 6]} style={{ justifyContent: 'center', maxWidth: 320 }}>
-                  {skills.map(s => (
+                  {teamAgents.map(agent => (
                     <Tag
-                      key={s.intent}
+                      key={agent.id}
+                      title={(agent.capabilities || []).map(c => c.name).join('、')}
                       style={{ cursor: 'pointer', fontSize: 12, borderRadius: 12, padding: '2px 10px', border: '1px solid #dbeafe', background: '#eff6ff', color: '#1d4ed8', margin: 0 }}
-                      onClick={() => onSend(s.keywords[0] || s.name)}
+                      onClick={() => {
+                        setInputValue(prev => prev.trim() ? prev : `请用「${agent.name}」`)
+                        inputRef.current?.focus()
+                      }}
                     >
-                      {s.name}
+                      {agent.name}
                     </Tag>
                   ))}
                 </Space>
@@ -526,6 +502,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
       <div style={{ padding: '10px 12px', borderTop: '1px solid #eef2f7', background: '#fff' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f1f5f9', borderRadius: 12, padding: '4px 4px 4px 12px', border: '1px solid #e2e8f0' }}>
           <Input
+            ref={inputRef}
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
