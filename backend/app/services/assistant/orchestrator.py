@@ -17,11 +17,15 @@ import time
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from sqlalchemy import select
+
 from app.core.config import get_settings
 from app.models.agent.call import AgentCallLog
+from app.models.agent.conversation import AgentConversation, AgentMessage
 from app.models.basicdata.user import SysUser
 from app.services.ai import ai_service, ChatMessage, ChatOptions
 from app.services.ai_config import ASSISTANT_SCOPE, get_scope_config, render_system_prompt
+from app.services.agent import conversation as agent_conversation
 from app.services.agent.actor import issue_actor_token
 from app.services.agent.business import resolve_business_object
 from app.services.agent.caller import build_caller
@@ -29,6 +33,7 @@ from app.services.agent.capabilities import (
     CONFIGURABLE_CAPABILITIES,
     allowed_query_paths,
     allowed_reasoning_types,
+    allowed_write_fields,
 )
 from app.services.agent.context import UserContext, load_user_context
 from app.services.assistant import session_store, write_confirmation
@@ -210,6 +215,7 @@ def build_default_system_prompt() -> str:
 
 使用规则：
 - 自主规划步骤：需要数据时先查询，需要结论时先推理分析，需要改数据时先查旧值再发起写操作
+- 数据较多时可以自动翻页（params 传 page / page_size，page_size 最大 200），但不要重复拉取完全相同的页码与参数
 - 不要重复调用完全相同参数的工具；同工具换参数可以继续查
 - 查询结果为空时如实告知，不要虚构数据
 
@@ -365,12 +371,93 @@ def _step_summary(tool_name: str, args: Dict[str, Any]) -> str:
     if tool_name == "call_query_agent":
         path = args.get("path") or ""
         name = next((c["name"] for c in QUERY_CATALOG if c["path"] == path), path)
-        return f"查询 {name}"
+        params = args.get("params") if isinstance(args.get("params"), dict) else {}
+        page = params.get("page")
+        suffix = f"（第{page}页）" if page else ""
+        return f"查询 {name}{suffix}"
     if tool_name == "call_reasoning_agent":
         return f"分析 {args.get('task_type') or ''}"
     if tool_name == "hub_query":
         return f"查询外部系统 {args.get('capability') or ''}"
+    if tool_name == "create_feedback":
+        return f"提交反馈 {args.get('title') or ''}"
+    if tool_name == "revoke_feedback":
+        return f"撤销反馈 #{args.get('feedback_id') or ''}"
     return f"修改订单 {args.get('order_no') or ''}"
+
+
+PLAN_MAX_STEPS = 5
+PLAN_STEP_MAX_CHARS = 40
+PLAN_TIMEOUT_S = 19
+PLAN_MAX_TOKENS = 256
+CONFIRMATION_HISTORY_SCAN_LIMIT = 20
+_PLAN_LINE_PREFIX = re.compile(r"^\s*(?:[-*•]\s*|\d+[.、)]\s*)+")
+
+
+async def _generate_plan(user_context: UserContext, message: str) -> List[str]:
+    """生成 3~5 步执行计划；失败/超时返回空列表（不阻塞任务）。"""
+    capability_names = [
+        CONFIGURABLE_CAPABILITIES[code].name
+        for code in sorted(user_context.effective_capabilities)
+        if code in CONFIGURABLE_CAPABILITIES
+    ]
+    if not capability_names:
+        return []
+    prompt = (
+        "你是任务规划助手。根据用户问题与可用能力，给出 3~5 步执行计划。\n"
+        "要求：每行一步，中文短句（不超过 20 字），不要编号和多余解释；"
+        "只能使用下列能力，缺失的能力不要写进计划。\n"
+        f"可用能力：{'、'.join(capability_names)}\n"
+        f"用户问题：{message}"
+    )
+    try:
+        text = await ai_service.chat(
+            [ChatMessage(role="user", content=prompt)],
+            ChatOptions(temperature=0.2, max_tokens=PLAN_MAX_TOKENS, timeout=PLAN_TIMEOUT_S),
+        )
+    except Exception as e:
+        logger.warning(f"[orchestrator] 执行计划生成失败: {e}")
+        return []
+    steps: List[str] = []
+    for line in (text or "").splitlines():
+        cleaned = _PLAN_LINE_PREFIX.sub("", line).strip()
+        if not cleaned or cleaned in steps:
+            continue
+        steps.append(cleaned[:PLAN_STEP_MAX_CHARS])
+        if len(steps) >= PLAN_MAX_STEPS:
+            break
+    return steps
+
+
+def _matched_capability(tool_name: str, args: Dict[str, Any], member) -> Optional[str]:
+    """按本次调用入参反解命中的能力码（审计归属），不按目录字母序猜。"""
+    if member is None:
+        return None
+    if tool_name == "call_query_agent":
+        path = args.get("path")
+        return next(
+            (code for code, cap in CONFIGURABLE_CAPABILITIES.items()
+             if path and path in cap.query_paths and code in member.capabilities),
+            None,
+        )
+    if tool_name == "call_reasoning_agent":
+        task_type = args.get("task_type")
+        return next(
+            (code for code, cap in CONFIGURABLE_CAPABILITIES.items()
+             if task_type and task_type in cap.reasoning_types and code in member.capabilities),
+            None,
+        )
+    if tool_name == "call_order_agent":
+        fields = args.get("fields")
+        wires = fields.keys() if isinstance(fields, dict) else ()
+        return next(
+            (code for wire in wires for code, cap in CONFIGURABLE_CAPABILITIES.items()
+             if wire in cap.write_fields and code in member.capabilities),
+            None,
+        )
+    if tool_name in ("create_feedback", "revoke_feedback"):
+        return "write.feedback_create" if "write.feedback_create" in member.capabilities else None
+    return None
 
 
 def _assistant_tool_msg(
@@ -526,6 +613,7 @@ async def run_reaction(
     gap_notify: bool = True,
     db: Any = None,
     user_context: Optional[UserContext] = None,
+    with_plan: bool = True,
 ) -> AsyncIterator[Tuple[str, Dict[str, Any]]]:
     """AI 自主 ReAct 循环：LLM 逐步决定调用哪个智能体，编排器负责校验、执行、拦截与审计。
 
@@ -533,6 +621,7 @@ async def run_reaction(
     step_id_base 用于写确认后的续跑，使同一任务的 stepId 延续不重号。
 
     事件流：
+    - plan_started / plan（任务执行计划，先于首个 step_started）
     - thinking / delta / cards / confirmation_required / cancelled / error
     - step_started / step_completed（步骤时间线）
     - done（终态，携带 steps / stats / diagnostics / partial / failed）
@@ -567,8 +656,9 @@ async def run_reaction(
             role=user_context.role_code,
         )
     effective = user_context.effective_capabilities if user_context else None
+    write_fields = allowed_write_fields(effective) if effective is not None else None
     include_order = include_order_tool and (
-        effective is None or "write.order_schedule" in effective
+        effective is None or bool(write_fields)
     )
     tools_schema = build_agent_tools_schema(
         include_order=include_order,
@@ -576,6 +666,7 @@ async def run_reaction(
         allowed_tools=user_context.allowed_tools if user_context else None,
         query_paths=allowed_query_paths(effective) if effective is not None else None,
         reasoning_types=allowed_reasoning_types(effective) if effective is not None else None,
+        order_fields=write_fields,
     )
 
     messages: List[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
@@ -622,6 +713,11 @@ async def run_reaction(
             yield ("delta", {"text": text})
         yield ("done", _done_payload(text))
         return
+
+    # 任务执行计划：LLM 轻量预规划，先于工具执行为用户呈现"打算怎么做"；失败则空列表隐藏卡片
+    if with_plan and user_context is not None:
+        yield ("plan_started", {})
+        yield ("plan", {"steps": await _generate_plan(user_context, message)})
 
     total_start = time.perf_counter()
     agent_calls = 0
@@ -715,11 +811,13 @@ async def run_reaction(
         if tool_name not in stats["tools_called"]:
             stats["tools_called"].append(tool_name)
 
-        # ── 成员路由：query/reasoning 工具按团队成员定位承接者（调用审计与 handled_by 展示用）──
+        # ── 成员路由：query/reasoning/write/feedback 工具按团队成员定位承接者（调用审计与展示用）──
         member = None
         member_error = None
-        member_capability = None
-        if user_context is not None and tool_name in ("call_query_agent", "call_reasoning_agent"):
+        if user_context is not None and tool_name in (
+            "call_query_agent", "call_reasoning_agent", "call_order_agent",
+            "create_feedback", "revoke_feedback",
+        ):
             capability_codes = {
                 code for code, cap in CONFIGURABLE_CAPABILITIES.items()
                 if tool_name in cap.tool_names
@@ -742,12 +840,6 @@ async def run_reaction(
                     member = candidate
             elif candidates:
                 member = candidates[0]
-            if member is not None:
-                # 审计记录本次调用命中的那个能力（多能力成员取目录序首个交集）
-                member_capability = next(
-                    (code for code in sorted(capability_codes) if code in member.capabilities),
-                    None,
-                )
 
         # ── 闸门 2：步数与循环 ──
         tool_key = f"{tool_name}:{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}"
@@ -762,8 +854,19 @@ async def run_reaction(
             block_reason = "当前智能体没有该推理能力，请更换分析类型"
         elif member_error:
             block_reason = member_error
-        elif tool_name == "call_order_agent" and effective is not None and "write.order_schedule" not in effective:
-            block_reason = "当前智能体没有订单写入能力"
+        elif tool_name == "call_order_agent" and effective is not None:
+            fields_arg = args.get("fields")
+            if not isinstance(fields_arg, dict):
+                block_reason = "参数非法：fields 必须是对象"
+            else:
+                denied = sorted(set(fields_arg) - (write_fields or set()))
+                if not write_fields:
+                    block_reason = "当前智能体没有订单写入能力"
+                elif denied:
+                    block_reason = f"当前团队没有这些字段的写入能力：{'、'.join(denied)}"
+        elif tool_name in ("create_feedback", "revoke_feedback") and effective is not None \
+                and "write.feedback_create" not in effective:
+            block_reason = "当前团队没有创建问题反馈能力"
         elif tool_name == "hub_query" and effective is not None:
             block_reason = "Hub 跨系统查询首期未开放给个人智能体"
         elif agent_calls >= lim["max_agent_calls"]:
@@ -808,7 +911,11 @@ async def run_reaction(
         if tool_name == "call_order_agent":
             invalid = validate_tool_input(tool_name, args)
             if invalid:
-                step = _new_step(_next_step_id(), tool_name, args, status="blocked", error=f"参数非法：{invalid}")
+                step = _new_step(
+                    _next_step_id(), tool_name, args, status="blocked",
+                    error=f"参数非法：{invalid}",
+                    agent_label=member.display_name if member else None,
+                )
                 steps.append(step)
                 yield ("step_started", {"step": step})
                 yield ("step_completed", {"step": step})
@@ -833,6 +940,7 @@ async def run_reaction(
                 _next_step_id(), tool_name, args,
                 status="pending_confirmation",
                 summary=f"订单 {args.get('order_no')} 写操作等待用户确认",
+                agent_label=member.display_name if member else None,
             )
             steps.append(step)
             yield ("step_started", {"step": step})
@@ -935,6 +1043,7 @@ async def run_reaction(
             "operator_user_id": user_id, "trace_id": session_id,
             "hub_trace_id": trace_id, "caller": caller,
             "task_id": task_id, "step_id": step["step_id"],
+            "db": db, "user_context": user_context,
         }
         if actor_token:
             tool_kwargs["actor_token"] = actor_token
@@ -947,7 +1056,7 @@ async def run_reaction(
                     trace_id=trace_id,
                     caller_user_id=int(user_context.user.id),
                     callee_agent_id=int(member.agent_id) if member else None,
-                    capability=member_capability or CAPABILITY_BY_TOOL.get(tool_name, ""),
+                    capability=_matched_capability(tool_name, args, member) or CAPABILITY_BY_TOOL.get(tool_name, ""),
                     instruction_summary=json.dumps(args, ensure_ascii=False, default=str)[:500],
                     status="completed" if outcome.get("ok") else "failed",
                     result_summary=f"返回 {outcome.get('item_count') or 0} 条" if outcome.get("ok") else None,
@@ -1037,6 +1146,78 @@ async def _append_session_note(session_id: str, text: str) -> None:
         logger.warning(f"回填会话失败: {e}")
 
 
+_CONFIRMATION_STEP_STATUS = {
+    "cancelled": "cancelled",
+    "executed": "completed",
+    "failed": "failed",
+}
+
+
+def _conversation_id_from_session(session_id: str) -> Optional[int]:
+    parts = (session_id or "").split(":")
+    if len(parts) >= 2 and parts[-1].isdigit():
+        return int(parts[-1])
+    return None
+
+
+async def _persist_confirmation_outcome(
+    db: Any,
+    *,
+    session_id: str,
+    confirmation_id: str,
+    confirmation: Dict[str, Any],
+    content: str,
+    steps: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    """确认/取消结果落库：更新原确认消息的卡片与步骤状态，并追加结果消息，保证历史回看与实况一致。"""
+    if db is None or not session_id or not content:
+        return
+    conversation_id = _conversation_id_from_session(session_id)
+    if not conversation_id:
+        return
+    try:
+        conversation = await db.get(AgentConversation, conversation_id)
+        if not conversation:
+            return
+        step_status = _CONFIRMATION_STEP_STATUS.get(str(confirmation.get("status") or ""), "failed")
+        rows = (await db.execute(
+            select(AgentMessage)
+            .where(AgentMessage.conversation_id == conversation.id, AgentMessage.role == "assistant")
+            .order_by(AgentMessage.id.desc())
+            .limit(CONFIRMATION_HISTORY_SCAN_LIMIT)
+        )).scalars().all()
+        for row in rows:
+            results = row.tool_results if isinstance(row.tool_results, dict) else None
+            snapshot = (results or {}).get("confirmation")
+            if not isinstance(snapshot, dict) or snapshot.get("confirmation_id") != confirmation_id:
+                continue
+            merged = {**snapshot, **{k: v for k, v in confirmation.items() if v is not None}}
+            row.tool_results = {**results, "confirmation": merged}
+            if row.tool_calls:
+                row.tool_calls = [
+                    ({**step, "status": step_status}
+                     if step.get("tool") == "call_order_agent" and step.get("status") == "pending_confirmation"
+                     else step)
+                    for step in row.tool_calls
+                ]
+            break
+        await agent_conversation.append_message(
+            db, conversation, role="assistant", content=content,
+            tool_calls=[
+                {
+                    "tool": step.get("tool"), "agent_label": step.get("agent_label"),
+                    "status": step.get("status"), "summary": step.get("summary"),
+                    "path": step.get("path"), "task_type": step.get("task_type"),
+                    "error": step.get("error"), "duration_ms": step.get("duration_ms"),
+                }
+                for step in (steps or [])
+            ] or None,
+        )
+        await db.flush()
+    except Exception as e:
+        logger.warning(f"[orchestrator] 确认结果落库失败: {e}")
+
+
 async def _notify_write_result(
     *, record: Dict[str, Any], write_result: Any, fields: Dict[str, Any],
     biz_type: str, action: str, biz_no: str, operator_user_id: str,
@@ -1097,11 +1278,12 @@ async def _notify_write_result(
 
 
 async def _prepare_order_write_actor(
-    db: Any, user_id: str, order_no: str,
+    db: Any, user_id: str, order_no: str, fields: Dict[str, Any],
 ) -> str:
-    """确认订单写操作前：校验用户与订单可见，签发短时 actor token。
+    """确认订单写操作前：重新校验用户、订单可见与字段级写能力，签发短时 actor token。
 
     用户不存在时抛错而非返回空 token：空 token 会让写端点退化为仅 API-Key 鉴权。
+    字段能力必须在此复核：创建确认单到确认执行之间（TTL 10 分钟）团队能力可能已变更。
     """
     if db is None:
         raise ValueError("确认写操作需要数据库会话")
@@ -1109,6 +1291,9 @@ async def _prepare_order_write_actor(
     if not user:
         raise ValueError("确认用户不存在或已删除")
     ctx = await load_user_context(db, user, use_cache=False)
+    denied = sorted(set(fields) - allowed_write_fields(ctx.effective_capabilities))
+    if denied:
+        raise ValueError(f"团队已无这些字段的写入能力：{'、'.join(denied)}")
     await resolve_business_object(db, "order", order_no)
     return issue_actor_token(
         user_id=int(user.id),
@@ -1172,6 +1357,14 @@ async def resolve_confirmation(
         )
         cancel_text = f"已取消订单 {order_no} 的写操作，订单未做任何修改。"
         await _append_session_note(session_id, cancel_text)
+        await _persist_confirmation_outcome(
+            db, session_id=session_id, confirmation_id=confirmation_id,
+            confirmation={
+                "confirmation_id": confirmation_id, "action_type": "order_update",
+                "order_no": order_no, "fields": fields_payload, "status": "cancelled",
+            },
+            content=cancel_text,
+        )
         report_assistant_event(
             session_id, "assistant_reply", "助手回复", "completed",
             f"回复：{cancel_text}", {"intent": "agent", "length": len(cancel_text)},
@@ -1199,11 +1392,20 @@ async def resolve_confirmation(
     # 确认时重新校验用户与订单范围，并签发新的 actor token
     try:
         actor_token = await _prepare_order_write_actor(
-            db, record_user or current_user_id, order_no,
+            db, record_user or current_user_id, order_no, fields,
         )
     except Exception as exc:
         error = f"确认执行前校验失败：{getattr(exc, 'message', str(exc))}"
         await _append_session_note(session_id, error)
+        await _persist_confirmation_outcome(
+            db, session_id=session_id, confirmation_id=confirmation_id,
+            confirmation={
+                "confirmation_id": confirmation_id, "action_type": "order_update",
+                "order_no": order_no, "fields": fields_payload, "status": "failed",
+                "error": error,
+            },
+            content=error,
+        )
         return {
             "code": 0,
             "message": error,
@@ -1291,7 +1493,12 @@ async def resolve_confirmation(
         "error": error,
     }
     if error:
-        await _append_session_note(session_id, f"写操作执行失败：{error}")
+        failure_text = f"写操作执行失败：{error}"
+        await _append_session_note(session_id, failure_text)
+        await _persist_confirmation_outcome(
+            db, session_id=session_id, confirmation_id=confirmation_id,
+            confirmation=confirmation_info, content=failure_text,
+        )
         return {"code": 0, "message": error, "data": {"confirmation": confirmation_info, "reply": None}}
 
     await _notify_write_result(
@@ -1350,7 +1557,7 @@ async def resolve_confirmation(
             provider_name=ai_service.current_provider(),
             limits=CONTINUATION_LIMITS, include_order_tool=False, stream_final=False,
             task_id=task_id, step_id_base=order_step_id,
-            gap_notify=False,
+            gap_notify=False, with_plan=False,
             db=db, user_context=continuation_context,
         ):
             if event == "delta":
@@ -1371,6 +1578,10 @@ async def resolve_confirmation(
 
     final_text = text or f"写操作已执行：订单 {order_no} 已更新字段 {', '.join(fields)}。"
     await _append_session_note(session_id, final_text)
+    await _persist_confirmation_outcome(
+        db, session_id=session_id, confirmation_id=confirmation_id,
+        confirmation=confirmation_info, content=final_text, steps=steps_out,
+    )
     return {
         "code": 0,
         "message": "写操作已执行",

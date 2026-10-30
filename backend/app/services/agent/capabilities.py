@@ -20,6 +20,7 @@ class Capability:
     endpoint_codes: tuple = ()
     query_paths: tuple = ()
     reasoning_types: tuple = ()
+    write_fields: tuple = ()
     structural: bool = False
     description: str = ""
 
@@ -31,6 +32,7 @@ class Capability:
             "read_only": self.read_only,
             "scope_mode": self.scope_mode,
             "tool_names": list(self.tool_names),
+            "write_fields": list(self.write_fields),
             "structural": self.structural,
             "description": self.description,
         }
@@ -149,12 +151,51 @@ CAPABILITIES: Dict[str, Capability] = {
         reasoning_types=("quality_analysis",),
         description="品质异常只读推理分析",
     ),
-    "write.order_schedule": Capability(
-        code="write.order_schedule", name="订单计划写入", category="write", read_only=False,
+    "write.order_promised_date": Capability(
+        code="write.order_promised_date", name="修改合同交期", category="write", read_only=False,
         required_permissions={"orders.list": "update"},
         tool_names=("call_order_agent",),
         endpoint_codes=("orders.write",),
-        description="修改订单合同交期/出货计划/发货完成/客户验货/上线时间（必须人工确认）",
+        write_fields=("promised_date",),
+        description="修改订单合同交期（必须人工确认）",
+    ),
+    "write.order_shipping_plan": Capability(
+        code="write.order_shipping_plan", name="修改出货计划", category="write", read_only=False,
+        required_permissions={"orders.list": "update"},
+        tool_names=("call_order_agent",),
+        endpoint_codes=("orders.write",),
+        write_fields=("shipping_plan",),
+        description="修改订单出货计划日期（必须人工确认）",
+    ),
+    "write.order_delivery_completed": Capability(
+        code="write.order_delivery_completed", name="修改发货完成时间", category="write", read_only=False,
+        required_permissions={"orders.list": "update"},
+        tool_names=("call_order_agent",),
+        endpoint_codes=("orders.write",),
+        write_fields=("delivery_completed_date",),
+        description="修改订单发货完成时间（必须人工确认）",
+    ),
+    "write.order_customer_inspection": Capability(
+        code="write.order_customer_inspection", name="修改客户验货时间", category="write", read_only=False,
+        required_permissions={"orders.list": "update"},
+        tool_names=("call_order_agent",),
+        endpoint_codes=("orders.write",),
+        write_fields=("customer_inspection_date",),
+        description="修改订单客户验货时间（必须人工确认）",
+    ),
+    "write.order_planned_start": Capability(
+        code="write.order_planned_start", name="修改上线时间", category="write", read_only=False,
+        required_permissions={"orders.list": "update"},
+        tool_names=("call_order_agent",),
+        endpoint_codes=("orders.write",),
+        write_fields=("planned_start_date",),
+        description="修改订单上线时间（必须人工确认）",
+    ),
+    "write.feedback_create": Capability(
+        code="write.feedback_create", name="创建问题反馈", category="write", read_only=False,
+        required_permissions={"topbar.feedback": "read"},
+        tool_names=("create_feedback", "revoke_feedback"),
+        description="代用户提交问题反馈，并可撤销本人待处理的反馈",
     ),
     "team.manage": Capability(
         code="team.manage", name="团队管理", category="team", read_only=False,
@@ -205,6 +246,16 @@ def allowed_reasoning_types(effective: Set[str]) -> Set[str]:
         if cap:
             types |= set(cap.reasoning_types)
     return types
+
+
+def allowed_write_fields(effective: Set[str]) -> Set[str]:
+    """团队写能力并集对应的订单可写字段集合（call_order_agent 的字段门控）。"""
+    fields: Set[str] = set()
+    for code in effective:
+        cap = CONFIGURABLE_CAPABILITIES.get(code)
+        if cap:
+            fields |= set(cap.write_fields)
+    return fields
 
 
 def capabilities_for_endpoint(endpoint_code: str) -> Set[str]:

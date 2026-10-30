@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react'
 import { Input, Button, Space, Tag, Typography, Collapse, Descriptions, Tooltip, Alert } from 'antd'
-import { SendOutlined, ClearOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined } from '@ant-design/icons'
+import { SendOutlined, ClearOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import Markdown from '../Markdown'
-import { ChatMessage, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
+import { AssistantPlan, ChatMessage, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
 
 const { Text } = Typography
 
@@ -52,6 +52,7 @@ const STEP_STATUS_META: Record<string, { color: string; text: string }> = {
   failed: { color: 'error', text: '失败' },
   blocked: { color: 'warning', text: '已拦截' },
   pending_confirmation: { color: 'gold', text: '待确认' },
+  cancelled: { color: 'default', text: '已取消' },
 }
 
 const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
@@ -61,6 +62,8 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
       {steps.map((s, i) => {
         const meta = STEP_STATUS_META[s.status] || { color: 'default', text: s.status }
+        // 旧数据没有 agent_label：智能体工具只显示步骤摘要，避免回退成 call_xxx_agent 原始名
+        const label = s.agent_label || (s.tool?.startsWith('call_') ? '' : s.tool)
         const node = (
           <div key={s.step_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#64748b', flexWrap: 'wrap' }}>
             <span
@@ -74,7 +77,7 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
             >
               {i + 1}
             </span>
-            <span style={{ fontWeight: 600, color: '#334155' }}>{s.agent_label || s.tool}</span>
+            {label && <span style={{ fontWeight: 600, color: '#334155' }}>{label}</span>}
             {s.summary && <span>{s.summary}</span>}
             <Tag color={meta.color} style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
               {meta.text}
@@ -94,8 +97,27 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
   )
 }
 
+// 任务执行计划卡片：先于步骤时间线展示"助手打算怎么做"
+const PlanCard: React.FC<{ plan: AssistantPlan }> = ({ plan }) => (
+  <div style={{ marginTop: 6, border: '1px solid #dbeafe', background: '#f0f9ff', borderRadius: 10, padding: '8px 12px', fontSize: 12, color: '#334155' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#1d4ed8', marginBottom: plan.status === 'planning' ? 0 : 6 }}>
+      {plan.status === 'planning'
+        ? <LoadingOutlined spin style={{ fontSize: 12 }} />
+        : <UnorderedListOutlined style={{ fontSize: 12 }} />}
+      执行计划
+      {plan.status === 'planning' && <span style={{ fontWeight: 400, color: '#64748b' }}>正在规划…</span>}
+    </div>
+    {plan.status === 'ready' && (
+      <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+        {plan.steps.map((step, i) => <li key={i}>{step}</li>)}
+      </ol>
+    )}
+  </div>
+)
+
 // 写操作确认卡片：订单号、字段、旧值 → 新值、确认 / 取消
 const WRITE_FIELD_LABELS: Record<string, string> = {
+  promised_date: '合同交期',
   shipping_plan: '出货计划',
   delivery_completed_date: '发货完成时间',
   customer_inspection_date: '客户验货时间',
@@ -360,6 +382,13 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
                   />
                 )}
               </div>
+
+              {/* 执行计划 */}
+              {msg.plan && (
+                <div style={{ maxWidth: '88%' }}>
+                  <PlanCard plan={msg.plan} />
+                </div>
+              )}
 
               {/* 编排步骤时间线 */}
               {msg.steps && msg.steps.length > 0 && (

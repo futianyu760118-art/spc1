@@ -14,6 +14,7 @@ export interface ChatMessage {
   traceId?: string
   diagnostics?: any
   steps?: OrchestrationStep[]
+  plan?: AssistantPlan
   confirmation?: WriteConfirmation
   // 流式状态
   streaming?: boolean
@@ -28,15 +29,19 @@ export interface AssistantCard {
   payload: any
 }
 
-export interface OrchestrationStep {
-  step_id: number
+export interface AssistantPlan {
+  status: 'planning' | 'ready'
+  steps: string[]
+}
+
+export interface OrchestrationStep {  step_id: number
   tool: string
   agent_label?: string
   capability?: string
   path?: string
   task_type?: string
   order_no?: string
-  status: 'running' | 'completed' | 'failed' | 'blocked' | 'pending_confirmation'
+  status: 'running' | 'completed' | 'failed' | 'blocked' | 'pending_confirmation' | 'cancelled'
   summary?: string
   error?: string
   item_count?: number
@@ -105,6 +110,22 @@ export function useAssistantChat() {
 
           case 'thinking':
             return { ...m, thinkingStage: data.message || '思考中...' }
+
+          case 'plan_started':
+            return {
+              ...m,
+              thinkingStage: '正在规划执行步骤...',
+              plan: { status: 'planning', steps: [] },
+            }
+
+          case 'plan':
+            return {
+              ...m,
+              thinkingStage: undefined,
+              plan: (data.steps || []).length > 0
+                ? { status: 'ready', steps: data.steps }
+                : undefined,
+            }
 
           case 'step_started':
             return {
@@ -443,14 +464,49 @@ export function useAssistantChat() {
     const res: any = await agentApi.conversation(conversationId)
     const historyMessages = (res.data?.messages || [])
       .filter((item: any) => item.role === 'user' || item.role === 'assistant')
-      .map((item: any, index: number): ChatMessage => ({
-        id: `history-${item.id ?? index}`,
-        role: item.role === 'user' ? 'user' : 'assistant',
-        content: item.content || '',
-        timestamp: item.created_at ? new Date(item.created_at).getTime() : Date.now(),
-        cards: [],
-        suggestions: [],
-      }))
+      .map((item: any, index: number): ChatMessage => {
+        const steps: OrchestrationStep[] = Array.isArray(item.tool_calls) && item.tool_calls.length > 0
+          ? item.tool_calls.map((step: any, i: number) => ({
+              step_id: step.step_id ?? i + 1,
+              tool: step.tool,
+              agent_label: step.agent_label,
+              capability: step.capability,
+              path: step.path,
+              task_type: step.task_type,
+              status: step.status || 'completed',
+              summary: step.summary,
+              error: step.error,
+              duration_ms: step.duration_ms,
+            }))
+          : []
+        const results = item.tool_results && typeof item.tool_results === 'object' ? item.tool_results : {}
+        const planSteps = Array.isArray(results.plan)
+          ? results.plan.filter((step: unknown): step is string => typeof step === 'string')
+          : []
+        const plan: AssistantPlan | undefined = planSteps.length > 0
+          ? { status: 'ready', steps: planSteps }
+          : undefined
+        const confirmation: WriteConfirmation | undefined =
+          results.confirmation && typeof results.confirmation === 'object'
+            ? {
+                ...results.confirmation,
+                fields: Array.isArray(results.confirmation.fields)
+                  ? results.confirmation.fields.filter((f: any) => f && typeof f === 'object')
+                  : [],
+              }
+            : undefined
+        return {
+          id: `history-${item.id ?? index}`,
+          role: item.role === 'user' ? 'user' : 'assistant',
+          content: item.content || '',
+          timestamp: item.created_at ? new Date(item.created_at).getTime() : Date.now(),
+          cards: [],
+          suggestions: [],
+          steps: steps.length > 0 ? steps : undefined,
+          plan,
+          confirmation,
+        }
+      })
     conversationIdRef.current = conversationId
     sessionIdRef.current = ''
     setMessages(historyMessages)

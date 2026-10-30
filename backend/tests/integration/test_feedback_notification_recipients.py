@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import text
 
-from app.api.v1.basicdata.feedback import _insert_handler_notifications
+from app.services.basicdata.feedback_service import insert_handler_notifications as _insert_handler_notifications
 
 
 async def test_handler_notifications_follow_permission_and_exclude_submitter(db):

@@ -6,6 +6,7 @@ from app.services.agent.capabilities import (
     allowed_query_paths,
     allowed_reasoning_types,
     allowed_tool_names,
+    allowed_write_fields,
     public_catalog,
 )
 
@@ -17,8 +18,18 @@ def test_query_capability_enables_query_tool_only():
     assert "call_reasoning_agent" not in tools
 
 
-def test_write_capability_enables_order_tool():
-    assert "call_order_agent" in allowed_tool_names({"write.order_schedule"})
+def test_write_capabilities_split_by_field():
+    cases = {
+        "write.order_promised_date": "promised_date",
+        "write.order_shipping_plan": "shipping_plan",
+        "write.order_delivery_completed": "delivery_completed_date",
+        "write.order_customer_inspection": "customer_inspection_date",
+        "write.order_planned_start": "planned_start_date",
+    }
+    for code, field in cases.items():
+        assert allowed_write_fields({code}) == {field}
+        assert "call_order_agent" in allowed_tool_names({code})
+    assert "write.order_schedule" not in CONFIGURABLE_CAPABILITIES
 
 
 def test_empty_effective_yields_no_tools():

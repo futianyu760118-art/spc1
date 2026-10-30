@@ -1212,6 +1212,32 @@ class DatabaseInitializer:
                 print("Agent multi capability migration skipped (already array).")
         print("Agent multi capability migration done.")
 
+    async def migrate_agent_write_capability_split(self):
+        """写能力按字段拆分：把旧 write.order_schedule 展开为 5 个单字段写能力（幂等）。"""
+        WRITE_SPLIT_CODES = [
+            "write.order_promised_date", "write.order_shipping_plan",
+            "write.order_delivery_completed", "write.order_customer_inspection",
+            "write.order_planned_start",
+        ]
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(text(
+                "SELECT id, capability_codes FROM agent "
+                "WHERE capability_codes @> '[\"write.order_schedule\"]'::jsonb"
+            ))).all()
+            if not rows:
+                print("Agent write capability split skipped (already split).")
+                return
+            print(f"Migrating agent write capability split ({len(rows)} agent rows)...")
+            for row in rows:
+                codes = [c for c in (row.capability_codes or []) if c != "write.order_schedule"]
+                codes.extend(WRITE_SPLIT_CODES)
+                deduped = list(dict.fromkeys(codes))
+                await conn.execute(text(
+                    "UPDATE agent SET capability_codes = CAST(:codes AS jsonb), "
+                    "config_version = config_version + 1 WHERE id = :id"
+                ), {"codes": json.dumps(deduped), "id": row.id})
+        print("Agent write capability split done.")
+
     async def rebuild_mrp_plan_order(self):
         """按 PRD 重建 mrp_plan_order 表（销售订单ID + 物料ID 联合主键）。
         若检测到旧结构（存在自增 id 列）则 DROP 后按 ORM 模型重建；
@@ -1501,8 +1527,12 @@ class DatabaseInitializer:
          "品质异常/质量追溯只读查询与品质推理分析"),
         ("AG-SYS-MASTERDATA", "主数据查询员", "query.materials,query.suppliers,query.boms,query.inventory",
          "物料/供应商/BOM/库存等全局共享主数据只读查询"),
-        ("AG-SYS-WRITE", "计划写入员", "write.order_schedule",
-         "修改订单计划日期（必须人工确认）"),
+        ("AG-SYS-WRITE", "计划写入员",
+         "write.order_promised_date,write.order_shipping_plan,write.order_delivery_completed,"
+         "write.order_customer_inspection,write.order_planned_start",
+         "修改订单合同交期/出货计划/发货完成/客户验货/上线时间（必须人工确认）"),
+        ("AG-SYS-SERVICE", "服务台", "write.feedback_create",
+         "代提交问题反馈，并支持撤销本人待处理的反馈"),
     ]
 
     async def seed_system_agents(self):
@@ -1519,7 +1549,7 @@ class DatabaseInitializer:
                     await session.execute(text(
                         "INSERT INTO agent (agent_no, display_name, capability_codes, scope_type, "
                         "description, status, config_version) "
-                        "VALUES (:no, :name, :codes, 'all', :desc, 'active', 1)"),
+                        "VALUES (:no, :name, CAST(:codes AS jsonb), 'all', :desc, 'active', 1)"),
                         {
                             "no": agent_no, "name": name,
                             "codes": json.dumps(capability_codes.split(",")),
@@ -2703,6 +2733,7 @@ ORDER BY b.FDate DESC, b.FBillNo, e.FEntryID
             await self.migrate_columns()
             await self.migrate_agent_team_redesign()
             await self.migrate_agent_multi_capability()
+            await self.migrate_agent_write_capability_split()
             await self.drop_pto_sale_order_id_fk()
             await self.ensure_indexes()
             await self.migrate_stock_check_k3_writeback_counter_manager()

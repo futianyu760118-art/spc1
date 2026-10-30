@@ -224,9 +224,19 @@ async def chat(
             await agent_conversation.append_message(
                 db, conversation, role="assistant", content=reply.text,
                 tool_calls=[
-                    {"tool": step.tool, "status": step.status, "summary": step.summary}
+                    {
+                        "step_id": step.step_id, "tool": step.tool,
+                        "agent_label": step.agent_label, "capability": step.capability,
+                        "path": step.path, "task_type": step.task_type,
+                        "status": step.status, "summary": step.summary,
+                        "error": step.error, "duration_ms": step.duration_ms,
+                    }
                     for step in (reply.steps or [])
                 ] or None,
+                tool_results=(
+                    {"confirmation": reply.confirmation.model_dump()}
+                    if getattr(reply, "confirmation", None) else None
+                ),
                 token_usage={"total_tokens": (reply.diagnostics or {}).get("total_tokens")},
                 trace_id=trace_id,
             )
@@ -280,7 +290,7 @@ async def chat_stream(
         started = time.perf_counter()
         run_info: Dict[str, Any] = {
             "tools": [], "stats": None, "intent": None, "error": None,
-            "done": False, "text": "", "steps": [],
+            "done": False, "text": "", "steps": [], "plan": [], "confirmation": None,
             "conversation_id": None,
         }
         session_id = body.session_id or str(uuid.uuid4())
@@ -306,6 +316,10 @@ async def chat_stream(
                 run_info["steps"] = payload.get("steps") or []
             elif event_name == "delta":
                 run_info["text"] += payload.get("text") or ""
+            elif event_name == "plan":
+                run_info["plan"] = payload.get("steps") or []
+            elif event_name == "confirmation_required":
+                run_info["confirmation"] = payload
             elif event_name == "error":
                 run_info["error"] = payload.get("message")
 
@@ -353,10 +367,20 @@ async def chat_stream(
                         await agent_conversation.append_message(
                             stream_db, conversation, role="assistant", content=content,
                             tool_calls=[
-                                {"tool": step.get("tool"), "status": step.get("status"),
-                                 "summary": step.get("summary")}
+                                {
+                                    "step_id": step.get("step_id"), "tool": step.get("tool"),
+                                    "agent_label": step.get("agent_label"),
+                                    "capability": step.get("capability"),
+                                    "path": step.get("path"), "task_type": step.get("task_type"),
+                                    "status": step.get("status"), "summary": step.get("summary"),
+                                    "error": step.get("error"), "duration_ms": step.get("duration_ms"),
+                                }
                                 for step in (run_info["steps"] or [])
                             ] or None,
+                            tool_results=(
+                                {"plan": run_info["plan"], "confirmation": run_info["confirmation"]}
+                                if run_info["plan"] or run_info["confirmation"] else None
+                            ),
                             token_usage={"total_tokens": (run_info["stats"] or {}).get("total_tokens")},
                             trace_id=trace_id,
                         )

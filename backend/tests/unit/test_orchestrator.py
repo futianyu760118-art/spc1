@@ -47,7 +47,7 @@ async def _run(monkeypatch, script, *, limits=None, include_order=True, max_tool
 
     async def fake_execute(
         tool_name, args, *, operator_user_id="", trace_id="", hub_trace_id="", caller=None,
-        task_id=None, step_id=None,
+        task_id=None, step_id=None, actor_token="", db=None, user_context=None,
     ):
         exec_calls.append({"tool": tool_name, "args": args})
         return {
@@ -396,7 +396,7 @@ class TestResolveConfirmation:
                 "idempotent_replay": False,
             }}
 
-        async def fake_prepare(db, user_id, order_no):
+        async def fake_prepare(db, user_id, order_no, fields):
             return "actor-token-1"
 
         monkeypatch.setattr(orchestrator, "_prepare_order_write_actor", fake_prepare)
@@ -442,7 +442,7 @@ class TestResolveConfirmation:
             dispatched.append(input)
             return {"online": True, "ok": False, "reason": "订单已关闭"}
 
-        async def fake_prepare(db, user_id, order_no):
+        async def fake_prepare(db, user_id, order_no, fields):
             return "actor-token-2"
 
         monkeypatch.setattr(orchestrator, "_prepare_order_write_actor", fake_prepare)
@@ -591,3 +591,238 @@ def test_new_step_prefers_member_label_and_falls_back_to_tool_label():
 
     fallback = orchestrator._new_step(2, "call_query_agent", {}, status="blocked")
     assert fallback["agent_label"] == "查询智能体"
+
+
+async def test_generate_plan_cleans_prefixes_and_caps(monkeypatch):
+    """计划解析：去编号/项目符号、去重、上限 5 条；失败返回空列表。"""
+    from types import SimpleNamespace
+
+    async def fake_chat(messages, options):
+        return "1. 查询订单\n- 查询齐套\n• 分析交期风险\n2) 汇总结论\n- 查询订单\n5. 生成建议\n6. 多余步骤"
+
+    monkeypatch.setattr(orchestrator.ai_service, "chat", fake_chat)
+    ctx = SimpleNamespace(effective_capabilities={"query.orders", "reason.orders"})
+    steps = await orchestrator._generate_plan(ctx, "这批订单交期风险怎么样")
+    assert steps == ["查询订单", "查询齐套", "分析交期风险", "汇总结论", "生成建议"]
+
+    async def failing_chat(messages, options):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(orchestrator.ai_service, "chat", failing_chat)
+    assert await orchestrator._generate_plan(ctx, "x") == []
+
+
+async def test_plan_events_precede_first_step(monkeypatch):
+    """流式事件：plan_started/plan 恒在首个 step_started 之前。"""
+    from types import SimpleNamespace
+
+    from app.services.agent.context import TeamMemberInfo, UserContext
+
+    user = SimpleNamespace(id=1, username="u1", display_name="测试用户", role_id=1)
+    user_ctx = UserContext(
+        user=user, role_code="admin", permissions={},
+        members=[TeamMemberInfo(
+            agent_id=1, agent_no="AG-1", display_name="订单专员",
+            capabilities=["query.orders"], description=None, status="active", config_version=1,
+        )],
+        effective_capabilities={"query.orders"},
+        allowed_tools={"call_query_agent"},
+    )
+    llm = ScriptedLLM([
+        tool_call("call_query_agent", {"path": "/external/orders/list"}),
+        direct_reply("好的"),
+    ])
+    monkeypatch.setattr(orchestrator.ai_service, "chat_with_tools", llm.chat_with_tools)
+    monkeypatch.setattr(orchestrator.ai_service, "chat", _fake_chat())
+    monkeypatch.setattr(orchestrator, "maybe_summarize", _identity_summarize)
+    monkeypatch.setattr(orchestrator, "report_assistant_event", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator, "report_model_call", lambda *a, **k: None)
+
+    async def fake_execute(tool_name, args, **kwargs):
+        return {"ok": True, "online": True, "error": None, "item_count": 1,
+                "result": {"items": [{"order_no": "HJ-1"}], "total": 1}}
+
+    monkeypatch.setattr(orchestrator, "execute_agent_tool", fake_execute)
+
+    events = await _collect(orchestrator.run_reaction(
+        "查订单", [],
+        system_prompt="sys", model_override=None, temperature=0.1, max_tokens=4096,
+        max_tool_rounds=6, max_agent_calls=8,
+        disabled_tools=None, session_id="", trace_id="", user_id="u1",
+        run_logger=None, provider_name="test", stream_final=False,
+        user_context=user_ctx,
+    ))
+    names = [e for e, _ in events]
+    assert names[0] == "plan_started"
+    assert names[1] == "plan"
+    assert next(d for e, d in events if e == "plan")["steps"]
+    assert names.index("plan") < names.index("step_started")
+
+
+async def test_order_field_gate_blocks_ungranted_fields(monkeypatch):
+    """字段级门控：团队仅有客户验货时间能力时，提交上线时间必须被拦截。"""
+    from types import SimpleNamespace
+
+    from app.services.agent.context import TeamMemberInfo, UserContext
+
+    user = SimpleNamespace(id=1, username="u1", display_name="测试用户", role_id=1)
+    user_ctx = UserContext(
+        user=user, role_code="admin", permissions={},
+        members=[TeamMemberInfo(
+            agent_id=1, agent_no="AG-1", display_name="计划写入员",
+            capabilities=["write.order_customer_inspection"],
+            description=None, status="active", config_version=1,
+        )],
+        effective_capabilities={"write.order_customer_inspection"},
+        allowed_tools={"call_order_agent"},
+    )
+    llm = ScriptedLLM([
+        tool_call("call_order_agent", {
+            "operation": "order.update_schedule_fields",
+            "order_no": "HJ-1",
+            "fields": {"planned_start_date": "2026-11-01"},
+        }),
+        direct_reply("好的"),
+    ])
+    monkeypatch.setattr(orchestrator.ai_service, "chat_with_tools", llm.chat_with_tools)
+    monkeypatch.setattr(orchestrator.ai_service, "chat", _fake_chat())
+    monkeypatch.setattr(orchestrator, "maybe_summarize", _identity_summarize)
+    monkeypatch.setattr(orchestrator, "report_assistant_event", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator, "report_model_call", lambda *a, **k: None)
+
+    events = await _collect(orchestrator.run_reaction(
+        "把上线时间改一下", [],
+        system_prompt="sys", model_override=None, temperature=0.1, max_tokens=4096,
+        max_tool_rounds=6, max_agent_calls=8, disabled_tools=None,
+        session_id="", trace_id="", user_id="u1", run_logger=None, provider_name="test",
+        stream_final=False, user_context=user_ctx, with_plan=False,
+    ))
+    blocked = [d["step"] for e, d in events if e == "step_started" and d["step"]["status"] == "blocked"]
+    assert blocked, "未授权字段必须产生 blocked 步骤"
+    assert "planned_start_date" in blocked[0]["error"]
+
+
+async def test_order_field_gate_allows_granted_fields(monkeypatch):
+    """字段级门控：团队具备该字段能力时进入写确认流程（确认单步骤生成）。"""
+    from types import SimpleNamespace
+
+    from app.services.agent.context import TeamMemberInfo, UserContext
+
+    user = SimpleNamespace(id=1, username="u1", display_name="测试用户", role_id=1)
+    user_ctx = UserContext(
+        user=user, role_code="admin", permissions={},
+        members=[TeamMemberInfo(
+            agent_id=1, agent_no="AG-1", display_name="计划写入员",
+            capabilities=["write.order_planned_start"],
+            description=None, status="active", config_version=1,
+        )],
+        effective_capabilities={"write.order_planned_start"},
+        allowed_tools={"call_order_agent"},
+    )
+    llm = ScriptedLLM([
+        tool_call("call_order_agent", {
+            "operation": "order.update_schedule_fields",
+            "order_no": "HJ-1",
+            "fields": {"planned_start_date": "2026-11-01"},
+        }),
+        direct_reply("好的"),
+    ])
+    monkeypatch.setattr(orchestrator.ai_service, "chat_with_tools", llm.chat_with_tools)
+    monkeypatch.setattr(orchestrator.ai_service, "chat", _fake_chat())
+    monkeypatch.setattr(orchestrator, "maybe_summarize", _identity_summarize)
+    monkeypatch.setattr(orchestrator, "report_assistant_event", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator, "report_model_call", lambda *a, **k: None)
+
+    async def fake_readback(order_no, **kwargs):
+        return {"values": {}, "missing": True, "row": None, "error": None}
+
+    async def fake_create_confirmation(record):
+        return {
+            **record,
+            "confirmation_id": "wc-test",
+            "created_at": "2026-10-29T00:00:00+00:00",
+            "expires_at": "2026-10-29T00:10:00+00:00",
+        }
+
+    monkeypatch.setattr(orchestrator, "query_order_current_fields", fake_readback)
+    monkeypatch.setattr(orchestrator.write_confirmation, "create_confirmation", fake_create_confirmation)
+
+    events = await _collect(orchestrator.run_reaction(
+        "把上线时间改一下", [],
+        system_prompt="sys", model_override=None, temperature=0.1, max_tokens=4096,
+        max_tool_rounds=6, max_agent_calls=8, disabled_tools=None,
+        session_id="", trace_id="", user_id="u1", run_logger=None, provider_name="test",
+        stream_final=False, user_context=user_ctx, with_plan=False,
+    ))
+    states = [d["step"]["status"] for e, d in events if e == "step_started"]
+    assert "pending_confirmation" in states
+    confirmations = [d for e, d in events if e == "confirmation_required"]
+    assert confirmations and confirmations[0]["confirmation_id"] == "wc-test"
+
+
+async def test_plan_degrades_to_empty_steps_on_failure(monkeypatch):
+    """计划生成失败：仍先发 plan_started + 空 plan，任务继续执行。"""
+    from types import SimpleNamespace
+
+    from app.services.agent.context import TeamMemberInfo, UserContext
+
+    user = SimpleNamespace(id=1, username="u1", display_name="测试用户", role_id=1)
+    user_ctx = UserContext(
+        user=user, role_code="admin", permissions={},
+        members=[TeamMemberInfo(
+            agent_id=1, agent_no="AG-1", display_name="订单专员",
+            capabilities=["query.orders"], description=None, status="active", config_version=1,
+        )],
+        effective_capabilities={"query.orders"},
+        allowed_tools={"call_query_agent"},
+    )
+
+    async def failing_chat(messages, options):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(orchestrator.ai_service, "chat_with_tools", ScriptedLLM([direct_reply("好的")]).chat_with_tools)
+    monkeypatch.setattr(orchestrator.ai_service, "chat", failing_chat)
+    monkeypatch.setattr(orchestrator, "maybe_summarize", _identity_summarize)
+    monkeypatch.setattr(orchestrator, "report_assistant_event", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator, "report_model_call", lambda *a, **k: None)
+
+    events = await _collect(orchestrator.run_reaction(
+        "查订单", [],
+        system_prompt="sys", model_override=None, temperature=0.1, max_tokens=4096,
+        max_tool_rounds=6, max_agent_calls=8, disabled_tools=None,
+        session_id="", trace_id="", user_id="u1", run_logger=None, provider_name="test",
+        stream_final=False, user_context=user_ctx,
+    ))
+    names = [e for e, _ in events]
+    assert names[0] == "plan_started"
+    plan = next(d for e, d in events if e == "plan")
+    assert plan["steps"] == []
+    assert "done" in names
+
+
+def test_query_step_summary_shows_page():
+    """步骤摘要展示页码，翻页调用在时间线上可区分。"""
+    assert orchestrator._step_summary(
+        "call_query_agent", {"path": "/external/orders/list", "params": {"page": 2}},
+    ) == "查询 销售订单列表（第2页）"
+    assert orchestrator._step_summary(
+        "call_query_agent", {"path": "/external/orders/list", "params": {}},
+    ) == "查询 销售订单列表"
+
+
+async def test_identical_page_query_calls_blocked(monkeypatch):
+    """完全相同的页码与参数重复拉取会被重复调用拦截。"""
+    def same_call():
+        return tool_call(
+            "call_query_agent",
+            {"path": "/external/orders/list", "params": {"keyword": "HJ", "page": 1}},
+        )
+
+    events, _, exec_calls = await _run(monkeypatch, [
+        same_call(),
+        same_call(),
+        direct_reply("好的"),
+    ])
+    assert len(exec_calls) == 1, "完全相同参数的第二次查询不应执行"
+    blocked = [d["step"] for e, d in events if e == "step_started" and d["step"]["status"] == "blocked"]
+    assert blocked and "重复调用被拦截" in blocked[0]["error"]
