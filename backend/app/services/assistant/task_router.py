@@ -3,7 +3,7 @@
 能力目录与执行面 agent 契约同源（变更需三处同步）：
 - query 白名单 = agents/query-agent/src/query-adapter.js PATH_ENDPOINT_CODES（契约 §4.2，已排除 int:health.ping）
 - reasoning 任务类型 = agents/reasoning-agent/src/reasoning-adapter.js inputSchema
-- order 字段白名单 = agents/order-agent/src/order-adapter.js ALLOWED_FIELDS
+- order 写操作 = agents/shared/order-write-operations.json（assistant audience 项）
 
 仅保留能力目录与校验；分类 / 派单 / 渲染已随 AI 自主 ReAct 方案移除。
 """
@@ -12,6 +12,13 @@ import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
+
+from app.services.order.write_registry import (
+    ASSISTANT_FIELDS,
+    ASSISTANT_FIELD_WIRES,
+    OPERATION_MAP,
+    normalize_changes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,20 +66,25 @@ REASONING_TASK_TYPES = [
     {"type": "production_analysis", "desc": "生产分析（业务锚点 business://order/<订单号>）"},
 ]
 
-ORDER_FIELDS_DOC = (
-    "shipping_plan 出货计划(YYYY-MM-DD或null清空), delivery_completed_date 发货完成时间, "
-    "customer_inspection_date 客户验货时间, planned_start_date 上线时间"
+ORDER_FIELDS_DOC = ", ".join(
+    f"{field['wire']} {field['label']}(YYYY-MM-DD或null清空)" for field in ASSISTANT_FIELDS
 )
 
-ORDER_ALLOWED_FIELDS = (
-    "shipping_plan",
-    "delivery_completed_date",
-    "customer_inspection_date",
-    "planned_start_date",
-)
+ORDER_ALLOWED_FIELDS = ASSISTANT_FIELD_WIRES
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _BUSINESS_REF_RE = re.compile(r"^business://(order|product|batch)/\S+$")
+
+
+def _validate_write_task_input(task_input: Dict[str, Any]) -> Optional[str]:
+    order_no = (task_input.get("orderNo") or "").strip()
+    if not order_no:
+        return "order_no 不能为空"
+    operation = task_input.get("operation")
+    spec = OPERATION_MAP.get(operation)
+    if spec is None or "assistant" not in spec["audiences"]:
+        return f"operation 不在白名单: {operation}"
+    _, error = normalize_changes(operation, task_input.get("changes"))
+    return error
 
 
 def validate_task_input(capability: str, task_input: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -97,18 +109,8 @@ def validate_task_input(capability: str, task_input: Optional[Dict[str, Any]]) -
         if not _BUSINESS_REF_RE.match(ref or ""):
             return "context.businessObjectRef 缺失或格式错误（须 business://order|product|batch/<键>）"
         return None
-    if capability == "update_control_platform_order":
-        if not (task_input.get("order_no") or "").strip():
-            return "order_no 不能为空"
-        fields = task_input.get("fields")
-        if not isinstance(fields, dict) or not fields:
-            return "fields 至少一个字段"
-        for key, value in fields.items():
-            if key not in ORDER_ALLOWED_FIELDS:
-                return f"字段不在白名单: {key}"
-            if value is not None and (not isinstance(value, str) or not _DATE_RE.match(value)):
-                return f"字段 {key} 必须是 YYYY-MM-DD 或 null"
-        return None
+    if capability == "write_control_platform":
+        return _validate_write_task_input(task_input)
     return f"未知 capability: {capability}"
 
 

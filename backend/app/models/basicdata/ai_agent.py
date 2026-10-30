@@ -41,4 +41,11 @@ class AssistantRun(Base):
     duration_ms = Column(Numeric(12, 2), nullable=True)
     is_success = Column(Boolean, nullable=False, default=True)
     error_message = Column(Text, nullable=True)
+    agent_id = Column(BigInteger, nullable=True, index=True, comment="发起运行的智能体")
+    task_id = Column(BigInteger, nullable=True, index=True, comment="关联主管任务")
+    conversation_id = Column(BigInteger, nullable=True, index=True, comment="持久化会话")
+    trigger = Column(
+        String(16), nullable=False, default="chat", server_default="chat",
+        comment="chat|task_chat|auto_analysis",
+    )
     created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)

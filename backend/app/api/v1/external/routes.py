@@ -7,7 +7,7 @@ from .registry import check_registry_matches_router
 from . import endpoints  # noqa: F401
 from .endpoints import (
     agent_config, bom, bom_detail, bom_tree, human_resources, inventory, inventory_availability,
-    masterdata, material_kitting, material_supplies, order_schedule, orders, production,
+    masterdata, material_kitting, material_supplies, order_write, orders, production,
     production_task_orders, production_coordination, process_data, purchase,
     quality, reasoning, warehouse,
 )
@@ -27,7 +27,7 @@ for r in (
     warehouse.wh_router, warehouse.loc_router,
     reasoning.router,
     agent_config.router,
-    order_schedule.router,
+    order_write.router,
 ):
     external_router.include_router(r)
 

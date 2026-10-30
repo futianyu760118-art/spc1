@@ -75,15 +75,20 @@ function createAdapter({ config, http, log }) {
     if (!input || typeof input.prompt !== "string" || !input.prompt.trim()) {
       throw new UpstreamError("INVALID_ARGUMENT", "input.prompt 不能为空");
     }
+    const businessObjectRef = input.context && input.context.businessObjectRef;
+    if (typeof businessObjectRef !== "string" || !businessObjectRef.trim()) {
+      throw new UpstreamError("INVALID_ARGUMENT", "input.context.businessObjectRef 不能为空");
+    }
     const runId = run.runId;
     const taskType = input.task_type ?? "";
+    const requestId = run.requestId ?? input.request_id ?? input.requestId;
     const body = {
       prompt: input.prompt,
       task_type: input.task_type,
       context: input.context,
       constraints: Object.assign({ read_only: true, require_evidence: true }, input.constraints),
       task_id: runId,
-      request_id: input.request_id,
+      request_id: requestId,
     };
     const report = run.report;
     const startedAt = new Date().toISOString();
@@ -94,6 +99,7 @@ function createAdapter({ config, http, log }) {
       envelope = await http.signedPostEnvelope(ANALYZE_PATH, "reasoning.analyze", body, {
         signal: run.controller.signal,
         timeoutMs: config.reasoningTimeoutMs,
+        headers: run.actorToken ? { "X-Actor-Token": run.actorToken } : {},
       });
     } catch (e) {
       if (e.code === "ABORTED") return null;

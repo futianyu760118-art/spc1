@@ -1,6 +1,7 @@
 # 订单交付中心
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
 from app.models.order.eta_update import ETAUpdate
+from app.models.order.write_idempotency import OrderWriteIdempotency
 
 # 物料齐套中心
 from app.models.material.material_demand import MaterialDemand
@@ -69,6 +70,16 @@ from app.models.basicdata.share_link import ShareLink  # noqa: F401
 from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa: F401
 from app.models.basicdata.backup import BackupConfig, BackupRecord  # noqa: F401
 from app.models.basicdata.ai_agent import AiAgentConfig, AssistantRun  # noqa: F401
+
+# 智能体中心（2026-10-29 团队制：智能体目录 + 勾选式平铺团队）
+from app.models.agent import (  # noqa: F401
+    Agent,
+    AgentCallLog,
+    AgentConversation,
+    AgentMessage,
+    AgentTeamMember,
+    GatewayDispatchLog,
+)
 from app.models.purchase.price_change import (  # noqa: F401
     ApprovalConfig,
     PriceChangeRuleConfig,
@@ -119,6 +130,7 @@ __all__ = [
     # 订单交付中心
     "SaleOrder",
     "SaleOrderLine",
+    "OrderWriteIdempotency",
     # 物料齐套中心
     "MaterialDemand",
     "PurchaseOrder",
@@ -170,6 +182,12 @@ __all__ = [
     "BackupRecord",
     "AiAgentConfig",
     "AssistantRun",
+    "Agent",
+    "AgentTeamMember",
+    "AgentCallLog",
+    "AgentConversation",
+    "AgentMessage",
+    "GatewayDispatchLog",
     "ApprovalConfig",
     "PriceChangeRuleConfig",
     "PurchasePriceChange",

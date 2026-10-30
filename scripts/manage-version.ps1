@@ -81,7 +81,9 @@ ls -1 versions 2>/dev/null | grep -E '^v[0-9]+-' | sed 's/^v\([0-9][0-9]*\)-.*/\
   ok="OK"
   docker image inspect "spc-v2-backend:$d" >/dev/null 2>&1 || ok="MISSING"
   docker image inspect "spc-v2-frontend:$d" >/dev/null 2>&1 || ok="MISSING"
-  echo "VER|$d|$created|$git|$note|$ok|$compose"
+  gw=""
+  docker image inspect "aeos-gateway:$d" >/dev/null 2>&1 && gw="GW"
+  echo "VER|$d|$created|$git|$note|$ok|$compose|$gw"
 done
 '@
         $remoteScript = $remoteScript.Replace('__P__', $target.Path)
@@ -94,7 +96,7 @@ done
             if ($t -match '^REMOTE-PATH-MISSING') { throw "远程部署目录不存在: $($target.Path)（尚未做过版本化部署？）" }
             elseif ($t -match '^CURRENT\s+(.+)$') { $current = $Matches[1].Trim() }
             elseif ($t -match '^VER\|(.+)$') {
-                $parts = $Matches[1] -split '\|', 6
+                $parts = $Matches[1] -split '\|', 7
                 $rows += [pscustomobject]@{
                     Version = $parts[0]
                     Created = $parts[1]
@@ -102,6 +104,7 @@ done
                     Note    = $parts[3]
                     Images  = $parts[4]
                     Compose = if ($parts[5]) { $parts[5] } else { "docker-compose-prod.yml" }
+                    Gateway = $parts[6]
                     Status  = if ($parts[0] -eq $current) { "当前运行" } else { "" }
                 }
             }
@@ -111,7 +114,7 @@ done
         if ($rows.Count -eq 0) {
             Write-Host "（远程尚无历史版本）"
         } else {
-            $rows | Format-Table Version, Created, Git, Compose, Images, Status, Note -AutoSize
+            $rows | Format-Table Version, Created, Git, Compose, Images, Gateway, Status, Note -AutoSize
         }
     }
 
@@ -132,6 +135,9 @@ docker image inspect "spc-v2-backend:$V" >/dev/null 2>&1 || { echo "IMAGE-MISSIN
 docker image inspect "spc-v2-frontend:$V" >/dev/null 2>&1 || { echo "IMAGE-MISSING: spc-v2-frontend:$V（该版本镜像可能已被清理）"; exit 1; }
 docker tag "spc-v2-backend:$V" spc-v2-backend:latest
 docker tag "spc-v2-frontend:$V" spc-v2-frontend:latest
+if docker image inspect "aeos-gateway:$V" >/dev/null 2>&1; then
+  docker tag "aeos-gateway:$V" aeos-gateway:latest
+fi
 cp "versions/$V/.env" ./.env
 COMPOSE_FILE=$(grep '^compose=' "versions/$V/meta.txt" 2>/dev/null | cut -d= -f2-)
 if [ -z "$COMPOSE_FILE" ]; then COMPOSE_FILE=docker-compose-prod.yml; fi

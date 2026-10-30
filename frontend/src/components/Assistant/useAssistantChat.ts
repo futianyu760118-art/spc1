@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import { assistantApi } from '../../services/api'
+import { agentApi } from '../../services/agent'
 
 export interface ChatMessage {
   id: string
@@ -13,6 +14,7 @@ export interface ChatMessage {
   traceId?: string
   diagnostics?: any
   steps?: OrchestrationStep[]
+  plan?: AssistantPlan
   confirmation?: WriteConfirmation
   // 流式状态
   streaming?: boolean
@@ -27,15 +29,19 @@ export interface AssistantCard {
   payload: any
 }
 
-export interface OrchestrationStep {
-  step_id: number
+export interface AssistantPlan {
+  status: 'planning' | 'ready'
+  steps: string[]
+}
+
+export interface OrchestrationStep {  step_id: number
   tool: string
   agent_label?: string
   capability?: string
   path?: string
   task_type?: string
   order_no?: string
-  status: 'running' | 'completed' | 'failed' | 'blocked' | 'pending_confirmation'
+  status: 'running' | 'completed' | 'failed' | 'blocked' | 'pending_confirmation' | 'cancelled'
   summary?: string
   error?: string
   item_count?: number
@@ -50,8 +56,10 @@ export interface WriteConfirmationField {
 
 export interface WriteConfirmation {
   confirmation_id: string
-  order_no: string
+  action_type?: string
+  order_no?: string
   fields: WriteConfirmationField[]
+  preview?: Record<string, any>
   created_at?: string
   expires_at?: string
   status: 'pending' | 'cancelled' | 'executed' | 'failed'
@@ -59,16 +67,9 @@ export interface WriteConfirmation {
   error?: string
 }
 
-export interface Skill {
-  intent: string
-  name: string
-  description: string
-  keywords: string[]
-}
-
 const CONFIRM_COMMANDS = new Set(['确认', '确认执行', '确定', '确定执行'])
 const CANCEL_COMMANDS = new Set(['取消', '取消操作', '不确认'])
-const NO_PENDING_CONFIRMATION_REPLY = '当前没有待确认的写操作。如需修改订单，请说明订单号与要调整的字段。'
+const NO_PENDING_CONFIRMATION_REPLY = '当前没有待确认的操作。如需修改订单或执行任务动作，请先发起。'
 
 function parseConfirmationCommand(text: string): 'confirm' | 'cancel' | null {
   const command = text.trim().replace(/[。！!，,]+$/g, '')
@@ -92,8 +93,8 @@ function mergeConfirmation(
 export function useAssistantChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(false)
-  const [skills, setSkills] = useState<Skill[]>([])
   const sessionIdRef = useRef<string>('')
+  const conversationIdRef = useRef<number | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const handleSSEEvent = useCallback((msgId: string, event: string, data: any) => {
@@ -104,10 +105,27 @@ export function useAssistantChat() {
         switch (event) {
           case 'session':
             sessionIdRef.current = data.session_id || ''
+            if (data.conversation_id) conversationIdRef.current = Number(data.conversation_id)
             return m
 
           case 'thinking':
             return { ...m, thinkingStage: data.message || '思考中...' }
+
+          case 'plan_started':
+            return {
+              ...m,
+              thinkingStage: '正在规划执行步骤...',
+              plan: { status: 'planning', steps: [] },
+            }
+
+          case 'plan':
+            return {
+              ...m,
+              thinkingStage: undefined,
+              plan: (data.steps || []).length > 0
+                ? { status: 'ready', steps: data.steps }
+                : undefined,
+            }
 
           case 'step_started':
             return {
@@ -331,6 +349,7 @@ export function useAssistantChat() {
         trimmed,
         sessionIdRef.current || undefined,
         conversationHistory,
+        conversationIdRef.current || undefined,
       )
 
       if (!response.ok) {
@@ -393,9 +412,13 @@ export function useAssistantChat() {
       console.warn('SSE failed, falling back to non-stream:', e)
       try {
         const conversationHistory = messages.slice(-10)
-        const res: any = await assistantApi.chat(trimmed, sessionIdRef.current || undefined, conversationHistory)
+        const res: any = await assistantApi.chat(
+          trimmed, sessionIdRef.current || undefined, conversationHistory,
+          conversationIdRef.current || undefined,
+        )
         const data = res.data
         sessionIdRef.current = data.session_id || ''
+        if (data.conversation_id) conversationIdRef.current = Number(data.conversation_id)
 
         setMessages(prev =>
           prev.map(m =>
@@ -437,16 +460,62 @@ export function useAssistantChat() {
     }
   }, [loading, messages, confirmWrite, cancelWrite, handleSSEEvent])
 
-  const loadSkills = useCallback(async () => {
-    try {
-      const res: any = await assistantApi.listSkills()
-      setSkills(res.data || [])
-    } catch { /* ignore */ }
+  const loadConversation = useCallback(async (conversationId: number) => {
+    const res: any = await agentApi.conversation(conversationId)
+    const historyMessages = (res.data?.messages || [])
+      .filter((item: any) => item.role === 'user' || item.role === 'assistant')
+      .map((item: any, index: number): ChatMessage => {
+        const steps: OrchestrationStep[] = Array.isArray(item.tool_calls) && item.tool_calls.length > 0
+          ? item.tool_calls.map((step: any, i: number) => ({
+              step_id: step.step_id ?? i + 1,
+              tool: step.tool,
+              agent_label: step.agent_label,
+              capability: step.capability,
+              path: step.path,
+              task_type: step.task_type,
+              status: step.status || 'completed',
+              summary: step.summary,
+              error: step.error,
+              duration_ms: step.duration_ms,
+            }))
+          : []
+        const results = item.tool_results && typeof item.tool_results === 'object' ? item.tool_results : {}
+        const planSteps = Array.isArray(results.plan)
+          ? results.plan.filter((step: unknown): step is string => typeof step === 'string')
+          : []
+        const plan: AssistantPlan | undefined = planSteps.length > 0
+          ? { status: 'ready', steps: planSteps }
+          : undefined
+        const confirmation: WriteConfirmation | undefined =
+          results.confirmation && typeof results.confirmation === 'object'
+            ? {
+                ...results.confirmation,
+                fields: Array.isArray(results.confirmation.fields)
+                  ? results.confirmation.fields.filter((f: any) => f && typeof f === 'object')
+                  : [],
+              }
+            : undefined
+        return {
+          id: `history-${item.id ?? index}`,
+          role: item.role === 'user' ? 'user' : 'assistant',
+          content: item.content || '',
+          timestamp: item.created_at ? new Date(item.created_at).getTime() : Date.now(),
+          cards: [],
+          suggestions: [],
+          steps: steps.length > 0 ? steps : undefined,
+          plan,
+          confirmation,
+        }
+      })
+    conversationIdRef.current = conversationId
+    sessionIdRef.current = ''
+    setMessages(historyMessages)
   }, [])
 
   const clearMessages = useCallback(() => {
     setMessages([])
     sessionIdRef.current = ''
+    conversationIdRef.current = null
     // 取消正在进行的流式请求
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
@@ -464,5 +533,8 @@ export function useAssistantChat() {
     )
   }, [])
 
-  return { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming, confirmWrite, cancelWrite }
+  return {
+    messages, loading, send, clearMessages, stopStreaming,
+    confirmWrite, cancelWrite, loadConversation,
+  }
 }

@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.basicdata.data_supply import DataSupplyApiKey
-from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.order.sale_order import SaleOrder, SaleOrderLine, order_not_closed_condition
 from app.models.production.labor_price_audit import ProductionLaborPriceAudit
 from app.schemas.common import ResponseModel
 
@@ -116,7 +116,8 @@ class OrderOut(BaseModel):
             summary="订单列表", description="endpoint_code: orders.list")
 @register_external(
     "orders.list", "订单列表", method="GET", path="/orders/list",
-    description="销售订单行列表查询，支持订单号精确、关键字、派生状态、客户、风险等级、合同交期范围、增量同步",
+    description="销售订单行列表查询，支持订单号精确、关键字、派生状态、客户、风险等级、合同交期范围、增量同步；"
+                "默认排除已关闭订单（传 status 可显式查询），按合同交期降序（空值置底）",
     tags=["订单"],
 )
 @log_external_call("orders.list")
@@ -151,6 +152,16 @@ async def orders_list(
             status_cond = or_(*[_status_filter_condition(s) for s in statuses])
             query = query.where(status_cond)
             count_query = count_query.where(status_cond)
+    else:
+        # 默认排除已关闭订单（ERP 已关闭 erp_status=3 / 手工 status="closed" / is_closed=1）；
+        # 显式传 status 筛选时以调用方指定为准（可查 completed/cancelled/closed）
+        closed_cond = or_(
+            ~order_not_closed_condition(),
+            SaleOrder.status == "closed",
+            SaleOrder.is_closed == 1,
+        )
+        query = query.where(~closed_cond)
+        count_query = count_query.where(~closed_cond)
 
     if q.customer_code:
         query = query.where(SaleOrder.customer_code == q.customer_code)
@@ -179,7 +190,7 @@ async def orders_list(
     total = (await db.execute(count_query)).scalar() or 0
 
     query = (
-        query.order_by(SaleOrder.promised_date.asc().nullslast(), SaleOrder.id.desc())
+        query.order_by(SaleOrder.promised_date.desc().nullslast(), SaleOrder.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )

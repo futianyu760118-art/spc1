@@ -44,6 +44,11 @@ const TYPE_DEFS = [
   { key: 'assistant_create', label: '助手新增', icon: BellOutlined, color: '#15803d', bg: '#f0fdf4' },
   { key: 'assistant_delete', label: '助手删除', icon: BellOutlined, color: '#b91c1c', bg: '#fef2f2' },
   { key: 'assistant_gap', label: '助手提醒', icon: WarningOutlined, color: '#b45309', bg: '#fffbeb' },
+  { key: 'agent_task', label: '智能体任务', icon: InboxOutlined, color: '#4c4dc2', bg: '#eef0fe' },
+  { key: 'agent_analysis', label: '任务分析', icon: BellOutlined, color: '#0f766e', bg: '#f0fdfa' },
+  { key: 'agent_config', label: '智能体配置', icon: SettingOutlined, color: '#0284c7', bg: '#f0f9ff' },
+  { key: 'agent_team', label: '我的团队', icon: AuditOutlined, color: '#15803d', bg: '#f0fdf4' },
+  { key: 'agent_hierarchy', label: '团队关系', icon: AuditOutlined, color: '#15803d', bg: '#f0fdf4' },
 ]
 
 const KNOWN_TYPES = TYPE_DEFS.map(t => t.key)

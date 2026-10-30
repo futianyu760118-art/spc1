@@ -69,9 +69,11 @@ function createAdapter({ config, http, log }) {
     report("step_started", "查询中台接口", "started", `path=${path}`, { path }, { startedAt });
     log("info", "query_started", { path });
     try {
+      const headers = run.actorToken ? { "X-Actor-Token": run.actorToken } : {};
       const data = await http.signedGet(path, endpointCode, params, {
         signal: run.controller.signal,
         timeoutMs: config.queryTimeoutMs,
+        headers,
       });
       report("step_completed", "查询中台接口", "completed", summarizeResult(data), { path }, { startedAt });
       log("info", "query_ok", { path });

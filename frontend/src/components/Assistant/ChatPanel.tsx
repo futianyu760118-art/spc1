@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react'
 import { Input, Button, Space, Tag, Typography, Collapse, Descriptions, Tooltip, Alert } from 'antd'
-import { SendOutlined, ClearOutlined, ThunderboltOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined } from '@ant-design/icons'
+import { SendOutlined, ClearOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import Markdown from '../Markdown'
-import { ChatMessage, Skill, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
+import { AssistantPlan, ChatMessage, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
 
 const { Text } = Typography
 
@@ -29,10 +29,16 @@ const getProviderLabel = (provider?: string) => {
   return labels[provider] || provider
 }
 
+interface TeamAgent {
+  id: number
+  name: string
+  capabilities?: Array<{ code: string; name: string }>
+}
+
 interface Props {
   messages: ChatMessage[]
   loading: boolean
-  skills: Skill[]
+  teamAgents: TeamAgent[]
   onSend: (text: string) => void
   onClear: () => void
   onStop?: () => void
@@ -46,6 +52,7 @@ const STEP_STATUS_META: Record<string, { color: string; text: string }> = {
   failed: { color: 'error', text: '失败' },
   blocked: { color: 'warning', text: '已拦截' },
   pending_confirmation: { color: 'gold', text: '待确认' },
+  cancelled: { color: 'default', text: '已取消' },
 }
 
 const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
@@ -55,6 +62,8 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
       {steps.map((s, i) => {
         const meta = STEP_STATUS_META[s.status] || { color: 'default', text: s.status }
+        // 旧数据没有 agent_label：智能体工具只显示步骤摘要，避免回退成 call_xxx_agent 原始名
+        const label = s.agent_label || (s.tool?.startsWith('call_') ? '' : s.tool)
         const node = (
           <div key={s.step_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#64748b', flexWrap: 'wrap' }}>
             <span
@@ -68,7 +77,7 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
             >
               {i + 1}
             </span>
-            <span style={{ fontWeight: 600, color: '#334155' }}>{s.agent_label || s.tool}</span>
+            {label && <span style={{ fontWeight: 600, color: '#334155' }}>{label}</span>}
             {s.summary && <span>{s.summary}</span>}
             <Tag color={meta.color} style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
               {meta.text}
@@ -88,8 +97,27 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
   )
 }
 
+// 任务执行计划卡片：先于步骤时间线展示"助手打算怎么做"
+const PlanCard: React.FC<{ plan: AssistantPlan }> = ({ plan }) => (
+  <div style={{ marginTop: 6, border: '1px solid #dbeafe', background: '#f0f9ff', borderRadius: 10, padding: '8px 12px', fontSize: 12, color: '#334155' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#1d4ed8', marginBottom: plan.status === 'planning' ? 0 : 6 }}>
+      {plan.status === 'planning'
+        ? <LoadingOutlined spin style={{ fontSize: 12 }} />
+        : <UnorderedListOutlined style={{ fontSize: 12 }} />}
+      执行计划
+      {plan.status === 'planning' && <span style={{ fontWeight: 400, color: '#64748b' }}>正在规划…</span>}
+    </div>
+    {plan.status === 'ready' && (
+      <ol style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+        {plan.steps.map((step, i) => <li key={i}>{step}</li>)}
+      </ol>
+    )}
+  </div>
+)
+
 // 写操作确认卡片：订单号、字段、旧值 → 新值、确认 / 取消
 const WRITE_FIELD_LABELS: Record<string, string> = {
+  promised_date: '合同交期',
   shipping_plan: '出货计划',
   delivery_completed_date: '发货完成时间',
   customer_inspection_date: '客户验货时间',
@@ -104,6 +132,22 @@ const ConfirmationCard: React.FC<{
 }> = ({ confirmation, confirming, onConfirm, onCancel }) => {
   const pending = confirmation.status === 'pending'
 
+  const isOrder = !confirmation.action_type || confirmation.action_type === 'order_update'
+  const preview = confirmation.preview || {}
+  const previewRows: Array<[string, any]> = [
+    ['接收人', preview.assignee_name],
+    ['任务标题', preview.task_title],
+    ['截止时间', preview.due_at],
+    ['优先级', preview.priority],
+    ['业务对象', preview.biz_title],
+    ['新接收人', preview.new_assignee_name],
+    ['成员', preview.target_name || preview.agent_name],
+    ['原因', preview.reason],
+    ['汇报摘要', preview.summary],
+    ['授予能力', Array.isArray(preview.granted) ? preview.granted.join(', ') : preview.granted],
+    ['禁用能力', Array.isArray(preview.disabled) ? preview.disabled.join(', ') : preview.disabled],
+  ].filter(([, value]) => value !== undefined && value !== null && value !== '') as Array<[string, any]>
+
   return (
     <div
       style={{
@@ -117,10 +161,10 @@ const ConfirmationCard: React.FC<{
       }}
     >
       <div style={{ fontWeight: 600, color: '#92400e', marginBottom: 6 }}>
-        写操作确认 — 订单 {confirmation.order_no}
-        <span style={{ marginLeft: 6, fontWeight: 400, color: '#b45309', fontSize: 11 }}>（不可撤销）</span>
+        {isOrder ? `写操作确认 — 订单 ${confirmation.order_no}` : `操作确认 — ${preview.title || confirmation.action_type}`}
+        <span style={{ marginLeft: 6, fontWeight: 400, color: '#b45309', fontSize: 11 }}>（服务端将再次校验权限与状态）</span>
       </div>
-      {confirmation.fields.map(f => (
+      {isOrder ? confirmation.fields.map(f => (
         <div key={f.field} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, color: '#78350f', flexWrap: 'wrap' }}>
           <span style={{ minWidth: 84, fontWeight: 500 }}>{WRITE_FIELD_LABELS[f.field] || f.field}</span>
           <code style={{ background: '#fef3c7', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>
@@ -130,6 +174,11 @@ const ConfirmationCard: React.FC<{
           <code style={{ background: '#fde68a', padding: '1px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
             {f.new_value ?? '（空）'}
           </code>
+        </div>
+      )) : previewRows.map(([label, value]) => (
+        <div key={label} style={{ display: 'flex', gap: 6, marginBottom: 3, color: '#78350f', flexWrap: 'wrap' }}>
+          <span style={{ minWidth: 84, fontWeight: 500 }}>{label}</span>
+          <span style={{ wordBreak: 'break-all' }}>{String(value)}</span>
         </div>
       ))}
 
@@ -171,14 +220,15 @@ const ConfirmationCard: React.FC<{
         />
       )}
       {confirmation.status === 'cancelled' && (
-        <div style={{ marginTop: 6, color: '#94a3b8' }}>已取消，未产生任何写入</div>
+        <div style={{ marginTop: 6, color: '#94a3b8' }}>已取消，未产生任何变更</div>
       )}
     </div>
   )
 }
 
-const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear, onStop, onConfirm, onCancelConfirmation }) => {
+const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onClear, onStop, onConfirm, onCancelConfirmation }) => {
   const [inputValue, setInputValue] = useState('')
+  const inputRef = useRef<any>(null)
   const shouldAutoScrollRef = useRef(true)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -243,60 +293,29 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
       >
         {messages.length === 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100%', textAlign: 'center', padding: '24px 8px' }}>
-            <div style={{
-              width: 64, height: 64, borderRadius: 20,
-              background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 12px 28px rgba(59,130,246,.35)',
-              marginBottom: 16,
-            }}>
-              <RobotOutlined style={{ fontSize: 32, color: '#fff' }} />
-            </div>
             <div style={{ fontSize: 16, fontWeight: 600, color: '#1e293b' }}>您好，我是 AI 智能助手</div>
             <div style={{ fontSize: 12, marginTop: 6, color: '#94a3b8' }}>
               不仅能查询数据，还能给出行动建议
             </div>
 
-            {/* 推荐提问 */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 18, width: '100%', maxWidth: 320 }}>
-              {[
-                { icon: '📋', text: '今日简报', q: '今天有什么需要关注的？' },
-                { icon: '⚠️', text: '逾期订单', q: '有哪些逾期订单？' },
-                { icon: '🔔', text: '采购预警', q: '采购有什么风险？' },
-              ].map(item => (
-                <div
-                  key={item.text}
-                  onClick={() => onSend(item.q)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '10px 12px', borderRadius: 12,
-                    background: '#fff', border: '1px solid #e2e8f0',
-                    cursor: 'pointer', textAlign: 'left',
-                    transition: 'all .15s ease',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#93c5fd'; e.currentTarget.style.background = '#f0f9ff' }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.background = '#fff' }}
-                >
-                  <span style={{ fontSize: 18 }}>{item.icon}</span>
-                  <span style={{ fontSize: 13, color: '#334155' }}>{item.text}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* 技能快捷指令 */}
-            {skills.length > 0 && (
+            {/* 我的团队成员：点击填入并聚焦输入框 */}
+            {teamAgents.length > 0 && (
               <>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 18, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <ThunderboltOutlined style={{ color: '#f59e0b' }} /> 快捷指令
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 18, marginBottom: 8 }}>
+                  我的团队成员
                 </div>
                 <Space wrap size={[6, 6]} style={{ justifyContent: 'center', maxWidth: 320 }}>
-                  {skills.map(s => (
+                  {teamAgents.map(agent => (
                     <Tag
-                      key={s.intent}
+                      key={agent.id}
+                      title={(agent.capabilities || []).map(c => c.name).join('、')}
                       style={{ cursor: 'pointer', fontSize: 12, borderRadius: 12, padding: '2px 10px', border: '1px solid #dbeafe', background: '#eff6ff', color: '#1d4ed8', margin: 0 }}
-                      onClick={() => onSend(s.keywords[0] || s.name)}
+                      onClick={() => {
+                        setInputValue(prev => prev.trim() ? prev : `请用「${agent.name}」`)
+                        inputRef.current?.focus()
+                      }}
                     >
-                      {s.name}
+                      {agent.name}
                     </Tag>
                   ))}
                 </Space>
@@ -363,6 +382,13 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
                   />
                 )}
               </div>
+
+              {/* 执行计划 */}
+              {msg.plan && (
+                <div style={{ maxWidth: '88%' }}>
+                  <PlanCard plan={msg.plan} />
+                </div>
+              )}
 
               {/* 编排步骤时间线 */}
               {msg.steps && msg.steps.length > 0 && (
@@ -505,6 +531,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, skills, onSend, onClear
       <div style={{ padding: '10px 12px', borderTop: '1px solid #eef2f7', background: '#fff' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f1f5f9', borderRadius: 12, padding: '4px 4px 4px 12px', border: '1px solid #e2e8f0' }}>
           <Input
+            ref={inputRef}
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}

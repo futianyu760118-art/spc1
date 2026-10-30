@@ -30,12 +30,18 @@ function createConfig({ agentKey, envPath, defaults = {} }) {
     return Number.isFinite(parsed) ? parsed : fallback;
   };
 
+  const systemId = process.env.EXECUTION_SYSTEM_ID ?? fileVars.EXECUTION_SYSTEM_ID ?? "";
+  const systemToken = process.env.EXECUTION_SYSTEM_TOKEN ?? fileVars.EXECUTION_SYSTEM_TOKEN ?? "";
+  const legacyToken = systemId && systemToken
+    ? (process.env.EXECUTION_PLANE_TOKEN ?? fileVars.EXECUTION_PLANE_TOKEN ?? "")
+    : read("EXECUTION_PLANE_TOKEN");
+
   const config = {
     ...defaults.configDefaults,
     agentKey: read("EXECUTION_AGENT_KEY", agentKey),
     // wsUrl 允许为空：置空即「本地模式」，只提供 /admin/run 与 /admin/status，不连 Hub
     wsUrl: (process.env.EXECUTION_WS_URL ?? fileVars.EXECUTION_WS_URL ?? defaults.wsUrl ?? "").trim(),
-    token: read("EXECUTION_PLANE_TOKEN"),
+    token: legacyToken,
     agentId: read("EXECUTION_AGENT_ID", defaults.agentId),
     agentName: read("EXECUTION_AGENT_NAME", defaults.agentName),
     agentVersion: read("AGENT_VERSION", defaults.agentVersion),
@@ -46,8 +52,13 @@ function createConfig({ agentKey, envPath, defaults = {} }) {
     healthCheckPort: toInt("HEALTH_CHECK_PORT", defaults.healthCheckPort ?? 8790),
     logLevel: read("LOG_LEVEL", "info"),
     adminToken: process.env.AGENT_ADMIN_TOKEN ?? fileVars.AGENT_ADMIN_TOKEN ?? "",
-    systemId: process.env.EXECUTION_SYSTEM_ID ?? fileVars.EXECUTION_SYSTEM_ID ?? "",
-    systemToken: process.env.EXECUTION_SYSTEM_TOKEN ?? fileVars.EXECUTION_SYSTEM_TOKEN ?? "",
+    systemId,
+    systemToken,
+    backendInternalBaseUrl: (process.env.BACKEND_INTERNAL_BASE_URL ?? fileVars.BACKEND_INTERNAL_BASE_URL ?? "").trim(),
+    gatewayInternalToken: process.env.GATEWAY_INTERNAL_TOKEN ?? fileVars.GATEWAY_INTERNAL_TOKEN ?? "",
+    hubBaseUrl: (process.env.AEOS_HUB_BASE ?? fileVars.AEOS_HUB_BASE ?? "").trim(),
+    hubSystemId: process.env.AEOS_SYSTEM_ID ?? fileVars.AEOS_SYSTEM_ID ?? "",
+    hubSystemToken: process.env.AEOS_SYSTEM_TOKEN ?? fileVars.AEOS_SYSTEM_TOKEN ?? "",
     configVersion: 0,
   };
 

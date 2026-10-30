@@ -175,6 +175,19 @@ _SHARE_PATH_TO_RESOURCE: dict[str, str] = {
 }
 
 
+def check_permission(permissions: dict, resource: str, action: str) -> bool:
+    """resource.action 权限判断（含全链路父级 fallback），与 PermissionChecker 语义一致（不含别名）。
+
+    供服务层/工具层在拿到 permissions dict 后做与路由相同的判定，避免各处重复实现。
+    """
+    if not isinstance(permissions, dict):
+        return False
+    candidates = [resource]
+    parts = resource.split(".")
+    candidates.extend(".".join(parts[:i]) for i in range(len(parts) - 1, 0, -1))
+    return any(action in (permissions.get(c) or []) for c in candidates)
+
+
 class PermissionChecker:
     """权限校验依赖，用法: Depends(PermissionChecker("orders", "update"))
     admin角色自动通过所有权限检查

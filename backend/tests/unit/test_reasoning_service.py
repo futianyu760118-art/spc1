@@ -135,6 +135,17 @@ def test_replay_succeeded_marks_idempotent():
     assert replayed["summary"] == "s"
 
 
+def test_replay_normalizes_legacy_float_duration():
+    record = SimpleNamespace(
+        status="succeeded",
+        result_json={"task_id": "t4", "summary": "s", "duration_ms": 123.4},
+        task_id="t4", error_code=None, error_message=None,
+    )
+    replayed = rs._replay_existing_task(record)
+    assert replayed["duration_ms"] == 123
+    assert isinstance(replayed["duration_ms"], int)
+
+
 def test_replay_failed_raises_recorded_error():
     record = SimpleNamespace(
         status="failed", result_json=None, task_id="t2",

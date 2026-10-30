@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Button } from 'antd'
-import { RobotOutlined, CloseOutlined } from '@ant-design/icons'
+import { Button, List, Popover } from 'antd'
+import { RobotOutlined, CloseOutlined, HistoryOutlined } from '@ant-design/icons'
 import ChatPanel from './ChatPanel'
 import { useAssistantChat } from './useAssistantChat'
+import { agentApi } from '../../services/agent'
 
 // 悬浮球尺寸
 const BALL_SIZE = 52
@@ -23,7 +24,12 @@ const WIN_HEIGHT = 620
 
 const FloatingAssistant: React.FC = () => {
   const [open, setOpen] = useState(false)
-  const { messages, loading, send, skills, loadSkills, clearMessages, stopStreaming, confirmWrite, cancelWrite } = useAssistantChat()
+  const [conversationList, setConversationList] = useState<any[]>([])
+  const [teamAgents, setTeamAgents] = useState<Array<{ id: number; name: string; capabilities?: Array<{ code: string; name: string }> }>>([])
+  const {
+    messages, loading, send, clearMessages, stopStreaming,
+    confirmWrite, cancelWrite, loadConversation,
+  } = useAssistantChat()
 
   // 以距右、距底的偏移存储位置，窗口缩放时仍贴右下
   const [pos, setPos] = useState({ right: 24, bottom: 24 })
@@ -35,10 +41,32 @@ const FloatingAssistant: React.FC = () => {
   const idleTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
-    if (open && skills.length === 0) {
-      loadSkills()
+    if (!open) return
+    agentApi.team()
+      .then((res: any) => setTeamAgents(res.data?.items || []))
+      .catch(() => setTeamAgents([]))
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    agentApi.conversations({ page_size: 20 }, true)
+      .then((res: any) => setConversationList(res.data?.items || []))
+      .catch(() => setConversationList([]))
+  }, [open])
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {}
+      if (detail.newConversation) {
+        clearMessages()
+      } else if (detail.conversationId) {
+        loadConversation(Number(detail.conversationId))
+      }
+      setOpen(true)
     }
-  }, [open, skills.length, loadSkills])
+    window.addEventListener('spc:open-assistant', handler)
+    return () => window.removeEventListener('spc:open-assistant', handler)
+  }, [clearMessages, loadConversation])
 
   // 任何交互（悬停 / 拖动 / 打开面板）都应取消收起状态
   useEffect(() => {
@@ -185,13 +213,44 @@ const FloatingAssistant: React.FC = () => {
               <RobotOutlined style={{ fontSize: 18 }} />
               AI 智能助手
             </span>
-            <Button
-              type="text"
-              size="small"
-              icon={<CloseOutlined />}
-              onClick={() => setOpen(false)}
-              style={{ color: '#fff', width: 28, height: 28, borderRadius: 8 }}
-            />
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                title="历史会话"
+                content={
+                  <List
+                    size="small"
+                    style={{ width: 300 }}
+                    dataSource={conversationList}
+                    locale={{ emptyText: '暂无历史会话' }}
+                    renderItem={(item: any) => (
+                      <List.Item
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => {
+                          loadConversation(item.id)
+                          setOpen(true)
+                        }}
+                      >
+                        <List.Item.Meta
+                          title={<span style={{ fontSize: 12 }}>{item.title || '（未命名会话）'}</span>}
+                          description={<span style={{ fontSize: 11 }}>{item.last_message_at ? new Date(item.last_message_at).toLocaleString('zh-CN') : ''}</span>}
+                        />
+                      </List.Item>
+                    )}
+                  />
+                }
+              >
+                <Button type="text" size="small" icon={<HistoryOutlined />} style={{ color: '#fff' }} />
+              </Popover>
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={() => setOpen(false)}
+                style={{ color: '#fff', width: 28, height: 28, borderRadius: 8 }}
+              />
+            </span>
           </div>
 
           {/* 主体 */}
@@ -199,8 +258,8 @@ const FloatingAssistant: React.FC = () => {
             <ChatPanel
               messages={messages}
               loading={loading}
-              skills={skills}
-              onSend={send}
+              teamAgents={teamAgents}
+              onSend={(text) => send(text)}
               onClear={clearMessages}
               onStop={stopStreaming}
               onConfirm={confirmWrite}

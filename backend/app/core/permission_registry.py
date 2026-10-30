@@ -453,3 +453,24 @@ declare_permission(
     actions=["read", "create", "update", "convert"],
     route_path="/purchase-requisitions", sort_order=15,
 )
+
+# 智能体中心 — 智能体目录、勾选式团队、团队能力门控
+declare_permission(
+    "ai.agent.self", "智能体中心",
+    module="agent", actions=["read"], sort_order=15,
+)
+declare_permission(
+    "ai.agent.self.me", "我的智能体",
+    module="agent", parent_code="ai.agent.self", actions=["read"],
+    route_path="/agents/me", sort_order=1,
+)
+declare_permission(
+    "ai.agent.team", "我的团队",
+    module="agent", parent_code="ai.agent.self", actions=["read"],
+    route_path="/agents/team", sort_order=2,
+)
+declare_permission(
+    "ai.agent.admin", "智能体管理",
+    module="agent", parent_code="ai.agent.self", actions=["read", "update"],
+    route_path="/agents/admin", sort_order=3,
+)

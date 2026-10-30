@@ -455,6 +455,12 @@ class DatabaseInitializer:
                 "sender_name": "VARCHAR(64)",
                 "ref_no": "VARCHAR(64)",
             },
+            "assistant_run": {
+                "agent_id": "BIGINT",
+                "task_id": "BIGINT",
+                "conversation_id": "BIGINT",
+                "trigger": "VARCHAR(16) NOT NULL DEFAULT 'chat'",
+            },
         }
         # 删除已废弃的列
         drop_columns = {
@@ -1093,6 +1099,148 @@ class DatabaseInitializer:
             except Exception as e:
                 print(f"  sys_user.permissions migration skipped: {e}")
 
+    async def migrate_agent_center_permissions(self):
+        """智能体中心从「任务闭环」收敛为「层级 + 能力 + 委派」：清理旧菜单权限。"""
+        print("Migrating agent center permissions...")
+        async with self.engine.begin() as conn:
+            try:
+                await conn.execute(text(
+                    "DELETE FROM sys_permission WHERE code IN ("
+                    "'ai.agent.self.tasks','ai.agent.team.tasks','ai.agent.team.config'"
+                    ")"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '智能体中心' WHERE code = 'ai.agent.self'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '我的智能体', parent_code = 'ai.agent.self', "
+                    "route_path = '/agents/me', actions = '[\"read\"]'::jsonb "
+                    "WHERE code = 'ai.agent.self.me'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '我的团队', parent_code = 'ai.agent.self', "
+                    "route_path = '/agents/team', actions = '[\"read\"]'::jsonb "
+                    "WHERE code = 'ai.agent.team'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '智能体管理', parent_code = 'ai.agent.self' "
+                    "WHERE code = 'ai.agent.admin'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_role SET permissions = permissions "
+                    "- 'ai.agent.self.tasks' - 'ai.agent.team.tasks' - 'ai.agent.team.config'"
+                ))
+                print("  agent center permissions migrated")
+            except Exception as e:
+                print(f"  agent center permissions migration skipped: {e}")
+
+    async def migrate_agent_team_redesign(self):
+        """智能体团队制重构：agent 表转目录、删员工镜像列、清旧账本；仅旧结构存在时执行一次。"""
+        async with self.engine.begin() as conn:
+            legacy = (await conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='agent' AND column_name='user_id'"
+            ))).first()
+            if legacy:
+                print("Migrating agent team redesign (legacy structure found)...")
+                await conn.execute(text("DROP TABLE IF EXISTS agent_hierarchy_log"))
+                await conn.execute(text("DROP TABLE IF EXISTS agent_config_log"))
+                await conn.execute(text("DELETE FROM agent_call_log"))
+                # 会话外键 agent_id -> agent.id 必须先摘除，否则清空 agent 触发 FK violation
+                await conn.execute(text("ALTER TABLE agent_conversation DROP COLUMN IF EXISTS agent_id"))
+                await conn.execute(text("DROP INDEX IF EXISTS ix_agent_conversation_agent_last"))
+                await conn.execute(text("DELETE FROM agent"))
+                await conn.execute(text("ALTER TABLE agent DROP COLUMN IF EXISTS user_id"))
+                await conn.execute(text("ALTER TABLE agent DROP COLUMN IF EXISTS parent_agent_id"))
+                await conn.execute(text("ALTER TABLE agent DROP COLUMN IF EXISTS capability_policy"))
+                await conn.execute(text("DROP INDEX IF EXISTS ix_agent_parent_agent_id"))
+            else:
+                print("Agent team redesign migration skipped (already catalog).")
+            # 新列（幂等，老库首跑/新库都走；老库首跑时表已清空，加 NOT NULL 安全）
+            await conn.execute(text(
+                "ALTER TABLE agent ALTER COLUMN display_name SET NOT NULL"))
+            await conn.execute(text(
+                "ALTER TABLE agent ADD COLUMN IF NOT EXISTS scope_type VARCHAR(16) NOT NULL DEFAULT 'all'"))
+            await conn.execute(text(
+                "ALTER TABLE agent ADD COLUMN IF NOT EXISTS scope_role_ids JSONB"))
+            await conn.execute(text(
+                "ALTER TABLE agent ADD COLUMN IF NOT EXISTS description VARCHAR(500)"))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_agent_conversation_user_last "
+                "ON agent_conversation (user_id, last_message_at)"))
+            # 调用日志瘦身
+            await conn.execute(text(
+                "ALTER TABLE agent_call_log DROP COLUMN IF EXISTS caller_agent_id"))
+            await conn.execute(text(
+                "ALTER TABLE agent_call_log DROP COLUMN IF EXISTS callee_user_id"))
+            await conn.execute(text(
+                "ALTER TABLE agent_call_log DROP COLUMN IF EXISTS depth"))
+            await conn.execute(text(
+                "ALTER TABLE agent_call_log ALTER COLUMN caller_user_id SET NOT NULL"))
+            await conn.execute(text(
+                "DROP INDEX IF EXISTS ix_agent_call_log_caller_created"))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_agent_call_log_caller_created "
+                "ON agent_call_log (caller_user_id, created_at)"))
+            # 网关派单审计不再记录解析到的员工智能体（镜像已废）
+            await conn.execute(text(
+                "ALTER TABLE gateway_dispatch_log DROP COLUMN IF EXISTS resolved_agent_id"))
+            await conn.execute(text(
+                "ALTER TABLE gateway_dispatch_log DROP COLUMN IF EXISTS resolved_agent_no"))
+        print("Agent team redesign migration done.")
+
+    async def migrate_agent_multi_capability(self):
+        """智能体多能力：capability_code（单值）转 capability_codes（数组）；仅单值列存在时执行一次。"""
+        async with self.engine.begin() as conn:
+            await conn.execute(text(
+                "ALTER TABLE agent ADD COLUMN IF NOT EXISTS capability_codes JSONB NOT NULL DEFAULT '[]'::jsonb"))
+            legacy = (await conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='agent' AND column_name='capability_code'"
+            ))).first()
+            if legacy:
+                print("Migrating agent multi capability (legacy single-code found)...")
+                # 单值回填为数组后，替换旧单能力种子（由 seed_system_agents 重建多能力角色种子）；
+                # 先清勾选关系再删种子，避免 agent_team_member 外键阻塞
+                await conn.execute(text(
+                    "UPDATE agent SET capability_codes = jsonb_build_array(capability_code) "
+                    "WHERE capability_code IS NOT NULL AND capability_codes = '[]'::jsonb"))
+                await conn.execute(text(
+                    "DELETE FROM agent_team_member "
+                    "WHERE agent_id IN (SELECT id FROM agent WHERE agent_no LIKE 'AG-SYS-%')"))
+                await conn.execute(text("DELETE FROM agent WHERE agent_no LIKE 'AG-SYS-%'"))
+                await conn.execute(text("DROP INDEX IF EXISTS ix_agent_capability_code"))
+                await conn.execute(text("ALTER TABLE agent DROP COLUMN IF EXISTS capability_code"))
+            else:
+                print("Agent multi capability migration skipped (already array).")
+        print("Agent multi capability migration done.")
+
+    async def migrate_agent_write_capability_split(self):
+        """写能力按字段拆分：把旧 write.order_schedule 展开为 5 个单字段写能力（幂等）。"""
+        WRITE_SPLIT_CODES = [
+            "write.order_promised_date", "write.order_shipping_plan",
+            "write.order_delivery_completed", "write.order_customer_inspection",
+            "write.order_planned_start",
+        ]
+        async with self.engine.begin() as conn:
+            rows = (await conn.execute(text(
+                "SELECT id, capability_codes FROM agent "
+                "WHERE capability_codes @> '[\"write.order_schedule\"]'::jsonb"
+            ))).all()
+            if not rows:
+                print("Agent write capability split skipped (already split).")
+                return
+            print(f"Migrating agent write capability split ({len(rows)} agent rows)...")
+            for row in rows:
+                codes = [c for c in (row.capability_codes or []) if c != "write.order_schedule"]
+                codes.extend(WRITE_SPLIT_CODES)
+                deduped = list(dict.fromkeys(codes))
+                await conn.execute(text(
+                    "UPDATE agent SET capability_codes = CAST(:codes AS jsonb), "
+                    "config_version = config_version + 1 WHERE id = :id"
+                ), {"codes": json.dumps(deduped), "id": row.id})
+        print("Agent write capability split done.")
+
     async def rebuild_mrp_plan_order(self):
         """按 PRD 重建 mrp_plan_order 表（销售订单ID + 物料ID 联合主键）。
         若检测到旧结构（存在自增 id 列）则 DROP 后按 ORM 模型重建；
@@ -1374,6 +1522,52 @@ class DatabaseInitializer:
             except Exception as e:
                 await session.rollback()
                 print(f"Error seeding roles: {e}")
+                raise
+
+    SYSTEM_AGENTS = [
+        ("AG-SYS-ORDERS", "订单专员", "query.orders,query.order_details,reason.orders",
+         "销售订单/明细只读查询与交期风险推理分析"),
+        ("AG-SYS-MATERIAL", "物料专员", "query.kitting,query.material_supplies,reason.materials",
+         "齐套/缺料/物料供给只读查询与齐套风险推理分析"),
+        ("AG-SYS-QUALITY", "品质专员", "query.quality,query.quality_trace,reason.quality",
+         "品质异常/质量追溯只读查询与品质推理分析"),
+        ("AG-SYS-MASTERDATA", "主数据查询员", "query.materials,query.suppliers,query.boms,query.inventory",
+         "物料/供应商/BOM/库存等全局共享主数据只读查询"),
+        ("AG-SYS-WRITE", "计划写入员",
+         "write.order_promised_date,write.order_shipping_plan,write.order_delivery_completed,"
+         "write.order_customer_inspection,write.order_planned_start",
+         "修改订单合同交期/出货计划/发货完成/客户验货/上线时间（必须人工确认）"),
+        ("AG-SYS-SERVICE", "服务台", "write.feedback_create",
+         "代提交问题反馈，并支持撤销本人待处理的反馈"),
+    ]
+
+    async def seed_system_agents(self):
+        """幂等 seed 默认智能体（按 agent_no 判重，不覆盖管理员改动）。"""
+        print("Seeding system agents...")
+        async with AsyncSessionLocal() as session:
+            try:
+                for agent_no, name, capability_codes, desc in self.SYSTEM_AGENTS:
+                    exists = (await session.execute(
+                        text("SELECT 1 FROM agent WHERE agent_no = :no"), {"no": agent_no}
+                    )).first()
+                    if exists:
+                        continue
+                    await session.execute(text(
+                        "INSERT INTO agent (agent_no, display_name, capability_codes, scope_type, "
+                        "description, status, config_version) "
+                        "VALUES (:no, :name, CAST(:codes AS jsonb), 'all', :desc, 'active', 1)"),
+                        {
+                            "no": agent_no, "name": name,
+                            "codes": json.dumps(capability_codes.split(",")),
+                            "desc": desc,
+                        },
+                    )
+                await session.commit()
+                print("System agents seeded.")
+
+            except Exception as e:
+                await session.rollback()
+                print(f"Error seeding system agents: {e}")
                 raise
 
     async def seed_completeness_rules(self):
@@ -2688,6 +2882,9 @@ ORDER BY [{safe_order_alias}]
             self.create_database()
             await self.create_tables()
             await self.migrate_columns()
+            await self.migrate_agent_team_redesign()
+            await self.migrate_agent_multi_capability()
+            await self.migrate_agent_write_capability_split()
             await self.drop_pto_sale_order_id_fk()
             await self.ensure_indexes()
             await self.migrate_stock_check_k3_writeback_counter_manager()
@@ -2698,7 +2895,9 @@ ORDER BY [{safe_order_alias}]
             await self.backfill_sale_order_id()
             await self.backfill_sys_user_scm_employee_id()
             await self.migrate_stock_check_permission()
+            await self.migrate_agent_center_permissions()
             await self.seed_roles()
+            await self.seed_system_agents()
             await self.seed_completeness_rules()
             await self.seed_users()
             await self.seed_price_change_rule_config()
