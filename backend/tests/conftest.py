@@ -194,6 +194,8 @@ async def _test_db():
         await conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS ai_result JSONB"))
         await conn.execute(text("ALTER TABLE supplier_claim ADD COLUMN IF NOT EXISTS clause_snapshot JSONB"))
         await conn.execute(text("ALTER TABLE notification ADD COLUMN IF NOT EXISTS ref_no VARCHAR(64)"))
+        await conn.execute(text("ALTER TABLE sale_order ADD COLUMN IF NOT EXISTS inbound_date DATE"))
+        await conn.execute(text("ALTER TABLE sale_order ADD COLUMN IF NOT EXISTS outbound_date DATE"))
         await conn.execute(text("ALTER TABLE assistant_run ADD COLUMN IF NOT EXISTS agent_id BIGINT"))
         await conn.execute(text("ALTER TABLE assistant_run ADD COLUMN IF NOT EXISTS task_id BIGINT"))
         await conn.execute(text("ALTER TABLE assistant_run ADD COLUMN IF NOT EXISTS conversation_id BIGINT"))

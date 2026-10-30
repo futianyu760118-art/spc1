@@ -192,9 +192,9 @@ export default function Dashboard372() {
   const [materialCards, setMaterialCards] = useState<TodayCard[]>([])
   const [loading, setLoading] = useState(false)
 
-  const loadTodayCards = async () => {
+  const loadTodayCards = async (baseDate: Dayjs) => {
     try {
-      const res: any = await productionApi.getTodayCards()
+      const res: any = await productionApi.getTodayCards({ target_date: baseDate.format('YYYY-MM-DD') })
       if (res?.data) {
         setTodayCards(res.data as TodayCard[])
       }
@@ -204,14 +204,20 @@ export default function Dashboard372() {
     }
   }
 
-  // 阶段 2：冷冻/配料区卡片直接调 listSchedulePlans（用 time_zone 参数）
-  const loadZoneCards = async (timeZone: 'frozen' | 'material', setter: (v: TodayCard[]) => void) => {
+  // 阶段 2：冷冻/配料区卡片直接调 listSchedulePlans（按基准日推算日期区间）
+  const loadZoneCards = async (
+    startOffset: number,
+    endOffset: number,
+    setter: (v: TodayCard[]) => void,
+    baseDate: Dayjs,
+  ) => {
     try {
       const res: any = await productionApi.listSchedulePlans({
         page: 1,
         page_size: 50,
         is_active: true,
-        time_zone: timeZone,
+        date_start: baseDate.add(startOffset, 'day').format('YYYY-MM-DD'),
+        date_end: baseDate.add(endOffset, 'day').format('YYYY-MM-DD'),
       })
       const items = res?.data?.items || []
       setter(items.map((r: any): TodayCard => ({
@@ -233,10 +239,10 @@ export default function Dashboard372() {
     }
   }
 
-  const loadKpi = async () => {
+  const loadKpi = async (baseDate: Dayjs) => {
     setLoading(true)
     try {
-      const res: any = await productionApi.getKpiSummary()
+      const res: any = await productionApi.getKpiSummary({ target_date: baseDate.format('YYYY-MM-DD') })
       if (res?.data) {
         const d = res.data
         setKpi({
@@ -280,11 +286,11 @@ export default function Dashboard372() {
   }
 
   useEffect(() => {
-    loadKpi()
-    loadTodayCards()
-    loadZoneCards('frozen', setFrozenCards)
-    loadZoneCards('material', setMaterialCards)
-  }, [])
+    loadKpi(currentDate)
+    loadTodayCards(currentDate)
+    loadZoneCards(1, 3, setFrozenCards, currentDate)
+    loadZoneCards(4, 10, setMaterialCards, currentDate)
+  }, [currentDate])
 
   const dateLabel = useMemo(() => currentDate.format('YYYY-MM-DD'), [currentDate])
 

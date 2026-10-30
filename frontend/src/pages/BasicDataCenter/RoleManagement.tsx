@@ -89,6 +89,7 @@ const FALLBACK_PERMISSION_TREE: PermTreeNode[] = [
     children: [
       { key: 'production.overview', label: '生产总览' },
       { key: 'production.schedule_plans', label: '计划排产' },
+      { key: 'production.schedule_date_adjust', label: '日期调整' },
       { key: 'production.front_process', label: '前道管理' },
       { key: 'production.smt', label: '贴片管理' },
       { key: 'production.lean', label: '精益管理' },

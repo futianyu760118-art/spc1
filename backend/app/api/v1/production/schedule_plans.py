@@ -66,6 +66,7 @@ from app.schemas.production.schemas import (
     BoardCapacityResponse,
 )
 from app.services.production.config_service import ProductionScheduleConfigService
+from app.services.production.kpi_summary_service import invalidate_kpi_cache
 from app.services.production.assembly_roll_schedule_service import AssemblyRollScheduleService
 from app.services.production.plan_delete_backfill_service import PlanDeleteAndBackfillService
 from app.services.production.production_change_service import ProductionChangeService
@@ -188,8 +189,9 @@ async def _check_production_schedule_permission_fast(
     token: str,
     db: AsyncSession,
     action: str = "read",
+    any_of: Optional[list[tuple[str, str]]] = None,
 ) -> tuple[dict, dict[str, object]]:
-    checker = PermissionChecker("production.schedule_plans", action)
+    checker = PermissionChecker("production.schedule_plans", action, any_of=any_of)
     timings: dict[str, object] = {}
 
     decode_started_at = perf_counter()
@@ -250,24 +252,14 @@ async def _check_production_schedule_permission_fast(
     timings["merge_role_permissions"] = round((perf_counter() - permission_merge_started_at) * 1000, 2)
 
     permission_eval_started_at = perf_counter()
-    for resource in checker._resource_candidates():
-        allowed_actions = permissions.get(resource, [])
-        if checker.action in allowed_actions:
-            timings["permission_eval"] = round((perf_counter() - permission_eval_started_at) * 1000, 2)
-            return payload, timings
-    for resource in checker._resource_candidates():
-        if "." not in resource:
-            continue
-        parent = resource.split(".")[0]
-        parent_actions = permissions.get(parent, [])
-        if checker.action in parent_actions:
-            timings["permission_eval"] = round((perf_counter() - permission_eval_started_at) * 1000, 2)
-            return payload, timings
+    if checker._has_any_permission(permissions):
+        timings["permission_eval"] = round((perf_counter() - permission_eval_started_at) * 1000, 2)
+        return payload, timings
 
     timings["permission_eval"] = round((perf_counter() - permission_eval_started_at) * 1000, 2)
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail=f"缺少 {checker.resource}.{checker.action} 权限",
+        detail=checker._forbidden_detail(),
     )
 
 
@@ -275,7 +267,12 @@ async def _check_production_schedule_read_permission_fast(
     token: str,
     db: AsyncSession,
 ) -> tuple[dict, dict[str, object]]:
-    return await _check_production_schedule_permission_fast(token, db, "read")
+    return await _check_production_schedule_permission_fast(
+        token,
+        db,
+        "read",
+        any_of=[("production.schedule_date_adjust", "read")],
+    )
 
 
 async def _get_production_schedule_read_context(
@@ -416,6 +413,8 @@ def _invalidate_schedule_runtime_caches() -> None:
     _schedule_plan_list_cache.clear()
     _delete_preview_cache.clear()
     _production_schedule_read_permission_cache.clear()
+    # 驾驶舱今日卡片/KPI 也在进程内缓存，排产变更后必须一起失效
+    invalidate_kpi_cache()
 
 
 def _get_runtime_page_cache(
@@ -3094,7 +3093,12 @@ async def _build_split_rules_map(db: AsyncSession, bom_codes: list[Optional[str]
             missed.append(code)
 
     if missed:
-        fresh = await AssemblyRollScheduleService(db).get_stage_rules_bulk(missed)
+        try:
+            fresh = await AssemblyRollScheduleService(db).get_stage_rules_bulk(missed)
+        except Exception as exc:
+            # OA 工序规则只是排产增强信息，ERP/OA 不可用时不能让订单池整页 500
+            logger.warning("[split_rules] 工序规则批量查询失败，降级为空: %s", exc)
+            fresh = {}
         for code, payload in fresh.items():
             _split_rules_cache[code] = (now, payload)
             result[code] = payload
@@ -5106,7 +5110,13 @@ async def delete_schedule_plan(
 @router.post("/batch-delete", response_model=ResponseModel[dict])
 async def batch_delete_plans(
     data: dict,
-    current_user: dict = Depends(PermissionChecker("production.schedule_plans", "update")),
+    current_user: dict = Depends(
+        PermissionChecker(
+            "production.schedule_plans",
+            "update",
+            any_of=[("production.schedule_date_adjust", "update")],
+        )
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """批量删除排产计划（简化版：不走补位逻辑，直接删 plan + slot + 重置 snapshot）
@@ -6969,6 +6979,96 @@ async def auto_schedule(
     ))
 
 
+async def _merge_mixed_order_plans(
+    db: AsyncSession,
+    plans: list[ProductionSchedulePlan],
+) -> int:
+    """同订单优先合并: mixed 订单的组装/包装分别压到同一天.
+
+    只在当天剩余产能内占槽, 不推其他订单; 装不下则自动顺延到下一个生产日.
+    """
+    from app.services.production.capacity_slot_service import (
+        MAX_DAILY_HOURS,
+        recompute_plan_slots,
+    )
+
+    assembly_plans = [p for p in plans if (p.source_process_type or "") == "assembly"]
+    packaging_plans = [p for p in plans if (p.source_process_type or "") == "packaging"]
+    config_service = ProductionScheduleConfigService(db)
+    updated = 0
+
+    def total_hours(plan: ProductionSchedulePlan) -> float:
+        qty = _to_float(plan.quantity, 0) or 0
+        upph = _to_float(plan.upph, 0) or 0
+        manpower = max(int(plan.manpower or 10), 1)
+        return qty / (upph * manpower) if upph > 0 else 0
+
+    async def reserve_plan(plan: ProductionSchedulePlan, start: date, bucket: str) -> bool:
+        base = await config_service.get_base_condition(bucket)
+        daily_capacity = max(
+            1.0,
+            min(float(base.get("daily_work_hours") or 8.5), MAX_DAILY_HOURS),
+        )
+        bookings = await recompute_plan_slots(
+            db,
+            plan_id=plan.id,
+            department=str(plan.department or ""),
+            schedule_bucket=bucket,
+            order_no=plan.order_no,
+            line_no=plan.line_no,
+            total_hours=total_hours(plan),
+            target_start_date=start,
+            daily_capacity=daily_capacity,
+            include_sunday=bool(base.get("include_sunday")),
+            serial_mode=False,
+            target_end_date=None,
+            earliest_fill_date=None,
+        )
+        if not bookings:
+            return False
+        plan.plan_date = plan.start_date = min(b["date"] for b in bookings)
+        plan.end_date = max(b["date"] for b in bookings)
+        plan.needs_reschedule = False
+        db.add(plan)
+        return True
+
+    if assembly_plans:
+        anchor = min(
+            (p.start_date or p.plan_date for p in assembly_plans if p.start_date or p.plan_date),
+            default=None,
+        )
+        assembly_plans.sort(key=total_hours, reverse=True)
+        if anchor:
+            for plan in assembly_plans:
+                if await reserve_plan(plan, anchor, "assembly"):
+                    updated += 1
+            await db.flush()
+
+    if packaging_plans:
+        assembly_by_line = {
+            str(p.line_no): p for p in assembly_plans if p.line_no is not None
+        }
+        packaging_targets: dict[int, date] = {}
+        for plan in packaging_plans:
+            assembly = assembly_by_line.get(str(plan.line_no))
+            if assembly and assembly.end_date:
+                packaging_targets[plan.id] = assembly.end_date + timedelta(days=1)
+            elif plan.start_date or plan.plan_date:
+                packaging_targets[plan.id] = plan.start_date or plan.plan_date
+        packaging_plans.sort(
+            key=lambda p: (packaging_targets.get(p.id, date.max), -total_hours(p))
+        )
+        for plan in packaging_plans:
+            target = packaging_targets.get(plan.id)
+            if not target:
+                continue
+            if await reserve_plan(plan, target, "packaging"):
+                updated += 1
+        await db.flush()
+
+    return updated
+
+
 @router.post("/batch-auto-schedule", response_model=ResponseModel[BatchAutoScheduleResponse])
 async def batch_auto_schedule(
     data: BatchAutoScheduleRequest,
@@ -6992,62 +7092,118 @@ async def batch_auto_schedule(
     created_plan_ids: list[int] = []
     synced_keys: set[tuple[str, str]] = set()
 
-    for item in deduplicated_items:
-        try:
-            records, calculation_result, response_message = await _create_schedule_plan_from_request(
-                db,
-                order_no=item.order_no,
-                line_no=item.line_no,
-                department=data.department,
-                plan_date=data.plan_date,
-                upph=item.upph,
-                daily_work_hours=data.daily_work_hours,
-                owner=data.owner,
-                operator=current_user["username"],
-                fail_if_scheduled=True,
-                operation_remark="批量排产创建",
-                manpower=item.manpower or data.manpower,
-                include_sunday=data.include_sunday,
-            )
-            await db.commit()
-            synced_keys.update({
-                (record.order_no, record.line_no)
-                for record in records
-                if record.order_no and record.line_no
-            })
-            _invalidate_schedule_runtime_caches()
-            for record in records:
-                await db.refresh(record)
+    mergeable_buckets = {"lean", "assembly", "packaging"}
+    if data.merge_same_order:
+        grouped_items: dict[tuple[str, str], list] = {}
+        for item in deduplicated_items:
+            bucket = (item.schedule_bucket or "").strip()
+            grouped_items.setdefault((item.order_no, bucket), []).append(item)
+        groups: list[tuple[str, list]] = [
+            (bucket, group_items)
+            for (_, bucket), group_items in grouped_items.items()
+        ]
+    else:
+        groups = [("", [item]) for item in deduplicated_items]
 
-            success_count += 1
-            created_plan_ids.extend([record.id for record in records if record.id])
-            warning = next((record.remark for record in records if record.remark), None)
-            if warning and "延期预警" in warning:
-                delay_warning_count += 1
-            items.append(BatchAutoScheduleItemOut(
-                order_no=item.order_no,
-                line_no=item.line_no,
-                success=True,
-                plan_id=records[0].id if records else None,
-                message=response_message,
-                warning=warning,
-            ))
-        except HTTPException as exc:
-            await db.rollback()
-            items.append(BatchAutoScheduleItemOut(
-                order_no=item.order_no,
-                line_no=item.line_no,
-                success=False,
-                message=str(exc.detail),
-            ))
-        except Exception as exc:
-            await db.rollback()
-            items.append(BatchAutoScheduleItemOut(
-                order_no=item.order_no,
-                line_no=item.line_no,
-                success=False,
-                message=f"排产异常: {exc}",
-            ))
+    async def schedule_one(
+        item,
+        *,
+        plan_date_override: Optional[date] = None,
+        skip_conflict_resolution: bool = False,
+    ):
+        return await _create_schedule_plan_from_request(
+            db,
+            order_no=item.order_no,
+            line_no=item.line_no,
+            department=data.department,
+            plan_date=(
+                plan_date_override
+                if plan_date_override is not None
+                else data.plan_date
+            ),
+            upph=item.upph,
+            daily_work_hours=data.daily_work_hours,
+            owner=data.owner,
+            operator=current_user["username"],
+            fail_if_scheduled=True,
+            operation_remark="批量排产创建",
+            manpower=item.manpower or data.manpower,
+            include_sunday=data.include_sunday,
+            skip_conflict_resolution=skip_conflict_resolution,
+        )
+
+    for group_bucket, group_items in groups:
+        anchor_date: Optional[date] = None
+        group_records: list[ProductionSchedulePlan] = []
+        can_merge = (
+            data.merge_same_order
+            and group_bucket in mergeable_buckets
+            and len(group_items) > 1
+        )
+        for index, item in enumerate(group_items):
+            try:
+                anchor_override = anchor_date if (can_merge and index > 0 and anchor_date) else None
+                records, calculation_result, response_message = await schedule_one(
+                    item,
+                    plan_date_override=anchor_override,
+                    skip_conflict_resolution=bool(anchor_override),
+                )
+                await db.commit()
+                synced_keys.update({
+                    (record.order_no, record.line_no)
+                    for record in records
+                    if record.order_no and record.line_no
+                })
+                _invalidate_schedule_runtime_caches()
+                for record in records:
+                    await db.refresh(record)
+                group_records.extend(records)
+
+                if can_merge and index == 0 and anchor_date is None:
+                    bucket_dates = [
+                        record.start_date or record.plan_date
+                        for record in records
+                        if (record.source_process_type or "") == group_bucket
+                    ]
+                    if not bucket_dates:
+                        bucket_dates = [record.start_date or record.plan_date for record in records]
+                    anchor_date = min((d for d in bucket_dates if d), default=None)
+
+                success_count += 1
+                created_plan_ids.extend([record.id for record in records if record.id])
+                warning = next((record.remark for record in records if record.remark), None)
+                if warning and "延期预警" in warning:
+                    delay_warning_count += 1
+                items.append(BatchAutoScheduleItemOut(
+                    order_no=item.order_no,
+                    line_no=item.line_no,
+                    success=True,
+                    plan_id=records[0].id if records else None,
+                    message=response_message,
+                    warning=warning,
+                ))
+            except HTTPException as exc:
+                await db.rollback()
+                items.append(BatchAutoScheduleItemOut(
+                    order_no=item.order_no,
+                    line_no=item.line_no,
+                    success=False,
+                    message=str(exc.detail),
+                ))
+            except Exception as exc:
+                await db.rollback()
+                items.append(BatchAutoScheduleItemOut(
+                    order_no=item.order_no,
+                    line_no=item.line_no,
+                    success=False,
+                    message=f"排产异常: {exc}",
+                ))
+
+        if data.merge_same_order and group_bucket == "mixed" and group_records:
+            merged_count = await _merge_mixed_order_plans(db, group_records)
+            if merged_count:
+                await db.commit()
+                _invalidate_schedule_runtime_caches()
 
     if created_plan_ids:
         await _log_schedule_operation(
@@ -7055,7 +7211,10 @@ async def batch_auto_schedule(
             "batch_create",
             current_user["username"],
             affected_plan_ids=created_plan_ids,
-            remark=f"批量排产 {len(deduplicated_items)} 条订单，成功 {success_count} 条",
+            remark=(
+                f"批量排产 {len(deduplicated_items)} 条订单"
+                f"{'（同订单优先合并）' if data.merge_same_order else ''}，成功 {success_count} 条"
+            ),
         )
         await db.commit()
         await _sync_snapshot_schedule_state_for_keys(db, synced_keys)

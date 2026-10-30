@@ -178,6 +178,20 @@ class PriceChangeService:
                 return cid
         return None
 
+    @staticmethod
+    def _calc_price_change_pct(old, new) -> float | None:
+        """计算调价幅度并限制在 NUMERIC(10,2) 范围内，避免涨幅过大时 500."""
+        try:
+            old_price = float(old or 0)
+            new_price = float(new or 0)
+        except (TypeError, ValueError):
+            return None
+        if old_price <= 0 or new_price <= 0:
+            return None
+        pct = round((new_price / old_price - 1) * 100, 2)
+        limit = 99999999.99
+        return max(-limit, min(pct, limit))
+
     async def create_price_change(self, data: dict, items_data: list, *, submit=False, applicant="", self_check_evidence: list | None = None, action_note: str = ""):
         # 幂等：短窗口内 同人+同供应商+同明细+同提交态(+凭证有无) 的重复创建，直接返回已有单，避免重复落库
         signature = _items_signature(items_data)
@@ -218,7 +232,7 @@ class PriceChangeService:
         for idx, item in enumerate(items_data):
             old = item.get("old_price")
             new = item.get("new_price")
-            pct = round((float(new) / float(old) - 1) * 100, 2) if old and float(old) > 0 and new and float(new) > 0 else None
+            pct = self._calc_price_change_pct(old, new)
             # old_price_date 列为 varchar(16), 只保留日期部分, 防止带时分秒的字符串超长
             old_price_date = (item.get("old_price_date") or "")[:10] or None
             await self.db.execute(
@@ -279,7 +293,7 @@ class PriceChangeService:
         for idx, item in enumerate(items_data):
             old = item.get("old_price")
             new = item.get("new_price")
-            pct = round((float(new) / float(old) - 1) * 100, 2) if old and float(old) > 0 and new and float(new) > 0 else None
+            pct = self._calc_price_change_pct(old, new)
             # old_price_date 列为 varchar(16), 只保留日期部分
             old_price_date = (item.get("old_price_date") or "")[:10] or None
             await self.db.execute(

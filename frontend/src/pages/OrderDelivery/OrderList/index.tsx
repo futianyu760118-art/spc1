@@ -60,6 +60,8 @@ interface OrderRow {
   risk_assessed_at: string | null
   data_source: string | null
   delivery_completed_date: string | null
+  inbound_date: string | null
+  outbound_date: string | null
   customer_grade: string | null
   shipping_plan: string | null
   shipping_plan_change_count?: number
@@ -240,6 +242,8 @@ const ORDER_COLUMN_GROUPS: { title: string; keys: { key: string; label: string }
     title: '交期 & 计划', keys: [
       { key: 'promised_date', label: '合同交期' },
       { key: 'shipping_plan', label: '出货计划' },
+      { key: 'inbound_date', label: '入库时间' },
+      { key: 'outbound_date', label: '出库时间' },
       { key: 'customer_inspection_date', label: '客户验货时间' },
       { key: 'planned_start_date', label: '上线时间' },
       { key: 'inspection_result', label: '客检结果' },
@@ -280,7 +284,7 @@ const ORDER_COLUMN_KEYS: string[] = ORDER_COLUMN_GROUPS.flatMap(g => g.keys.map(
 const DEFAULT_COLUMN_KEYS: string[] = [
   'department', 'delivery_completed_date', 'customer_grade', 'customer_code', 'order_no',
   'risk_level', 'order_qty', 'order_amount', 'completed_qty', 'order_date',
-  'promised_date', 'shipping_plan', 'inspection_result', 'packaging_status',
+  'promised_date', 'shipping_plan', 'inbound_date', 'outbound_date', 'inspection_result', 'packaging_status',
   'material_ready_date', 'shipping_status_desc', 'procurement_status', 'is_closed', 'status',
 ]
 
@@ -288,6 +292,8 @@ const DEFAULT_COLUMN_KEYS: string[] = [
 const FIELD_EDIT_META: Record<string, { edit?: 'text' | 'date' | 'number' | 'select'; ro?: string }> = {
   department: { ro: 'ERP 同步，只读' },
   delivery_completed_date: { edit: 'date' },
+  inbound_date: { ro: 'K3 同步，只读' },
+  outbound_date: { ro: 'K3 同步，只读' },
   customer_grade: { edit: 'select' },
   customer_code: { ro: 'ERP 同步，只读' },
   order_no: { ro: 'ERP 同步，只读' },
@@ -426,12 +432,28 @@ export default function OrderList() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { exporting, exportData } = useExport()
-  const getColumnVisibility = useUiPreferencesStore(s => s.getColumnVisibility)
+    const getColumnVisibility = useUiPreferencesStore(s => s.getColumnVisibility)
   const setColumnVisibility = useUiPreferencesStore(s => s.setColumnVisibility)
+  const getFlag = useUiPreferencesStore(s => s.getFlag)
+  const setFlag = useUiPreferencesStore(s => s.setFlag)
   const fontSizeScale = useThemeStore(s => s.fontSizeScale)
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<string[]>(
     () => getColumnVisibility(ORDER_LIST_PAGE_KEY, DEFAULT_COLUMN_KEYS)
   )
+
+  useEffect(() => {
+    const flagKey = 'order_list_warehouse_columns_v1'
+    if (getFlag(flagKey, false)) return
+    const current = getColumnVisibility(ORDER_LIST_PAGE_KEY, DEFAULT_COLUMN_KEYS)
+    const merged = Array.from(new Set([...current, 'inbound_date', 'outbound_date']))
+    if (merged.length !== current.length) {
+      setVisibleColumnKeys(merged)
+      setColumnVisibility(ORDER_LIST_PAGE_KEY, merged)
+    }
+    setFlag(flagKey, true)
+  }, [getColumnVisibility, getFlag, setColumnVisibility, setFlag])
+
+
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -1398,6 +1420,14 @@ export default function OrderList() {
       sorter: true,
       filterDropdown: dateFilterDropdown('shipping_plan_range'),
       filteredValue: dateFilteredValue('shipping_plan_range'),
+    },
+    {
+      title: '入库时间', dataIndex: 'inbound_date', key: 'inbound_date', minWidth: 90,
+      render: (v: string | null) => <DateCell value={v} />,
+    },
+    {
+      title: '出库时间', dataIndex: 'outbound_date', key: 'outbound_date', minWidth: 90,
+      render: (v: string | null) => <DateCell value={v} />,
     },
     {
       title: '客户验货时间', dataIndex: 'customer_inspection_date', key: 'customer_inspection_date', minWidth: 100,

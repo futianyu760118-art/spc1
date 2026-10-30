@@ -846,7 +846,8 @@ class ERPSyncService:
                         pass
                     stats["errors"].append(f"订单 {row_dict.get('order_no')}-{row_dict.get('line_no')}: {e}")
 
-            if erp_ids_in_k3:
+            # 按单号定向同步时结果只含指定订单，不能据此判断其它订单已删除
+            if erp_ids_in_k3 and not order_numbers:
                 from sqlalchemy import update as sa_update
                 result = await self.spc_db.execute(
                     sa_update(SaleOrder)

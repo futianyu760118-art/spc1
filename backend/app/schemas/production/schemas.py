@@ -632,6 +632,54 @@ class OrderForSchedulingOut(BaseModel):
     latest_material_eta: Optional[date] = None
 
 
+class ReworkOrderOut(BaseModel):
+    """OA 返工单（品质异常流程）"""
+    id: int
+    request_id: str
+    form_id: Optional[int] = None
+    flow_no: Optional[str] = None
+    apply_date: Optional[date] = None
+    flow_type: Optional[int] = None
+    order_no: Optional[str] = None
+    product_code: Optional[str] = None
+    line_no: Optional[str] = None
+    line_no_source: Optional[str] = None
+    product_name: Optional[str] = None
+    production_task_no: Optional[str] = None
+    batch_qty: Optional[int] = None
+    sample_qty: Optional[int] = None
+    defect_qty: Optional[int] = None
+    rework_hours: Optional[float] = None
+    hour_price: Optional[float] = None
+    hour_cost: Optional[float] = None
+    total_cost: Optional[float] = None
+    is_rework: Optional[int] = None
+    approve_flag: Optional[int] = None
+    execute_status: Optional[str] = None
+    flow_status: Optional[int] = None
+    title: Optional[str] = None
+    synced_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ScheduleRemainderOut(BaseModel):
+    """已排计划未覆盖完的剩余量（拆单少排 / 只生产一部分时出现）"""
+    order_no: str
+    line_no: str
+    department: Optional[str] = None
+    schedule_bucket: Optional[str] = None
+    product_code: Optional[str] = None
+    model_code: Optional[str] = None
+    source_order_qty: float
+    planned_qty: float
+    remaining_qty: float
+    upph: Optional[float] = None
+    manpower: Optional[int] = None
+    daily_work_hours: Optional[float] = None
+    last_plan_date: Optional[date] = None
+
+
 class TodoWorkbenchItemOut(BaseModel):
     id: Optional[int] = None
     todo_source: str
@@ -774,7 +822,8 @@ class BatchAutoScheduleItemIn(BaseModel):
     order_no: str
     line_no: str
     upph: Optional[float] = None
-    manpower: Optional[int] = None  # 班组人数(可空, 默认走基础条件)
+    manpower: Optional[int] = None  # 本行人数(可空, 默认走基础条件)
+    schedule_bucket: Optional[str] = None
 
 
 class BatchAutoScheduleRequest(BaseModel):
@@ -784,6 +833,7 @@ class BatchAutoScheduleRequest(BaseModel):
     owner: Optional[str] = None
     manpower: Optional[int] = None  # 批量统一人数(可被 item.manpower 覆盖)
     include_sunday: Optional[bool] = None  # 批量统一周日排产(可被 item 覆盖)
+    merge_same_order: bool = False  # 同订单优先合并: 组装/包装分别合并, 只用当天剩余产能
     items: List[BatchAutoScheduleItemIn]
 
 
@@ -938,6 +988,118 @@ class BatchRescheduleResponse(BaseModel):
     # 新增：交期影响统计
     delay_warning_count: int = 0  # 产生新延期预警的条数
     items: List[BatchRescheduleItemOut]
+
+
+class ManualDateAdjustItem(BaseModel):
+    """手工改日期：单条计划的目标开工日"""
+    plan_id: int
+    target_date: date
+
+
+class ManualDateAdjustRequest(BaseModel):
+    """手工改日期请求（硬排，不级联推后其它计划）"""
+    items: List[ManualDateAdjustItem] = Field(..., min_length=1)
+    reason: Optional[str] = None
+
+
+class ManualDateAdjustItemOut(BaseModel):
+    plan_id: int
+    order_no: Optional[str] = None
+    line_no: Optional[str] = None
+    target_date: date
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    total_hours: Optional[float] = None
+    success: bool
+    message: Optional[str] = None
+
+
+class CapacityConflictOut(BaseModel):
+    """产能冲突：同部门同排产段某天占用超过日上限"""
+    date: date
+    department: str
+    schedule_bucket: str
+    booked_hours: float
+    limit_hours: float
+    plan_ids: List[int] = Field(default_factory=list)
+
+
+class ManualDateAdjustResponse(BaseModel):
+    total: int
+    success_count: int
+    failed_count: int
+    items: List[ManualDateAdjustItemOut]
+    conflicts: List[CapacityConflictOut] = Field(default_factory=list)
+
+
+class InsertSchedulePlanRequest(BaseModel):
+    """在日期调整页插入一条计划（订单池新单或同订单返单）"""
+    order_no: str
+    line_no: str = "1"
+    department: str = "生产"
+    schedule_bucket: str
+    target_date: date
+    quantity: float
+    upph: Optional[float] = None
+    manpower: int = 10
+    daily_work_hours: Optional[float] = None
+    rework_hours: Optional[float] = Field(
+        None,
+        description="返工工时：来自 OA 返工单时直接按工时占槽，不再按数量/UPPH 计算",
+    )
+    rework_request_id: Optional[str] = None
+    source_order_qty: Optional[float] = Field(
+        None,
+        description="原订单总数；补排剩余量时传入，保持待排余量口径一致",
+    )
+    product_code: Optional[str] = None
+    model_code: Optional[str] = None
+    owner: Optional[str] = None
+    priority: str = "normal"
+    source_promised_date: Optional[date] = None
+    allow_duplicate: bool = Field(
+        False,
+        description="返单/返工场景：允许同订单同排产段再插入一条（不覆盖原计划）",
+    )
+    remark: Optional[str] = None
+    break_frozen_reason: Optional[str] = None
+
+
+class PushedPlanOut(BaseModel):
+    plan_id: int
+    new_plan_id: Optional[int] = None
+    order_no: Optional[str] = None
+    line_no: Optional[str] = None
+    old_start: Optional[date] = None
+    old_end: Optional[date] = None
+    new_start: Optional[date] = None
+    new_end: Optional[date] = None
+
+
+class InsertSchedulePlanResponse(BaseModel):
+    plan: Optional[ProductionSchedulePlanOut] = None
+    pushed: List[PushedPlanOut] = Field(default_factory=list)
+    conflicts: List[CapacityConflictOut] = Field(default_factory=list)
+
+
+class SplitBatchIn(BaseModel):
+    quantity: float
+    target_date: date
+
+
+class SplitSchedulePlanRequest(BaseModel):
+    """把一个计划按数量拆成多批"""
+    plan_id: int
+    batches: List[SplitBatchIn] = Field(..., min_length=1)
+    push_conflicts: bool = Field(True, description="批次插入时是否顺延同段后续计划")
+    break_frozen_reason: Optional[str] = None
+
+
+class SplitSchedulePlanResponse(BaseModel):
+    plans: List[ProductionSchedulePlanOut] = Field(default_factory=list)
+    pushed: List[PushedPlanOut] = Field(default_factory=list)
+    unplanned_qty: float = 0
+    conflicts: List[CapacityConflictOut] = Field(default_factory=list)
 
 
 class DeleteSchedulePlanBackfillItemOut(BaseModel):

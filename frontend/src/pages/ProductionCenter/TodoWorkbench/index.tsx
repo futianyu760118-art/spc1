@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Col, DatePicker, Input, InputNumber, Row, Select, Space, Statistic, Table, Tag, Tooltip, message } from 'antd'
+import { Button, Col, DatePicker, Input, InputNumber, Modal, Row, Select, Space, Statistic, Table, Tag, Tooltip, message, notification } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined, SearchOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -51,6 +51,7 @@ export default function TodoWorkbench() {
   const [baseConditionOpen, setBaseConditionOpen] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [selectedRows, setSelectedRows] = useState<any[]>([])
+  const [batchRescheduling, setBatchRescheduling] = useState(false)
 
   const openSchedule = (row: any) => {
     setScheduleOrder(row)
@@ -64,6 +65,37 @@ export default function TodoWorkbench() {
       return
     }
     setBatchScheduleOpen(true)
+  }
+
+  const openBatchReschedule = () => {
+    const rows = selectedRows.filter((row) => row.todo_kind === 'reschedule' && row.id)
+    if (rows.length === 0) {
+      message.warning('请先勾选待重排订单')
+      return
+    }
+    const planIds = Array.from(new Set(rows.map((row) => Number(row.id)).filter(Boolean)))
+    Modal.confirm({
+      title: `确认批量重排 ${planIds.length} 条计划？`,
+      content: '将按最新订单/UPPH 重新倒排，计划日期可能变化；不会自动顺延其它计划。',
+      okText: '开始重排',
+      onOk: async () => {
+        setBatchRescheduling(true)
+        try {
+          const res: any = await productionApi.batchReschedulePlans({ plan_ids: planIds })
+          const result = res.data || {}
+          notification[result.failed_count ? 'warning' : 'success']({
+            message: '批量重排完成',
+            description: `成功 ${result.success_count || 0} 条，失败 ${result.failed_count || 0} 条`,
+            duration: 6,
+          })
+          setSelectedRowKeys([])
+          setSelectedRows([])
+          await load()
+        } finally {
+          setBatchRescheduling(false)
+        }
+      },
+    })
   }
   const [data, setData] = useState<TodoRow[]>([])
   const [total, setTotal] = useState(0)
@@ -406,7 +438,7 @@ export default function TodoWorkbench() {
             <Col>
               <Space>
                 <span style={{ color: '#595959' }}>
-                  共 {total} 条，已选 {selectedRows.length} 条（其中待排产 {selectedRows.filter(r => r.todo_kind === 'ready').length} 条）
+                  共 {total} 条，已选 {selectedRows.length} 条（其中待排产 {selectedRows.filter(r => r.todo_kind === 'ready').length} 条、待重排 {selectedRows.filter(r => r.todo_kind === 'reschedule').length} 条）
                 </span>
                 <Button onClick={() => setBaseConditionOpen(true)}>基础条件</Button>
                 <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
@@ -416,6 +448,11 @@ export default function TodoWorkbench() {
                 <Tooltip title={selectedRows.filter(r => r.todo_kind === 'ready').length > 0 ? `批量排产 ${selectedRows.filter(r => r.todo_kind === 'ready').length} 条` : '请先勾选待排产订单'}>
                   <Button type="primary" icon={<ThunderboltOutlined />} disabled={selectedRows.filter(r => r.todo_kind === 'ready').length === 0} onClick={openBatchSchedule}>
                     批量排产
+                  </Button>
+                </Tooltip>
+                <Tooltip title={selectedRows.filter(r => r.todo_kind === 'reschedule').length > 0 ? `批量重排 ${selectedRows.filter(r => r.todo_kind === 'reschedule').length} 条` : '请先勾选待重排订单'}>
+                  <Button icon={<SyncOutlined />} loading={batchRescheduling} disabled={selectedRows.filter(r => r.todo_kind === 'reschedule').length === 0} onClick={openBatchReschedule}>
+                    批量重排
                   </Button>
                 </Tooltip>
               </Space>
@@ -433,7 +470,7 @@ export default function TodoWorkbench() {
               setSelectedRowKeys(keys)
               setSelectedRows(rows)
             },
-            getCheckboxProps: (row) => ({ disabled: row.todo_kind !== 'ready' }),
+            getCheckboxProps: (row) => ({ disabled: !['ready', 'reschedule'].includes(row.todo_kind) }),
           }}
           dataSource={data}
           columns={columns}

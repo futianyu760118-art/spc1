@@ -69,6 +69,7 @@ import Inventory from '../pages/BasicDataCenter/Inventory'
 import ProductionOverview from '../pages/ProductionCenter/ProductionOverview/index'
 import Dashboard372 from '../pages/ProductionCenter/Dashboard372/index'
 import SchedulePlans from '../pages/ProductionCenter/SchedulePlans/index'
+import ScheduleDateAdjust from '../pages/ProductionCenter/ScheduleDateAdjust/index'
 import TodoWorkbench from '../pages/ProductionCenter/TodoWorkbench/index'
 import ChangeEvents from '../pages/ProductionCenter/ChangeEvents/index'
 import ScheduleBoard from '../pages/ProductionCenter/ScheduleBoard/index'
@@ -139,6 +140,7 @@ export const contentRoutes = (
         <Route path="/production-overview" element={<ProductionOverview/>}/>
         <Route path="/production-dashboard" element={<Dashboard372/>}/>
         <Route path="/schedule-plans" element={<SchedulePlans/>}/>
+        <Route path="/schedule-date-adjust" element={<ScheduleDateAdjust/>}/>
         <Route path="/todo-workbench" element={<TodoWorkbench/>}/>
         <Route path="/change-events" element={<ChangeEvents/>}/>
         <Route path="/schedule-board" element={<ScheduleBoard/>}/>
