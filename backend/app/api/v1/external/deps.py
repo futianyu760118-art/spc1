@@ -5,12 +5,41 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.basicdata.data_supply import DataSupplyApiKey
+from app.models.basicdata.user import SysUser
+from app.services.agent.actor import decode_actor_token
+from app.services.agent.capabilities import CONFIGURABLE_CAPABILITIES, capabilities_for_endpoint
+from app.services.agent.context import load_user_context
 from app.services.basicdata.data_supply_service import (
     validate_signature_for_endpoint,
     check_ip_whitelist,
 )
 from app.services.basicdata.rate_limiter import check_rate_limit, RATE_LIMITED_MARK
 from app.services.basicdata.data_supply_service import log_call
+
+
+async def _apply_actor_token(request: Request, db: AsyncSession, endpoint_code: str) -> None:
+    """助手发起的请求携带 X-Actor-Token：校验身份/团队能力并把数据范围挂到 request.state。"""
+    token = (request.headers.get("X-Actor-Token") or "").strip()
+    if not token:
+        return
+    payload = decode_actor_token(token)
+    user = await db.get(SysUser, int(payload["user_id"]))
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="actor 用户不存在或已停用")
+    endpoint_caps = capabilities_for_endpoint(endpoint_code)
+    if not endpoint_caps:
+        raise HTTPException(status_code=403, detail="该接口未开放给个人智能体")
+    # 写操作、派活、配置校验必须绕过读缓存；只读端点允许 5 分钟 TTL。
+    use_cache = all(
+        CONFIGURABLE_CAPABILITIES[code].read_only
+        for code in endpoint_caps
+        if code in CONFIGURABLE_CAPABILITIES
+    )
+    ctx = await load_user_context(db, user, use_cache=use_cache)
+    if not (endpoint_caps & ctx.effective_capabilities):
+        raise HTTPException(status_code=403, detail="当前团队缺少该接口能力")
+    request.state.actor_capabilities = set(ctx.effective_capabilities)
+    request.state.actor_user_id = int(user.id)
 
 
 def external_auth(endpoint_code: str):
@@ -59,6 +88,7 @@ def external_auth(endpoint_code: str):
                 headers={"Retry-After": str(retry_after)},
             )
 
+        await _apply_actor_token(request, db, endpoint_code)
         return key_obj
 
     return dependency

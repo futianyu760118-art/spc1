@@ -19,6 +19,7 @@ from app.core.database import get_db
 from app.models.basicdata.data_supply import DataSupplyApiKey
 from app.schemas.common import ResponseModel
 from app.services import reasoning as reasoning_service
+from app.services.agent.capabilities import CONFIGURABLE_CAPABILITIES
 
 from ..common import ExternalEnvelopeError
 from ..deps import external_auth
@@ -101,7 +102,7 @@ class ReasoningResultOut(BaseModel):
     warnings: List[str] = []
     llm: Optional[ReasoningLLMMetaOut] = None
     usage: Optional[ReasoningUsageOut] = None
-    duration_ms: Optional[float] = None
+    duration_ms: Optional[int] = None
     idempotent_replay: bool = False
     request_id: Optional[str] = None
 
@@ -119,6 +120,7 @@ class ReasoningTaskViewOut(BaseModel):
     llm_provider: Optional[str] = None
     data_as_of: Optional[str] = None
     data_confidence: Optional[str] = None
+    duration_ms: Optional[int] = None
     cancellation_requested: Optional[bool] = None
 
 
@@ -137,6 +139,15 @@ async def reasoning_analyze(
     db: AsyncSession = Depends(get_db),
     key: DataSupplyApiKey = Depends(external_auth("reasoning.analyze")),
 ):
+    actor_capabilities = getattr(request.state, "actor_capabilities", None)
+    if actor_capabilities is not None:
+        allowed_types = set()
+        for code in actor_capabilities:
+            cap = CONFIGURABLE_CAPABILITIES.get(code)
+            if cap:
+                allowed_types |= set(cap.reasoning_types)
+        if payload.task_type not in allowed_types:
+            raise HTTPException(status_code=403, detail="当前智能体没有该推理任务类型的能力")
     if reasoning_service.running_count() >= get_settings().REASONING_MAX_CONCURRENT:
         raise HTTPException(
             status_code=429,

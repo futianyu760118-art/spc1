@@ -55,6 +55,16 @@ test("rejects empty prompt", async () => {
   );
 });
 
+test("rejects missing context.businessObjectRef", async () => {
+  const { ctx } = createCtx(async () => ({ code: 0, data: {} }));
+  const adapter = createAdapter(ctx);
+  const input = { ...validInput(), context: {} };
+  await assert.rejects(
+    () => adapter.invoke(runStub(), input),
+    (e) => e.code === "INVALID_ARGUMENT" && /businessObjectRef/.test(e.message),
+  );
+});
+
 test("passes config.reasoningTimeoutMs to the signed POST", async () => {
   const { ctx, calls } = createCtx(async () => ({ code: 0, data: {} }));
   const adapter = createAdapter(ctx);
@@ -110,4 +120,19 @@ test("cancel posts to cancel endpoint with a 10s timeout", async () => {
   assert.equal(calls[0][0], "/external/reasoning/tasks/run-1/cancel");
   assert.equal(calls[0][1], "reasoning.cancel");
   assert.equal(calls[0][3].timeoutMs, 10000);
+});
+
+test("prefers run.requestId and falls back to input.request_id", async () => {
+  const { ctx, calls } = createCtx(async () => ({ code: 0, data: {} }));
+  const adapter = createAdapter(ctx);
+
+  await adapter.invoke(
+    { ...runStub(), requestId: "req-run" },
+    { ...validInput(), request_id: "req-input" },
+  );
+  assert.equal(calls[0][2].request_id, "req-run");
+
+  calls.length = 0;
+  await adapter.invoke(runStub(), { ...validInput(), request_id: "req-input" });
+  assert.equal(calls[0][2].request_id, "req-input");
 });

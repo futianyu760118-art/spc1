@@ -14,6 +14,7 @@ const {
 test("mapCode maps contract status codes", () => {
   assert.equal(mapCode(400), "INVALID_ARGUMENT");
   assert.equal(mapCode(404), "NOT_FOUND");
+  assert.equal(mapCode(409), "AGENT_BUSY");
   assert.equal(mapCode(429), "RATE_LIMITED");
   assert.equal(mapCode(504), "UPSTREAM_TIMEOUT");
   assert.equal(mapCode(500), "UPSTREAM_UNAVAILABLE");
@@ -65,14 +66,14 @@ test("signedSendEnvelope PUT merges extra headers and unwraps nothing", async ()
     );
     const envelope = await client.signedSendEnvelope(
       "PUT",
-      "/external/orders/O-1/schedule",
-      "orders.schedule.update",
-      { fields: { shipping_plan: null } },
+      "/external/orders/O-1/write",
+      "orders.write",
+      { operation: "order.update_schedule_fields", changes: { fields: { shipping_plan: null } } },
       { headers: { "X-Agent-Run-Id": "run-9" }, timeoutMs: 5000 },
     );
     assert.deepEqual(envelope, { code: 0, message: "success", data: { ok: true } });
     assert.equal(requests[0].method, "PUT");
-    assert.equal(requests[0].url, "/api/v1/external/orders/O-1/schedule");
+    assert.equal(requests[0].url, "/api/v1/external/orders/O-1/write");
     assert.equal(requests[0].headers["x-agent-run-id"], "run-9");
     assert.ok(requests[0].headers["x-signature"]);
   } finally {

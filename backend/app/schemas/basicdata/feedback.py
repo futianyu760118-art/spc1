@@ -1,6 +1,6 @@
 """问题反馈 schemas"""
 from datetime import datetime
-from typing import Optional, List, Any
+from typing import Any, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -12,9 +12,13 @@ class FeedbackAttachment(BaseModel):
     mime: Optional[str] = None
 
 
+FeedbackType = Literal["issue", "suggestion", "inquiry"]
+FeedbackSeverity = Literal["low", "medium", "high"]
+
+
 class FeedbackCreate(BaseModel):
-    type: str = "issue"  # issue/suggestion/inquiry
-    severity: str = "low"  # low/medium/high
+    type: FeedbackType = "issue"
+    severity: FeedbackSeverity = "low"
     page_path: Optional[str] = None
     title: str
     description: str
@@ -22,8 +26,8 @@ class FeedbackCreate(BaseModel):
 
 
 class FeedbackUpdate(BaseModel):
-    type: Optional[str] = None
-    severity: Optional[str] = None
+    type: Optional[FeedbackType] = None
+    severity: Optional[FeedbackSeverity] = None
     page_path: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None

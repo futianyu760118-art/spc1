@@ -7,14 +7,17 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal, get_db
 from app.core.security import PermissionChecker
 from app.models.basicdata.ai_agent import AssistantRun
+from app.models.basicdata.user import SysUser
 from app.schemas.assistant.schemas import ChatMessageIn, AssistantReply, ToolInfo
+from app.services.agent import conversation as agent_conversation
+from app.services.agent.context import load_user_context
 
 import app.services.assistant.agent_tools  # noqa: F401 — 触发智能体工具注册
 from app.services.assistant import agent
@@ -59,6 +62,7 @@ async def _record_run(
     duration_ms: Optional[float],
     is_success: bool,
     error_message: Optional[str],
+    conversation_id: Optional[int] = None,
 ) -> None:
     """用量审计落库；失败仅告警不影响对话主流程。
 
@@ -80,6 +84,8 @@ async def _record_run(
                 duration_ms=duration_ms,
                 is_success=is_success,
                 error_message=error_message,
+                conversation_id=conversation_id,
+                trigger="chat",
             ))
             await session.commit()
     except Exception as exc:
@@ -90,6 +96,35 @@ def _current_user_id(current_user: Any) -> str:
     """PermissionChecker 返回 dict（JWT payload），user id 在 sub/user_id 键"""
     user_id = current_user.get("sub") or current_user.get("user_id") or ""
     return str(user_id)
+
+
+async def _prepare_agent_chat(
+    db: AsyncSession,
+    user_id: str,
+    body: ChatMessageIn,
+):
+    """构建 UserContext / 持久化会话。"""
+    user = await db.get(SysUser, int(user_id))
+    if not user:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    ctx = await load_user_context(db, user)
+    if not body.conversation_id and body.session_id:
+        prefix = f"{user.id}:"
+        session_id = body.session_id
+        if not session_id.startswith(prefix):
+            session_id = f"{prefix}{session_id}"
+        return ctx, None, session_id, body.conversation_history
+    try:
+        conversation = await agent_conversation.resolve_conversation(
+            db, user_id=user.id, conversation_id=body.conversation_id,
+        )
+    except agent_conversation.ConversationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message)
+    history = body.conversation_history
+    if not history:
+        history = await agent_conversation.load_recent_messages(db, conversation.id, limit=20)
+    session_id = f"{user.id}:{conversation.id}"
+    return ctx, conversation, session_id, history
 
 
 def _diag_tools(diagnostics: Optional[dict]) -> list:
@@ -112,13 +147,25 @@ async def chat(
 ):
     """接收用户消息，运行 Agent"""
     trace_id = str(uuid.uuid4())
-    session_id = body.session_id or str(uuid.uuid4())
     user_id = _current_user_id(current_user)
-
-    _report_turn_start(session_id, user_id, body.message, is_new_session=not body.session_id)
-
     request_start = time.perf_counter()
 
+    prepared = await _prepare_agent_chat(db, user_id, body)
+    ctx = conversation = None
+    if prepared:
+        ctx, conversation, session_id, history = prepared
+        if conversation:
+            await agent_conversation.append_message(
+                db, conversation, role="user", content=body.message, trace_id=trace_id,
+            )
+    else:
+        session_id = body.session_id or str(uuid.uuid4())
+        history = body.conversation_history
+
+    _report_turn_start(
+        session_id, user_id, body.message,
+        is_new_session=not body.session_id and not body.conversation_id,
+    )
     if session_id:
         await CancellationRegistry.get_or_create(session_id)
 
@@ -143,16 +190,24 @@ async def chat(
                 message=body.message,
                 db=db,
                 session_id=session_id,
-                conversation_history=body.conversation_history,
+                conversation_history=history,
                 trace_id=trace_id,
                 user_id=str(user_id) if user_id else "",
+                user_context=ctx,
+                conversation_id=conversation.id if conversation else None,
             )
         except Exception as e:
+            if conversation:
+                await agent_conversation.append_message(
+                    db, conversation, role="assistant",
+                    content=f"处理失败：{str(e)[:500]}", trace_id=trace_id,
+                )
             await _record_run(
                 trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
                 intent=None, tools_called=[], tool_rounds=None, total_tokens=None,
                 duration_ms=round((time.perf_counter() - request_start) * 1000, 2),
                 is_success=False, error_message=str(e),
+                conversation_id=conversation.id if conversation else None,
             )
             report_assistant_event(
                 session_id, "error", "助手异常", "failed", str(e)[:200], started_at=now_iso(),
@@ -164,6 +219,27 @@ async def chat(
             reply.diagnostics["total_duration_ms"] = total_duration_ms
         reply.session_id = session_id
         reply.trace_id = trace_id
+        if conversation:
+            reply.conversation_id = conversation.id
+            await agent_conversation.append_message(
+                db, conversation, role="assistant", content=reply.text,
+                tool_calls=[
+                    {
+                        "step_id": step.step_id, "tool": step.tool,
+                        "agent_label": step.agent_label, "capability": step.capability,
+                        "path": step.path, "task_type": step.task_type,
+                        "status": step.status, "summary": step.summary,
+                        "error": step.error, "duration_ms": step.duration_ms,
+                    }
+                    for step in (reply.steps or [])
+                ] or None,
+                tool_results=(
+                    {"confirmation": reply.confirmation.model_dump()}
+                    if getattr(reply, "confirmation", None) else None
+                ),
+                token_usage={"total_tokens": (reply.diagnostics or {}).get("total_tokens")},
+                trace_id=trace_id,
+            )
         errors = (reply.diagnostics or {}).get("errors") or []
         await _record_run(
             trace_id=trace_id, session_id=session_id, user_id=str(user_id), message=body.message,
@@ -174,6 +250,7 @@ async def chat(
             duration_ms=total_duration_ms,
             is_success=not errors,
             error_message=errors[0].get("message") if errors else None,
+            conversation_id=conversation.id if conversation else None,
         )
         for err in errors:
             report_assistant_event(
@@ -207,14 +284,16 @@ async def chat_stream(
     改为在 generator 内自建 session，随生成器关闭释放。
     """
     trace_id = str(uuid.uuid4())
-    session_id = body.session_id or str(uuid.uuid4())
     user_id = _current_user_id(current_user)
-
-    _report_turn_start(session_id, user_id, body.message, is_new_session=not body.session_id)
 
     async def event_generator():
         started = time.perf_counter()
-        run_info: Dict[str, Any] = {"tools": [], "stats": None, "intent": None, "error": None, "done": False, "text": ""}
+        run_info: Dict[str, Any] = {
+            "tools": [], "stats": None, "intent": None, "error": None,
+            "done": False, "text": "", "steps": [], "plan": [], "confirmation": None,
+            "conversation_id": None,
+        }
+        session_id = body.session_id or str(uuid.uuid4())
 
         def _track(raw_event: str) -> None:
             lines = raw_event.split("\n")
@@ -234,25 +313,78 @@ async def chat_stream(
                 run_info["done"] = True
                 run_info["intent"] = payload.get("intent")
                 run_info["stats"] = payload.get("stats")
+                run_info["steps"] = payload.get("steps") or []
             elif event_name == "delta":
                 run_info["text"] += payload.get("text") or ""
+            elif event_name == "plan":
+                run_info["plan"] = payload.get("steps") or []
+            elif event_name == "confirmation_required":
+                run_info["confirmation"] = payload
             elif event_name == "error":
                 run_info["error"] = payload.get("message")
 
         try:
-            yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
             async with AsyncSessionLocal() as stream_db:
-                async for event in agent_stream.run_stream(
-                    message=body.message,
-                    db=stream_db,
-                    session_id=session_id,
-                    conversation_history=body.conversation_history,
-                    trace_id=trace_id,
-                    user_id=str(user_id) if user_id else "",
-                    request=request,
-                ):
-                    _track(event)
-                    yield event
+                try:
+                    prepared = await _prepare_agent_chat(stream_db, user_id, body)
+                except HTTPException as exc:
+                    yield f"event: error\ndata: {json.dumps({'message': exc.detail}, ensure_ascii=False)}\n\n"
+                    return
+                ctx = conversation = None
+                history = body.conversation_history
+                if prepared:
+                    ctx, conversation, session_id, history = prepared
+                    if conversation:
+                        run_info["conversation_id"] = conversation.id
+                        await agent_conversation.append_message(
+                            stream_db, conversation, role="user", content=body.message, trace_id=trace_id,
+                        )
+                        await stream_db.commit()
+                _report_turn_start(
+                    session_id, user_id, body.message,
+                    is_new_session=not body.session_id and not body.conversation_id,
+                )
+                yield f"event: session\ndata: {json.dumps({'session_id': session_id, 'trace_id': trace_id, 'conversation_id': run_info['conversation_id']}, ensure_ascii=False)}\n\n"
+                try:
+                    async for event in agent_stream.run_stream(
+                        message=body.message,
+                        db=stream_db,
+                        session_id=session_id,
+                        conversation_history=history,
+                        trace_id=trace_id,
+                        user_id=str(user_id) if user_id else "",
+                        request=request,
+                        user_context=ctx,
+                        conversation_id=conversation.id if conversation else None,
+                    ):
+                        _track(event)
+                        yield event
+                finally:
+                    if conversation:
+                        content = run_info["text"] or (
+                            f"处理失败：{run_info['error'][:500]}" if run_info["error"] else "（无回复）"
+                        )
+                        await agent_conversation.append_message(
+                            stream_db, conversation, role="assistant", content=content,
+                            tool_calls=[
+                                {
+                                    "step_id": step.get("step_id"), "tool": step.get("tool"),
+                                    "agent_label": step.get("agent_label"),
+                                    "capability": step.get("capability"),
+                                    "path": step.get("path"), "task_type": step.get("task_type"),
+                                    "status": step.get("status"), "summary": step.get("summary"),
+                                    "error": step.get("error"), "duration_ms": step.get("duration_ms"),
+                                }
+                                for step in (run_info["steps"] or [])
+                            ] or None,
+                            tool_results=(
+                                {"plan": run_info["plan"], "confirmation": run_info["confirmation"]}
+                                if run_info["plan"] or run_info["confirmation"] else None
+                            ),
+                            token_usage={"total_tokens": (run_info["stats"] or {}).get("total_tokens")},
+                            trace_id=trace_id,
+                        )
+                    await stream_db.commit()
         finally:
             stats = run_info["stats"] or {}
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -266,6 +398,7 @@ async def chat_stream(
                 duration_ms=duration_ms,
                 is_success=run_info["done"] and not run_info["error"],
                 error_message=run_info["error"] or (None if run_info["done"] else "stream_interrupted"),
+                conversation_id=run_info["conversation_id"],
             ))
             if run_info["error"]:
                 report_assistant_event(
@@ -321,21 +454,38 @@ async def cancel_write(
     return {"code": 0, "message": outcome.get("message", ""), "data": outcome.get("data")}
 
 
-@router.get("/tools", response_model=dict)
-async def list_tools(current_user=Depends(PermissionChecker("topbar.ai_search", "read"))):
-    """返回当前注册的工具清单"""
+async def _current_user_context(db: AsyncSession, current_user):
+    user = await db.get(SysUser, int(_current_user_id(current_user)))
+    if not user:
+        return None
+    return await load_user_context(db, user)
+
+
+def _visible_tools(ctx) -> list:
     tools = get_all_tools()
-    tool_items = [
-        ToolInfo(name=t.name, description=t.description)
-        for t in tools
-    ]
-    return {"code": 0, "data": [t.model_dump() for t in tool_items]}
+    if ctx is None:
+        return tools
+    return [tool for tool in tools if tool.name in ctx.allowed_tools]
+
+
+@router.get("/tools", response_model=dict)
+async def list_tools(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(PermissionChecker("topbar.ai_search", "read")),
+):
+    """返回当前用户可用工具（按团队能力过滤）"""
+    ctx = await _current_user_context(db, current_user)
+    data = [ToolInfo(name=t.name, description=t.description).model_dump() for t in _visible_tools(ctx)]
+    return {"code": 0, "data": data}
 
 
 @router.get("/skills", response_model=dict)
-async def list_skills(current_user=Depends(PermissionChecker("topbar.ai_search", "read"))):
-    """兼容旧接口：返回工具清单（以 skill 格式）"""
-    tools = get_all_tools()
+async def list_skills(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(PermissionChecker("topbar.ai_search", "read")),
+):
+    """兼容旧接口：返回工具清单（以 skill 格式，按当前用户团队能力过滤）"""
+    ctx = await _current_user_context(db, current_user)
     skill_items = [
         {
             "intent": t.name,
@@ -344,7 +494,7 @@ async def list_skills(current_user=Depends(PermissionChecker("topbar.ai_search",
             "keywords": t.keywords or [t.name],
             "category": t.category,
         }
-        for t in tools
+        for t in _visible_tools(ctx)
     ]
     return {"code": 0, "data": skill_items}
 

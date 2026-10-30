@@ -49,6 +49,7 @@ import {
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { usePermissionStore, PermNode } from '../store/permission'
+import { useAgentStore } from '../store/agent'
 import { authApi, notificationApi } from '../services/api'
 import { notificationStream } from '../services/notificationStream'
 import { notificationJump } from '../utils/notificationJump'
@@ -135,6 +136,11 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   audit: <AuditOutlined />,
   settings: <SwapOutlined />,
   'finance.data': <AccountBookOutlined />,
+  agent: <RobotOutlined />,
+  'ai.agent.self': <RobotOutlined />,
+  'ai.agent.self.me': <RobotOutlined />,
+  'ai.agent.team': <TeamOutlined />,
+  'ai.agent.admin': <SafetyCertificateOutlined />,
 }
 
 // 判断节点是否为可进入的菜单页面：自身有路由，或子树中存在有路由的页面。
@@ -597,12 +603,18 @@ function getRequiredPermission(pathname: string, dynamicMap?: Record<string, str
   if (pathname.startsWith('/orders/')) return 'orders.list'
   if (pathname.startsWith('/stock-check/')) return 'materials.stock_check'
   if (pathname.startsWith('/approvals/create')) return 'approval.initiate'
+  if (pathname.startsWith('/agents/team')) return 'ai.agent.team'
+  if (pathname.startsWith('/agents/admin')) return 'ai.agent.admin'
+  if (pathname.startsWith('/agents')) return 'ai.agent.self'
   return undefined
 }
 
 export default function MainLayout() {
   const { currentUser, logout, hasPermission, isSupplierUser, isShareUser, getShareTargetPath, exitShare, originalToken, setAuth } = useAuthStore()
   const { tree: permTree, loaded: permLoaded, fetchTree, getPathToPermission, getPathToGroupKey } = usePermissionStore()
+  const {
+    enabled: agentEnabled, loaded: agentLoaded, fetchMe: fetchAgentMe,
+  } = useAgentStore()
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
@@ -621,6 +633,12 @@ export default function MainLayout() {
       fetchTree()
     }
   }, [originalToken, permLoaded, fetchTree])
+
+  useEffect(() => {
+    if (originalToken && !isShareUser() && hasPermission('ai.agent.self', 'read')) {
+      fetchAgentMe()
+    }
+  }, [originalToken, isShareUser, hasPermission, fetchAgentMe])
 
   // 动态菜单项：优先使用 API 数据，fallback 到硬编码
   const dynamicMenuItems = useMemo(() => {
@@ -841,13 +859,21 @@ export default function MainLayout() {
     if (isSupplierUser()) {
       return filterSupplierPortalMenu(dynamicMenuItems, hasPermission)
     }
-    const tree = filterMenuByPermission(dynamicMenuItems, hasPermission)
+    const pruneAgentTeam = (items: PermissionAwareItem[]): PermissionAwareItem[] => {
+      return items.flatMap(item => {
+        if (item.key === 'ai.agent.self' && agentLoaded && !agentEnabled) return []
+        const next = item.children ? { ...item, children: pruneAgentTeam(item.children) } : item
+        if (next.children && next.children.length === 0 && !String(next.key).startsWith('/')) return []
+        return [next]
+      })
+    }
+    const tree = pruneAgentTeam(filterMenuByPermission(dynamicMenuItems, hasPermission))
     // 个人工作区：站内信（对全部持有 topbar.notifications 权限的内部用户可见）
     if (hasPermission('topbar.notifications', 'read')) {
       tree.push({ key: '/notifications', icon: <BellOutlined />, label: '站内信' } as any)
     }
     return tree
-  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
+  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems, agentEnabled, agentLoaded])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
   // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（如仅授 ai.assistant_config 也能进 /ai-assistant）

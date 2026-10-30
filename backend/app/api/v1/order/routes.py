@@ -9,7 +9,7 @@ import io
 import logging
 import traceback
 
-from app.core.database import get_db
+from app.core.database import get_db, get_read_only_db, get_write_db
 from app.core.security import PermissionChecker
 from app.core.audit import log_audit
 from app.models.order.sale_order import SaleOrder, SaleOrderLine, order_not_closed_condition
@@ -258,7 +258,7 @@ async def list_orders(
     sort_by: Optional[str] = Query("promised_date", description="排序字段"),
     sort_order: Optional[str] = Query("asc", description="排序方向 asc/desc"),
     current_user: dict = Depends(PermissionChecker("orders.list", "read")),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_only_db),
 ):
     try:
         query = select(SaleOrder).where(SaleOrder.is_deleted == 0)
@@ -1543,7 +1543,7 @@ async def get_order_detail(
 async def create_order(
     data: OrderCreate,
     current_user: dict = Depends(PermissionChecker("orders.list", "create")),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_write_db),
 ):
     if data.sale_order.erp_id is not None:
         exists = await db.execute(
@@ -1569,7 +1569,7 @@ async def update_order(
     order_no: str,
     data: SaleOrderUpdate,
     current_user: dict = Depends(PermissionChecker("orders.list", "update")),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_write_db),
 ):
     result = await db.execute(
         select(SaleOrder).where(SaleOrder.order_no == order_no).order_by(SaleOrder.id.desc()).limit(1)
@@ -1592,7 +1592,7 @@ async def update_order(
 async def import_inspection_csv_endpoint(
     filepath: str = Query(..., description="服务器上1.点检.csv的路径"),
     current_user: dict = Depends(PermissionChecker("orders.list", "import")),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_write_db),
 ):
     """从1.点检.csv导入数据到SaleOrder表"""
     from app.services.order.import_csv import import_inspection_csv
@@ -1621,7 +1621,7 @@ async def import_run_order_csv_endpoint(
 async def import_shipping_plan_endpoint(
     file: UploadFile = File(...),
     current_user: dict = Depends(PermissionChecker("orders.list", "import")),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_write_db),
 ):
     """导入出货计划表（表头含「销售订单号」「计划时间」），只更新订单头 shipping_plan"""
     from app.services.order.import_csv import import_shipping_plan

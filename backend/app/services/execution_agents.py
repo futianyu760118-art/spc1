@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from uuid import uuid4
-from typing import Dict
+from typing import Dict, Optional
 
 import httpx
 from sqlalchemy import text
@@ -47,8 +47,8 @@ AGENT_SPECS: Dict[str, ExecutionAgentSpec] = {
         key="order",
         label="订单智能体",
         scope=EXECUTION_ORDER_SCOPE,
-        capability="update_control_platform_order",
-        base_url_setting="EXECUTION_ORDER_AGENT_BASE_URL",
+        capability="write_control_platform",
+        base_url_setting="EXECUTION_WRITE_AGENT_BASE_URL",
     ),
 }
 
@@ -101,7 +101,14 @@ async def call_agent_spec(
 
 
 async def call_agent_run(
-    spec: ExecutionAgentSpec, input: dict, *, timeout: float = 30.0, operator_user_id: str = ""
+    spec: ExecutionAgentSpec,
+    input: dict,
+    *,
+    timeout: float = 30.0,
+    operator_user_id: str = "",
+    actor_token: str = "",
+    trace_id: str = "",
+    caller: Optional[dict] = None,
 ) -> dict:
     """本地派单：POST /admin/run 同步执行一个 capability（不经 Hub）。
 
@@ -118,6 +125,12 @@ async def call_agent_run(
     payload: dict = {"capability": spec.capability, "input": input, "runId": f"local-{uuid4().hex}"}
     if operator_user_id:
         payload["operator"] = {"user_id": str(operator_user_id)}
+    if actor_token:
+        payload["actorToken"] = actor_token
+    if trace_id:
+        payload["traceId"] = trace_id
+    if caller:
+        payload["caller"] = caller
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(

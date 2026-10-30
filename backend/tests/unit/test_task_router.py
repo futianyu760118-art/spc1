@@ -56,25 +56,34 @@ class TestValidateTaskInput:
         assert reason is not None
 
     def test_order_valid(self):
-        assert (
-            validate_task_input(
-                "update_control_platform_order",
-                {"order_no": "HJ-1", "fields": {"shipping_plan": "2026-11-01"}},
-            )
-            is None
-        )
+        assert validate_task_input(
+            "write_control_platform",
+            {
+                "operation": "order.update_schedule_fields",
+                "orderNo": "HJ-1",
+                "changes": {"fields": {"promised_date": "2026-11-15"}},
+            },
+        ) is None
 
     def test_order_field_not_allowed(self):
         reason = validate_task_input(
-            "update_control_platform_order",
-            {"order_no": "HJ-1", "fields": {"status": "closed"}},
+            "write_control_platform",
+            {
+                "operation": "order.update_schedule_fields",
+                "orderNo": "HJ-1",
+                "changes": {"fields": {"status": "closed"}},
+            },
         )
         assert reason is not None
 
     def test_order_bad_date(self):
         reason = validate_task_input(
-            "update_control_platform_order",
-            {"order_no": "HJ-1", "fields": {"shipping_plan": "tomorrow"}},
+            "write_control_platform",
+            {
+                "operation": "order.update_schedule_fields",
+                "orderNo": "HJ-1",
+                "changes": {"fields": {"shipping_plan": "tomorrow"}},
+            },
         )
         assert reason is not None
 

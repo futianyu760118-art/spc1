@@ -119,14 +119,17 @@ class Settings(BaseSettings):
     EXECUTION_AGENT_BASE_URL: str = ""   # legacy 单 Agent 管理代理（已停用，仅旧端点兼容）
     EXECUTION_QUERY_AGENT_BASE_URL: str = ""
     EXECUTION_REASONING_AGENT_BASE_URL: str = ""
-    EXECUTION_ORDER_AGENT_BASE_URL: str = ""
+    EXECUTION_WRITE_AGENT_BASE_URL: str = ""
     AGENT_ADMIN_TOKEN: str = ""          # 与 agent .env 的 AGENT_ADMIN_TOKEN 一致
 
-    # AEOS Hub 助手观测上报（assistant-events，中台助手调用留痕；三项任一缺失即停用）
-    AEOS_HUB_BASE: str = ""              # 如 https://aeos-hub.test:9444
-    AEOS_SYSTEM_ID: str = ""             # Hub 侧生成令牌时的系统 ID
-    AEOS_SYSTEM_TOKEN: str = ""          # Hub 侧生成的系统 HMAC 令牌
-    AEOS_HUB_CA_CERT: str = ""           # Hub 使用私有 CA 时的 CA 证书路径；空则用系统默认信任链
+    # SPC 单一网关（Hub 执行面/出站统一出口）
+    GATEWAY_BASE_URL: str = ""
+    GATEWAY_INTERNAL_TOKEN: str = ""
+    GATEWAY_CALLER_USER_ID_FIELD: str = "emp_code"
+    GATEWAY_HUB_TIMEOUT_S: float = 20.0
+
+    # SPC 系统 ID：backend 仅用于构造 caller.systemId；Hub 鉴权/CA 由网关容器直接读同名 env
+    AEOS_SYSTEM_ID: str = ""
 
     # 物料盘点
     STOCK_CHECK_RECENT_SKIP_DAYS: int = 7  # 订单盘点建单/刷新BOM时，近 N 天内已盘过的(物料×仓库)行仅标记"近期已盘"免盘(不预填盘点数据)
@@ -155,6 +158,9 @@ class Settings(BaseSettings):
     # 已排产订单变更检测(出货计划/数量/UPPH 变更 -> 标记待重排)
     change_detect_enabled: bool = True
     change_detect_interval_hours: int = 1
+
+    # 智能体中心（上下文缓存 TTL）
+    AGENT_SCOPE_CACHE_TTL_SECONDS: int = 300
 
     model_config = {"env_file": _ENV_FILES, "env_file_encoding": "utf-8", "extra": "ignore"}
 

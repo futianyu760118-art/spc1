@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 # 一键部署 SPC-v2 到远程 Docker（多服务器并行，带版本管理）
 # 支持 1 台 full 服务器（postgres/redis/backend/frontend）+ N 台 app 服务器（仅 backend/frontend，
 # 连 full 服务器的数据库/Redis）。每次完整部署所有目标服务器共用同一版本号 vN-时间戳
@@ -148,22 +148,28 @@ try {
 if (-not $SkipUpload) {
     Write-Host "[2/6] 构建镜像 (SkipBuild=$SkipBuild) ..."
     if (-not $SkipBuild) {
-        & docker build -t spc-v2-backend:latest -t "spc-v2-backend:$Version" (Join-Path $RepoRoot "backend")
+        & docker build --build-context "agents_shared=$(Join-Path $RepoRoot "agents\shared")" -t spc-v2-backend:latest -t "spc-v2-backend:$Version" (Join-Path $RepoRoot "backend")
         if ($LASTEXITCODE -ne 0) { throw "backend 镜像构建失败" }
         & docker build -t spc-v2-frontend:latest -t "spc-v2-frontend:$Version" (Join-Path $RepoRoot "frontend")
         if ($LASTEXITCODE -ne 0) { throw "frontend 镜像构建失败" }
+        & docker build -f (Join-Path $RepoRoot "agents\gateway-agent\Dockerfile") -t aeos-gateway:latest -t "aeos-gateway:$Version" (Join-Path $RepoRoot "agents")
+        if ($LASTEXITCODE -ne 0) { throw "gateway 镜像构建失败" }
     } else {
         & docker tag spc-v2-backend:latest "spc-v2-backend:$Version"
         if ($LASTEXITCODE -ne 0) { throw "本机不存在 spc-v2-backend:latest，无法 -SkipBuild（请先完整构建）" }
         & docker tag spc-v2-frontend:latest "spc-v2-frontend:$Version"
         if ($LASTEXITCODE -ne 0) { throw "本机不存在 spc-v2-frontend:latest，无法 -SkipBuild（请先完整构建）" }
+        & docker image inspect aeos-gateway:latest | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "本机不存在 aeos-gateway:latest，无法 -SkipBuild（请先完整构建）" }
+        & docker tag aeos-gateway:latest "aeos-gateway:$Version"
+        if ($LASTEXITCODE -ne 0) { throw "gateway 镜像打版本标签失败" }
     }
     Show-StepElapsed "2/6"
 
     Write-Host "[3/6] 打包镜像与配置 ..."
     # 公共镜像包只压缩一次；每台服务器另有小 config bundle（compose + nginx.conf + 该台 .env）
     $imagesTar = Join-Path $tmpDir "images.tar"
-    & docker save -o $imagesTar "spc-v2-backend:$Version" "spc-v2-frontend:$Version"
+    & docker save -o $imagesTar "spc-v2-backend:$Version" "spc-v2-frontend:$Version" "aeos-gateway:latest" "aeos-gateway:$Version"
     if ($LASTEXITCODE -ne 0) { throw "docker save 失败" }
     & gzip -f $imagesTar
     if ($LASTEXITCODE -ne 0) { throw "images.tar 压缩失败" }
@@ -193,6 +199,8 @@ mkdir -p .bundle-new
 tar -xzf bundle.tar.gz -C .bundle-new
 cp -f .bundle-new/docker-compose-prod.yml ./docker-compose-prod.yml
 cp -f .bundle-new/docker-compose-app.yml ./docker-compose-app.yml
+mkdir -p backend/certs
+cp -f .bundle-new/backend/certs/caddy-root.crt ./backend/certs/caddy-root.crt
 if [ "__KEEP_ENV__" = "1" ] && [ -f .env ]; then echo ENV-KEPT; else cp -f .bundle-new/.env ./.env; fi
 if [ ! -f nginx.conf ]; then cp -f .bundle-new/nginx.conf ./nginx.conf; else echo NGINX-KEPT; fi
 rm -rf .bundle-new
@@ -241,7 +249,7 @@ echo DEPLOY-VERSIONED __V__
         New-Item -ItemType Directory -Path $envStage -Force | Out-Null
         Copy-Item -LiteralPath $s.EnvFile -Destination (Join-Path $envStage ".env") -Force
         $bundleTar = Join-Path $tmpDir "bundle-$($s.Name).tar"
-        & tar -cf $bundleTar -C $RepoRoot docker-compose-prod.yml docker-compose-app.yml -C $tmpDir nginx.conf -C $envStage .env
+        & tar -cf $bundleTar -C $RepoRoot docker-compose-prod.yml docker-compose-app.yml backend/certs/caddy-root.crt -C $tmpDir nginx.conf -C $envStage .env
         if ($LASTEXITCODE -ne 0) { throw "服务器 '$($s.Name)' bundle 打包失败" }
         & gzip -f $bundleTar
         if ($LASTEXITCODE -ne 0) { throw "服务器 '$($s.Name)' bundle 压缩失败" }

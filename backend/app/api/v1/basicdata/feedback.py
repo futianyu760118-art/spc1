@@ -35,6 +35,14 @@ from app.schemas.basicdata.feedback import (
     FeedbackUpdate,
 )
 from app.services.common.file_service import FileService
+from app.services.basicdata import feedback_service
+from app.services.basicdata.feedback_service import (
+    can_handle as _can_handle,
+    get_user_id as _get_user_id,
+    has_feedback_perm as _has_perm,
+    is_admin as _is_admin,
+    to_dicts as _to_dicts,
+)
 from app.services.notification.notification_broker import publish_unread_update
 from app.services.notification.text_utils import (
     NOTIFICATION_CONTENT_MAX,
@@ -49,111 +57,6 @@ _SEVERITY_LABELS = {"high": "高", "medium": "中", "low": "低"}
 _STATUS_LABELS = {"pending": "待处理", "processing": "处理中", "resolved": "已解决", "closed": "已关闭"}
 
 router = APIRouter()
-
-
-def _is_admin(user: dict) -> bool:
-    return (user or {}).get("role") == "admin"
-
-
-def _has_perm(user: dict, action: str) -> bool:
-    """是否有 basicdata.feedback 资源的指定动作权限（admin 自动通过）"""
-    if not user:
-        return False
-    if _is_admin(user):
-        return True
-    perms = user.get("permissions") or {}
-    if not isinstance(perms, dict):
-        return False
-
-    resources = ("basicdata.feedback", "masterdata.feedback")
-    for resource in resources:
-        actions = perms.get(resource) or []
-        if isinstance(actions, list) and action in actions:
-            return True
-
-    for resource in resources:
-        parent = resource.split(".", 1)[0]
-        actions = perms.get(parent) or []
-        if isinstance(actions, list) and action in actions:
-            return True
-    return False
-
-
-def _can_handle(user: dict) -> bool:
-    """是否有「处理问题反馈」权限（admin 自动通过）。
-
-    优先判新权限 basicdata.feedback.handle 的 handle 动作；
-    兼容旧权限：basicdata.feedback 的 update 动作（避免自定义角色误伤）。
-    """
-    if not user:
-        return False
-    if _is_admin(user):
-        return True
-    perms = user.get("permissions") or {}
-    if not isinstance(perms, dict):
-        return False
-    for resource in ("basicdata.feedback.handle", "masterdata.feedback.handle"):
-        actions = perms.get(resource) or []
-        if isinstance(actions, list) and "handle" in actions:
-            return True
-    return _has_perm(user, "update")
-
-
-def _get_user_id(user: dict) -> int:
-    return int(user.get("user_id") or user["sub"])
-
-
-def _to_dicts(attachments) -> list[dict]:
-    if not attachments:
-        return []
-    out = []
-    for a in attachments:
-        if isinstance(a, dict):
-            out.append(a)
-        elif hasattr(a, "model_dump"):
-            out.append(a.model_dump())
-    return out
-
-
-async def _insert_handler_notifications(db: AsyncSession, fb: Feedback) -> list[int]:
-    """向所有「有反馈处理权限」的活跃用户插入 feedback_alert 通知行，返回被通知的 user_id 列表。
-
-    处理人按权限判定（镜像 _has_perm 'update'），不硬编码角色名：
-    - admin 自动通过；
-    - 其余角色在 sys_role.permissions JSONB 合并 ROLE_PERMISSION_ADDITIONS 后，
-      含 basicdata.feedback / masterdata.feedback / 父级 basicdata 的 update 动作即视为处理人。
-    这样在 RoleManagement 调整权限矩阵后，通知接收人自动跟随。
-    严重度 high → priority important（触发加载时 toast），其余 normal。排除提交人本人。
-    """
-    from app.services.common.permission_users import user_ids_matching
-    handler_ids = await user_ids_matching(
-        db,
-        lambda role_code, perms: _can_handle({"role": role_code, "permissions": perms}),
-    )
-    if fb.submitter_id and fb.submitter_id in handler_ids:
-        handler_ids = [u for u in handler_ids if u != fb.submitter_id]
-    if not handler_ids:
-        return []
-
-    priority = "important" if fb.severity == "high" else "normal"
-    title = f"[问题反馈]{fb.title}"
-    content = fb.description or ""
-
-    for hid in handler_ids:
-        db.add(Notification(
-            user_id=hid,
-            type="feedback",
-            title=clip_text(title, NOTIFICATION_TITLE_MAX),
-            content=clip_text(content, NOTIFICATION_CONTENT_MAX),
-            ref_type="feedback",
-            ref_id=fb.id,
-            sender_id=fb.submitter_id,
-            sender_name=fb.submitter_name,
-            priority=priority,
-            is_read=False,
-        ))
-    await db.flush()
-    return handler_ids
 
 
 async def _insert_submitter_progress_notification(
@@ -370,43 +273,26 @@ async def create_feedback(
     current_user: dict = Depends(PermissionChecker("topbar.feedback", "read")),
     db: AsyncSession = Depends(get_db),
 ):
-    attachments = _to_dicts(body.attachments)
-    fb = Feedback(
-        type=body.type or "issue",
-        severity=body.severity or "low",
-        page_path=body.page_path,
-        title=body.title,
-        description=body.description,
-        attachments=attachments or None,
-        status="pending",
-        submitter_id=_get_user_id(current_user),
-        submitter_name=current_user.get("username") or "",
-    )
-    db.add(fb)
-    await db.flush()
-
-    # 关联文件资产
-    if attachments:
-        svc = FileService(db)
-        await svc.attach([a.get("key") for a in attachments], "feedback", str(fb.id))
-
-    # 通知处理人（插 notification 行；失败只记日志，不影响反馈提交）
-    handler_ids: list[int] = []
     try:
-        handler_ids = await _insert_handler_notifications(db, fb)
-    except Exception as e:
-        logger.warning(f"[feedback] 插入处理人通知失败 feedback_id={fb.id}: {e}")
+        fb, handler_ids = await feedback_service.create_feedback(
+            db,
+            submitter_id=_get_user_id(current_user),
+            submitter_name=current_user.get("username") or "",
+            subtype=body.type,
+            severity=body.severity,
+            page_path=body.page_path,
+            title=body.title,
+            description=body.description,
+            attachments=body.attachments,
+        )
+    except feedback_service.FeedbackValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
 
     await db.commit()
     await db.refresh(fb)
 
     # commit 后 SSE 推送未读计数（计数反映已提交数据；Redis 失败静默丢弃）
-    if handler_ids:
-        try:
-            for hid in handler_ids:
-                await publish_unread_update(db, hid)
-        except Exception as e:
-            logger.warning(f"[feedback] SSE 推送失败 feedback_id={fb.id}: {e}")
+    await feedback_service.publish_unread_updates(db, handler_ids)
 
     return ResponseModel(data=FeedbackOut.model_validate(fb))
 
@@ -841,6 +727,7 @@ async def delete_feedback(
         svc = FileService(db)
         await svc.detach(keys)
 
+    await feedback_service.delete_feedback_notifications(db, fb.id)
     await db.delete(fb)
     await db.commit()
     return ResponseModel(data={"deleted": feedback_id})

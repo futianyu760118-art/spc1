@@ -20,10 +20,9 @@ from tests.conftest import login
 def hub_capture(monkeypatch):
     """启用上报并把 _post 换成内存捕获，测完恢复设置。"""
     settings = get_settings()
-    saved = (settings.AEOS_HUB_BASE, settings.AEOS_SYSTEM_ID, settings.AEOS_SYSTEM_TOKEN)
-    settings.AEOS_HUB_BASE = "http://hub-mock"
-    settings.AEOS_SYSTEM_ID = "中台智能助手"
-    settings.AEOS_SYSTEM_TOKEN = "test-token"
+    saved = (settings.GATEWAY_BASE_URL, settings.GATEWAY_INTERNAL_TOKEN)
+    settings.GATEWAY_BASE_URL = "http://gateway-mock"
+    settings.GATEWAY_INTERNAL_TOKEN = "test-gateway-token"
     captured = []
 
     async def _stub(payload):
@@ -31,7 +30,7 @@ def hub_capture(monkeypatch):
 
     monkeypatch.setattr(hub_reporter, "_post", _stub)
     yield captured
-    settings.AEOS_HUB_BASE, settings.AEOS_SYSTEM_ID, settings.AEOS_SYSTEM_TOKEN = saved
+    settings.GATEWAY_BASE_URL, settings.GATEWAY_INTERNAL_TOKEN = saved
 
 
 async def _flush(captured, count):

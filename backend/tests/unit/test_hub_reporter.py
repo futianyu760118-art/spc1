@@ -1,7 +1,6 @@
-"""hub_reporter 单元测试：停用开关、payload 构造、请求头编码、失败吞掉。"""
+"""hub_reporter 单元测试：停用开关、payload 构造、网关转发、失败吞掉。"""
 
 import asyncio
-import json
 
 import pytest
 
@@ -13,32 +12,19 @@ from app.services.ai.base import TokenUsage
 @pytest.fixture
 def settings_fixture():
     settings = get_settings()
-    saved = (
-        settings.AEOS_HUB_BASE,
-        settings.AEOS_SYSTEM_ID,
-        settings.AEOS_SYSTEM_TOKEN,
-        settings.AEOS_HUB_CA_CERT,
-    )
+    saved = (settings.GATEWAY_BASE_URL, settings.GATEWAY_INTERNAL_TOKEN)
     yield settings
-    (
-        settings.AEOS_HUB_BASE,
-        settings.AEOS_SYSTEM_ID,
-        settings.AEOS_SYSTEM_TOKEN,
-        settings.AEOS_HUB_CA_CERT,
-    ) = saved
+    settings.GATEWAY_BASE_URL, settings.GATEWAY_INTERNAL_TOKEN = saved
 
 
-def _enable(settings, hub_base="http://127.0.0.1:1"):
-    settings.AEOS_HUB_BASE = hub_base
-    settings.AEOS_SYSTEM_ID = "中台智能助手"
-    settings.AEOS_SYSTEM_TOKEN = "test-token"
+def _enable(settings, gateway_base="http://gateway-mock"):
+    settings.GATEWAY_BASE_URL = gateway_base
+    settings.GATEWAY_INTERNAL_TOKEN = "test-gateway-token"
 
 
 def _disable(settings):
-    settings.AEOS_HUB_BASE = ""
-    settings.AEOS_SYSTEM_ID = ""
-    settings.AEOS_SYSTEM_TOKEN = ""
-    settings.AEOS_HUB_CA_CERT = ""
+    settings.GATEWAY_BASE_URL = ""
+    settings.GATEWAY_INTERNAL_TOKEN = ""
 
 
 async def test_disabled_skips_report(settings_fixture, monkeypatch):
@@ -76,7 +62,7 @@ async def test_enabled_reports_fire_and_forget(settings_fixture, monkeypatch):
     assert payload["summary"] == "hello"
     assert payload["detail"] == {"length": 5}
     assert payload["startedAt"] == "2026-10-19T00:00:00+00:00"
-    assert payload["durationMs"] == 12.35
+    assert payload["durationMs"] == 12
     assert "endedAt" not in payload
     assert "usage" not in payload
 
@@ -115,25 +101,16 @@ async def test_post_degrades_when_hub_rejects_optional_fields(settings_fixture, 
     monkeypatch.setattr(hub_reporter, "_rejected_event_fields", set())
     payloads = []
 
-    class _Response:
-        def __init__(self, status_code, text):
-            self.status_code = status_code
-            self.text = text
+    async def _post(payload):
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return {"ok": False, "status": 400,
+                    "body": {"error": "不支持的字段：taskId, stepId, tool", "code": "INVALID_ARGUMENT"},
+                    "text": '{"error":"不支持的字段：taskId, stepId, tool","code":"INVALID_ARGUMENT"}',
+                    "error": "网关返回 HTTP 400"}
+        return {"ok": True, "status": 201, "body": {}, "text": "{}", "error": None}
 
-        def json(self):
-            return {}
-
-    class _Client:
-        async def post(self, url, json, headers):
-            payloads.append(json)
-            if len(payloads) == 1:
-                return _Response(
-                    400,
-                    '{"error":"不支持的字段：taskId, stepId, tool","code":"INVALID_ARGUMENT"}',
-                )
-            return _Response(201, "{}")
-
-    monkeypatch.setattr(hub_reporter, "_get_client", lambda: _Client())
+    monkeypatch.setattr(hub_reporter.gateway_client, "post_assistant_event", _post)
     payload = {
         "eventId": "e1", "traceId": "s1", "event": "tool_call",
         "taskId": "task-1", "stepId": 1, "tool": "call_query_agent", "confirmationId": "wc-1",
@@ -193,64 +170,28 @@ async def test_report_model_call_skips_rule_based(settings_fixture, monkeypatch)
     assert captured == []
 
 
-async def test_post_sends_encoded_headers_and_body(settings_fixture):
-    received = []
+async def test_post_forwards_payload_to_gateway(settings_fixture, monkeypatch):
+    _enable(settings_fixture)
+    captured = []
 
-    async def handler(reader, writer):
-        data = b""
-        while b"\r\n\r\n" not in data:
-            chunk = await reader.read(4096)
-            if not chunk:
-                break
-            data += chunk
-        head, _, body = data.partition(b"\r\n\r\n")
-        head_text = head.decode("utf-8", "replace")
-        length = 0
-        for line in head_text.split("\r\n")[1:]:
-            if line.lower().startswith("content-length:"):
-                length = int(line.split(":", 1)[1].strip())
-        while len(body) < length:
-            body += await reader.read(4096)
-        received.append({"head": head_text, "body": json.loads(body[:length])})
-        resp = b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
-        writer.write(resp)
-        await writer.drain()
-        writer.close()
+    async def _post(payload):
+        captured.append(payload)
+        return {"ok": True, "status": 200, "body": {"accepted": True}, "text": "", "error": None}
 
-    server = await asyncio.start_server(handler, "127.0.0.1", 0)
-    port = server.sockets[0].getsockname()[1]
-    try:
-        _enable(settings_fixture, hub_base=f"http://127.0.0.1:{port}")
-        await hub_reporter._post({"traceId": "s1", "event": "message", "eventId": "e1"})
-    finally:
-        server.close()
-        await server.wait_closed()
-
-    assert len(received) == 1
-    head = received[0]["head"]
-    assert "x-aeos-system-id: %E4%B8%AD%E5%8F%B0%E6%99%BA%E8%83%BD%E5%8A%A9%E6%89%8B" in head
-    assert "x-aeos-system-token: test-token" in head
-    assert received[0]["body"] == {"traceId": "s1", "event": "message", "eventId": "e1"}
+    monkeypatch.setattr(hub_reporter.gateway_client, "post_assistant_event", _post)
+    payload = {"traceId": "s1", "event": "message", "eventId": "e1"}
+    await hub_reporter._post(dict(payload))
+    assert captured == [payload]
 
 
-async def test_post_swallows_connection_error(settings_fixture):
-    _enable(settings_fixture, hub_base="http://127.0.0.1:1")
+async def test_post_swallows_gateway_error(settings_fixture, monkeypatch):
+    _enable(settings_fixture)
+    captured = []
+
+    async def _post(payload):
+        captured.append(payload)
+        return {"ok": False, "status": 0, "body": None, "text": "", "error": "网关连接失败"}
+
+    monkeypatch.setattr(hub_reporter.gateway_client, "post_assistant_event", _post)
     await hub_reporter._post({"traceId": "s1", "event": "message", "eventId": "e1"})
-
-
-async def test_get_client_uses_hub_ca_cert(settings_fixture, monkeypatch, tmp_path):
-    ca_cert = tmp_path / "caddy-root.crt"
-    ca_cert.write_text("dummy", encoding="utf-8")
-    settings_fixture.AEOS_HUB_CA_CERT = str(ca_cert)
-    captured = {}
-
-    class _FakeClient:
-        is_closed = False
-
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(hub_reporter.httpx, "AsyncClient", _FakeClient)
-    monkeypatch.setattr(hub_reporter, "_client", None)
-    hub_reporter._get_client()
-    assert captured["verify"] == str(ca_cert)
+    assert len(captured) == 1

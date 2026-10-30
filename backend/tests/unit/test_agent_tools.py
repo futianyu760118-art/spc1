@@ -37,6 +37,19 @@ class TestBuildAgentToolsSchema:
         assert len(enum) == len(QUERY_CATALOG) == 17
         assert enum == [c["path"] for c in QUERY_CATALOG]
 
+    def test_order_schema_includes_promised_date(self):
+        schema = next(s for s in build_agent_tools_schema() if s["function"]["name"] == "call_order_agent")
+        fields = schema["function"]["parameters"]["properties"]["fields"]["properties"]
+        assert "promised_date" in fields
+
+    def test_order_schema_filters_fields_by_capability(self):
+        schema = next(
+            s for s in build_agent_tools_schema(order_fields={"customer_inspection_date", "planned_start_date"})
+            if s["function"]["name"] == "call_order_agent"
+        )
+        fields = schema["function"]["parameters"]["properties"]["fields"]["properties"]
+        assert set(fields) == {"customer_inspection_date", "planned_start_date"}
+
 
 class TestValidateToolInput:
     def test_query_valid(self):
@@ -71,6 +84,11 @@ class TestValidateToolInput:
             "call_order_agent", {"order_no": "HJ-1", "fields": {"shipping_plan": "2026-11-01"}}
         ) is None
 
+    def test_order_promised_date_valid(self):
+        assert validate_tool_input(
+            "call_order_agent", {"order_no": "HJ-1", "fields": {"promised_date": "2026-11-15"}}
+        ) is None
+
     def test_order_field_not_allowed(self):
         assert validate_tool_input(
             "call_order_agent", {"order_no": "HJ-1", "fields": {"status": "closed"}}
@@ -103,6 +121,15 @@ class TestRegistryMetadata:
         assert hub.read_only is True
         assert hub.requires_confirmation is False
         assert hub.category == "agent"
+
+    def test_feedback_tools_registered(self):
+        from app.services.assistant.tool_registry import get_tool
+
+        create = get_tool("create_feedback")
+        revoke = get_tool("revoke_feedback")
+        assert create is not None and revoke is not None
+        assert create.read_only is False and revoke.read_only is False
+        assert "反馈" in create.keywords
 
     def test_agent_tools_registered_at_import(self):
         import app.services.assistant.agent_tools as mod  # noqa: F401

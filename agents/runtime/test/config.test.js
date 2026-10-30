@@ -22,6 +22,11 @@ const ENV_NAMES = [
   "HEALTH_CHECK_PORT",
   "LOG_LEVEL",
   "AGENT_ADMIN_TOKEN",
+  "BACKEND_INTERNAL_BASE_URL",
+  "GATEWAY_INTERNAL_TOKEN",
+  "AEOS_HUB_BASE",
+  "AEOS_SYSTEM_ID",
+  "AEOS_SYSTEM_TOKEN",
 ];
 
 function withEnv(values, fn) {
@@ -71,12 +76,51 @@ test("createConfig reads agent-specific keys and applies env int defaults", () =
   });
 });
 
+test("createConfig reads gateway internal and hub connection settings", () => {
+  withEnv({
+    EXECUTION_AGENT_KEY: "query",
+    EXECUTION_PLANE_TOKEN: "token",
+    CONTROL_PLATFORM_BASE_URL: "http://platform/api/v1",
+    CONTROL_PLATFORM_QUERY_APP_KEY: "ak",
+    CONTROL_PLATFORM_QUERY_APP_SECRET: "sk",
+    BACKEND_INTERNAL_BASE_URL: " http://backend:8000 ",
+    GATEWAY_INTERNAL_TOKEN: "gw-token",
+    AEOS_HUB_BASE: " https://hub.example.com ",
+    AEOS_SYSTEM_ID: "control-platform",
+    AEOS_SYSTEM_TOKEN: "system-token",
+  }, () => {
+    const cfg = createConfig({ agentKey: "query", envPath: "", defaults: QUERY_DEFAULTS });
+
+    assert.equal(cfg.backendInternalBaseUrl, "http://backend:8000");
+    assert.equal(cfg.gatewayInternalToken, "gw-token");
+    assert.equal(cfg.hubBaseUrl, "https://hub.example.com");
+    assert.equal(cfg.hubSystemId, "control-platform");
+    assert.equal(cfg.hubSystemToken, "system-token");
+  });
+});
+
 test("createConfig throws when a required key is missing", () => {
   withEnv({ EXECUTION_AGENT_KEY: "query" }, () => {
     assert.throws(
       () => createConfig({ agentKey: "query", envPath: "", defaults: QUERY_DEFAULTS }),
       /缺少必填配置 EXECUTION_PLANE_TOKEN/,
     );
+  });
+});
+
+test("createConfig allows empty legacy token when system token is configured", () => {
+  withEnv({
+    EXECUTION_AGENT_KEY: "query",
+    EXECUTION_SYSTEM_ID: "control-platform",
+    EXECUTION_SYSTEM_TOKEN: "system-token",
+    CONTROL_PLATFORM_BASE_URL: "http://platform/api/v1",
+    CONTROL_PLATFORM_QUERY_APP_KEY: "ak",
+    CONTROL_PLATFORM_QUERY_APP_SECRET: "sk",
+  }, () => {
+    const config = createConfig({ agentKey: "query", envPath: "", defaults: QUERY_DEFAULTS });
+    assert.equal(config.token, "");
+    assert.equal(config.systemId, "control-platform");
+    assert.equal(config.systemToken, "system-token");
   });
 });
 

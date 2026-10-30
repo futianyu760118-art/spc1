@@ -230,9 +230,8 @@ async def quality_trace_list(
         "product_code": SaleOrderLine.product_code,
         "batch_no": SaleOrderLine.batch_no,
     }[anchor]
-    lines = (
-        await db.execute(select(SaleOrderLine).where(line_column == anchor_value))
-    ).scalars().all()
+    line_stmt = select(SaleOrderLine).where(line_column == anchor_value)
+    lines = (await db.execute(line_stmt)).scalars().all()
 
     if anchor == "order_no":
         issue_where = [QualityIssue.order_no == anchor_value]

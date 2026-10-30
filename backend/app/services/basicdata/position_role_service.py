@@ -29,6 +29,8 @@ COMMON_INTERNAL_PERMISSIONS = {
     "topbar.ai_search": READ,
     "topbar.font_size": READ,
     "topbar.notifications": READ,
+    "ai.agent.self": READ,
+    "ai.agent.team": READ,
 }
 
 
