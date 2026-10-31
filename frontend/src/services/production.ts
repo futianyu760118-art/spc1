@@ -1,0 +1,199 @@
+import api from './api'
+
+// 生产协同中心 API（从 services/api.ts 拆出，纯搬运）
+export const productionApi = {
+  // 生产总览
+  getOverview: () => api.get('/production/overview'),
+  getKpiSummary: (params?: Record<string, any>) => api.get('/production/kpi-summary', { params }),
+  getTodayCards: (params?: Record<string, any>) => api.get('/production/kpi-summary/today-cards', { params }),
+  getWorkshopOverview: (params: Record<string, any>) => api.get('/production/kpi-summary/workshop-overview', { params }),
+  listSchedulePlans: (params: Record<string, any>) => api.get('/production/schedule-plans', { params }),
+  createSchedulePlan: (data: Record<string, any>) => api.post('/production/schedule-plans', data),
+  updateSchedulePlan: (id: number, data: Record<string, any>) => api.put(`/production/schedule-plans/${id}`, data),
+  getDeleteSchedulePlanPreview: (id: number, params?: Record<string, any>) =>
+    api.get(`/production/schedule-plans/${id}/delete-preview`, { params }),
+  confirmDeleteSchedulePlan: (id: number, data: { reason?: string; execute_backfill?: boolean; break_frozen_reason?: string }) =>
+    api.post(`/production/schedule-plans/${id}/delete-confirm`, data),
+  deleteSchedulePlan: (id: number, params?: Record<string, any>) =>
+    api.delete(`/production/schedule-plans/${id}`, { params }),
+  executeDeleteBackfill: (data: { items: Array<{ plan_id: number; suggested_plan_date: string }>; remark?: string }) =>
+    api.post('/production/schedule-plans/backfill/execute', data),
+  // 重新排产
+  reschedulePreview: (
+    planId: number,
+    targetDate: string,
+    manpower?: number,
+    dailyWorkHours?: number,
+  ) =>
+    api.post(`/production/schedule-plans/${planId}/reschedule-preview`, null, {
+      params: { target_date: targetDate, manpower, daily_work_hours: dailyWorkHours },
+      timeout: 60000,
+    }),
+  reschedulePlan: (
+    planId: number,
+    targetDate?: string,
+    breakFrozenReason?: string,
+    manpower?: number,
+    dailyWorkHours?: number,
+    includeSunday?: boolean,
+  ) =>
+    api.post(`/production/schedule-plans/${planId}/reschedule`, null, {
+      params: {
+        target_date: targetDate,
+        break_frozen_reason: breakFrozenReason,
+        manpower,
+        daily_work_hours: dailyWorkHours,
+        include_sunday: includeSunday,
+      },
+      timeout: 120000,
+    }),
+  listSchedulePlanHistory: (params: { order_no: string; line_no: string }) =>
+    api.get('/production/schedule-plans/history', { params }),
+  // 订单池用于排产
+  getOrdersForScheduling: (params: Record<string, any>) => api.get('/production/schedule-plans/orders-for-scheduling', { params }),
+  // 排产看板周视图专用：返回真实占槽表(生产_capacity_slot)按日聚合, 不再被 long 单区间相交误导
+  getBoardCapacity: (params: Record<string, any>) => api.get('/production/schedule-plans/board-capacity', { params }),
+  getTodoWorkbench: (params: Record<string, any>) => api.get('/production/schedule-plans/todo-workbench', { params }),
+  refreshTodoSnapshots: (data: Record<string, any>) => api.post('/production/schedule-plans/todo-workbench/refresh-snapshots', data),
+  // 获取工作时间配置
+  getWorkHoursConfig: () => api.get('/production/schedule-plans/work-hours-config'),
+  // 车间排产基础条件 (人数/工时/周日排产, 按阶段分桶)
+  getBaseConditions: () => api.get('/production/schedule-plans/base-conditions'),
+  saveBaseConditions: (data: { items: Array<{ schedule_bucket: string; default_manpower: number; daily_work_hours: number; include_sunday: boolean }> }) =>
+    api.post('/production/schedule-plans/base-conditions', data),
+  // 查询产能时间槽使用情况
+  getCapacityUsage: (params: {
+    department: string
+    schedule_bucket: string
+    start_date: string
+    end_date: string
+    daily_capacity?: number
+  }) => api.get('/production/schedule-plans/capacity-usage', { params }),
+  simulateLeanSchedule: (data: Record<string, any>) => api.post('/production/schedule-plans/simulate-lean', data),
+  // 一键排产
+  autoSchedule: (data: Record<string, any>) => api.post('/production/schedule-plans/auto-schedule', data, { timeout: 120000 }),
+  batchAutoSchedule: (data: Record<string, any>) => api.post('/production/schedule-plans/batch-auto-schedule', data, { timeout: 900000 }),
+  // 检测变更
+  detectScheduleChanges: () => api.post('/production/schedule-plans/detect-changes'),
+  // UPPH 变更影响
+  listChangeEvents: (params: Record<string, any>) => api.get('/production/schedule-plans/change-events', { params }),
+  updateChangeEventStatus: (data: { event_ids: string[]; process_status: string; remark?: string }) =>
+    api.post('/production/schedule-plans/change-events/status', data),
+  listUpphImpactPlans: (params: Record<string, any>) => api.get('/production/schedule-plans/upph-impact', { params }),
+  batchReschedulePlans: (data: { plan_ids: number[], all_or_none?: boolean }) => api.post('/production/schedule-plans/batch-reschedule', data),
+  // 手工改日期（硬排，以手工日期为准，超产能只提示）
+  adjustScheduleDates: (data: { items: Array<{ plan_id: number; target_date: string }>; reason?: string }) =>
+    api.post('/production/schedule-date-adjust/batch', data, { timeout: 120000 }),
+  insertSchedulePlan: (data: Record<string, any>) =>
+    api.post('/production/schedule-date-adjust/insert', data, { timeout: 180000 }),
+  splitSchedulePlan: (data: Record<string, any>) =>
+    api.post('/production/schedule-date-adjust/split', data, { timeout: 180000 }),
+  // OA 返工单（品质异常流程）只读快照
+  listReworkOrders: (params: Record<string, any>) =>
+    api.get('/production/rework-orders', { params }),
+  syncReworkOrders: () =>
+    api.post('/production/rework-orders/sync', null, { timeout: 180000 }),
+  // 拆单少排/只生产一部分后的待排余量
+  listScheduleRemainders: (params: Record<string, any>) =>
+    api.get('/production/schedule-date-adjust/remainders', { params }),
+  batchDeletePlans: (planIds: number[]) => api.post('/production/schedule-plans/batch-delete', { plan_ids: planIds }, { timeout: 120000 }),
+  listOperationLogs: (params: Record<string, any>) => api.get('/production/schedule-plans/operation-logs', { params }),
+  getScheduleDebugTrace: (params: { order_no: string; line_no: string }) =>
+    api.get('/production/schedule-plans/debug-trace', { params }),
+  // 缺少UPPH的产品
+  listMissingUpphProducts: (params: Record<string, any>) => api.get('/production/schedule-plans/missing-upph-products', { params }),
+  // 前道管理（数据主体：喷塑/压铸车间未关闭的生产任务单）
+  listFrontProcess: (params: Record<string, any>) =>
+    api.get('/production/front-process', { params }),
+  updateFrontProcess: (task_id: number, data: Record<string, any>) =>
+    api.put(`/production/front-process/${task_id}`, data),
+  // 贴片管理
+  listSMT: (params: Record<string, any>) =>
+    api.get('/production/smt', { params }),
+  createSMT: (data: Record<string, any>) =>
+    api.post('/production/smt', data),
+  updateSMT: (id: number, data: Record<string, any>) =>
+    api.put(`/production/smt/${id}`, data),
+  importSMT: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/smt/import', fd)
+  },
+  // 精益管理
+  listLean: (params: Record<string, any>) =>
+    api.get('/production/lean', { params }),
+  createLean: (data: Record<string, any>) =>
+    api.post('/production/lean', data),
+  updateLean: (id: number, data: Record<string, any>) =>
+    api.put(`/production/lean/${id}`, data),
+  importLean: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/lean/import', fd)
+  },
+  // 组装管理
+  listAssembly: (params: Record<string, any>) =>
+    api.get('/production/assembly', { params }),
+  createAssembly: (data: Record<string, any>) =>
+    api.post('/production/assembly', data),
+  updateAssembly: (id: number, data: Record<string, any>) =>
+    api.put(`/production/assembly/${id}`, data),
+  importAssembly: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/assembly/import', fd)
+  },
+  // 包装管理
+  listPackaging: (params: Record<string, any>) =>
+    api.get('/production/packaging', { params }),
+  createPackaging: (data: Record<string, any>) =>
+    api.post('/production/packaging', data),
+  updatePackaging: (id: number, data: Record<string, any>) =>
+    api.put(`/production/packaging/${id}`, data),
+  importPackaging: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return api.post('/production/packaging/import', fd)
+  },
+  // 工序异常池
+  listExceptions: (params: Record<string, any>) =>
+    api.get('/production/exceptions', { params }),
+  createException: (data: Record<string, any>) =>
+    api.post('/production/exceptions', data),
+  updateException: (id: number, data: Record<string, any>) =>
+    api.put(`/production/exceptions/${id}`, data),
+  deleteException: (id: number) =>
+    api.delete(`/production/exceptions/${id}`),
+  // 产品工序产能
+  listProductProcessCapacities: (params: Record<string, any>) => api.get('/production/product-process-capacities', { params }),
+  syncProductProcessCapacitiesFromOA: () => api.post('/production/product-process-capacities/sync-oa'),
+  createProductProcessCapacity: (data: Record<string, any>) => api.post('/production/product-process-capacities', data),
+  updateProductProcessCapacity: (id: number, data: Record<string, any>) => api.put(`/production/product-process-capacities/${id}`, data),
+  deleteProductProcessCapacity: (id: number) => api.delete(`/production/product-process-capacities/${id}`),
+  listUpphFormulaConfigs: (params: Record<string, any> = {}) => api.get('/production/upph-formula-configs', { params }),
+  createUpphFormulaConfig: (data: Record<string, any>) => api.post('/production/upph-formula-configs', data),
+  updateUpphFormulaConfig: (id: number, data: Record<string, any>) => api.put(`/production/upph-formula-configs/${id}`, data),
+  deleteUpphFormulaConfig: (id: number) => api.delete(`/production/upph-formula-configs/${id}`),
+  // 生产日报表（ERP/OA 同步只读 + 手工录入）
+  listDailyReports: (params: Record<string, any>) => api.get('/production/daily-reports', { params }),
+  createDailyReport: (data: Record<string, any>) => api.post('/production/daily-reports', data),
+  createDailyReportsBatch: (data: Record<string, any>[]) => api.post('/production/daily-reports/batch', data),
+  updateDailyReport: (id: number, data: Record<string, any>) => api.put(`/production/daily-reports/${id}`, data),
+  deleteDailyReport: (id: number) => api.delete(`/production/daily-reports/${id}`),
+  // 车间日报表单据（泛微OA样式）
+  listWorkshopDailyReports: (params: Record<string, any>) => api.get('/production/workshop-daily-reports', { params }),
+  getWorkshopDailyReport: (id: number) => api.get(`/production/workshop-daily-reports/${id}`),
+  createWorkshopDailyReport: (data: Record<string, any>) => api.post('/production/workshop-daily-reports', data),
+  updateWorkshopDailyReport: (id: number, data: Record<string, any>) => api.put(`/production/workshop-daily-reports/${id}`, data),
+  deleteWorkshopDailyReport: (id: number) => api.delete(`/production/workshop-daily-reports/${id}`),
+  workshopDailyReportOrgOptions: () => api.get('/production/workshop-daily-reports/org-options'),
+  workshopDailyReportPeopleOptions: (orgId: number) => api.get('/production/workshop-daily-reports/people-options', { params: { org_id: orgId } }),
+  workshopDailyReportAttendanceOptions: (orgId: number, reportDate?: string) => api.get('/production/workshop-daily-reports/attendance-options', { params: { org_id: orgId, report_date: reportDate } }),
+  workshopDailyReportLeaveOptions: (orgId: number, reportDate: string) => api.get('/production/workshop-daily-reports/leave-options', { params: { org_id: orgId, report_date: reportDate } }),
+  // 报工（针对排产计划）
+  reportVirtualWarehouses: () => api.get('/production/reports/virtual-warehouses'),
+  reportablePlans: (params: Record<string, any>) => api.get('/production/reports/plans', { params }),
+  createReport: (data: Record<string, any>) => api.post('/production/reports', data),
+  listReports: (params: Record<string, any>) => api.get('/production/reports', { params }),
+  dailyReportDraft: (params: Record<string, any>) => api.get('/production/reports/daily-report-draft', { params }),
+  // 订单工价查询
+  lookupOrderWage: (params: Record<string, any>) => api.get('/production/order-wage-lookup', { params }),
+  lookupAssemblyTaskOrders: (params: Record<string, any>) => api.get('/production/order-wage-lookup/task-orders', { params }),
+  syncOrderWageFromOA: () => api.post('/production/order-wage-lookup/sync-oa', null, { timeout: 180000 }),
+}

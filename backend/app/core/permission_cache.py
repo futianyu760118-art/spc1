@@ -1,0 +1,114 @@
+"""用户权限 payload 缓存 — 减轻 PermissionChecker 每次请求查库的负担
+
+缓存内容：role_code / supplier_name / supplier_code / oa_user_id / org_scope_ids / login_version
+缓存粒度：按 user_id + channel + login_version（login_version 为 token 携带的渠道版本；
+   同渠道重新登录版本递增，登录时主动 invalidate 该渠道缓存，立即失效旧缓存）
+TTL：5 分钟（兜底，即使失效机制出问题也不会缓存太久）
+"""
+import json
+import time
+import threading
+from app.core.redis_client import get_command_client, note_failure, note_success
+
+PAYLOAD_CACHE_PREFIX = "perm:payload:"
+PAYLOAD_CACHE_TTL = 5 * 60  # 5 分钟
+
+# 进程内 fallback 缓存（Redis 不可用时用）
+_local_cache: dict[str, tuple[float, dict]] = {}
+_local_lock = threading.Lock()
+
+
+async def _get_redis():
+    """共享命令客户端（熔断开启时返回 None）。调用方不要 aclose。"""
+    return get_command_client()
+
+
+def _cache_key(user_id: int, channel: str, login_version: int) -> str:
+    return f"{PAYLOAD_CACHE_PREFIX}{user_id}:{channel}:v{login_version}"
+
+
+def _local_get(key: str) -> dict | None:
+    """进程内缓存读取"""
+    with _local_lock:
+        item = _local_cache.get(key)
+        if item and time.time() - item[0] < PAYLOAD_CACHE_TTL:
+            return item[1]
+        if item:
+            _local_cache.pop(key, None)
+    return None
+
+
+def _local_set(key: str, value: dict) -> None:
+    """进程内缓存写入"""
+    with _local_lock:
+        _local_cache[key] = (time.time(), value)
+
+
+async def get_cached_user_payload(user_id: int, channel: str, login_version: int) -> dict | None:
+    """读取缓存的用户 payload（不含 permissions，permissions 单独查）。返回 None 表示未命中。"""
+    key = _cache_key(user_id, channel, login_version)
+    # 先查进程内缓存（最快）
+    local = _local_get(key)
+    if local is not None:
+        return local
+    # 再查 Redis
+    client = await _get_redis()
+    if not client:
+        return None
+    try:
+        raw = await client.get(key)
+        note_success()
+        if not raw:
+            return None
+        data = json.loads(raw)
+        _local_set(key, data)  # 回写进程内
+        return data
+    except Exception:
+        note_failure()
+        return None
+
+
+async def set_cached_user_payload(user_id: int, channel: str, login_version: int, payload: dict) -> None:
+    """写入用户 payload 缓存"""
+    key = _cache_key(user_id, channel, login_version)
+    # org_scope_ids 是 set，需要转 list 才能序列化
+    safe = dict(payload)
+    if isinstance(safe.get("org_scope_ids"), set):
+        safe["org_scope_ids"] = list(safe["org_scope_ids"])
+    # 进程内缓存（即使 Redis 不可用也能命中）
+    _local_set(key, safe)
+    # Redis（跨进程共享）
+    client = await _get_redis()
+    if not client:
+        return
+    try:
+        await client.setex(key, PAYLOAD_CACHE_TTL, json.dumps(safe, default=str))
+        note_success()
+    except Exception:
+        note_failure()
+    # client 为共享客户端，不 aclose
+
+
+async def invalidate_user_payload(user_id: int, channel: str | None = None) -> None:
+    """主动失效某用户（某渠道）的所有版本缓存。
+
+    channel 给定时只清该渠道；为 None 时清该用户所有渠道。同时清进程内缓存与 Redis。
+    """
+    local_prefix = f"{PAYLOAD_CACHE_PREFIX}{user_id}:{channel}:v" if channel else f"{PAYLOAD_CACHE_PREFIX}{user_id}:"
+    redis_pattern = f"{PAYLOAD_CACHE_PREFIX}{user_id}:{channel}:v*" if channel else f"{PAYLOAD_CACHE_PREFIX}{user_id}:*"
+    # 清进程内缓存
+    with _local_lock:
+        stale = [k for k in _local_cache if k.startswith(local_prefix)]
+        for k in stale:
+            _local_cache.pop(k, None)
+    # 清 Redis
+    client = await _get_redis()
+    if not client:
+        return
+    try:
+        async for key in client.scan_iter(match=redis_pattern, count=100):
+            await client.delete(key)
+        note_success()
+    except Exception:
+        note_failure()
+    # client 为共享客户端，不 aclose

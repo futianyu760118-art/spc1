@@ -1,0 +1,29 @@
+from app.models.basicdata.user import SysUser, SysRole  # noqa: F401
+from app.models.basicdata.audit_log import AuditLog  # noqa: F401
+from app.models.basicdata.sync_sql_config import SyncSqlConfig  # noqa: F401
+from app.models.basicdata.sync_log import SyncLog  # noqa: F401
+from app.models.basicdata.customer import Customer  # noqa: F401
+from app.models.basicdata.supplier import Supplier  # noqa: F401
+from app.models.basicdata.material import Material  # noqa: F401
+from app.models.basicdata.sku import SKU  # noqa: F401
+from app.models.basicdata.product import Product  # noqa: F401
+from app.models.basicdata.bom import Bom  # noqa: F401
+from app.models.basicdata.bom_detail import BomDetail  # noqa: F401
+from app.models.basicdata.warehouse import Warehouse  # noqa: F401
+from app.models.basicdata.location import Location  # noqa: F401
+from app.models.basicdata.inventory import Inventory  # noqa: F401
+from app.models.basicdata.subject_balance import SubjectBalance  # noqa: F401
+from app.models.basicdata.process import Process  # noqa: F401
+from app.models.basicdata.organization import Organization  # noqa: F401
+from app.models.basicdata.employee import Employee  # noqa: F401
+from app.models.basicdata.position import Position  # noqa: F401
+from app.models.basicdata.user_org_scope import UserOrgScope  # noqa: F401
+from app.models.basicdata.file_asset import FileAsset  # noqa: F401
+from app.models.basicdata.feedback import Feedback  # noqa: F401
+from app.models.basicdata.permission import SysPermission  # noqa: F401
+from app.models.basicdata.data_supply import DataSupplyApiKey, DataSupplyCallLog  # noqa: F401
+from app.models.basicdata.share_link import ShareLink  # noqa: F401
+from app.models.basicdata.share_link_recipient import ShareLinkRecipient  # noqa: F401
+from app.models.basicdata.writeback_sql_config import WritebackSqlConfig  # noqa: F401
+from app.models.basicdata.writeback_queue import WritebackQueue  # noqa: F401
+from app.models.basicdata.writeback_log import WritebackLog  # noqa: F401

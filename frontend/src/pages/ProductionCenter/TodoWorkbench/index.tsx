@@ -1,0 +1,529 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Button, Col, DatePicker, Input, InputNumber, Modal, Row, Select, Space, Statistic, Table, Tag, Tooltip, message, notification } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
+import { ReloadOutlined, SearchOutlined, SyncOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
+import { productionApi } from '../../../services/api'
+import { formatDate } from '../../../utils'
+import { TODO_FILTER_OPTIONS, TODO_BUCKET_WORKSPACE_OPTIONS, TODO_STATUS_META } from '../SchedulePlans/constants'
+import { renderBucketTag, renderCopyableText, renderSchedulingReasonCell, renderSchedulingStatusTag } from '../SchedulePlans/helpers'
+import ScheduleModal from '../components/ScheduleModal'
+import BatchScheduleModal from '../components/BatchScheduleModal'
+import CollapsibleStats from '../components/CollapsibleStats'
+import BaseConditionDrawer from '../components/BaseConditionDrawer'
+
+interface TodoRow {
+  id: number
+  order_no: string
+  line_no: string | null
+  product_code: string | null
+  bom_no: string | null
+  order_qty: number | null
+  quantity: number | null
+  promised_date: string | null
+  source_promised_date: string | null
+  schedule_bucket: string | null
+  schedule_bucket_label: string | null
+  todo_kind: string
+  todo_status_label: string | null
+  todo_action_label: string | null
+  reschedule_reason: string | null
+  impact_reason: string | null
+  display_status: string | null
+  scheduling_status: string | null
+  display_status_label: string | null
+  scheduling_status_label: string | null
+  scheduling_reason_code: string | null
+  scheduling_reason: string | null
+  upph: number | null
+  kit_rate: number | null
+  kit_risk_level: string | null
+  shortage_material_count: number | null
+  latest_material_eta: string | null
+}
+
+export default function TodoWorkbench() {
+  const navigate = useNavigate()
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
+  const [scheduleOrder, setScheduleOrder] = useState<any>(null)
+  const [batchScheduleOpen, setBatchScheduleOpen] = useState(false)
+  const [baseConditionOpen, setBaseConditionOpen] = useState(false)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [selectedRows, setSelectedRows] = useState<any[]>([])
+  const [batchRescheduling, setBatchRescheduling] = useState(false)
+
+  const openSchedule = (row: any) => {
+    setScheduleOrder(row)
+    setScheduleModalOpen(true)
+  }
+
+  const openBatchSchedule = () => {
+    const schedulableRows = selectedRows.filter((row) => row.todo_kind === 'ready')
+    if (schedulableRows.length === 0) {
+      message.warning('请先勾选待排产订单')
+      return
+    }
+    setBatchScheduleOpen(true)
+  }
+
+  const openBatchReschedule = () => {
+    const rows = selectedRows.filter((row) => row.todo_kind === 'reschedule' && row.id)
+    if (rows.length === 0) {
+      message.warning('请先勾选待重排订单')
+      return
+    }
+    const planIds = Array.from(new Set(rows.map((row) => Number(row.id)).filter(Boolean)))
+    Modal.confirm({
+      title: `确认批量重排 ${planIds.length} 条计划？`,
+      content: '将按最新订单/UPPH 重新倒排，计划日期可能变化；不会自动顺延其它计划。',
+      okText: '开始重排',
+      onOk: async () => {
+        setBatchRescheduling(true)
+        try {
+          const res: any = await productionApi.batchReschedulePlans({ plan_ids: planIds })
+          const result = res.data || {}
+          notification[result.failed_count ? 'warning' : 'success']({
+            message: '批量重排完成',
+            description: `成功 ${result.success_count || 0} 条，失败 ${result.failed_count || 0} 条`,
+            duration: 6,
+          })
+          setSelectedRowKeys([])
+          setSelectedRows([])
+          await load()
+        } finally {
+          setBatchRescheduling(false)
+        }
+      },
+    })
+  }
+  const [data, setData] = useState<TodoRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [keyword, setKeyword] = useState('')
+  const [year, setYear] = useState(dayjs().year())
+  const [month, setMonth] = useState(dayjs().month() + 1)
+  const [todoStatusFilter, setTodoStatusFilter] = useState('all')
+  const [bucketFilter, setBucketFilter] = useState('all')
+  const [kitRiskFilter, setKitRiskFilter] = useState('all')
+  const [snapshotRefreshing, setSnapshotRefreshing] = useState(false)
+  // 表头列筛选
+  const [fOrderNo, setFOrderNo] = useState('')
+  const [fProductCode, setFProductCode] = useState('')
+  const [fBomNo, setFBomNo] = useState('')
+  const [fQtyMin, setFQtyMin] = useState<number | null>(null)
+  const [fQtyMax, setFQtyMax] = useState<number | null>(null)
+  const [fPromisedRange, setFPromisedRange] = useState<any>(null)
+  const [fEtaRange, setFEtaRange] = useState<any>(null)
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const setDebounced = (key: string, fn: (v: string) => void, value: string) => {
+    if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key])
+    debounceTimers.current[key] = setTimeout(() => { fn(value); setPage(1) }, 300)
+  }
+  useEffect(() => () => {
+    Object.values(debounceTimers.current).forEach((t) => clearTimeout(t))
+  }, [])
+  const [stats, setStats] = useState<{ ready: number; pending: number; reschedule: number; missing_upph: number; bucket_counts?: Record<string, number> }>({ ready: 0, pending: 0, reschedule: 0, missing_upph: 0 })
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const params: Record<string, any> = {
+        page,
+        page_size: pageSize,
+        year,
+        month,
+      }
+      if (keyword.trim()) params.keyword = keyword.trim()
+      if (todoStatusFilter !== 'all') params.todo_status = todoStatusFilter
+      if (bucketFilter !== 'all') params.schedule_bucket = bucketFilter
+      if (kitRiskFilter !== 'all') params.kit_risk_level = kitRiskFilter
+      if (fOrderNo.trim()) params.order_no = fOrderNo.trim()
+      if (fProductCode.trim()) params.product_code = fProductCode.trim()
+      if (fBomNo.trim()) params.bom_no = fBomNo.trim()
+      if (fQtyMin != null) params.qty_min = fQtyMin
+      if (fQtyMax != null) params.qty_max = fQtyMax
+      if (fPromisedRange?.[0] && fPromisedRange?.[1]) {
+        params.promised_from = fPromisedRange[0].format('YYYY-MM-DD')
+        params.promised_to = fPromisedRange[1].format('YYYY-MM-DD')
+      }
+      if (fEtaRange?.[0] && fEtaRange?.[1]) {
+        params.eta_from = fEtaRange[0].format('YYYY-MM-DD')
+        params.eta_to = fEtaRange[1].format('YYYY-MM-DD')
+      }
+
+      const res: any = await productionApi.getTodoWorkbench(params)
+      setData(res.data?.items || [])
+      setTotal(res.data?.total || 0)
+      setStats({
+        ready: res.data?.stats?.ready || 0,
+        pending: res.data?.stats?.pending || 0,
+        reschedule: res.data?.stats?.reschedule || 0,
+        missing_upph: res.data?.stats?.missing_upph || 0,
+        bucket_counts: res.data?.stats?.bucket_counts,
+      })
+    } catch (e: any) {
+      // 错误已由全局拦截器提示
+    } finally {
+      setLoading(false)
+    }
+  }, [page, pageSize, keyword, year, month, todoStatusFilter, bucketFilter, kitRiskFilter, fOrderNo, fProductCode, fBomNo, fQtyMin, fQtyMax, fPromisedRange, fEtaRange])
+
+  // 刷新快照: 按当月重新生成待排快照(补齐新进订单)。列表读的是快照表, 不刷新则新订单不出现。
+  const handleRefreshSnapshots = useCallback(async () => {
+    setSnapshotRefreshing(true)
+    try {
+      const res: any = await productionApi.refreshTodoSnapshots({ year, month, limit: 500 })
+      const d = res.data || {}
+      message.success(`快照已刷新：扫描 ${d.matched_total ?? 0} 条，更新 ${d.refreshed_total ?? 0} 条`)
+      await load()
+    } catch (error: any) {
+      // 错误已由全局拦截器提示
+    } finally {
+      setSnapshotRefreshing(false)
+    }
+  }, [year, month, load])
+
+  useEffect(() => { load() }, [load])
+
+  const counts = useMemo(() => ({
+    reschedule: stats.reschedule || 0,
+    ready: stats.ready || 0,
+    pending: stats.pending || 0,
+  }), [stats])
+
+  const bucketCounts = useMemo(() => ({
+    all: stats.bucket_counts?.all || 0,
+    lean: stats.bucket_counts?.lean || 0,
+    assembly: stats.bucket_counts?.assembly || 0,
+    packaging: stats.bucket_counts?.packaging || 0,
+  }), [stats])
+
+  const filterTitle = (text: string, control: any) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '2px 0' }}>
+      <span>{text}</span>
+      {control}
+    </div>
+  )
+
+  const columns: ColumnsType<TodoRow> = useMemo(() => [
+    {
+      title: filterTitle('订单号', (
+        <Input size="small" placeholder="订单号" value={fOrderNo} allowClear
+          onChange={(e) => { setFOrderNo(e.target.value); setDebounced('order_no', setFOrderNo, e.target.value) }} />
+      )),
+      dataIndex: 'order_no',
+      width: 150,
+      fixed: 'left',
+      render: (v: string) => renderCopyableText(v, '订单号'),
+    },
+    { title: '行号', dataIndex: 'line_no', width: 90, render: (v: string) => renderCopyableText(v, '行号') },
+    {
+      title: filterTitle('产品编码', (
+        <Input size="small" placeholder="产品编码" value={fProductCode} allowClear
+          onChange={(e) => { setFProductCode(e.target.value); setDebounced('product_code', setFProductCode, e.target.value) }} />
+      )),
+      dataIndex: 'product_code',
+      width: 220,
+      render: (v: string) => renderCopyableText(v, '产品编码'),
+    },
+    {
+      title: filterTitle('BOM编码', (
+        <Input size="small" placeholder="BOM编码" value={fBomNo} allowClear
+          onChange={(e) => { setFBomNo(e.target.value); setDebounced('bom_no', setFBomNo, e.target.value) }} />
+      )),
+      dataIndex: 'bom_no',
+      width: 170,
+      ellipsis: true,
+      render: (v: string) => renderCopyableText(v, 'BOM编码'),
+    },
+    {
+      title: filterTitle('数量', (
+        <div style={{ display: 'flex', gap: 4 }}>
+          <InputNumber size="small" placeholder="≥" value={fQtyMin} style={{ width: '50%' }}
+            onChange={(v) => { setFQtyMin(v as number | null); setPage(1) }} />
+          <InputNumber size="small" placeholder="≤" value={fQtyMax} style={{ width: '50%' }}
+            onChange={(v) => { setFQtyMax(v as number | null); setPage(1) }} />
+        </div>
+      )),
+      width: 130,
+      render: (_: any, row: TodoRow) => row.order_qty ?? row.quantity ?? '-',
+    },
+    {
+      title: filterTitle('出货计划', (
+        <DatePicker.RangePicker size="small" value={fPromisedRange} style={{ width: '100%' }}
+          onChange={(v) => { setFPromisedRange(v); setPage(1) }} />
+      )),
+      width: 140,
+      render: (_: any, row: TodoRow) => formatDate(row.promised_date || row.source_promised_date),
+    },
+    {
+      title: '齐套',
+      width: 110,
+      render: (_: any, row: TodoRow) => {
+        if (row.kit_rate == null) return <span style={{ color: '#bfbfbf' }}>-</span>
+        const riskColor = row.kit_risk_level === 'red' ? '#e11d48' : row.kit_risk_level === 'yellow' ? '#f59e0b' : '#16a34a'
+        const riskLabel = row.kit_risk_level === 'red' ? '缺料严重' : row.kit_risk_level === 'yellow' ? '部分齐套' : '齐套'
+        return (
+          <Tooltip title={`订单级齐套率（与齐套中心口径一致）${row.shortage_material_count ? ` · 缺料 ${row.shortage_material_count} 项` : ''}`}>
+            <Space size={6}>
+              <span style={{ color: riskColor, fontWeight: 600 }}>{Math.round((row.kit_rate || 0) * 100)}%</span>
+              <Tag color={row.kit_risk_level || 'default'}>{riskLabel}</Tag>
+            </Space>
+          </Tooltip>
+        )
+      },
+    },
+    {
+      title: filterTitle('最晚ETA', (
+        <DatePicker.RangePicker size="small" value={fEtaRange} style={{ width: '100%' }}
+          onChange={(v) => { setFEtaRange(v); setPage(1) }} />
+      )),
+      width: 140,
+      render: (_: any, row: TodoRow) => row.latest_material_eta ? formatDate(row.latest_material_eta) : '-',
+    },
+    { title: '排产段', width: 110, render: (_: any, row: TodoRow) => renderBucketTag(row) },
+    {
+      title: '状态',
+      width: 100,
+      render: (_: any, row: TodoRow) => {
+        const statusMeta = TODO_STATUS_META[row.todo_kind] || TODO_STATUS_META.pending
+        return <Tag color={statusMeta.color}>{row.todo_status_label || statusMeta.label}</Tag>
+      },
+    },
+    {
+      title: '原因',
+      width: 320,
+      render: (_: any, row: TodoRow) => {
+        if (row.todo_kind === 'reschedule') {
+          return (
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+              <span>{row.reschedule_reason || 'UPPH变化后建议重排'}</span>
+              <span style={{ color: '#8c8c8c', fontSize: 12 }}>{row.impact_reason || '-'}</span>
+            </Space>
+          )
+        }
+        return renderSchedulingReasonCell(row)
+      },
+    },
+    { title: '建议动作', width: 120, render: (_: any, row: TodoRow) => <span style={{ color: '#595959' }}>{row.todo_action_label || '-'}</span> },
+    {
+      title: '操作',
+      width: 180,
+      fixed: 'right',
+      render: (_: any, row: TodoRow) => {
+        if (row.todo_kind === 'ready') {
+          return (
+            <Button size="small" type="primary" icon={<ThunderboltOutlined />} onClick={() => openSchedule(row)}>
+              {row.schedule_bucket === 'mixed' ? '生成两段' : '排产'}
+            </Button>
+          )
+        }
+        if (row.todo_kind === 'reschedule') {
+          return (
+            <Button size="small" type="primary" ghost onClick={() => navigate(`/schedule-plans?workspace=plan_board&planId=${row.id}&keyword=${row.order_no}`)}>
+              预览重排
+            </Button>
+          )
+        }
+        return (
+          <Button size="small" type="link" onClick={() => navigate(`/schedule-plans?workspace=plan_board&planId=${row.id}&keyword=${row.order_no}`)}>
+            查看
+          </Button>
+        )
+      },
+    },
+  ], [navigate])
+
+  return (
+    <div>
+      <div className="card-modern" style={{ padding: '16px 20px', marginBottom: 16 }}>
+        <Row align="middle" justify="space-between">
+          <Col>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>待排工作台</div>
+            <div style={{ color: '#64748b', fontSize: 12 }}>
+              待排/待重排/待确认订单集中处理 · 接口真实数据
+            </div>
+          </Col>
+          <Col>
+            <Space>
+              <Button size="small" onClick={() => navigate('/change-events')}>🔄 变更事件中心</Button>
+              <Button size="small" onClick={() => navigate('/schedule-plans')}>📊 排产台账</Button>
+              <Button size="small" onClick={() => navigate('/production-dashboard')}>🏠 驾驶舱</Button>
+            </Space>
+          </Col>
+        </Row>
+
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {/* bucket 切换 */}
+          <Space>
+            {TODO_BUCKET_WORKSPACE_OPTIONS.map((item) => (
+              <Button
+                key={item.value}
+                size="small"
+                type={bucketFilter === item.value ? 'primary' : 'default'}
+                onClick={() => { setBucketFilter(item.value); setPage(1) }}
+              >
+                {item.label} ({bucketCounts[item.value as keyof typeof bucketCounts] || 0})
+              </Button>
+            ))}
+          </Space>
+
+          {/* 统计卡（可折叠） */}
+          <CollapsibleStats title="待排统计" storageKey="todo_workbench" summary={`待排产 ${counts.ready} · 待重排 ${counts.reschedule} · 待确认 ${counts.pending}`}>
+          <Row gutter={12}>
+            {[
+              { key: 'reschedule', label: '待重排', value: counts.reschedule, color: '#cf1322' },
+              { key: 'ready', label: '待排产', value: counts.ready, color: '#1677ff' },
+              { key: 'pending', label: '待确认', value: counts.pending, color: '#fa8c16' },
+            ].map((item) => (
+              <Col key={item.label} xs={12} md={8}>
+                <div
+                  className="card-modern"
+                  style={{
+                    padding: 16,
+                    cursor: 'pointer',
+                    background: todoStatusFilter === item.key ? '#f0f5ff' : '#fff',
+                    border: todoStatusFilter === item.key ? '1px solid #1677ff' : '1px solid #f0f0f0',
+                  }}
+                  onClick={() => {
+                    setTodoStatusFilter(todoStatusFilter === item.key ? 'all' : item.key)
+                    setPage(1)
+                  }}
+                >
+                  <Statistic title={item.label} value={item.value} valueStyle={{ color: item.color, fontSize: 24 }} />
+                </div>
+              </Col>
+            ))}
+          </Row>
+          </CollapsibleStats>
+
+          {/* 工具栏 */}
+          <Row gutter={12} align="middle">
+            <Col>
+              <Select value={year} onChange={(v) => { setYear(v); setPage(1) }} style={{ width: 110 }} options={Array.from({ length: 7 }, (_, i) => ({ value: dayjs().year() - 3 + i, label: `${dayjs().year() - 3 + i}年` }))} />
+            </Col>
+            <Col>
+              <Select value={month} onChange={(v) => { setMonth(v); setPage(1) }} style={{ width: 90 }} options={Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: `${i + 1}月` }))} />
+            </Col>
+            <Col>
+              <Input
+                prefix={<SearchOutlined />}
+                value={keyword}
+                onChange={(e) => { setKeyword(e.target.value); setPage(1) }}
+                placeholder="搜索订单/BOM/产品"
+                allowClear
+                style={{ width: 240 }}
+              />
+            </Col>
+            <Col>
+              <Select value={todoStatusFilter} onChange={(v) => { setTodoStatusFilter(v); setPage(1) }} style={{ width: 130 }} options={TODO_FILTER_OPTIONS} />
+            </Col>
+            <Col>
+              <Select
+                value={kitRiskFilter}
+                onChange={(v) => { setKitRiskFilter(v); setPage(1) }}
+                style={{ width: 130 }}
+                options={[
+                  { value: 'all', label: '齐套风险：全部' },
+                  { value: 'red', label: '缺料严重 🔴' },
+                  { value: 'yellow', label: '部分齐套 🟡' },
+                  { value: 'green', label: '已齐套 🟢' },
+                ]}
+              />
+            </Col>
+            <Col flex="auto" />
+            <Col>
+              <Space>
+                <span style={{ color: '#595959' }}>
+                  共 {total} 条，已选 {selectedRows.length} 条（其中待排产 {selectedRows.filter(r => r.todo_kind === 'ready').length} 条、待重排 {selectedRows.filter(r => r.todo_kind === 'reschedule').length} 条）
+                </span>
+                <Button onClick={() => setBaseConditionOpen(true)}>基础条件</Button>
+                <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+                <Tooltip title="按当前月份重新生成待排快照（新进来的订单需刷新后才会出现）">
+                  <Button icon={<SyncOutlined />} loading={snapshotRefreshing} onClick={handleRefreshSnapshots}>刷新快照</Button>
+                </Tooltip>
+                <Tooltip title={selectedRows.filter(r => r.todo_kind === 'ready').length > 0 ? `批量排产 ${selectedRows.filter(r => r.todo_kind === 'ready').length} 条` : '请先勾选待排产订单'}>
+                  <Button type="primary" icon={<ThunderboltOutlined />} disabled={selectedRows.filter(r => r.todo_kind === 'ready').length === 0} onClick={openBatchSchedule}>
+                    批量排产
+                  </Button>
+                </Tooltip>
+                <Tooltip title={selectedRows.filter(r => r.todo_kind === 'reschedule').length > 0 ? `批量重排 ${selectedRows.filter(r => r.todo_kind === 'reschedule').length} 条` : '请先勾选待重排订单'}>
+                  <Button icon={<SyncOutlined />} loading={batchRescheduling} disabled={selectedRows.filter(r => r.todo_kind === 'reschedule').length === 0} onClick={openBatchReschedule}>
+                    批量重排
+                  </Button>
+                </Tooltip>
+              </Space>
+            </Col>
+          </Row>
+        </Space>
+      </div>
+
+      <div className="card-modern" style={{ padding: '0 0 4px' }}>
+        <Table<TodoRow>
+          rowKey={(row) => row.id || `${row.order_no}-${row.line_no}-${row.todo_kind}`}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys, rows) => {
+              setSelectedRowKeys(keys)
+              setSelectedRows(rows)
+            },
+            getCheckboxProps: (row) => ({ disabled: !['ready', 'reschedule'].includes(row.todo_kind) }),
+          }}
+          dataSource={data}
+          columns={columns}
+          loading={loading}
+          size="small"
+          scroll={{ x: 1900, y: 600 }}
+          pagination={{
+            total,
+            current: page,
+            pageSize,
+            onChange: (p, ps) => { setPage(p); setPageSize(ps) },
+            showSizeChanger: true,
+            showTotal: (t) => `共 ${t} 条`,
+          }}
+        />
+      </div>
+
+      <div style={{ color: '#94a3b8', fontSize: 11, textAlign: 'center', padding: '8px 0' }}>
+        待排工作台 · 真实数据来自 getTodoWorkbench 接口 · 单条/批量排产直接弹 Modal，重排/查看跳排产台账
+      </div>
+
+      <ScheduleModal
+        open={scheduleModalOpen}
+        orderData={scheduleOrder}
+        onClose={() => { setScheduleModalOpen(false); setScheduleOrder(null) }}
+        onSuccess={() => {
+          load()
+          message.success('排产成功，已自动刷新列表', 2)
+        }}
+      />
+
+      <BatchScheduleModal
+        open={batchScheduleOpen}
+        orderRows={selectedRows}
+        onClose={() => setBatchScheduleOpen(false)}
+        onSuccess={() => {
+          setSelectedRowKeys([])
+          setSelectedRows([])
+          // 延迟刷新: 批量排产刚结束, 后端可能还在处理 snapshot 同步等后续工作
+          // 立即刷新可能撞上后端忙碌导致超时, 延迟 1 秒给后端喘息
+          setTimeout(() => {
+            load().catch(() => {
+              // 静默失败, 不弹"网络错误"打扰用户 (排产已成功, 刷新失败不影响结果)
+            })
+          }, 1000)
+          message.success('批量排产完成，列表将在后台自动刷新', 2)
+        }}
+      />
+
+      <BaseConditionDrawer
+        open={baseConditionOpen}
+        onClose={() => setBaseConditionOpen(false)}
+      />
+    </div>
+  )
+}
