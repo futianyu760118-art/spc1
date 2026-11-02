@@ -1,4 +1,4 @@
-"""系统管理 — 智能助手管理端点（监控 + 配置，设计文档 2026-10-15）"""
+"""智能体中心 — 智能助手监控与配置端点（原 /system/ai-assistant，2026-10-30 迁入）"""
 
 from typing import Optional
 
@@ -10,6 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
+from app.services.assistant.tool_registry import get_all_tools
+# tool_registry 必须先于 ai_config 导入：agent 包是 v1 路由中最先加载的域，
+# 若 ai_config 先入口会触发 ai_config → assistant 包 → execution_agents → ai_config 的部分初始化循环
 from app.services.ai_config import (
     ASSISTANT_SCOPE,
     SCOPE_DEFS,
@@ -18,7 +21,6 @@ from app.services.ai_config import (
     operator_name,
     save_scope_config,
 )
-from app.services.assistant.tool_registry import get_all_tools
 
 router = APIRouter()
 
@@ -31,7 +33,7 @@ class AssistantConfigIn(BaseModel):
 async def assistant_stats(
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.assistant_monitor", "read")),
+    current_user=Depends(PermissionChecker("ai.agent.admin", "read")),
 ):
     since = f"NOW() - INTERVAL '{days} days'"
     total_row = (await db.execute(text(
@@ -72,7 +74,7 @@ async def assistant_runs(
     intent: Optional[str] = Query(None),
     is_success: Optional[bool] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.assistant_monitor", "read")),
+    current_user=Depends(PermissionChecker("ai.agent.admin", "read")),
 ):
     conds = [f"created_at >= NOW() - INTERVAL '{days} days'"]
     params: dict = {"limit": page_size, "offset": (page - 1) * page_size}
@@ -95,7 +97,7 @@ async def assistant_runs(
 @router.get("/config", response_model=ResponseModel[dict])
 async def get_assistant_config(
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.assistant_config", "read")),
+    current_user=Depends(PermissionChecker("ai.agent.admin", "read")),
 ):
     from app.services.assistant.agent import INTENT_RECOGNITION_PROMPT
     from app.services.assistant.orchestrator import SYSTEM_PROMPT
@@ -126,7 +128,7 @@ async def get_assistant_config(
 async def update_assistant_config(
     body: AssistantConfigIn,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.assistant_config", "update")),
+    current_user=Depends(PermissionChecker("ai.agent.admin", "update")),
 ):
     try:
         version = await save_scope_config(db, ASSISTANT_SCOPE, body.config, operator_name(current_user))

@@ -103,10 +103,16 @@ async def lifespan(app: FastAPI):
             sync_permissions_to_db, cleanup_deprecated_permissions,
             migrate_permission_actions, migrate_permission_names,
             migrate_added_permission_actions,
+            migrate_assistant_permissions_to_agent_admin,
         )
         from app.core.database import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
             await sync_permissions_to_db(db)
+            # 智能助手监控/配置权限并入 ai.agent.admin（须在废弃清理之前，幂等）
+            try:
+                await migrate_assistant_permissions_to_agent_admin(db)
+            except Exception as e:
+                logger.warning(f"[权限注册] 智能助手权限合并迁移失败: {e}")
             # 清理已废弃的权限（如 orders.stock_check -> materials.stock_check 迁移后的残留）
             try:
                 await cleanup_deprecated_permissions(db)

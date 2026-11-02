@@ -305,7 +305,6 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/share-management', icon: <SendOutlined />, label: '分享管理', permission: 'basicdata.share_management' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
       { key: '/backups', icon: <DatabaseOutlined />, label: '备份管理', permission: 'backup' },
-      { key: '/ai-assistant', icon: <RobotOutlined />, label: '智能助手管理', permission: 'ai.assistant_monitor', anyOfPermissions: ['ai.assistant_config'] },
       { key: '/execution-agent', icon: <ApiOutlined />, label: '执行面智能体', permission: 'ai.execution_agent' },
       { key: '/basicdata/data-supply', icon: <ApiOutlined />, label: '数据供给', permission: 'basicdata.data_supply' },
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
@@ -501,7 +500,6 @@ const pathToGroupKey: Record<string, string> = {
   '/share-management': 'basicdata-center',
   '/sync-config': 'basicdata-center',
   '/backups': 'basicdata-center',
-  '/ai-assistant': 'basicdata-center',
   '/execution-agent': 'basicdata-center',
   '/basicdata/feedback': 'basicdata-center',
   '/basicdata/files': 'basicdata-center',
@@ -564,7 +562,6 @@ const pathToPermission: Record<string, string> = {
   '/share-management': 'basicdata.share_management',
   '/sync-config': 'settings',
   '/backups': 'backup',
-  '/ai-assistant': 'ai.assistant_monitor',
   '/execution-agent': 'ai.execution_agent',
   '/permissions': 'permissions',
   '/basicdata/customers': 'basicdata.data',
@@ -876,13 +873,9 @@ export default function MainLayout() {
   }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems, agentEnabled, agentLoaded])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
-  // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（如仅授 ai.assistant_config 也能进 /ai-assistant）
-  // 静态兜底：权限树未加载（接口失败/竞态）时动态映射为空，用静态映射保证放行逻辑不缺位
-  const STATIC_PATH_ANY_OF: Record<string, string[]> = {
-    '/ai-assistant': ['ai.assistant_monitor', 'ai.assistant_config'],
-  }
+  // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（权限树「页面 + Tab 子权限」节点自动展开）
   const pathAnyOfMap = useMemo(() => {
-    const map: Record<string, string[]> = { ...STATIC_PATH_ANY_OF }
+    const map: Record<string, string[]> = {}
     const walk = (nodes: PermNode[]) => {
       for (const n of nodes) {
         if (n.route_path) {

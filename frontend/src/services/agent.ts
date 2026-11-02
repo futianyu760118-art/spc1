@@ -71,4 +71,9 @@ export const agentApi = {
   adminStats: () => api.get('/agents/admin/stats') as any,
   adminConversation: (id: number, reason: string) =>
     api.get(`/agents/admin/conversations/${id}`, { params: { reason } }) as any,
+  assistantStats: (params: Record<string, any> = {}) => api.get('/agents/admin/assistant/stats', { params }) as any,
+  assistantRuns: (params: Record<string, any> = {}) => api.get('/agents/admin/assistant/runs', { params }) as any,
+  assistantConfig: () => api.get('/agents/admin/assistant/config') as any,
+  saveAssistantConfig: (data: { config: Record<string, any> }) =>
+    api.put('/agents/admin/assistant/config', data) as any,
 }

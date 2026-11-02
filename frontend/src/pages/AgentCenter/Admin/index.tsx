@@ -6,6 +6,9 @@ import { PlusOutlined } from '@ant-design/icons'
 import { userApi } from '../../../services/api'
 import { agentApi, AgentCapability } from '../../../services/agent'
 import { CapabilityTags } from '../../../components/Agent/CapabilityTags'
+import { useAuthStore } from '../../../store/auth'
+import AssistantMonitorTab from './AssistantMonitorTab'
+import AssistantConfigTab from './AssistantConfigTab'
 
 const { Text } = Typography
 const PAGE_SIZE = 6
@@ -50,6 +53,8 @@ export default function AgentAdmin() {
   const [editingAgent, setEditingAgent] = useState<any>(null)
   const [saving, setSaving] = useState(false)
   const scopeType = Form.useWatch('scope_type', form)
+  const hasPermission = useAuthStore((s: any) => s.hasPermission) as (r: string, a: string) => boolean
+  const canAssistantConfig = hasPermission('ai.agent.admin', 'update')
 
   const [auditId, setAuditId] = useState('')
   const [auditReason, setAuditReason] = useState('')
@@ -278,6 +283,14 @@ export default function AgentAdmin() {
                 </Space>
               ),
             },
+            {
+              key: 'assistant-monitor', label: '助手监控',
+              children: <AssistantMonitorTab/>,
+            },
+            ...(canAssistantConfig ? [{
+              key: 'assistant-config', label: '助手配置',
+              children: <AssistantConfigTab/>,
+            }] : []),
           ]}
         />
       </Card>

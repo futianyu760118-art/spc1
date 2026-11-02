@@ -121,6 +121,9 @@ DEPRECATED_PERMISSION_CODES = (
     "quality.supplier_claim.pending",
     "quality.supplier_claim.config",
     "deploy_versions",
+    # 智能助手监控/配置已合并进 ai.agent.admin（2026-10-30），页面并入智能体中心
+    "ai.assistant_monitor",
+    "ai.assistant_config",
 )
 
 # 一次性动作迁移:盘点抽检曾声明为 read/manage,现回归标准增删改查。
@@ -198,6 +201,37 @@ async def migrate_permission_actions(db: AsyncSession) -> int:
     await db.commit()
     if changed:
         logger.info(f"[权限注册] 迁移盘点抽检动作 manage→update,涉及 {changed} 个角色")
+    return changed
+
+
+async def migrate_assistant_permissions_to_agent_admin(db: AsyncSession) -> int:
+    """把 ai.assistant_monitor / ai.assistant_config 的存量角色授权并入 ai.agent.admin。
+
+    动作按并集映射：仅 monitor → read；含 config → read, update。
+    必须在 cleanup_deprecated_permissions 之前执行（清理会移除角色 JSON 里的旧键）。
+    幂等：旧键被清理后本函数 WHERE 不再命中。每次启动执行。
+    """
+    from sqlalchemy import text
+
+    result = await db.execute(text(
+        "UPDATE sys_role SET permissions = jsonb_set( "
+        "  permissions, ARRAY['ai.agent.admin'], "
+        "  ( "
+        "    SELECT COALESCE(jsonb_agg(DISTINCT x.a ORDER BY x.a), '[]'::jsonb) "
+        "    FROM ( "
+        "      SELECT jsonb_array_elements_text(COALESCE(permissions -> 'ai.agent.admin', '[]'::jsonb)) AS a "
+        "      UNION SELECT 'read' "
+        "        WHERE permissions ? 'ai.assistant_monitor' OR permissions ? 'ai.assistant_config' "
+        "      UNION SELECT 'update' WHERE permissions ? 'ai.assistant_config' "
+        "    ) x "
+        "  ) "
+        ") "
+        "WHERE permissions ? 'ai.assistant_monitor' OR permissions ? 'ai.assistant_config'"
+    ))
+    changed = result.rowcount or 0
+    await db.commit()
+    if changed:
+        logger.info(f"[权限注册] 智能助手权限并入 ai.agent.admin，涉及 {changed} 个角色")
     return changed
 
 
@@ -390,19 +424,6 @@ declare_permission(
     route_path="/backups", sort_order=12,
 )
 
-# 智能体管理台（2026-10-15）— 智能助手监控/配置 + 执行面智能体管理
-declare_permission(
-    "ai.assistant_monitor", "智能助手管理",
-    module="basicdata", parent_code="basicdata",
-    actions=["read"],
-    route_path="/ai-assistant", sort_order=13,
-)
-# Tab 级权限（页内二次校验，同 approval.business 模式；无独立路由）
-declare_permission(
-    "ai.assistant_config", "助手配置",
-    module="basicdata", parent_code="ai.assistant_monitor",
-    actions=["read", "update"], sort_order=1,
-)
 declare_permission(
     "ai.execution_agent", "执行面智能体",
     module="basicdata", parent_code="basicdata",
