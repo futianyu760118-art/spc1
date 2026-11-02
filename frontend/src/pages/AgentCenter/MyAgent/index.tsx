@@ -118,6 +118,19 @@ export default function MyAgent() {
               ))}
               {capabilities.length === 0 && <Text type="secondary">暂无能力，先去勾选团队成员</Text>}
             </Space>
+            <div style={{ marginTop: 12 }}>
+              <Text type="secondary" className="ac-fs-xs">团队技能</Text>
+              <div style={{ marginTop: 6 }}>
+                <Space wrap size={[4, 4]}>
+                  {(data.skills || []).map((skill: any) => (
+                    <Tag key={skill.id} color="purple" style={{ marginInlineEnd: 0 }}>
+                      {skill.name} · {skill.agent_name}
+                    </Tag>
+                  ))}
+                  {(data.skills || []).length === 0 && <Text type="secondary">暂无技能</Text>}
+                </Space>
+              </div>
+            </div>
           </Card>
         </div>
 

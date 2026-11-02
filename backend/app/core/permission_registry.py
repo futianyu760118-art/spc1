@@ -495,3 +495,8 @@ declare_permission(
     module="agent", parent_code="ai.agent.self", actions=["read", "update"],
     route_path="/agents/admin", sort_order=3,
 )
+declare_permission(
+    "ai.skill.manage", "技能管理（安装/创建/卸载）",
+    module="agent", parent_code="ai.agent.self", actions=["read", "update"],
+    sort_order=4,
+)

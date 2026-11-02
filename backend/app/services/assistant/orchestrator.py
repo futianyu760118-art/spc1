@@ -20,6 +20,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.core.config import get_settings
+from app.core.security import can_manage_skills as skill_admin_allowed
 from app.models.agent.call import AgentCallLog
 from app.models.agent.conversation import AgentConversation, AgentMessage
 from app.models.basicdata.user import SysUser
@@ -36,10 +37,13 @@ from app.services.agent.capabilities import (
     allowed_write_fields,
 )
 from app.services.agent.context import UserContext, load_user_context
+from app.services.agent.skill_sandbox import is_sandbox_enabled
 from app.services.assistant import session_store, write_confirmation
 from app.services.assistant.agent_tools import (
+    ADMIN_SKILL_TOOLS,
     AGENT_TOOL_LABELS,
     CAPABILITY_BY_TOOL,
+    SKILL_TOOLS,
     TOOL_TIMEOUT_S,
     build_agent_tools_schema,
     execute_agent_tool,
@@ -78,9 +82,13 @@ logger = logging.getLogger(__name__)
 
 # 首期硬闸门参数（可经运行时配置覆盖轮数与调用次数）
 DEFAULT_LIMITS = {
-    "max_llm_rounds": 6,
+    "max_llm_rounds": 12,
     "max_agent_calls": 8,
     "max_consecutive_same_agent": 3,
+    "max_skill_loads": 3,
+    "max_skill_reads": 5,
+    "max_script_runs": 3,
+    "max_skill_runs": 3,
     "total_budget_s": 300.0,
     "trim_max_items": 20,
     "trim_max_chars": 8000,
@@ -91,6 +99,10 @@ CONTINUATION_LIMITS = {
     "max_llm_rounds": 3,
     "max_agent_calls": 3,
     "max_consecutive_same_agent": 3,
+    "max_skill_loads": 1,
+    "max_skill_reads": 2,
+    "max_script_runs": 1,
+    "max_skill_runs": 1,
     "total_budget_s": 150.0,
     "trim_max_items": 20,
     "trim_max_chars": 8000,
@@ -355,7 +367,11 @@ def _new_step(
         "tool": tool_name,
         # 团队制：成员路由命中时展示承接成员名，否则回退工具类型标签
         "agent_label": agent_label or AGENT_TOOL_LABELS.get(tool_name, tool_name),
-        "capability": CAPABILITY_BY_TOOL.get(tool_name, ""),
+        "capability": (
+            "skill-admin" if tool_name in ADMIN_SKILL_TOOLS
+            else "skill" if tool_name in SKILL_TOOLS
+            else CAPABILITY_BY_TOOL.get(tool_name, "")
+        ),
         "path": args.get("path") if tool_name == "call_query_agent" else None,
         "task_type": args.get("task_type") if tool_name == "call_reasoning_agent" else None,
         "order_no": args.get("order_no") if tool_name == "call_order_agent" else None,
@@ -367,7 +383,40 @@ def _new_step(
     }
 
 
-def _step_summary(tool_name: str, args: Dict[str, Any]) -> str:
+def _with_generated_files(text: str, files: List[Dict[str, Any]]) -> str:
+    """把脚本生成的文件链接追加到最终回复，避免轮数耗尽时用户拿不到文件。"""
+    if not files:
+        return text
+    missing = [
+        item for item in files
+        if isinstance(item, dict) and item.get("url")
+        and item["url"] not in (text or "")
+    ]
+    if not missing:
+        return text
+    footer = "\n\n**生成文件**\n" + "\n".join(
+        f"- [{item.get('name') or '下载文件'}]({item['url']})" for item in missing
+    )
+    return ((text or "").rstrip() + footer).lstrip("\n")
+
+
+def _step_summary(tool_name: str, args: Dict[str, Any], skill_name: str = "") -> str:
+    if tool_name == "create_skill":
+        return f"创建技能 {args.get('skill_key') or ''}"
+    if tool_name == "install_skill":
+        return f"安装技能 {args.get('url') or ''}"
+    if tool_name == "uninstall_skill":
+        return (
+            f"卸载技能 {args.get('pack') or args.get('skill_key') or args.get('skill_id') or ''}"
+        )
+    if tool_name == "use_skill":
+        return f"加载技能《{skill_name or args.get('skill_id') or ''}》"
+    if tool_name == "read_skill_file":
+        return f"读取技能文件 {args.get('path') or ''}"
+    if tool_name == "run_skill_script":
+        return f"执行技能脚本 {args.get('script') or ''}"
+    if tool_name == "run_skill_executor":
+        return f"执行技能《{skill_name or args.get('skill_id') or ''}》"
     if tool_name == "call_query_agent":
         path = args.get("path") or ""
         name = next((c["name"] for c in QUERY_CATALOG if c["path"] == path), path)
@@ -644,6 +693,7 @@ async def run_reaction(
         return step_id_base + len(steps) + 1
 
     steps: List[Dict[str, Any]] = []
+    generated_files: List[Dict[str, Any]] = []
     query_results: List[Dict[str, Any]] = []
     diagnostics: Dict[str, Any] = {"llm_rounds": [], "tools": [], "errors": [], "total_tokens": None}
     stats: Dict[str, Any] = {"tools_called": [], "tool_rounds": 0, "total_tokens": None}
@@ -656,6 +706,9 @@ async def run_reaction(
             role=user_context.role_code,
         )
     effective = user_context.effective_capabilities if user_context else None
+    can_manage_skills = bool(
+        user_context and skill_admin_allowed(user_context.permissions)
+    )
     write_fields = allowed_write_fields(effective) if effective is not None else None
     include_order = include_order_tool and (
         effective is None or bool(write_fields)
@@ -667,6 +720,9 @@ async def run_reaction(
         query_paths=allowed_query_paths(effective) if effective is not None else None,
         reasoning_types=allowed_reasoning_types(effective) if effective is not None else None,
         order_fields=write_fields,
+        skills=user_context.skills if user_context else None,
+        script_execution_available=is_sandbox_enabled(),
+        include_skill_admin=can_manage_skills,
     )
 
     messages: List[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
@@ -721,6 +777,11 @@ async def run_reaction(
 
     total_start = time.perf_counter()
     agent_calls = 0
+    skill_loads = 0
+    skill_reads = 0
+    script_runs = 0
+    skill_runs = 0
+    loaded_skill_ids: set = set()
     last_tool_key: Optional[str] = None
     last_tool_name: Optional[str] = None
     consecutive_same_agent = 0
@@ -787,7 +848,7 @@ async def run_reaction(
         if not result.tool_calls:
             raw_text = result.text or "抱歉，我无法理解您的问题。请尝试换一种方式提问。"
             thinking = _extract_thinking(raw_text)
-            text = _strip_think_tags(raw_text)
+            text = _with_generated_files(_strip_think_tags(raw_text), generated_files)
             if thinking:
                 yield ("thinking", {"stage": "reasoning", "text": thinking})
             if text:
@@ -812,9 +873,17 @@ async def run_reaction(
             stats["tools_called"].append(tool_name)
 
         # ── 成员路由：query/reasoning/write/feedback 工具按团队成员定位承接者（调用审计与展示用）──
+        skill_brief = None
         member = None
         member_error = None
-        if user_context is not None and tool_name in (
+        if user_context is not None and tool_name in SKILL_TOOLS:
+            try:
+                skill_brief = user_context.skill_by_id(int(args.get("skill_id")))
+            except (TypeError, ValueError):
+                skill_brief = None
+            if skill_brief is not None:
+                member = user_context.member_by_id(skill_brief.agent_id)
+        elif user_context is not None and tool_name in (
             "call_query_agent", "call_reasoning_agent", "call_order_agent",
             "create_feedback", "revoke_feedback",
         ):
@@ -844,7 +913,56 @@ async def run_reaction(
         # ── 闸门 2：步数与循环 ──
         tool_key = f"{tool_name}:{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}"
         block_reason: Optional[str] = None
-        if tool_name not in CAPABILITY_BY_TOOL:
+        if tool_name in ADMIN_SKILL_TOOLS:
+            if not can_manage_skills:
+                block_reason = "当前用户没有技能管理权限（需要 ai.skill.manage update）"
+        elif tool_name == "use_skill":
+            if user_context is None or not user_context.skills:
+                block_reason = "当前团队没有可用技能"
+            elif skill_brief is None:
+                block_reason = "技能不在当前团队的技能清单内"
+            elif skill_loads >= lim["max_skill_loads"]:
+                block_reason = (
+                    f"技能加载次数已达上限（{lim['max_skill_loads']} 次），"
+                    "请基于已加载内容继续"
+                )
+        elif tool_name == "read_skill_file":
+            if skill_brief is None:
+                block_reason = "技能不在当前团队的技能清单内"
+            elif skill_brief.skill_id not in loaded_skill_ids:
+                block_reason = "请先调用 use_skill 加载技能，再读取其文件"
+            elif skill_reads >= lim["max_skill_reads"]:
+                block_reason = (
+                    f"技能文件读取次数已达上限（{lim['max_skill_reads']} 次），"
+                    "请基于已读取内容继续"
+                )
+        elif tool_name == "run_skill_script":
+            if not is_sandbox_enabled():
+                block_reason = "脚本沙箱未配置，无法执行技能脚本"
+            elif skill_brief is None:
+                block_reason = "技能不在当前团队的技能清单内"
+            elif skill_brief.skill_id not in loaded_skill_ids:
+                block_reason = "请先调用 use_skill 加载技能，再执行其脚本"
+            elif not skill_brief.has_scripts:
+                block_reason = "该技能没有 scripts/ 脚本"
+            elif script_runs >= lim["max_script_runs"]:
+                block_reason = (
+                    f"技能脚本执行次数已达上限（{lim['max_script_runs']} 次），"
+                    "请基于已有结果继续"
+                )
+        elif tool_name == "run_skill_executor":
+            if skill_brief is None:
+                block_reason = "技能不在当前团队的技能清单内"
+            elif skill_brief.skill_id not in loaded_skill_ids:
+                block_reason = "请先调用 use_skill 加载技能，再执行其执行器"
+            elif not skill_brief.has_executor:
+                block_reason = "该技能未绑定执行器"
+            elif skill_runs >= lim["max_skill_runs"]:
+                block_reason = (
+                    f"技能执行次数已达上限（{lim['max_skill_runs']} 次），"
+                    "请基于已有结果继续"
+                )
+        elif tool_name not in CAPABILITY_BY_TOOL:
             block_reason = f"工具 {tool_name} 不在能力目录内，请改用系统提供的智能体工具"
         elif tool_name == "call_query_agent" and effective is not None \
                 and args.get("path") not in allowed_query_paths(effective):
@@ -1027,7 +1145,8 @@ async def run_reaction(
 
         # ── 只读工具直接执行 ──
         step = _new_step(
-            _next_step_id(), tool_name, args, status="running", summary=_step_summary(tool_name, args),
+            _next_step_id(), tool_name, args, status="running",
+            summary=_step_summary(tool_name, args, skill_brief.name if skill_brief else ""),
             agent_label=member.display_name if member else None,
         )
         step["handled_by"] = member.display_name if member else None
@@ -1050,6 +1169,11 @@ async def run_reaction(
         outcome = await execute_agent_tool(tool_name, args, **tool_kwargs)
         duration_ms = round((time.perf_counter() - tool_start) * 1000, 2)
         step["duration_ms"] = duration_ms
+        if tool_name == "run_skill_script" and outcome.get("ok"):
+            for item in (outcome.get("result") or {}).get("files") or []:
+                if isinstance(item, dict) and item.get("url") and \
+                        all(existing.get("url") != item["url"] for existing in generated_files):
+                    generated_files.append(item)
         if db is not None and user_context is not None and tool_name in ("call_query_agent", "call_reasoning_agent"):
             try:
                 db.add(AgentCallLog(
@@ -1066,6 +1190,40 @@ async def run_reaction(
                 await db.flush()
             except Exception as e:
                 logger.warning(f"[orchestrator:{trace_id}] 调用审计落库失败: {e}")
+        if db is not None and user_context is not None \
+                and tool_name == "run_skill_script" and skill_brief is not None:
+            try:
+                db.add(AgentCallLog(
+                    trace_id=trace_id,
+                    caller_user_id=int(user_context.user.id),
+                    callee_agent_id=int(skill_brief.agent_id),
+                    capability=f"skill-script:{args.get('script') or ''}"[:64],
+                    instruction_summary=json.dumps(args, ensure_ascii=False, default=str)[:500],
+                    status="completed" if outcome.get("ok") else "failed",
+                    result_summary=f"退出码 {((outcome.get('result') or {}).get('exit_code'))}",
+                    error=outcome.get("error"),
+                    duration_ms=int(duration_ms),
+                ))
+                await db.flush()
+            except Exception as e:
+                logger.warning(f"[orchestrator:{trace_id}] 技能脚本审计落库失败: {e}")
+        if db is not None and user_context is not None \
+                and tool_name == "run_skill_executor" and skill_brief is not None:
+            try:
+                db.add(AgentCallLog(
+                    trace_id=trace_id,
+                    caller_user_id=int(user_context.user.id),
+                    callee_agent_id=int(skill_brief.agent_id),
+                    capability=f"skill:{skill_brief.executor_name or skill_brief.name}"[:64],
+                    instruction_summary=json.dumps(args, ensure_ascii=False, default=str)[:500],
+                    status="completed" if outcome.get("ok") else "failed",
+                    result_summary=f"返回 {outcome.get('item_count') or 0} 条" if outcome.get("ok") else None,
+                    error=outcome.get("error"),
+                    duration_ms=int(duration_ms),
+                ))
+                await db.flush()
+            except Exception as e:
+                logger.warning(f"[orchestrator:{trace_id}] 技能执行审计落库失败: {e}")
         if outcome.get("ok"):
             step["status"] = "completed"
             step["item_count"] = outcome.get("item_count")
@@ -1103,7 +1261,20 @@ async def run_reaction(
                 "success": outcome.get("ok"),
             })
 
-        agent_calls += 1
+        if tool_name == "use_skill":
+            skill_loads += 1
+            if outcome.get("ok") and skill_brief is not None:
+                loaded_skill_ids.add(skill_brief.skill_id)
+        elif tool_name == "read_skill_file":
+            skill_reads += 1
+        elif tool_name == "run_skill_script":
+            script_runs += 1
+        elif tool_name == "run_skill_executor":
+            skill_runs += 1
+        elif tool_name in ADMIN_SKILL_TOOLS:
+            pass
+        else:
+            agent_calls += 1
         consecutive_same_agent = consecutive_same_agent + 1 if tool_name == last_tool_name else 1
         last_tool_name = tool_name
         last_tool_key = tool_key
@@ -1127,6 +1298,7 @@ async def run_reaction(
     except Exception as e:
         logger.error(f"[orchestrator:{trace_id}] 最终总结失败: {e}")
         text, thinking = "查询完成，但生成总结时出现问题。", []
+    text = _with_generated_files(text, generated_files)
     for t in thinking:
         yield ("thinking", {"stage": "reasoning", "text": t})
     if text:

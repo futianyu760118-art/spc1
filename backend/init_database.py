@@ -1241,6 +1241,26 @@ class DatabaseInitializer:
                 ), {"codes": json.dumps(deduped), "id": row.id})
         print("Agent write capability split done.")
 
+    async def migrate_agent_skills(self):
+        """技能索引字段（磁盘文件夹版）：为旧 DB-only 技能表补列并清理无文件标识的行。"""
+        async with self.engine.begin() as conn:
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS skill_key VARCHAR(128)"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS source VARCHAR(16) NOT NULL DEFAULT 'builtin'"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS file_count INTEGER NOT NULL DEFAULT 0"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS has_scripts BOOLEAN NOT NULL DEFAULT false"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ALTER COLUMN description TYPE TEXT"))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_agent_skill_skill_key ON agent_skill (skill_key)"))
+            await conn.execute(text("DELETE FROM agent_skill WHERE skill_key IS NULL"))
+        print("Agent skill index migration done.")
+
     async def rebuild_mrp_plan_order(self):
         """按 PRD 重建 mrp_plan_order 表（销售订单ID + 物料ID 联合主键）。
         若检测到旧结构（存在自增 id 列）则 DROP 后按 ORM 模型重建；
@@ -2885,6 +2905,7 @@ ORDER BY [{safe_order_alias}]
             await self.migrate_agent_team_redesign()
             await self.migrate_agent_multi_capability()
             await self.migrate_agent_write_capability_split()
+            await self.migrate_agent_skills()
             await self.drop_pto_sale_order_id_fk()
             await self.ensure_indexes()
             await self.migrate_stock_check_k3_writeback_counter_manager()

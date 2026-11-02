@@ -8,6 +8,7 @@
 
 import json
 import os
+import tempfile
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urlunparse
 
@@ -25,8 +26,16 @@ def _swap_db(url: str, db_name: str) -> str:
     return urlunparse(parts._replace(path=f"/{db_name}"))
 
 
+SKILLS_TEST_ROOT = tempfile.mkdtemp(prefix="spc_skills_")
+SKILLS_TEST_BUILTIN = os.path.join(SKILLS_TEST_ROOT, "builtin")
+SKILLS_TEST_IMPORTED = os.path.join(SKILLS_TEST_ROOT, "imported")
+os.makedirs(SKILLS_TEST_BUILTIN, exist_ok=True)
+os.makedirs(SKILLS_TEST_IMPORTED, exist_ok=True)
+
 os.environ["DATABASE_URL"] = _swap_db(_base.DATABASE_URL, TEST_DB_NAME)
 os.environ["DATABASE_URL_SYNC"] = _swap_db(_base.DATABASE_URL_SYNC, TEST_DB_NAME)
+os.environ["SKILLS_DIR"] = SKILLS_TEST_BUILTIN
+os.environ["SKILLS_IMPORT_DIR"] = SKILLS_TEST_IMPORTED
 # Redis 指向不可达地址：通知推送等 Redis 调用走降级分支。测试用户 id 与开发库重叠，
 # 不隔离会把 spc_test 的 notif:{user_id} 事件推给正在使用的开发环境
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
@@ -117,7 +126,7 @@ async def _test_db():
     from app.models.basicdata.organization import Organization
     from app.models.agent import (
         Agent, AgentCallLog, AgentConversation, AgentMessage,
-        AgentTeamMember, GatewayDispatchLog,
+        AgentSkill, AgentSkillBinding, AgentTeamMember, GatewayDispatchLog,
     )
     from app.models.basicdata.reasoning import ReasoningTask
     from app.models.exception.quality_issue import QualityIssue
@@ -176,6 +185,7 @@ async def _test_db():
         Organization.__table__, Employee.__table__,
         Agent.__table__, AgentCallLog.__table__, AgentConversation.__table__,
         AgentMessage.__table__, AgentTeamMember.__table__, GatewayDispatchLog.__table__,
+        AgentSkill.__table__, AgentSkillBinding.__table__,
     ]
     async with engine.begin() as conn:
         # 旧结构测试库（agent 表仍含 user_id 或单值 capability_code 列）：agent 域表整体重建——
@@ -186,7 +196,8 @@ async def _test_db():
         ))).first()
         if legacy_agent:
             await conn.execute(text(
-                "DROP TABLE IF EXISTS agent_team_member, agent_hierarchy_log, agent_config_log, "
+                "DROP TABLE IF EXISTS agent_skill_binding, agent_skill, "
+                "agent_team_member, agent_hierarchy_log, agent_config_log, "
                 "agent_call_log, agent_conversation, agent_message, gateway_dispatch_log, agent CASCADE"
             ))
         await conn.run_sync(Base.metadata.create_all, tables=tables)
@@ -213,6 +224,28 @@ async def _test_db():
             "ALTER TABLE purchase_price_change "
             "ALTER COLUMN self_check_evidence TYPE JSONB USING self_check_evidence::jsonb"
         ))
+        await conn.execute(text(
+            "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS skill_key VARCHAR(128)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS source VARCHAR(16) NOT NULL DEFAULT 'builtin'"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS file_count INTEGER NOT NULL DEFAULT 0"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS has_scripts BOOLEAN NOT NULL DEFAULT false"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE agent_skill ALTER COLUMN description TYPE TEXT"
+        ))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_agent_skill_skill_key ON agent_skill (skill_key)"
+        ))
+        await conn.execute(text("DELETE FROM agent_skill WHERE skill_key IS NULL"))
         # approval_config 模型在 purchase 域（故意不导入），直接 DDL 建表
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS approval_config (
@@ -281,6 +314,16 @@ async def client(_test_db):
     from app.core.database import engine
     from app.main import app
 
+    import shutil
+    from pathlib import Path
+
+    for root in (SKILLS_TEST_BUILTIN, SKILLS_TEST_IMPORTED):
+        for child in Path(root).iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
     async with engine.begin() as conn:
         await conn.execute(text(
             "TRUNCATE supplier_claim, supplier_claim_approval_log, notification, file_asset, feedback, "
@@ -291,6 +334,7 @@ async def client(_test_db):
             "backup_record, scm_inventory, scm_location, scm_inventory_check, scm_inventory_check_item, "
             "ai_agent_config, assistant_run, completeness_rule, "
             "agent_message, agent_conversation, agent_call_log, "
+            "agent_skill_binding, agent_skill, "
             "agent_team_member, agent, gateway_dispatch_log, "
             "scm_employee, scm_organization RESTART IDENTITY CASCADE"
         ))

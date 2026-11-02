@@ -77,6 +77,8 @@ from app.models.agent import (  # noqa: F401
     AgentCallLog,
     AgentConversation,
     AgentMessage,
+    AgentSkill,
+    AgentSkillBinding,
     AgentTeamMember,
     GatewayDispatchLog,
 )

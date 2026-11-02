@@ -39,6 +39,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "ai.agent.self": ["read"],
         "ai.agent.team": ["read"],
         "ai.agent.admin": ["read", "update"],
+        "ai.skill.manage": ["read", "update"],
     },
     "planner": {
         "production.schedule_plans": ["read", "update"],

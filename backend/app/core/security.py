@@ -188,6 +188,14 @@ def check_permission(permissions: dict, resource: str, action: str) -> bool:
     return any(action in (permissions.get(c) or []) for c in candidates)
 
 
+def can_manage_skills(permissions: dict) -> bool:
+    """技能安装/创建/卸载：专用 ai.skill.manage 或智能体管理 ai.agent.admin 均可。"""
+    return (
+        check_permission(permissions, "ai.skill.manage", "update")
+        or check_permission(permissions, "ai.agent.admin", "update")
+    )
+
+
 class PermissionChecker:
     """权限校验依赖，用法: Depends(PermissionChecker("orders", "update"))
     admin角色自动通过所有权限检查

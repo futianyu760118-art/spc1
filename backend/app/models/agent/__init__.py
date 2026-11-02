@@ -4,6 +4,7 @@ from app.models.agent.agent import Agent
 from app.models.agent.call import AgentCallLog
 from app.models.agent.conversation import AgentConversation, AgentMessage
 from app.models.agent.gateway import GatewayDispatchLog
+from app.models.agent.skill import AgentSkill, AgentSkillBinding
 from app.models.agent.team import AgentTeamMember
 
 __all__ = [
@@ -12,5 +13,7 @@ __all__ = [
     "AgentCallLog",
     "AgentConversation",
     "AgentMessage",
+    "AgentSkill",
+    "AgentSkillBinding",
     "GatewayDispatchLog",
 ]

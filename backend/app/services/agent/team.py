@@ -11,6 +11,7 @@ from app.models.basicdata.user import SysUser
 from app.services.agent.capabilities import CONFIGURABLE_CAPABILITIES
 from app.services.agent.errors import AgentError
 from app.services.agent.notify import notify_user
+from app.services.agent.skills import load_agent_skills
 
 
 def _capability_items(agent: Agent) -> List[dict]:
@@ -47,12 +48,14 @@ async def list_my_team(db: AsyncSession, user_id: int) -> List[dict]:
         .where(AgentTeamMember.user_id == int(user_id))
         .order_by(AgentTeamMember.id.asc())
     )).all()
+    skills_by_agent = await load_agent_skills(db, [agent.id for _, agent in rows])
     return [
         {
             "id": int(agent.id),
             "agent_no": agent.agent_no,
             "name": agent.display_name,
             "capabilities": _capability_items(agent),
+            "skills": skills_by_agent.get(int(agent.id), []),
             "description": agent.description,
             "status": agent.status,
             "checked": True,
@@ -74,18 +77,22 @@ async def list_candidates(db: AsyncSession, user: SysUser, keyword: str = "") ->
         like = f"%{keyword.strip()}%"
         conditions.append(or_(Agent.display_name.ilike(like), Agent.agent_no.ilike(like)))
     rows = (await db.execute(select(Agent).where(*conditions).order_by(Agent.id.asc()))).scalars().all()
-    items = []
+    visible = []
     for agent in rows:
-        if not await is_visible(db, user, agent):
-            continue
-        items.append({
+        if await is_visible(db, user, agent):
+            visible.append(agent)
+    skills_by_agent = await load_agent_skills(db, [agent.id for agent in visible])
+    return [
+        {
             "id": int(agent.id),
             "agent_no": agent.agent_no,
             "name": agent.display_name,
             "capabilities": _capability_items(agent),
+            "skills": skills_by_agent.get(int(agent.id), []),
             "description": agent.description,
-        })
-    return items
+        }
+        for agent in visible
+    ]
 
 
 async def check_member(db: AsyncSession, user: SysUser, agent_id: int) -> dict:

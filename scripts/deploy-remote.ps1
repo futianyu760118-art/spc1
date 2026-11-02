@@ -154,6 +154,8 @@ if (-not $SkipUpload) {
         if ($LASTEXITCODE -ne 0) { throw "frontend 镜像构建失败" }
         & docker build -f (Join-Path $RepoRoot "agents\gateway-agent\Dockerfile") -t aeos-gateway:latest -t "aeos-gateway:$Version" (Join-Path $RepoRoot "agents")
         if ($LASTEXITCODE -ne 0) { throw "gateway 镜像构建失败" }
+        & docker build -t spc-v2-sandbox:latest -t "spc-v2-sandbox:$Version" (Join-Path $RepoRoot "sandbox")
+        if ($LASTEXITCODE -ne 0) { throw "sandbox 镜像构建失败" }
     } else {
         & docker tag spc-v2-backend:latest "spc-v2-backend:$Version"
         if ($LASTEXITCODE -ne 0) { throw "本机不存在 spc-v2-backend:latest，无法 -SkipBuild（请先完整构建）" }
@@ -163,13 +165,17 @@ if (-not $SkipUpload) {
         if ($LASTEXITCODE -ne 0) { throw "本机不存在 aeos-gateway:latest，无法 -SkipBuild（请先完整构建）" }
         & docker tag aeos-gateway:latest "aeos-gateway:$Version"
         if ($LASTEXITCODE -ne 0) { throw "gateway 镜像打版本标签失败" }
+        & docker image inspect spc-v2-sandbox:latest | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "本机不存在 spc-v2-sandbox:latest，无法 -SkipBuild（请先完整构建）" }
+        & docker tag spc-v2-sandbox:latest "spc-v2-sandbox:$Version"
+        if ($LASTEXITCODE -ne 0) { throw "sandbox 镜像打版本标签失败" }
     }
     Show-StepElapsed "2/6"
 
     Write-Host "[3/6] 打包镜像与配置 ..."
     # 公共镜像包只压缩一次；每台服务器另有小 config bundle（compose + nginx.conf + 该台 .env）
     $imagesTar = Join-Path $tmpDir "images.tar"
-    & docker save -o $imagesTar "spc-v2-backend:$Version" "spc-v2-frontend:$Version" "aeos-gateway:latest" "aeos-gateway:$Version"
+    & docker save -o $imagesTar "spc-v2-backend:$Version" "spc-v2-frontend:$Version" "spc-v2-sandbox:$Version" "aeos-gateway:latest" "aeos-gateway:$Version"
     if ($LASTEXITCODE -ne 0) { throw "docker save 失败" }
     & gzip -f $imagesTar
     if ($LASTEXITCODE -ne 0) { throw "images.tar 压缩失败" }
@@ -195,6 +201,7 @@ gunzip -f images.tar.gz
 docker load -i images.tar
 docker tag "spc-v2-backend:__V__" spc-v2-backend:latest
 docker tag "spc-v2-frontend:__V__" spc-v2-frontend:latest
+docker tag "spc-v2-sandbox:__V__" spc-v2-sandbox:latest
 mkdir -p .bundle-new
 tar -xzf bundle.tar.gz -C .bundle-new
 cp -f .bundle-new/docker-compose-prod.yml ./docker-compose-prod.yml

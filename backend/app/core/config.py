@@ -108,6 +108,20 @@ class Settings(BaseSettings):
     AI_LOG_RETENTION_DAYS: int = 30
     AI_MAX_AGENT_DURATION_S: int = 120
 
+    # 智能体技能（磁盘文件夹为事实来源；DB 仅索引/绑定）
+    SKILLS_DIR: str = ""                 # 内置技能根目录；空=backend/skills
+    SKILLS_IMPORT_DIR: str = ""          # 导入技能根目录；空=backend/skills-imported
+    SKILL_IMPORT_MAX_BYTES: int = 20 * 1024 * 1024
+    SKILL_FILE_PREVIEW_MAX_BYTES: int = 1024 * 1024
+    SKILL_INSTALL_ALLOWED_HOSTS: str = ""   # 逗号分隔；空=允许任意公网 HTTPS（私网/回环始终拒绝）
+    SKILL_INSTALL_TIMEOUT_S: int = 30
+    # 第二阶段：技能脚本沙箱（UDS 优先；URL 仅本地调试）
+    SKILL_SANDBOX_UDS: str = ""
+    SKILL_SANDBOX_URL: str = ""
+    SKILL_SANDBOX_TOKEN: str = ""
+    SKILL_SCRIPT_TIMEOUT_S: int = 30
+    SKILL_SCRIPT_MAX_OUTPUT_BYTES: int = 8000
+
     # 执行面推理（AEOS reason_control_platform 只读分析接入）
     REASONING_TIMEOUT_S: int = 170          # 单次推理任务总超时（含证据采集与 LLM；执行面 agent HTTP 超时 180s，留 10s 余量）
     REASONING_MODEL: str = ""               # 推理专用模型名；留空沿用 AI_OPENAI_MODEL（建议 flash 档以压时延）

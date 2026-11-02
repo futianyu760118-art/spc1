@@ -135,6 +135,9 @@ docker image inspect "spc-v2-backend:$V" >/dev/null 2>&1 || { echo "IMAGE-MISSIN
 docker image inspect "spc-v2-frontend:$V" >/dev/null 2>&1 || { echo "IMAGE-MISSING: spc-v2-frontend:$V（该版本镜像可能已被清理）"; exit 1; }
 docker tag "spc-v2-backend:$V" spc-v2-backend:latest
 docker tag "spc-v2-frontend:$V" spc-v2-frontend:latest
+if docker image inspect "spc-v2-sandbox:$V" >/dev/null 2>&1; then
+  docker tag "spc-v2-sandbox:$V" spc-v2-sandbox:latest
+fi
 if docker image inspect "aeos-gateway:$V" >/dev/null 2>&1; then
   docker tag "aeos-gateway:$V" aeos-gateway:latest
 fi
@@ -182,7 +185,7 @@ cd __P__
 cur=$(cat current.txt 2>/dev/null || echo '')
 ls -1 versions 2>/dev/null | grep -E '^v[0-9]+-' | sed 's/^v\([0-9][0-9]*\)-.*/\1 &/' | sort -rn | awk '{print $2}' | tail -n +6 | while read old; do
   if [ "$old" = "$cur" ]; then continue; fi
-  docker rmi "spc-v2-backend:$old" "spc-v2-frontend:$old" >/dev/null 2>&1 || true
+  docker rmi "spc-v2-backend:$old" "spc-v2-frontend:$old" "spc-v2-sandbox:$old" >/dev/null 2>&1 || true
   rm -rf "versions/$old"
   echo "已清理旧版本: $old"
 done

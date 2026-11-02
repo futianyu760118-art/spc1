@@ -157,6 +157,16 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"[启动] 清理中断同步任务失败: {e}")
     except Exception as e:
         logger.warning(f"[权限注册] 同步权限定义失败: {e}")
+    # 启动时：扫描磁盘技能目录，同步索引（磁盘为事实来源；失败不阻断启动）
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.services.agent.skills import sync_skills_from_disk
+        async with AsyncSessionLocal() as db:
+            summary = await sync_skills_from_disk(db)
+            await db.commit()
+        logger.info(f"[技能] 索引同步完成: {summary}")
+    except Exception as e:
+        logger.warning(f"[技能] 启动同步失败，技能索引可能不完整: {e}")
     try:
         from app.services.basicdata.exposable_registry import build_path_index, list_exposable_endpoints
         build_path_index(app)

@@ -25,6 +25,7 @@ npm run build      # = tsc -b && vite build，唯一 typecheck，交付前必跑
 - 本地开发（仓库根）：`docker-compose up -d` —— backend :8000、frontend :3000。
 - 生产部署（部署脚本使用）：`docker compose -f docker-compose-prod.yml up -d` —— 自带 postgres/redis，backend :18085、frontend :18084。
 - AEOS 执行面（`aeos` profile）：`docker compose --profile aeos up -d aeos-gateway` —— 单一网关即唯一执行面（Hub 派单与 SPC 助手共用）；网关必须单副本。
+- 技能沙箱镜像：`docker build -t spc-v2-sandbox:latest sandbox`；backend 与 `skill-sandbox` 共享 `sandbox-run` 卷（UDS），未配置 `SKILL_SANDBOX_TOKEN` 时脚本执行禁用。
 - backend 容器启动命令：生产为 `python init_database.py && uvicorn ...`（每次启动自动迁移）；本地 dev compose 只跑 uvicorn，需手动执行 `python init_database.py`。
 
 ### 部署（Windows 本机，多服务器并行）
@@ -138,6 +139,14 @@ ERP 集成是 SQL 驱动的：同步 SQL 与字段映射存在 `sync_sql_config`
 - **入站 caller 路由**：网关调内网 `POST /api/v1/internal/gateway/resolve-caller`（`X-Gateway-Token` 鉴权）解析 `caller` 并签发 actor token；审计写 `gateway_dispatch_log`，fail-closed。`caller.userId` 按 `GATEWAY_CALLER_USER_ID_FIELD` 解析，默认 `emp_code`。`caller.systemId` 非空且不等于 `control-platform`（如 Hub 页面派单的 `aeos-hub`）按外部 caller 处理：保留元数据、按系统级执行，不映射 SPC 用户。nginx 对 `/api/v1/internal/` 一律 deny，仅 Docker 内网可达。
 - **关键 env**：backend `GATEWAY_BASE_URL` / `GATEWAY_INTERNAL_TOKEN` / `GATEWAY_CALLER_USER_ID_FIELD`；gateway `GATEWAY_AGENT_ID` / `GATEWAY_AGENT_NAME` / `BACKEND_INTERNAL_BASE_URL` / `AEOS_HUB_BASE` / `AEOS_SYSTEM_ID` / `AEOS_SYSTEM_TOKEN` / `AEOS_HUB_CA_CERT` / `NODE_EXTRA_CA_CERTS` / `CONTROL_PLATFORM_ORDER_APP_KEY` / `CONTROL_PLATFORM_ORDER_APP_SECRET` / `CONTROL_PLATFORM_ORDER_TIMEOUT_MS`；`EXECUTION_QUERY_AGENT_BASE_URL` / `EXECUTION_REASONING_AGENT_BASE_URL` / `EXECUTION_WRITE_AGENT_BASE_URL` 均指向网关。**网关看门狗**（`watchdog.js`，"在线但无响应"自愈，触发即 exit(1) 由 Docker restart 拉起）：`WATCHDOG_RUN_MAX_MS`（默认 900000，卡死 run 占坑）/ `WATCHDOG_SELF_PING_*`（健康口自检，默认 30s/5s/3 次）/ `WATCHDOG_LOOP_STALL_MS`（默认 10000，事件循环停摆）；0 关闭对应项。
 - **命令**：`docker build -f agents/gateway-agent/Dockerfile -t aeos-gateway:latest agents`；`cd agents && npm install && npm test`。改网关 / resolver / 审批中心代码后跑 `python -m pytest` 与 `npm test`。
+
+### 智能体技能（Agent Skills）
+
+- 技能以磁盘文件夹为准：内置 `backend/skills/<skill-key>/SKILL.md`；导入目录 `SKILLS_IMPORT_DIR`（默认 `backend/skills-imported`，生产 compose 挂载 `./data/skills`）。
+- `agent_skill` 只是索引（启动扫描同步），`agent_skill_binding` 绑定智能体；不要恢复 DB 正文编辑。
+- 运行时 `use_skill` 读 SKILL.md；`read_skill_file` 读文本资源；`run_skill_executor` 走已注册只读执行器；`run_skill_script` 走独立 `skill-sandbox`（UDS、无网络、只读根、tmpfs、超时/资源/输出限额），需配置 `SKILL_SANDBOX_TOKEN`；脚本可用 `args` 传 CLI 参数、`input_files` 写输入文件，生成文件由 sandbox 收集后存入 `/uploads` 并返回下载链接。
+- 技能管理工具 `create_skill` / `install_skill` / `uninstall_skill` 仅对有 `ai.skill.manage` update 的用户下发；`install_skill` 支持 SkillHub 专家包（`pack`，按 `skillhub-pack-install.md` 协议安装主技能+子技能）或 HTTPS 公网 zip（私网/回环拒绝，`SKILL_INSTALL_ALLOWED_HOSTS` 可收紧）；创建脚本必须显式 `allow_scripts=true`。创建/安装后需在智能体管理中绑定。
+- 改技能表结构必须同步 `init_database.py` 的 `migrate_agent_skills`。
 
 ### 审批中心（approval）
 

@@ -112,8 +112,21 @@ export default function TeamConfig() {
               },
               { title: '编号', dataIndex: 'agent_no', width: 150, ellipsis: true },
               {
-                title: '能力', dataIndex: 'capabilities', width: 220,
+                title: '能力', dataIndex: 'capabilities', width: 200,
                 render: (value: TeamMember['capabilities']) => <CapabilityTags items={value} max={2} />,
+              },
+              {
+                title: '技能', dataIndex: 'skills', width: 160,
+                render: (value: TeamMember['skills']) => (
+                  value && value.length > 0
+                    ? <Space size={2} wrap>
+                        {value.slice(0, 2).map(skill => (
+                          <Tag key={skill.id} color="purple">{skill.name}</Tag>
+                        ))}
+                        {value.length > 2 && <Text type="secondary">+{value.length - 2}</Text>}
+                      </Space>
+                    : <Text type="secondary">-</Text>
+                ),
               },
               {
                 title: '状态', dataIndex: 'status', width: 86,

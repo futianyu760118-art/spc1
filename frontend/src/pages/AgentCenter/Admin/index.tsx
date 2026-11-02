@@ -4,11 +4,12 @@ import {
 } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { userApi } from '../../../services/api'
-import { agentApi, AgentCapability } from '../../../services/agent'
+import { agentApi, AgentCapability, AgentSkillBrief } from '../../../services/agent'
 import { CapabilityTags } from '../../../components/Agent/CapabilityTags'
 import { useAuthStore } from '../../../store/auth'
 import AssistantMonitorTab from './AssistantMonitorTab'
 import AssistantConfigTab from './AssistantConfigTab'
+import SkillLibraryTab from './SkillLibraryTab'
 
 const { Text } = Typography
 const PAGE_SIZE = 6
@@ -48,6 +49,7 @@ export default function AgentAdmin() {
   const [loadingCalls, setLoadingCalls] = useState(false)
 
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([])
+  const [skillOptions, setSkillOptions] = useState<AgentSkillBrief[]>([])
   const [roles, setRoles] = useState<RoleOption[]>([])
   const [modalOpen, setModalOpen] = useState(false)
   const [editingAgent, setEditingAgent] = useState<any>(null)
@@ -97,14 +99,16 @@ export default function AgentAdmin() {
   useEffect(() => { loadCalls() }, [loadCalls])
 
   const loadFormOptions = async () => {
-    const [capRes, roleRes]: any = await Promise.all([
+    const [capRes, skillRes, roleRes]: any = await Promise.all([
       agentApi.capabilities(),
+      agentApi.adminSkills({ page_size: 100 }).catch(() => ({ data: { items: [] } })),
       userApi.roles({ page_size: 500 }).catch(() => {
         message.warning('角色列表加载失败，无法按角色开放')
         return { data: { items: [] } }
       }),
     ])
     setCapabilities((capRes.data?.items || []).filter((cap: AgentCapability) => cap.grantable))
+    setSkillOptions(skillRes.data?.items || [])
     setRoles(roleRes.data?.items || [])
   }
 
@@ -122,6 +126,7 @@ export default function AgentAdmin() {
     form.setFieldsValue({
       name: row.name,
       capabilities: (row.capabilities || []).map((cap: { code: string }) => cap.code),
+      skill_ids: (row.skills || []).map((skill: AgentSkillBrief) => skill.id),
       scope_type: row.scope_type || 'all',
       scope_role_ids: row.scope_role_ids || [],
       description: row.description || '',
@@ -138,6 +143,7 @@ export default function AgentAdmin() {
       const payload = {
         name: values.name.trim(),
         capabilities: values.capabilities,
+        skill_ids: values.skill_ids || [],
         scope_type: values.scope_type,
         scope_role_ids: values.scope_type === 'roles' ? values.scope_role_ids : null,
         description: values.description || null,
@@ -212,8 +218,21 @@ export default function AgentAdmin() {
                       { title: '编号', dataIndex: 'agent_no', width: 130, ellipsis: true },
                       { title: '名称', dataIndex: 'name', width: 150, ellipsis: true },
                       {
-                        title: '能力', dataIndex: 'capabilities', width: 190,
+                        title: '能力', dataIndex: 'capabilities', width: 170,
                         render: (value: any) => <CapabilityTags items={value} max={2} />,
+                      },
+                      {
+                        title: '技能', dataIndex: 'skills', width: 150,
+                        render: (value: AgentSkillBrief[] | undefined) => (
+                          value && value.length > 0
+                            ? <Space size={2} wrap>
+                                {value.slice(0, 2).map(skill => (
+                                  <Tag key={skill.id} color="purple">{skill.name}</Tag>
+                                ))}
+                                {value.length > 2 && <Text type="secondary">+{value.length - 2}</Text>}
+                              </Space>
+                            : <Text type="secondary">-</Text>
+                        ),
                       },
                       {
                         title: '开放范围', dataIndex: 'scope_type', width: 110,
@@ -284,6 +303,10 @@ export default function AgentAdmin() {
               ),
             },
             {
+              key: 'skill-library', label: '技能库',
+              children: <SkillLibraryTab/>,
+            },
+            {
               key: 'assistant-monitor', label: '助手监控',
               children: <AssistantMonitorTab/>,
             },
@@ -315,6 +338,20 @@ export default function AgentAdmin() {
               options={capabilities.map(cap => ({
                 value: cap.code,
                 label: `${cap.name}（${cap.code}）`,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item name="skill_ids" label="技能" extra="最多绑定 10 个；技能只提供方法与上下文，不授予能力">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              maxTagCount="responsive"
+              placeholder="选择该智能体可用的技能（可多选）"
+              options={skillOptions.map(skill => ({
+                value: skill.id,
+                label: `${skill.name}${skill.status === 'disabled' ? '（停用）' : ''}`,
               }))}
             />
           </Form.Item>

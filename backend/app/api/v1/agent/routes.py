@@ -26,6 +26,12 @@ from app.services.agent.capabilities import (
     public_catalog,
 )
 from app.services.agent.context import load_user_context
+from app.services.agent.skills import (
+    MAX_SKILLS_PER_AGENT,
+    load_agent_skills,
+    sync_agent_skill_bindings,
+    validate_skill_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +65,7 @@ def _capture(exc: Exception) -> dict:
     return _err(message, int(status or 400))
 
 
-def _agent_brief(agent: Agent) -> dict:
+def _agent_brief(agent: Agent, skills: Optional[List[dict]] = None) -> dict:
     capabilities = [
         {"code": code, "name": (
             CONFIGURABLE_CAPABILITIES[code].name
@@ -67,11 +73,14 @@ def _agent_brief(agent: Agent) -> dict:
         )}
         for code in (agent.capability_codes or [])
     ]
+    skill_items = skills or []
     return {
         "id": agent.id,
         "agent_no": agent.agent_no,
         "name": agent.display_name,
         "capabilities": capabilities,
+        "skills": skill_items,
+        "skill_count": len(skill_items),
         "scope_type": agent.scope_type,
         "scope_role_ids": agent.scope_role_ids or [],
         "description": agent.description,
@@ -127,6 +136,7 @@ class AgentUpsertIn(BaseModel):
     scope_role_ids: Optional[List[int]] = None
     description: Optional[str] = Field(default=None, max_length=500)
     status: str = "active"
+    skill_ids: List[int] = Field(default_factory=list)
 
     @field_validator("name")
     @classmethod
@@ -168,6 +178,17 @@ async def my_agent(
             "display_name": ctx.display_name,
             "team_size": len(ctx.members),
             "effective_capabilities": _capability_items(ctx.effective_capabilities),
+            "skills": [
+                {
+                    "id": skill.skill_id,
+                    "name": skill.name,
+                    "description": skill.description,
+                    "agent_id": skill.agent_id,
+                    "agent_name": skill.agent_name,
+                    "has_executor": skill.has_executor,
+                }
+                for skill in ctx.skills
+            ],
             "usage_7d": {
                 "runs": int(usage[0] or 0) if usage else 0,
                 "total_tokens": int(usage[1] or 0) if usage else 0,
@@ -320,6 +341,8 @@ def _validate_upsert(body: AgentUpsertIn) -> Optional[str]:
     unknown = [code for code in body.capabilities if code not in ALL_CONFIGURABLE_CODES]
     if unknown:
         return f"未知能力：{'、'.join(unknown)}"
+    if len(set(body.skill_ids or [])) > MAX_SKILLS_PER_AGENT:
+        return f"每个智能体最多绑定 {MAX_SKILLS_PER_AGENT} 个技能"
     if body.scope_type not in ("all", "roles"):
         return "scope_type 只能为 all 或 roles"
     if body.scope_type == "roles" and not body.scope_role_ids:
@@ -358,12 +381,18 @@ async def admin_agents(
             select(Agent).where(*conditions).order_by(Agent.id.asc())
             .offset((page - 1) * page_size).limit(page_size)
         )).scalars().all()
+        skills_by_agent = await load_agent_skills(
+            db, [agent.id for agent in rows], include_disabled=True,
+        )
         items = []
         for agent in rows:
             teams_count = int((await db.execute(
                 select(func.count(AgentTeamMember.id)).where(AgentTeamMember.agent_id == agent.id)
             )).scalar() or 0)
-            items.append({**_agent_brief(agent), "teams_count": teams_count})
+            items.append({
+                **_agent_brief(agent, skills_by_agent.get(int(agent.id), [])),
+                "teams_count": teams_count,
+            })
         return _ok({"items": items, "total": total, "page": page, "page_size": page_size})
     except Exception as exc:
         return _capture(exc)
@@ -385,6 +414,7 @@ async def create_agent(
         )).scalars().first()
         if dup:
             return _err("已存在同名智能体")
+        await validate_skill_ids(db, body.skill_ids)
         next_id = await sequence.next_serial_id(db, "agent")
         agent = Agent(
             id=next_id,
@@ -399,8 +429,10 @@ async def create_agent(
         )
         db.add(agent)
         await db.flush()
+        await sync_agent_skill_bindings(db, agent.id, body.skill_ids)
+        skills = (await load_agent_skills(db, [agent.id], include_disabled=True)).get(int(agent.id), [])
         await log_audit(db, "agent", agent.id, "create", operator=operator.username)
-        return _ok(_agent_brief(agent), "已创建")
+        return _ok(_agent_brief(agent, skills), "已创建")
     except Exception as exc:
         return _capture(exc)
 
@@ -424,6 +456,7 @@ async def update_agent(
         )).scalars().first()
         if dup:
             return _err("已存在同名智能体")
+        await validate_skill_ids(db, body.skill_ids)
         agent.display_name = body.name.strip()
         agent.capability_codes = body.capabilities
         agent.scope_type = body.scope_type
@@ -431,8 +464,10 @@ async def update_agent(
         agent.description = body.description
         agent.status = body.status
         agent.config_version = int(agent.config_version or 1) + 1
+        await sync_agent_skill_bindings(db, agent.id, body.skill_ids)
+        skills = (await load_agent_skills(db, [agent.id], include_disabled=True)).get(int(agent.id), [])
         await db.flush()
-        return _ok(_agent_brief(agent), "已保存")
+        return _ok(_agent_brief(agent, skills), "已保存")
     except Exception as exc:
         return _capture(exc)
 
