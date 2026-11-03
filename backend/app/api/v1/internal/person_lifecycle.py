@@ -32,6 +32,7 @@ router = APIRouter()
 EVENT_LOG_TABLE = "person_lifecycle_event"
 QUEUE_LABEL = "待重新分配"
 SUPPORTED_EVENTS = {"person.offboarded", "person.reinstated"}
+RESULT_STATUSES = {"synced", "skipped", "pending_confirmation", "retrying", "failed"}
 TERMINAL_STATUSES = {
     "archived",
     "cancelled",
@@ -81,6 +82,27 @@ def _error(status_code: int, message: str) -> JSONResponse:
         status_code=status_code,
         content={"status": "failed", "error": message},
     )
+
+
+def _contract_result(payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    status = str(result.get("status") or "failed").lower()
+    if status == "stale":
+        status = "skipped"
+    elif status == "scheduled":
+        status = "pending_confirmation"
+    if status not in RESULT_STATUSES:
+        status = "failed"
+    return {
+        **result,
+        "event_id": result.get("event_id") or payload["event_id"],
+        "target_system": "M06_SPC",
+        "status": status,
+        "changed": result.get("changed") or {
+            "closed_items": len(result.get("closed_items") or []),
+            "reassigned_tasks": len(result.get("reassigned_tasks") or []),
+        },
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _lifecycle_secret_candidates(key_id: str) -> list[str]:
@@ -197,7 +219,7 @@ async def _find_duplicate(db: AsyncSession, event_key: str) -> dict[str, Any] | 
     return result if isinstance(result, dict) else None
 
 
-async def _latest_revision(db: AsyncSession, object_id: str) -> int | None:
+async def _latest_revision(db: AsyncSession, tenant_id: str, object_id: str) -> int | None:
     return (
         await db.execute(
             select(AuditLog.record_id)
@@ -205,6 +227,7 @@ async def _latest_revision(db: AsyncSession, object_id: str) -> int | None:
                 AuditLog.table_name == EVENT_LOG_TABLE,
                 AuditLog.action == "receive",
                 AuditLog.operator == object_id,
+                AuditLog.new_value.like(f"{tenant_id}:%"),
             )
             .order_by(AuditLog.record_id.desc(), AuditLog.id.desc())
             .limit(1)
@@ -424,11 +447,14 @@ async def person_lifecycle(request: Request, db: AsyncSession = Depends(get_writ
     if parse_error:
         return parse_error
     assert payload is not None
+    configured_tenant = os.getenv("AEOS_TENANT_ID", "").strip()
+    if configured_tenant and payload["tenant_id"] != configured_tenant:
+        return _error(403, "人员同步单位不匹配")
 
     duplicate = await _find_duplicate(db, _event_key(payload))
     if duplicate is not None:
         duplicate["duplicate"] = True
-        return duplicate
+        return _contract_result(payload, duplicate)
 
     employee, users, identity_error = await _resolve_identity(db, payload)
     if identity_error:
@@ -446,7 +472,7 @@ async def person_lifecycle(request: Request, db: AsyncSession = Depends(get_writ
         await _record_event(db, payload, result)
         return result
 
-    latest_revision = await _latest_revision(db, str(payload["object_id"]))
+    latest_revision = await _latest_revision(db, str(payload["tenant_id"]), str(payload["object_id"]))
     if latest_revision is not None and payload["revision"] <= int(latest_revision):
         result = {
             "status": "stale",
@@ -475,4 +501,4 @@ async def person_lifecycle(request: Request, db: AsyncSession = Depends(get_writ
     else:
         result = await _apply_reinstate(payload, employee, users)
     await _record_event(db, payload, result)
-    return result
+    return _contract_result(payload, result)
