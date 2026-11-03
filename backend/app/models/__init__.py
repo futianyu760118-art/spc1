@@ -26,6 +26,7 @@ from app.models.production.process_progress import ProcessProgress
 from app.models.production.process_exception import ProcessException
 from app.models.production.schedule_plan import ProductionSchedulePlan
 from app.models.production.base_condition import ProductionBaseCondition  # noqa: F401
+from app.models.production.monthly_capacity_scenario import MonthlyCapacityScenario  # noqa: F401
 from app.models.production.production_daily_report import ProductionDailyReport  # noqa: F401
 from app.models.production.labor_price_audit import ProductionLaborPriceAudit  # noqa: F401
 from app.models.production.workshop_daily_report import (  # noqa: F401

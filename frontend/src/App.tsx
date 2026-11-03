@@ -3,6 +3,7 @@ import {unstable_HistoryRouter as HistoryRouter, Routes, Route, Navigate, useLoc
 import {App as AntdApp, ConfigProvider, Result, Button} from 'antd'
 import MainLayout from './layouts/MainLayout'
 import { appHistory } from './utils/appHistory'
+import { resolveEmployeeLandingPath } from './utils/landing'
 import Dashboard from './pages/Dashboard/index'
 import OrderList from './pages/OrderDelivery/OrderList/index'
 import RunOrderList from './pages/OrderDelivery/RunOrderList/index'
@@ -72,6 +73,11 @@ import ProductionOverview from './pages/ProductionCenter/ProductionOverview/inde
 import Dashboard372 from './pages/ProductionCenter/Dashboard372/index'
 import SchedulePlans from './pages/ProductionCenter/SchedulePlans/index'
 import ScheduleDateAdjust from './pages/ProductionCenter/ScheduleDateAdjust/index'
+import MonthlyCapacityPlan from './pages/ProductionCenter/MonthlyCapacityPlan/index'
+import NewSchedulePlans from './pages/EngineeringCenter/NewSchedulePlans/index'
+import LaborPrices from './pages/EngineeringCenter/LaborPrices/index'
+import LaborPriceNew from './pages/EngineeringCenter/LaborPrices/New'
+import LaborPriceChanges from './pages/EngineeringCenter/LaborPriceChanges/index'
 import TodoWorkbench from './pages/ProductionCenter/TodoWorkbench/index'
 import ChangeEvents from './pages/ProductionCenter/ChangeEvents/index'
 import ScheduleBoard from './pages/ProductionCenter/ScheduleBoard/index'
@@ -162,6 +168,11 @@ function ShareRouteGuard({children}: { children: React.ReactNode }) {
     )
 }
 
+function RoleLanding() {
+    const currentUser = useAuthStore((state) => state.currentUser)
+    return <Navigate to={resolveEmployeeLandingPath(currentUser)} replace />
+}
+
 export default function App() {
     const {fontSizeScale} = useThemeStore()
 
@@ -194,7 +205,7 @@ export default function App() {
                                 </PrivateRoute>
                             }
                         >
-                            <Route index element={<Navigate to="/dashboard" replace/>}/>
+                            <Route index element={<RoleLanding/>}/>
                             <Route path="profile" element={<Profile/>}/>
                             <Route path="dashboard" element={<Dashboard/>}/>
                             <Route path="orders" element={<OrderList/>}/>
@@ -230,6 +241,11 @@ export default function App() {
                             <Route path="production-dashboard" element={<Dashboard372/>}/>
                             <Route path="schedule-plans" element={<SchedulePlans/>}/>
                             <Route path="schedule-date-adjust" element={<ScheduleDateAdjust/>}/>
+                            <Route path="production/monthly-capacity-plan" element={<MonthlyCapacityPlan/>}/>
+                            <Route path="engineering/new-schedule/plans" element={<NewSchedulePlans/>}/>
+                            <Route path="engineering/labor-prices" element={<LaborPrices/>}/>
+                            <Route path="engineering/labor-prices/new" element={<LaborPriceNew/>}/>
+                            <Route path="engineering/labor-price-changes" element={<LaborPriceChanges/>}/>
                             <Route path="todo-workbench" element={<TodoWorkbench/>}/>
                             <Route path="change-events" element={<ChangeEvents/>}/>
                             <Route path="schedule-board" element={<ScheduleBoard/>}/>

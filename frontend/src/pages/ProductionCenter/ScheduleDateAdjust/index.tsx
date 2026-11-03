@@ -35,7 +35,9 @@ interface PlanRow {
   line_no?: string
   product_code?: string
   model_code?: string
+  bom_no?: string
   quantity?: number
+  source_order_qty?: number
   upph?: number
   manpower?: number
   daily_work_hours?: number
@@ -50,6 +52,7 @@ interface PlanRow {
   schedule_bucket_label?: string
   delivery_status?: string
   delay_days?: number
+  daily_breakdown?: { date: string; hours: number; qty?: number }[]
 }
 
 interface CapacityConflict {
@@ -121,6 +124,7 @@ export default function ScheduleDateAdjust() {
   const [splitPlan, setSplitPlan] = useState<PlanRow | null>(null)
   const [splitForm] = Form.useForm()
   const [splitting, setSplitting] = useState(false)
+  const [splittingByDayId, setSplittingByDayId] = useState<number | null>(null)
   const [splitCount, setSplitCount] = useState(2)
   const [remainders, setRemainders] = useState<any[]>([])
   const [remainderSourceQty, setRemainderSourceQty] = useState<number | null>(null)
@@ -134,6 +138,7 @@ export default function ScheduleDateAdjust() {
         is_active: true,
         date_start: dateRange[0].format('YYYY-MM-DD'),
         date_end: dateRange[1].format('YYYY-MM-DD'),
+        sort_by: 'day',
       }
       if (keyword.trim()) params.keyword = keyword.trim()
       params.schedule_bucket = activeBucket
@@ -626,6 +631,53 @@ export default function ScheduleDateAdjust() {
     }
   }
 
+  const handleSplitByDay = (row: PlanRow) => {
+    const breakdown = row.daily_breakdown || []
+    if (breakdown.length <= 1) return
+    Modal.confirm({
+      title: '按天拆分',
+      content: `将把 ${row.order_no}/${row.line_no} 拆成 ${breakdown.length} 条独立计划，每天一条；拆完后可单独修改每天日期。`,
+      okText: '确认拆分',
+      cancelText: '取消',
+      onOk: async () => {
+        const totalQty = Number(row.quantity || 0)
+        let allocated = 0
+        const batches = breakdown
+          .map((item, index) => {
+            let quantity = Math.floor(Number(item.qty || 0))
+            if (index === breakdown.length - 1) {
+              quantity = Number((totalQty - allocated).toFixed(2))
+            }
+            allocated += quantity
+            return { quantity, target_date: item.date }
+          })
+          .filter((item) => item.quantity > 0)
+        if (!batches.length) {
+          message.warning('没有可拆的每日数量')
+          return
+        }
+        setSplittingByDayId(row.id)
+        try {
+          const res: any = await productionApi.splitSchedulePlan({
+            plan_id: row.id,
+            batches,
+            push_conflicts: false,
+            break_frozen_reason: '按天拆分（保持原计划日期）',
+          })
+          const data = res.data || {}
+          setConflicts(data.conflicts || [])
+          await loadPlans()
+          await loadRemainders()
+          message.success(`已拆成 ${data.plans?.length || batches.length} 条按天计划`)
+        } catch {
+          // 错误已由全局拦截器提示
+        } finally {
+          setSplittingByDayId(null)
+        }
+      },
+    })
+  }
+
   const columns: ColumnsType<PlanRow> = [
     {
       title: '订单号',
@@ -654,10 +706,20 @@ export default function ScheduleDateAdjust() {
         <Tag>{value || row.schedule_bucket || '-'}</Tag>
       ),
     },
-    { title: '数量', dataIndex: 'quantity', width: 90, render: (value?: number) => value ?? '-' },
     {
-      title: '总工时',
-      width: 90,
+      title: '订单数量',
+      width: 110,
+      render: (_: unknown, row: PlanRow) => row.source_order_qty ?? row.quantity ?? '-',
+    },
+    {
+      title: '当天排产数量',
+      dataIndex: 'quantity',
+      width: 120,
+      render: (value?: number) => value ?? '-',
+    },
+    {
+      title: '当天工时',
+      width: 100,
       render: (_: unknown, row: PlanRow) => {
         const hours = getTotalHours(row)
         return hours === null ? '-' : `${hours}h`
@@ -710,13 +772,37 @@ export default function ScheduleDateAdjust() {
     },
     {
       title: '操作',
-      width: 180,
+      width: 320,
       fixed: 'right',
       render: (_: unknown, row: PlanRow) => (
         <Space size={0}>
+          <Button
+            type="link"
+            size="small"
+            onClick={() =>
+              navigate(
+                `/engineering/labor-prices?bomNo=${encodeURIComponent(row.bom_no || '')}` +
+                  `&productCode=${encodeURIComponent(row.product_code || '')}` +
+                  `&orderNo=${encodeURIComponent(row.order_no || '')}` +
+                  `&lineNo=${encodeURIComponent(row.line_no || '')}`,
+              )
+            }
+          >
+            工价
+          </Button>
           <Button type="link" size="small" onClick={() => openInsertWithPlan(row)}>
             返单
           </Button>
+          {(row.daily_breakdown?.length || 0) > 1 && (
+            <Button
+              type="link"
+              size="small"
+              loading={splittingByDayId === row.id}
+              onClick={() => handleSplitByDay(row)}
+            >
+              按天拆分
+            </Button>
+          )}
           <Button type="link" size="small" onClick={() => openSplit(row)}>
             拆单
           </Button>
@@ -882,8 +968,39 @@ export default function ScheduleDateAdjust() {
                 loading={loading}
                 columns={columns}
                 dataSource={plans}
-                scroll={{ x: 1280 }}
+                scroll={{ x: 1700 }}
                 locale={{ emptyText: <Empty description={`当前区间没有${item.label}计划`} /> }}
+                expandable={{
+                  rowExpandable: (row) => (row.daily_breakdown?.length || 0) > 1,
+                  expandedRowRender: (row) => (
+                    <Table
+                      size="small"
+                      rowKey="date"
+                      pagination={false}
+                      dataSource={row.daily_breakdown || []}
+                      columns={[
+                        {
+                          title: '生产日期',
+                          dataIndex: 'date',
+                          width: 160,
+                          render: (value: string) => formatDate(value),
+                        },
+                        {
+                          title: '占用工时',
+                          dataIndex: 'hours',
+                          width: 120,
+                          render: (value: number) => `${value}h`,
+                        },
+                        {
+                          title: '当日数量',
+                          dataIndex: 'qty',
+                          width: 120,
+                          render: (value?: number) => value ?? '-',
+                        },
+                      ]}
+                    />
+                  ),
+                }}
                 rowSelection={{
                   selectedRowKeys,
                   onChange: (keys) => setSelectedRowKeys(keys),

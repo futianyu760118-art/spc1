@@ -241,6 +241,17 @@ const allMenuItems: PermissionAwareItem[] = [
     ],
   },
   {
+    key: 'engineering-center',
+    icon: <ToolOutlined />,
+    label: '排产中心',
+    permission: 'production.labor_price_audit',
+    children: [
+      { key: '/engineering/labor-prices', icon: <ProfileOutlined />, label: '工价管理', permission: 'production.labor_price_audit' },
+      { key: '/production/monthly-capacity-plan', icon: <ProjectOutlined />, label: '月度产能规划', permission: 'production.monthly_capacity_plan' },
+      { key: '/engineering/new-schedule/plans', icon: <ScheduleOutlined />, label: '新排产方案', permission: 'production.monthly_capacity_plan' },
+    ],
+  },
+  {
     key: 'exception-center',
     icon: <WarningOutlined />,
     label: '异常与质量中心',
@@ -465,6 +476,7 @@ const pathToGroupKey: Record<string, string> = {
   '/production-overview': 'production-center',
   '/schedule-plans': 'production-center',
   '/schedule-date-adjust': 'production-center',
+  '/production/monthly-capacity-plan': 'engineering-center',
   '/product-process-capacities': 'production-center',
   '/order-wage-lookup': 'production-center',
   '/front-process': 'production-center',
@@ -483,6 +495,10 @@ const pathToGroupKey: Record<string, string> = {
   '/assembly': 'production-center',
   '/packaging': 'production-center',
   '/process-exceptions': 'production-center',
+  '/engineering/labor-prices': 'engineering-center',
+  '/engineering/labor-prices/new': 'engineering-center',
+  '/engineering/labor-price-changes': 'engineering-center',
+  '/engineering/new-schedule/plans': 'engineering-center',
   '/issues': 'exception-center',
   '/quality-issues': 'exception-center',
   '/product-samples': 'exception-center',
@@ -551,6 +567,7 @@ const pathToPermission: Record<string, string> = {
   '/production-overview': 'production.overview',
   '/schedule-plans': 'production.schedule_plans',
   '/schedule-date-adjust': 'production.schedule_plans',
+  '/production/monthly-capacity-plan': 'production.monthly_capacity_plan',
   '/product-process-capacities': 'production.product_process_capacities',
   '/order-wage-lookup': 'production.order_wage_lookup',
   '/front-process': 'production.front_process',
@@ -561,6 +578,10 @@ const pathToPermission: Record<string, string> = {
   '/assembly': 'production.assembly',
   '/packaging': 'production.packaging',
   '/process-exceptions': 'production.exceptions',
+  '/engineering/labor-prices': 'production.labor_price_audit',
+  '/engineering/labor-prices/new': 'production.labor_price_audit',
+  '/engineering/labor-price-changes': 'production.labor_price_audit',
+  '/engineering/new-schedule/plans': 'production.monthly_capacity_plan',
   '/import': 'basicdata.import',
   '/risk-rules': 'rules.risk_rules',
   '/node-standards': 'rules.node_standards',
@@ -643,7 +664,7 @@ export default function MainLayout() {
       { key: '/production-dashboard', icon: <HomeOutlined />, label: '生产驾驶舱', permission: 'production.overview' },
         { key: '/todo-workbench', icon: <ThunderboltOutlined />, label: '待排工作台', permission: 'production.schedule_plans' },
         { key: '/change-events', icon: <AlertOutlined />, label: '变更事件中心', permission: 'production.schedule_plans' },
-        { key: '/schedule-date-adjust', icon: <ClockCircleOutlined />, label: '日期调整', permission: 'production.schedule_plans' },
+      { key: '/schedule-date-adjust', icon: <ClockCircleOutlined />, label: '日期调整', permission: 'production.schedule_plans' },
         { key: '/schedule-board', icon: <ScheduleOutlined />, label: '排产看板', permission: 'production.schedule_plans' },
         { key: '/lean-today', icon: <AuditOutlined />, label: '精益今日看板', permission: 'production.lean' },
         { key: '/lean-management', icon: <AuditOutlined />, label: '精益管理', permission: 'production.lean' },
@@ -674,6 +695,34 @@ export default function MainLayout() {
           label: '采购中心',
           permission: 'purchase',
           children: purchaseChildren,
+        })
+      }
+      if (!merged.some((item) => item.key === 'engineering-center')) {
+        merged.push({
+          key: 'engineering-center',
+          icon: <ToolOutlined />,
+          label: '排产中心',
+          permission: 'production.labor_price_audit',
+          children: [
+            {
+              key: '/engineering/labor-prices',
+              icon: <ProfileOutlined />,
+              label: '工价管理',
+              permission: 'production.labor_price_audit',
+            },
+            {
+              key: '/production/monthly-capacity-plan',
+              icon: <ProjectOutlined />,
+              label: '月度产能规划',
+              permission: 'production.monthly_capacity_plan',
+            },
+            {
+              key: '/engineering/new-schedule/plans',
+              icon: <ScheduleOutlined />,
+              label: '新排产方案',
+              permission: 'production.monthly_capacity_plan',
+            },
+          ],
         })
       }
       return merged
@@ -844,12 +893,23 @@ export default function MainLayout() {
       return filterSupplierPortalMenu(dynamicMenuItems, hasPermission)
     }
     const tree = filterMenuByPermission(dynamicMenuItems, hasPermission)
+    // 排产中心使用单菜单工作区，避免工程角色看到整棵业务菜单
+    if (
+      location.pathname.startsWith('/engineering')
+      || location.pathname === '/production/monthly-capacity-plan'
+    ) {
+      const engineeringParent = dynamicMenuItems.find((item) => item.key === 'engineering-center')
+      const children = (engineeringParent?.children || []).filter(
+        (item) => !item.permission || hasPermission(item.permission, 'read'),
+      )
+      return children
+    }
     // 个人工作区：站内信（对全部持有 topbar.notifications 权限的内部用户可见）
     if (hasPermission('topbar.notifications', 'read')) {
       tree.push({ key: '/notifications', icon: <BellOutlined />, label: '站内信' } as any)
     }
     return tree
-  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems])
+  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems, location.pathname])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
   const canViewCurrentPage = !requiredPermission || hasPermission(requiredPermission, 'read')
