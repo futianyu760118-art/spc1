@@ -3,9 +3,11 @@
 错误响应经 _err/_capture 包裹（HTTP 200 + code!=0）；真实 403 仅来自权限依赖。
 """
 
-from tests.conftest import login
+from tests.conftest import get_user_id_by_username, login
 
 ADMIN_AGENTS = "/api/v1/agents/admin/agents"
+ADMIN_USERS = "/api/v1/agents/admin/users"
+ADMIN_BIND = "/api/v1/agents/admin/users/bind"
 TEAM = "/api/v1/agents/me/team"
 ME = "/api/v1/agents/me"
 UNASSIGNED_ROLE_ID = 999999
@@ -154,3 +156,69 @@ async def test_disabled_member_capability_converges(client):
     r = await client.get(ME, headers=headers)
     codes = {c["code"] for c in r.json()["data"]["effective_capabilities"]}
     assert "query.orders" not in codes
+
+
+async def test_admin_batch_bind_and_unbind_users(client):
+    admin_headers = await login(client, "admin")
+    agent_a = await _create_agent(client, admin_headers, "batch-bind-a")
+    agent_b = await _create_agent(client, admin_headers, "batch-bind-b")
+    user_a = await get_user_id_by_username("qa_mgr")
+    user_b = await get_user_id_by_username("qa_gm")
+
+    r = await client.get(ADMIN_USERS, headers=admin_headers)
+    assert r.json()["code"] == 0
+    user_ids = {item["id"] for item in r.json()["data"]["items"]}
+    assert {user_a, user_b} <= user_ids
+
+    r = await client.post(ADMIN_BIND, json={
+        "agent_ids": [agent_a["id"], agent_b["id"]],
+        "user_ids": [user_a, user_b],
+        "action": "bind",
+    }, headers=admin_headers)
+    body = r.json()
+    assert body["code"] == 0, r.text
+    assert body["data"]["created"] == 4
+
+    headers_a = await login(client, "qa_mgr")
+    r = await client.get(TEAM, headers=headers_a)
+    team_ids = {item["id"] for item in r.json()["data"]["items"]}
+    assert {agent_a["id"], agent_b["id"]} <= team_ids
+
+    r = await client.post(ADMIN_BIND, json={
+        "agent_ids": [agent_a["id"]],
+        "user_ids": [user_a],
+        "action": "bind",
+    }, headers=admin_headers)
+    assert r.json()["data"]["created"] == 0
+    assert r.json()["data"]["skipped"] == 1
+
+    r = await client.post(ADMIN_BIND, json={
+        "agent_ids": [agent_a["id"], agent_b["id"]],
+        "user_ids": [user_a, user_b],
+        "action": "unbind",
+    }, headers=admin_headers)
+    assert r.json()["code"] == 0, r.text
+    assert r.json()["data"]["removed"] == 4
+
+    r = await client.get(TEAM, headers=headers_a)
+    team_ids = {item["id"] for item in r.json()["data"]["items"]}
+    assert agent_a["id"] not in team_ids
+
+
+async def test_admin_bind_respects_agent_scope(client):
+    admin_headers = await login(client, "admin")
+    agent = await _create_agent(
+        client, admin_headers, "scope-bind",
+        scope_type="roles", scope_role_ids=[UNASSIGNED_ROLE_ID],
+    )
+    user_id = await get_user_id_by_username("qa_mgr")
+    r = await client.post(ADMIN_BIND, json={
+        "agent_ids": [agent["id"]],
+        "user_ids": [user_id],
+        "action": "bind",
+    }, headers=admin_headers)
+    body = r.json()
+    assert body["code"] == 0, r.text
+    assert body["data"]["created"] == 0
+    assert body["data"]["skipped"] == 1
+    assert body["data"]["skipped_details"]

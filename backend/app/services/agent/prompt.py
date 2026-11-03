@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from app.core.security import can_manage_skills
+from app.services.agent.capabilities import allowed_skill_admin_tools
 from app.services.agent.context import UserContext
 from app.services.agent.skills import SKILL_INDEX_DESCRIPTION_MAX
 
@@ -90,14 +90,25 @@ def build_agent_system_prompt(base_prompt: str, ctx: UserContext) -> str:
         "- 脚本返回 files 时，必须把每个文件的下载链接（Markdown 链接）原样给用户。",
         "- 脚本执行未启用时不要声称已运行 scripts/ 下的脚本。",
     ])
-    if can_manage_skills(ctx.permissions):
-        lines.extend([
-            "",
-            "【技能管理（当前用户有权限）】",
-            "- 可调用 create_skill / install_skill / uninstall_skill 管理技能库。",
-            "- create_skill 必须提供完整 SKILL.md；默认只写指令与资源；只有用户明确要求可执行脚本时才传 allow_scripts=true。",
-            "- install_skill 支持 SkillHub 专家包（pack，如 tech-test-automation，按 skillhub-pack-install.md 协议安装主技能和全部子技能）"
-            "或 HTTPS 公网 zip 直链（url）；安装/创建后需在智能体管理中绑定才能使用。",
-            "- uninstall_skill 支持 pack（卸载整个 SkillHub 专家包及子技能）或 skill_key/skill_id（单个导入技能）；内置技能不可卸载。",
-        ])
+    allowed_admin = allowed_skill_admin_tools(ctx.permissions, ctx.effective_capabilities)
+    if allowed_admin:
+        rules = ["", "【技能管理（当前团队具备相应能力）】"]
+        if "create_skill" in allowed_admin:
+            rules.append(
+                "- create_skill 必须提供完整 SKILL.md；默认只写指令与资源；"
+                "只有用户明确要求可执行脚本时才传 allow_scripts=true。"
+            )
+        if "install_skill" in allowed_admin:
+            rules.append(
+                "- install_skill 支持 SkillHub 单个技能（skill，如 @zcwl/multi-search-engine）、"
+                "专家包（pack，如 tech-test-automation；按 skillhub-pack-install.md 协议安装主技能和全部子技能）"
+                "或 HTTPS 公网 zip 直链（url）。"
+            )
+        if "uninstall_skill" in allowed_admin:
+            rules.append(
+                "- uninstall_skill 支持 pack（卸载整个 SkillHub 专家包及子技能）"
+                "或 skill_key/skill_id（单个导入技能）；内置技能不可卸载。"
+            )
+        rules.append("- 创建/安装后需在智能体管理中绑定才能使用。")
+        lines.extend(rules)
     return "\n".join(lines)

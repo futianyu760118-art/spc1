@@ -42,15 +42,15 @@ export default function MyAgent() {
   useEffect(() => { load() }, [load])
 
   const openAssistant = () => {
-    window.dispatchEvent(new CustomEvent('spc:open-assistant', { detail: {} }))
+    navigate('/ai-assistant')
   }
 
   const newConversation = () => {
-    window.dispatchEvent(new CustomEvent('spc:open-assistant', { detail: { newConversation: true } }))
+    navigate('/ai-assistant', { state: { newConversation: true } })
   }
 
   const continueConversation = (id: number) => {
-    window.dispatchEvent(new CustomEvent('spc:open-assistant', { detail: { conversationId: id } }))
+    navigate('/ai-assistant', { state: { conversationId: id } })
   }
 
   const openConversation = async (id: number) => {

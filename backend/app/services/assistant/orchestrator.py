@@ -20,11 +20,11 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.core.security import can_manage_skills as skill_admin_allowed
 from app.models.agent.call import AgentCallLog
 from app.models.agent.conversation import AgentConversation, AgentMessage
 from app.models.basicdata.user import SysUser
 from app.services.ai import ai_service, ChatMessage, ChatOptions
+from app.services.ai.dsml import parse_dsml_tool_calls
 from app.services.ai_config import ASSISTANT_SCOPE, get_scope_config, render_system_prompt
 from app.services.agent import conversation as agent_conversation
 from app.services.agent.actor import issue_actor_token
@@ -34,6 +34,7 @@ from app.services.agent.capabilities import (
     CONFIGURABLE_CAPABILITIES,
     allowed_query_paths,
     allowed_reasoning_types,
+    allowed_skill_admin_tools,
     allowed_write_fields,
 )
 from app.services.agent.context import UserContext, load_user_context
@@ -400,6 +401,23 @@ def _with_generated_files(text: str, files: List[Dict[str, Any]]) -> str:
     return ((text or "").rstrip() + footer).lstrip("\n")
 
 
+_QUERY_SUMMARY_PARAM_KEYS = (
+    "keyword", "order_no", "customer_code", "status", "risk_level",
+    "promised_date_start", "promised_date_end", "product_code", "material_code",
+    "demand_no", "work_order_no", "wh_code", "supplier_code",
+)
+
+
+def _query_params_summary(params: Dict[str, Any]) -> str:
+    parts = []
+    for key in _QUERY_SUMMARY_PARAM_KEYS:
+        value = params.get(key)
+        if value not in (None, "", []):
+            parts.append(f"{key}={value}")
+    text = "；".join(parts)
+    return text[:160]
+
+
 def _step_summary(tool_name: str, args: Dict[str, Any], skill_name: str = "") -> str:
     if tool_name == "create_skill":
         return f"创建技能 {args.get('skill_key') or ''}"
@@ -421,8 +439,13 @@ def _step_summary(tool_name: str, args: Dict[str, Any], skill_name: str = "") ->
         path = args.get("path") or ""
         name = next((c["name"] for c in QUERY_CATALOG if c["path"] == path), path)
         params = args.get("params") if isinstance(args.get("params"), dict) else {}
-        page = params.get("page")
-        suffix = f"（第{page}页）" if page else ""
+        parts = []
+        filters = _query_params_summary(params)
+        if filters:
+            parts.append(filters)
+        if params.get("page"):
+            parts.append(f"第{params['page']}页")
+        suffix = f"（{'；'.join(parts)}）" if parts else ""
         return f"查询 {name}{suffix}"
     if tool_name == "call_reasoning_agent":
         return f"分析 {args.get('task_type') or ''}"
@@ -706,8 +729,9 @@ async def run_reaction(
             role=user_context.role_code,
         )
     effective = user_context.effective_capabilities if user_context else None
-    can_manage_skills = bool(
-        user_context and skill_admin_allowed(user_context.permissions)
+    skill_admin_tools = allowed_skill_admin_tools(
+        user_context.permissions if user_context else {},
+        effective or set(),
     )
     write_fields = allowed_write_fields(effective) if effective is not None else None
     include_order = include_order_tool and (
@@ -722,12 +746,15 @@ async def run_reaction(
         order_fields=write_fields,
         skills=user_context.skills if user_context else None,
         script_execution_available=is_sandbox_enabled(),
-        include_skill_admin=can_manage_skills,
+        include_skill_admin=bool(skill_admin_tools),
+        skill_admin_tools=skill_admin_tools,
     )
 
     messages: List[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
     for msg in history[-10:]:
         role, content = msg.get("role"), msg.get("content", "")
+        if role == "assistant" and content:
+            content, _ = parse_dsml_tool_calls(content)
         if role in ("user", "assistant") and content:
             messages.append(ChatMessage(role=role, content=content))
     messages.append(ChatMessage(role="user", content=message))
@@ -914,8 +941,8 @@ async def run_reaction(
         tool_key = f"{tool_name}:{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}"
         block_reason: Optional[str] = None
         if tool_name in ADMIN_SKILL_TOOLS:
-            if not can_manage_skills:
-                block_reason = "当前用户没有技能管理权限（需要 ai.skill.manage update）"
+            if tool_name not in skill_admin_tools:
+                block_reason = "当前团队没有该技能管理能力（创建/安装/卸载）"
         elif tool_name == "use_skill":
             if user_context is None or not user_context.skills:
                 block_reason = "当前团队没有可用技能"

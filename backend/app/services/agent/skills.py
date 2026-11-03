@@ -1068,6 +1068,19 @@ SKILLHUB_PACK_API = "https://api.skillhub.cn/api/v1/skillsets/{slug}/download"
 SKILLHUB_SKILL_API = "https://api.skillhub.cn/api/v1/download?slug={slug}"
 
 
+async def install_skillhub_skill(
+    db: AsyncSession, skill_key: str, *, created_by_user_id: Optional[int] = None
+) -> dict:
+    """安装 SkillHub 单个技能（支持 @scope/name 形式）。"""
+    key = (skill_key or "").strip()
+    if not key:
+        raise AgentError("SkillHub 技能标识不能为空")
+    data = await _download_skill_zip(
+        SKILLHUB_SKILL_API.format(slug=quote(key, safe=""))
+    )
+    return await import_skill_zip(db, data, created_by_user_id=created_by_user_id)
+
+
 async def _import_pack_child(
     db: AsyncSession, data: bytes, slug: str, meta: Dict[str, Any],
     created_by_user_id: Optional[int],

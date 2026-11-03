@@ -10,6 +10,7 @@ import { useAuthStore } from '../../../store/auth'
 import AssistantMonitorTab from './AssistantMonitorTab'
 import AssistantConfigTab from './AssistantConfigTab'
 import SkillLibraryTab from './SkillLibraryTab'
+import BindUsersModal from './BindUsersModal'
 
 const { Text } = Typography
 const PAGE_SIZE = 6
@@ -54,6 +55,8 @@ export default function AgentAdmin() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingAgent, setEditingAgent] = useState<any>(null)
   const [saving, setSaving] = useState(false)
+  const [bindOpen, setBindOpen] = useState(false)
+  const [bindAgentIds, setBindAgentIds] = useState<number[]>([])
   const scopeType = Form.useWatch('scope_type', form)
   const hasPermission = useAuthStore((s: any) => s.hasPermission) as (r: string, a: string) => boolean
   const canAssistantConfig = hasPermission('ai.agent.admin', 'update')
@@ -205,6 +208,7 @@ export default function AgentAdmin() {
                       options={STATUS_OPTIONS}
                     />
                     <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建智能体</Button>
+                    <Button onClick={() => { setBindAgentIds([]); setBindOpen(true) }}>批量绑定用户</Button>
                   </Space>
                   <Table
                     size="small" rowKey="id" loading={loadingAgents} dataSource={agents}
@@ -244,9 +248,17 @@ export default function AgentAdmin() {
                       { title: '勾选团队数', dataIndex: 'teams_count', width: 96 },
                       { title: '说明', dataIndex: 'description', ellipsis: true, render: (v: string | null) => v || '-' },
                       {
-                        title: '操作', width: 70,
+                        title: '操作', width: 120,
                         render: (_: any, row: any) => (
-                          <Button type="link" size="small" onClick={() => openEdit(row)}>编辑</Button>
+                          <Space size={0}>
+                            <Button type="link" size="small" onClick={() => openEdit(row)}>编辑</Button>
+                            <Button
+                              type="link" size="small"
+                              onClick={() => { setBindAgentIds([row.id]); setBindOpen(true) }}
+                            >
+                              绑定用户
+                            </Button>
+                          </Space>
                         ),
                       },
                     ]}
@@ -390,6 +402,13 @@ export default function AgentAdmin() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <BindUsersModal
+        open={bindOpen}
+        preselectedAgentIds={bindAgentIds}
+        onClose={() => setBindOpen(false)}
+        onSuccess={() => { loadAgents(); loadStats() }}
+      />
 
       <Drawer title="会话审计" width={640} open={auditOpen} onClose={() => setAuditOpen(false)}>
         {auditData && (

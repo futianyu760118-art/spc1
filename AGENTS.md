@@ -145,7 +145,7 @@ ERP 集成是 SQL 驱动的：同步 SQL 与字段映射存在 `sync_sql_config`
 - 技能以磁盘文件夹为准：内置 `backend/skills/<skill-key>/SKILL.md`；导入目录 `SKILLS_IMPORT_DIR`（默认 `backend/skills-imported`，生产 compose 挂载 `./data/skills`）。
 - `agent_skill` 只是索引（启动扫描同步），`agent_skill_binding` 绑定智能体；不要恢复 DB 正文编辑。
 - 运行时 `use_skill` 读 SKILL.md；`read_skill_file` 读文本资源；`run_skill_executor` 走已注册只读执行器；`run_skill_script` 走独立 `skill-sandbox`（UDS、无网络、只读根、tmpfs、超时/资源/输出限额），需配置 `SKILL_SANDBOX_TOKEN`；脚本可用 `args` 传 CLI 参数、`input_files` 写输入文件，生成文件由 sandbox 收集后存入 `/uploads` 并返回下载链接。
-- 技能管理工具 `create_skill` / `install_skill` / `uninstall_skill` 仅对有 `ai.skill.manage` update 的用户下发；`install_skill` 支持 SkillHub 专家包（`pack`，按 `skillhub-pack-install.md` 协议安装主技能+子技能）或 HTTPS 公网 zip（私网/回环拒绝，`SKILL_INSTALL_ALLOWED_HOSTS` 可收紧）；创建脚本必须显式 `allow_scripts=true`。创建/安装后需在智能体管理中绑定。
+- 技能管理工具 `create_skill` / `install_skill` / `uninstall_skill` 由 `ai.skill.manage`/`ai.agent.admin` update 或团队成员能力码 `skill.create` / `skill.install` / `skill.uninstall` 授予；`install_skill` 支持 SkillHub 专家包（`pack`，按 `skillhub-pack-install.md` 协议安装主技能+子技能）或 HTTPS 公网 zip（私网/回环拒绝，`SKILL_INSTALL_ALLOWED_HOSTS` 可收紧）；创建脚本必须显式 `allow_scripts=true`。创建/安装后需在智能体管理中绑定。
 - 改技能表结构必须同步 `init_database.py` 的 `migrate_agent_skills`。
 
 ### 审批中心（approval）

@@ -20,7 +20,8 @@ from app.core.storage import get_storage
 
 from app.core.audit import log_audit
 from app.core.config import get_settings
-from app.core.security import can_manage_skills, check_permission
+from app.core.security import check_permission
+from app.services.agent.capabilities import allowed_skill_admin_tools
 from app.services.agent.errors import AgentError
 from app.services.agent.skill_executors import (
     SkillExecutorContext,
@@ -34,6 +35,7 @@ from app.services.agent.skills import (
     get_skill_for_user,
     install_skill_from_url,
     install_skillhub_pack,
+    install_skillhub_skill,
     load_skill_content,
     read_skill_text_file,
     resolve_skill_for_manage,
@@ -373,9 +375,13 @@ def _install_skill_tool_schema() -> Dict[str, Any]:
                 "type": "string",
                 "description": "SkillHub 专家包标识（如 tech-test-automation）；会按 skillhub-pack-install.md 协议安装主技能和全部子技能",
             },
+            "skill": {
+                "type": "string",
+                "description": "SkillHub 单个技能标识（如 @zcwl/multi-search-engine）",
+            },
             "url": {
                 "type": "string",
-                "description": "单个技能 zip 的 HTTPS 直链；或 SkillHub 安装文档 URL（有 pack 时可省略）",
+                "description": "单个技能 zip 的 HTTPS 直链（与 pack、skill 三选一）",
             },
         },
     }
@@ -402,6 +408,7 @@ def build_agent_tools_schema(
     skills: Optional[List[Any]] = None,
     script_execution_available: bool = False,
     include_skill_admin: bool = False,
+    skill_admin_tools: Optional[set] = None,
 ) -> List[Dict[str, Any]]:
     """生成 OpenAI function calling 工具清单；exclude 为运行时禁用工具名集合。
 
@@ -438,7 +445,7 @@ def build_agent_tools_schema(
                 "parameters": _run_skill_executor_tool_schema(skills),
             })
     if include_skill_admin:
-        specs.extend([
+        admin_specs = [
             {
                 "name": "create_skill",
                 "description": "创建一个新技能（写入技能库）。需要完整 SKILL.md；默认只允许指令与资源，"
@@ -447,7 +454,7 @@ def build_agent_tools_schema(
             },
             {
                 "name": "install_skill",
-                "description": "从 HTTPS 公网 zip 直链安装技能包到技能库。",
+                "description": "从 SkillHub 专家包（pack）或 HTTPS 公网 zip 直链安装技能包到技能库。",
                 "parameters": _install_skill_tool_schema(),
             },
             {
@@ -455,7 +462,11 @@ def build_agent_tools_schema(
                 "description": "卸载导入的技能或 SkillHub 专家包（pack，连同子技能）；内置技能不可卸载。",
                 "parameters": _uninstall_skill_tool_schema(),
             },
-        ])
+        ]
+        specs.extend(
+            spec for spec in admin_specs
+            if skill_admin_tools is None or spec["name"] in skill_admin_tools
+        )
     specs.extend([
         {
             "name": "call_query_agent",
@@ -983,12 +994,18 @@ async def _run_skill_executor_tool(
     return _result(True, result=outcome.get("result"))
 
 
-def _require_skill_manage(user_context: Any) -> None:
+def _require_skill_manage(user_context: Any, tool_name: str) -> None:
     if user_context is None:
         raise AgentError("技能管理需要登录上下文")
-    permissions = getattr(user_context, "permissions", {}) or {}
-    if not can_manage_skills(permissions):
-        raise AgentError("当前用户没有技能管理权限（需要 ai.skill.manage 或 ai.agent.admin update）")
+    allowed = allowed_skill_admin_tools(
+        getattr(user_context, "permissions", {}) or {},
+        getattr(user_context, "effective_capabilities", set()) or set(),
+    )
+    if tool_name not in allowed:
+        raise AgentError(
+            "当前团队没有该技能管理能力（需要 ai.skill.manage/ai.agent.admin 权限，"
+            "或团队成员具备对应技能管理能力）"
+        )
 
 
 async def _audit_skill_action(
@@ -1034,7 +1051,7 @@ async def _run_create_skill(
         {"input": args}, started_at=started_at, task_id=task_id, step_id=step_id, tool="create_skill",
     )
     try:
-        _require_skill_manage(user_context)
+        _require_skill_manage(user_context, "create_skill")
         if db is None:
             raise AgentError("技能管理需要数据库上下文")
         files = args.get("files") or {}
@@ -1092,10 +1109,11 @@ async def _run_install_skill(
         {"input": args}, started_at=started_at, task_id=task_id, step_id=step_id, tool="install_skill",
     )
     try:
-        _require_skill_manage(user_context)
+        _require_skill_manage(user_context, "install_skill")
         if db is None:
             raise AgentError("技能管理需要数据库上下文")
         pack = str(args.get("pack") or "").strip()
+        skill = str(args.get("skill") or args.get("skill_key") or "").strip()
         url = str(args.get("url") or "").strip()
         if pack:
             summary = await install_skillhub_pack(
@@ -1107,8 +1125,22 @@ async def _run_install_skill(
                 )
             summary["message"] = "专家包已安装；请绑定需要的技能到智能体"
             return _result(True, summary)
+        if skill:
+            result = await install_skillhub_skill(
+                db, skill, created_by_user_id=int(user_context.user.id),
+            )
+            row = await resolve_skill_for_manage(db, skill_id=int(result["id"]))
+            await _audit_skill_action(
+                db, user_context, int(row.id), "install", row.skill_key or "",
+            )
+            return _result(True, {
+                "skill_id": int(row.id),
+                "skill_key": row.skill_key,
+                "name": row.name,
+                "message": "已安装；请绑定到智能体后使用",
+            })
         if not url:
-            raise AgentError("需要提供 SkillHub 专家包 pack 或技能 zip 的 url")
+            raise AgentError("需要提供 SkillHub 技能标识、专家包 pack 或技能 zip 的 url")
         result = await install_skill_from_url(
             db, url, created_by_user_id=int(user_context.user.id),
         )
@@ -1156,7 +1188,7 @@ async def _run_uninstall_skill(
         tool="uninstall_skill",
     )
     try:
-        _require_skill_manage(user_context)
+        _require_skill_manage(user_context, "uninstall_skill")
         if db is None:
             raise AgentError("技能管理需要数据库上下文")
         pack = str(args.get("pack") or "").strip()

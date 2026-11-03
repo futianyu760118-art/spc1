@@ -315,7 +315,7 @@ async def test_skill_admin_tools_require_permission(client):
             db=session, user_context=ctx,
         )
         assert result["ok"] is False
-        assert "没有技能管理权限" in result["error"]
+        assert "没有该技能管理能力" in result["error"]
 
 
 async def test_uninstall_pack_removes_children_from_sidecar(client):

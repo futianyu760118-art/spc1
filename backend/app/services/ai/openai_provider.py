@@ -7,6 +7,7 @@ from typing import AsyncIterator, List, Optional, Type
 from pydantic import BaseModel
 
 from app.services.ai.base import LLMProvider, ChatMessage, ChatOptions, ChatWithToolsResult, ToolCall, TokenUsage
+from app.services.ai.dsml import parse_dsml_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -212,8 +213,9 @@ class OpenAIProvider(LLMProvider):
             raise last_error  # type: ignore
         result = ChatWithToolsResult()
         result.thinking = _reasoning_content(choice.message)
-        if choice.message.content:
-            result.text = choice.message.content
+        text, dsml_calls = parse_dsml_tool_calls(choice.message.content or "")
+        if text:
+            result.text = text
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
                 try:
@@ -225,6 +227,8 @@ class OpenAIProvider(LLMProvider):
                     name=tc.function.name,
                     arguments=args,
                 ))
+        elif dsml_calls:
+            result.tool_calls.extend(dsml_calls)
         if response.usage:
             usage = _usage_dict(response.usage)
             result.usage = TokenUsage(

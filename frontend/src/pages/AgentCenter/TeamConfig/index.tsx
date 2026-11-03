@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Drawer, Empty, Input, List, Popconfirm, Space, Table, Tag, Typography, message } from 'antd'
 import { PlusOutlined, RobotOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import { agentApi, TeamMember } from '../../../services/agent'
 import { CapabilityTags } from '../../../components/Agent/CapabilityTags'
 
@@ -15,6 +16,7 @@ interface Candidate {
 }
 
 export default function TeamConfig() {
+  const navigate = useNavigate()
   const [rows, setRows] = useState<TeamMember[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -71,7 +73,7 @@ export default function TeamConfig() {
   }
 
   const openAssistant = () => {
-    window.dispatchEvent(new CustomEvent('spc:open-assistant', { detail: {} }))
+    navigate('/ai-assistant')
   }
 
   return (

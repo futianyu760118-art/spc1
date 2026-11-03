@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   RightOutlined,
 } from '@ant-design/icons'
+import { scalePx } from '../../utils/fontSize'
 
 const { Text } = Typography
 
@@ -54,7 +55,7 @@ const ActionListCard: React.FC<Props> = ({ title, actions, context, onActionClic
         marginTop: 8,
       }}
     >
-      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 10, color: '#333' }}>
+      <div style={{ fontWeight: 600, fontSize: scalePx(13), marginBottom: 10, color: '#333' }}>
         📋 {title}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -85,30 +86,30 @@ const ActionListCard: React.FC<Props> = ({ title, actions, context, onActionClic
               }}
             >
               {/* 优先级图标 */}
-              <div style={{ color: config.color, fontSize: 16, marginTop: 2, flexShrink: 0 }}>
+              <div style={{ color: config.color, fontSize: scalePx(16), marginTop: 2, flexShrink: 0 }}>
                 {config.icon}
               </div>
 
               {/* 内容 */}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                  <Text strong style={{ fontSize: 12, color: '#333' }}>
+                  <Text strong style={{ fontSize: scalePx(12), color: '#333' }}>
                     {action.title}
                   </Text>
                 </div>
-                <Text type="secondary" style={{ fontSize: 11, lineHeight: 1.4 }}>
+                <Text type="secondary" style={{ fontSize: scalePx(11), lineHeight: 1.4 }}>
                   {action.description}
                 </Text>
                 <div style={{ marginTop: 4 }}>
                   <Space size={4}>
                     <Tag
                       color={config.color}
-                      style={{ fontSize: 10, lineHeight: '16px', margin: 0, borderRadius: 3 }}
+                      style={{ fontSize: scalePx(10), lineHeight: '16px', margin: 0, borderRadius: 3 }}
                     >
                       {config.label}
                     </Tag>
                     <Tag
-                      style={{ fontSize: 10, lineHeight: '16px', margin: 0, borderRadius: 3 }}
+                      style={{ fontSize: scalePx(10), lineHeight: '16px', margin: 0, borderRadius: 3 }}
                     >
                       {categoryLabels[action.category] || action.category}
                     </Tag>
@@ -118,7 +119,7 @@ const ActionListCard: React.FC<Props> = ({ title, actions, context, onActionClic
 
               {/* 箭头 */}
               {action.action_type !== 'none' && (
-                <div style={{ color: '#bbb', fontSize: 12, marginTop: 4, flexShrink: 0 }}>
+                <div style={{ color: '#bbb', fontSize: scalePx(12), marginTop: 4, flexShrink: 0 }}>
                   <RightOutlined />
                 </div>
               )}

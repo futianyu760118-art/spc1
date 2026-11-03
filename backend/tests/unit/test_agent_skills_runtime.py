@@ -39,21 +39,25 @@ def _skill(skill_id, has_executor=True, has_scripts=False):
     )
 
 
-def _context(skills, permissions=None):
+def _context(skills, permissions=None, capabilities=None):
     user = SimpleNamespace(id=1, username="u1", display_name="测试用户", role_id=1)
     return UserContext(
         user=user, role_code="admin", permissions=permissions or {},
         members=[TeamMemberInfo(
             agent_id=1, agent_no="AG-1", display_name="订单专员",
-            capabilities=["query.orders"], description=None, status="active", config_version=1,
+            capabilities=list(capabilities or {"query.orders"}),
+            description=None, status="active", config_version=1,
         )],
-        effective_capabilities={"query.orders"},
+        effective_capabilities=set(capabilities or {"query.orders"}),
         allowed_tools={"call_query_agent"},
         skills=skills,
     )
 
 
-async def _run(monkeypatch, script, *, skills, limits=None, execute=None, permissions=None):
+async def _run(
+    monkeypatch, script, *, skills, limits=None, execute=None,
+    permissions=None, capabilities=None,
+):
     llm = ScriptedLLM(script)
     monkeypatch.setattr(orchestrator.ai_service, "chat_with_tools", llm.chat_with_tools)
     monkeypatch.setattr(orchestrator.ai_service, "chat", _fake_chat())
@@ -77,7 +81,8 @@ async def _run(monkeypatch, script, *, skills, limits=None, execute=None, permis
         max_tool_rounds=6, max_agent_calls=8, disabled_tools=None,
         session_id="", trace_id="", user_id="u1", run_logger=None, provider_name="test",
         limits=limits, stream_final=False,
-        user_context=_context(skills, permissions=permissions), with_plan=False,
+        user_context=_context(skills, permissions=permissions, capabilities=capabilities),
+        with_plan=False,
     ))
     return events, calls
 
@@ -168,7 +173,7 @@ async def test_skill_admin_gate(monkeypatch):
     steps = _steps(events)
     assert calls == []
     assert steps[0]["status"] == "blocked"
-    assert "没有技能管理权限" in steps[0]["error"]
+    assert "没有该技能管理能力" in steps[0]["error"]
 
     events, calls = await _run(
         monkeypatch, [tool, direct_reply("结束")], skills=[],
@@ -177,6 +182,24 @@ async def test_skill_admin_gate(monkeypatch):
     steps = _steps(events)
     assert steps[0]["status"] == "completed"
     assert calls and calls[0][0] == "create_skill"
+
+
+async def test_skill_admin_gate_by_capability(monkeypatch):
+    events, calls = await _run(
+        monkeypatch,
+        [
+            tool_call("create_skill", {"skill_key": "demo", "content": "x"}),
+            tool_call("install_skill", {"url": "https://example.com/a.zip"}),
+            direct_reply("结束"),
+        ],
+        skills=[],
+        capabilities={"skill.create"},
+    )
+    steps = _steps(events)
+    assert steps[0]["status"] == "completed"
+    assert steps[1]["status"] == "blocked"
+    assert "没有该技能管理能力" in steps[1]["error"]
+    assert [name for name, _ in calls] == ["create_skill"]
 
 
 async def test_run_script_before_load_is_blocked(monkeypatch):

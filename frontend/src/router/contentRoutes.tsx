@@ -101,6 +101,7 @@ import SubjectBalances from '../pages/FinanceCenter/SubjectBalances/index'
 import AgentMyAgent from '../pages/AgentCenter/MyAgent'
 import AgentTeamConfig from '../pages/AgentCenter/TeamConfig'
 import AgentAdmin from '../pages/AgentCenter/Admin'
+import AssistantPage from '../pages/Assistant'
 
 export const contentRoutes = (
     <>
@@ -168,7 +169,7 @@ export const contentRoutes = (
         <Route path="/permissions" element={<PermissionManagement/>}/>
         <Route path="/audit" element={<AuditLog/>}/>
         <Route path="/backups" element={<Backup/>} key="backups"/>
-        <Route path="/ai-assistant" element={<Navigate to="/agents/admin" replace/>}/>
+        <Route path="/ai-assistant" element={<AssistantPage/>}/>
         <Route path="/execution-agent" element={<ExecutionAgentManagement/>} key="execution-agent"/>
         <Route path="/share-management" element={<ShareManagement/>}/>
         <Route path="/sync-config" element={<SyncSqlConfig/>}/>

@@ -69,6 +69,23 @@ export interface AgentCapability {
   structural?: boolean
 }
 
+export interface AgentUserOption {
+  id: number
+  username: string
+  display_name: string
+  role_id?: number | null
+  role_name?: string
+}
+
+export interface AgentBindResult {
+  action: 'bind' | 'unbind'
+  created: number
+  removed: number
+  skipped: number
+  errors: string[]
+  skipped_details?: Array<{ agent_id: number; user_id: number; reason: string }>
+}
+
 export interface AgentCall {
   id: number
   trace_id: string
@@ -111,6 +128,8 @@ export const agentApi = {
     api.put(`/agents/admin/agents/${agentId}`, data) as any,
   adminCalls: (params: Record<string, any> = {}) => api.get('/agents/admin/calls', { params }) as any,
   adminStats: () => api.get('/agents/admin/stats') as any,
+  adminUsers: (params: Record<string, any> = {}) => api.get('/agents/admin/users', { params }) as any,
+  bindAgentUsers: (data: Record<string, any>) => api.post('/agents/admin/users/bind', data) as any,
   adminSkills: (params: Record<string, any> = {}) => api.get('/agents/admin/skills', { params }) as any,
   adminSkill: (skillId: number) => api.get(`/agents/admin/skills/${skillId}`) as any,
   adminSkillFile: (skillId: number, path: string) =>

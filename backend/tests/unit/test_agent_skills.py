@@ -239,6 +239,23 @@ def test_admin_skill_tools_only_when_requested():
         for s in build_agent_tools_schema(include_skill_admin=True)
     }
     assert {"create_skill", "install_skill", "uninstall_skill"} <= names
+    names = {
+        s["function"]["name"]
+        for s in build_agent_tools_schema(
+            include_skill_admin=True, skill_admin_tools={"create_skill"},
+        )
+    }
+    assert "create_skill" in names
+    assert "install_skill" not in names and "uninstall_skill" not in names
+
+
+def test_allowed_skill_admin_tools_from_permission_or_capability():
+    from app.services.agent.capabilities import allowed_skill_admin_tools
+
+    all_tools = {"create_skill", "install_skill", "uninstall_skill"}
+    assert allowed_skill_admin_tools({"ai.agent.admin": ["update"]}, set()) == all_tools
+    assert allowed_skill_admin_tools({}, {"skill.install"}) == {"install_skill"}
+    assert allowed_skill_admin_tools({}, {"query.orders"}) == set()
 
 
 def test_skill_tools_not_filtered_by_capability_allowed_tools():

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import { Routes, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, List, Tag, Typography, notification as antNotification } from 'antd'
 import {
@@ -46,6 +46,7 @@ import {
   AlertOutlined,
   HomeOutlined,
   RobotOutlined,
+  ControlOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { usePermissionStore, PermNode } from '../store/permission'
@@ -55,7 +56,7 @@ import { notificationStream } from '../services/notificationStream'
 import { notificationJump } from '../utils/notificationJump'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
-import { FloatingAssistant } from '../components/Assistant'
+import { AssistantDockItem, AssistantLauncher } from '../components/Assistant'
 import GlobalSearch from '../components/GlobalSearch/GlobalSearch'
 import FontSizeSetting from '../components/FontSizeSetting'
 import { usePageTitle } from '../hooks'
@@ -64,6 +65,20 @@ import AppTabs, { TabbedContent } from './AppTabs'
 import { useTabsStore } from '../store/tabs'
 import { contentRoutes } from '../router/contentRoutes'
 import { resolveCrumb, pathMatches, type PermissionAwareItem } from './navUtils'
+import { useUiPreferencesStore } from '../store/uiPreferences'
+import { useThemeStore } from '../store/theme'
+import { useAssistantLauncherStore } from '../store/assistantLauncher'
+import SidebarMorePanel from './SidebarMorePanel'
+import SidebarCustomizeModal from './SidebarCustomizeModal'
+import {
+  DEFAULT_SIDEBAR_MENU_PREFS,
+  SIDEBAR_MENU_PREF_KEY,
+  buildMoreSections,
+  buildSidebarEntries,
+  buildSidebarLayout,
+  normalizeSidebarMenuPrefs,
+  type SidebarMenuPrefs,
+} from './sidebarMenuPrefs'
 
 const { Sider, Content } = Layout
 
@@ -509,6 +524,7 @@ const pathToGroupKey: Record<string, string> = {
 
 const pathToPermission: Record<string, string> = {
   '/dashboard': 'dashboard',
+  '/ai-assistant': 'topbar.ai_search',
   '/orders': 'orders.list',
   '/run-orders': 'orders.run_orders',
   '/domestic-orders': 'orders.list',
@@ -615,6 +631,7 @@ export default function MainLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
+  const assistantLauncherDocked = useAssistantLauncherStore(state => state.mode === 'docked')
   const [bellOpen, setBellOpen] = useState(false)
   const [notifList, setNotifList] = useState<any[]>([])
   const [notifLoading, setNotifLoading] = useState(false)
@@ -623,6 +640,28 @@ export default function MainLayout() {
   const [forcePwdForm] = Form.useForm()
   const [forcePwdDismissable, setForcePwdDismissable] = useState(false)
   const toastShown = useRef(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [customizeOpen, setCustomizeOpen] = useState(false)
+  const [overflowCount, setOverflowCount] = useState(0)
+  const [measureTick, setMeasureTick] = useState(0)
+  const navRef = useRef<HTMLDivElement>(null)
+  const openChangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const didMountReset = useRef(false)
+  const sidebarPrefsRaw = useUiPreferencesStore(state => state.preferences[SIDEBAR_MENU_PREF_KEY])
+  const setUiFlag = useUiPreferencesStore(state => state.setFlag)
+  const sidebarPrefs = useMemo(() => {
+    const normalized = normalizeSidebarMenuPrefs(sidebarPrefsRaw)
+    if (
+      normalized.userId !== undefined
+      && currentUser?.id !== undefined
+      && String(normalized.userId) !== String(currentUser.id)
+    ) {
+      return { ...DEFAULT_SIDEBAR_MENU_PREFS, pageOrder: {} }
+    }
+    return normalized
+  }, [sidebarPrefsRaw, currentUser?.id])
+  const fontSizeScale = useThemeStore(state => state.fontSizeScale)
+  const lastFontScale = useRef(fontSizeScale)
 
   // 加载权限树
   useEffect(() => {
@@ -872,6 +911,132 @@ export default function MainLayout() {
     return tree
   }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems, agentEnabled, agentLoaded])
 
+  const canCustomizeSidebar = !isSupplierUser() && !isShareUser()
+  const effectiveSidebarPrefs = canCustomizeSidebar ? sidebarPrefs : DEFAULT_SIDEBAR_MENU_PREFS
+  const sidebarLayout = useMemo(
+    () => buildSidebarLayout(navTree, effectiveSidebarPrefs),
+    [navTree, effectiveSidebarPrefs],
+  )
+  const sidebarEntries = useMemo(
+    () => buildSidebarEntries(sidebarLayout, effectiveSidebarPrefs),
+    [sidebarLayout, effectiveSidebarPrefs],
+  )
+  const effectiveOverflowCount = canCustomizeSidebar
+    ? Math.min(overflowCount, sidebarEntries.length)
+    : 0
+  const visibleEntries = useMemo(
+    () => (canCustomizeSidebar
+      ? sidebarEntries.slice(0, sidebarEntries.length - effectiveOverflowCount)
+      : sidebarEntries),
+    [sidebarEntries, canCustomizeSidebar, effectiveOverflowCount],
+  )
+  const overflowEntries = useMemo(
+    () => (canCustomizeSidebar
+      ? sidebarEntries.slice(sidebarEntries.length - effectiveOverflowCount)
+      : []),
+    [sidebarEntries, canCustomizeSidebar, effectiveOverflowCount],
+  )
+  const moreSections = useMemo(
+    () => buildMoreSections(sidebarLayout, overflowEntries),
+    [sidebarLayout, overflowEntries],
+  )
+  const concealedPageCount = useMemo(
+    () => moreSections.reduce((total, section) => total + section.pages.length, 0),
+    [moreSections],
+  )
+  const showMore = canCustomizeSidebar && moreSections.length > 0
+  const sidebarMenuItems = useMemo(
+    () => visibleEntries.map(entry => ({
+      key: entry.item.key,
+      icon: entry.item.icon,
+      label: entry.item.label,
+      className: entry.kind === 'pinned' ? 'sidebar-pinned-item' : undefined,
+      ...(entry.item.children && entry.item.children.length > 0
+        ? { children: toAntdItems(entry.item.children) }
+        : {}),
+    })),
+    [visibleEntries],
+  )
+
+  const updateSidebarPrefs = useCallback((next: SidebarMenuPrefs) => {
+    setOverflowCount(0)
+    setUiFlag(SIDEBAR_MENU_PREF_KEY, { ...next, userId: currentUser?.id })
+  }, [setUiFlag, currentUser?.id])
+
+  const scheduleOverflowRecompute = useCallback(() => {
+    if (openChangeTimer.current) clearTimeout(openChangeTimer.current)
+    openChangeTimer.current = setTimeout(() => {
+      setOverflowCount(0)
+      setMeasureTick(tick => tick + 1)
+    }, 260)
+  }, [])
+
+  useEffect(() => () => {
+    if (openChangeTimer.current) clearTimeout(openChangeTimer.current)
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!canCustomizeSidebar) return
+    const container = navRef.current
+    if (!container) return
+    const menuRoot = container.querySelector('.ant-menu') as HTMLElement | null
+    if (!menuRoot) return
+    const itemNodes = Array.from(menuRoot.children)
+      .filter(node => node.tagName === 'LI') as HTMLElement[]
+    const available = container.clientHeight
+    const menuTop = menuRoot.getBoundingClientRect().top
+    let keep = 0
+    for (const node of itemNodes) {
+      const style = getComputedStyle(node)
+      const marginBottom = Number.parseFloat(style.marginBottom) || 0
+      const bottom = node.getBoundingClientRect().bottom - menuTop + marginBottom
+      if (bottom > available - 6) break
+      keep += 1
+    }
+    const next = Math.max(0, Math.min(sidebarEntries.length, sidebarEntries.length - keep))
+    if (next !== overflowCount) setOverflowCount(next)
+  }, [canCustomizeSidebar, sidebarEntries.length, visibleEntries, overflowCount, measureTick])
+
+  useLayoutEffect(() => {
+    if (!canCustomizeSidebar) return
+    const container = navRef.current
+    if (!container) return
+    let firstCallback = true
+    const observer = new ResizeObserver(() => {
+      if (firstCallback) {
+        firstCallback = false
+        return
+      }
+      setOverflowCount(0)
+      setMeasureTick(tick => tick + 1)
+    })
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [canCustomizeSidebar])
+
+  useLayoutEffect(() => {
+    if (!didMountReset.current) {
+      didMountReset.current = true
+      return
+    }
+    setOverflowCount(0)
+    setMeasureTick(tick => tick + 1)
+  }, [collapsed, navTree])
+
+  useEffect(() => {
+    if (lastFontScale.current === fontSizeScale) return
+    lastFontScale.current = fontSizeScale
+    const frame = requestAnimationFrame(() => {
+      setOverflowCount(0)
+      setMeasureTick(tick => tick + 1)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [fontSizeScale])
+
+  useEffect(() => {
+    if (!showMore) setMoreOpen(false)
+  }, [showMore])
+
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
   // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（权限树「页面 + Tab 子权限」节点自动展开）
   const pathAnyOfMap = useMemo(() => {
@@ -892,8 +1057,6 @@ export default function MainLayout() {
   const canViewCurrentPage = !requiredPermission
     || hasPermission(requiredPermission, 'read')
     || (pathAnyOfMap[location.pathname] || []).some(p => hasPermission(p, 'read'))
-
-  const menuItems = toAntdItems(navTree)
 
   const openKeys = useMemo(() => {
     // 动态子路由（如 /stock-check/:checkId）回退到父路径的分组，保持菜单组展开
@@ -923,7 +1086,7 @@ export default function MainLayout() {
           width={256}
           className="sidebar-modern"
           style={{
-            overflowY: 'auto',
+            overflow: 'hidden',
             height: '100vh',
             position: 'fixed',
             left: 0,
@@ -932,7 +1095,7 @@ export default function MainLayout() {
             zIndex: 10,
           }}
         >
-          <div className="flex items-center gap-3 px-6" style={{ height: 72, paddingTop: 16, paddingBottom: 16 }}>
+          <div className="flex items-center gap-3 px-6" style={{ height: 72, paddingTop: 16, paddingBottom: 16, flexShrink: 0 }}>
             <div style={{ width: 40, height: 40, borderRadius: 12, background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)' }}>
               <span style={{ color: '#fff', fontWeight: 700, fontSize: 'calc(1rem * var(--font-size-scale))', letterSpacing: 1 }}>S</span>
             </div>
@@ -948,14 +1111,55 @@ export default function MainLayout() {
             )}
           </div>
 
-          <Menu
-            theme="dark"
-            mode="inline"
-            selectedKeys={[findActiveKey(navTree, location.pathname) || location.pathname]}
-            defaultOpenKeys={openKeys}
-            items={menuItems}
-            onClick={({ key }) => navigate(key)}
-          />
+          <div className="sidebar-nav" ref={navRef}>
+            <Menu
+              theme="dark"
+              mode="inline"
+              selectedKeys={[findActiveKey(navTree, location.pathname) || location.pathname]}
+              defaultOpenKeys={openKeys}
+              items={sidebarMenuItems}
+              onClick={({ key }) => navigate(key)}
+              onOpenChange={() => {
+                if (canCustomizeSidebar) scheduleOverflowRecompute()
+              }}
+            />
+            {showMore && (
+              <div className={`sidebar-more-slot has-more${collapsed ? ' is-collapsed' : ''}`}>
+                <Popover
+                  open={moreOpen}
+                  onOpenChange={setMoreOpen}
+                  trigger={['hover', 'click']}
+                  placement="rightBottom"
+                  overlayStyle={{ width: 300 }}
+                  overlayClassName="sidebar-more-popover"
+                  content={(
+                    <SidebarMorePanel
+                      sections={moreSections}
+                      onNavigate={key => {
+                        setMoreOpen(false)
+                        navigate(key)
+                      }}
+                      onCustomize={() => {
+                        setMoreOpen(false)
+                        setCustomizeOpen(true)
+                      }}
+                    />
+                  )}
+                >
+                  <div className={`sidebar-more-entry${collapsed ? ' is-collapsed' : ''}`} title={collapsed ? '更多' : undefined}>
+                    <AppstoreOutlined />
+                    {!collapsed && <span className="sidebar-more-text">更多</span>}
+                    {!collapsed && concealedPageCount > 0 && (
+                      <span className="sidebar-more-count">{concealedPageCount}</span>
+                    )}
+                  </div>
+                </Popover>
+              </div>
+            )}
+          </div>
+          {!isShareUser() && !isSupplierUser() && canUseTopbar.aiSearch && assistantLauncherDocked && (
+            <AssistantDockItem collapsed={collapsed} />
+          )}
         </Sider>
       )}
 
@@ -1068,11 +1272,15 @@ export default function MainLayout() {
                 menu={{
                   items: [
                     { key: 'profile', icon: <IdcardOutlined />, label: '个人中心' },
+                    ...(canCustomizeSidebar
+                      ? [{ key: 'customizeMenu', icon: <ControlOutlined />, label: '自定义菜单' }]
+                      : []),
                     { type: 'divider' as const },
                     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
                   ],
                   onClick: ({ key }) => {
                     if (key === 'profile') { navigate('/profile') }
+                    if (key === 'customizeMenu') { setCustomizeOpen(true) }
                     if (key === 'logout') { logout(); navigate('/login') }
                   },
                 }}
@@ -1129,6 +1337,16 @@ export default function MainLayout() {
           </Form>
         </Modal>
 
+        {canCustomizeSidebar && (
+          <SidebarCustomizeModal
+            open={customizeOpen}
+            onClose={() => setCustomizeOpen(false)}
+            navTree={navTree}
+            prefs={sidebarPrefs}
+            onChange={updateSidebarPrefs}
+          />
+        )}
+
         <Content style={{ padding: '20px 24px 32px' }}>
           {canViewCurrentPage ? (
             isShareUser() ? (
@@ -1146,8 +1364,7 @@ export default function MainLayout() {
         </Content>
       </Layout>
 
-      {/* AI 智能助手：右下角悬浮球，可自由拖动，闲置自动收进右侧边 */}
-      {!isSupplierUser() && canUseTopbar.aiSearch && <FloatingAssistant />}
+      {!isShareUser() && !isSupplierUser() && canUseTopbar.aiSearch && <AssistantLauncher />}
     </Layout>
   )
 }

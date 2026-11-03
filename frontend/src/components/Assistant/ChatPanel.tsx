@@ -1,8 +1,10 @@
-import React, { useRef, useEffect, useState } from 'react'
+﻿import React, { useRef, useEffect, useState } from 'react'
 import { Input, Button, Space, Tag, Typography, Collapse, Descriptions, Tooltip, Alert } from 'antd'
 import { SendOutlined, ClearOutlined, RobotOutlined, BugOutlined, LoadingOutlined, PauseCircleOutlined, CheckOutlined, CloseOutlined, SwapRightOutlined, UnorderedListOutlined } from '@ant-design/icons'
 import Markdown from '../Markdown'
 import { AssistantPlan, ChatMessage, OrchestrationStep, WriteConfirmation } from './useAssistantChat'
+import { scalePx } from '../../utils/fontSize'
+import { stripDsmlMarkup } from '../../utils/dsml'
 
 const { Text } = Typography
 
@@ -65,11 +67,11 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
         // 旧数据没有 agent_label：智能体工具只显示步骤摘要，避免回退成 call_xxx_agent 原始名
         const label = s.agent_label || (s.tool?.startsWith('call_') ? '' : s.tool)
         const node = (
-          <div key={s.step_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#64748b', flexWrap: 'wrap' }}>
+          <div key={s.step_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: scalePx(11), color: '#64748b', flexWrap: 'wrap' }}>
             <span
               style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                minWidth: 16, height: 16, borderRadius: 8, fontSize: 10,
+                minWidth: 16, height: 16, borderRadius: 8, fontSize: scalePx(10),
                 background: s.status === 'failed' ? '#fee2e2' : s.status === 'completed' ? '#dcfce7' : '#e2e8f0',
                 color: s.status === 'failed' ? '#b91c1c' : s.status === 'completed' ? '#15803d' : '#475569',
                 fontWeight: 600,
@@ -79,7 +81,7 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
             </span>
             {label && <span style={{ fontWeight: 600, color: '#334155' }}>{label}</span>}
             {s.summary && <span>{s.summary}</span>}
-            <Tag color={meta.color} style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}>
+            <Tag color={meta.color} style={{ fontSize: scalePx(10), lineHeight: '16px', margin: 0 }}>
               {meta.text}
             </Tag>
             {s.duration_ms != null && <span>{Math.round(s.duration_ms)}ms</span>}
@@ -99,11 +101,11 @@ const StepTimeline: React.FC<{ steps: OrchestrationStep[] }> = ({ steps }) => {
 
 // 任务执行计划卡片：先于步骤时间线展示"助手打算怎么做"
 const PlanCard: React.FC<{ plan: AssistantPlan }> = ({ plan }) => (
-  <div style={{ marginTop: 6, border: '1px solid #dbeafe', background: '#f0f9ff', borderRadius: 10, padding: '8px 12px', fontSize: 12, color: '#334155' }}>
+  <div style={{ marginTop: 6, border: '1px solid #dbeafe', background: '#f0f9ff', borderRadius: 10, padding: '8px 12px', fontSize: scalePx(12), color: '#334155' }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#1d4ed8', marginBottom: plan.status === 'planning' ? 0 : 6 }}>
       {plan.status === 'planning'
-        ? <LoadingOutlined spin style={{ fontSize: 12 }} />
-        : <UnorderedListOutlined style={{ fontSize: 12 }} />}
+        ? <LoadingOutlined spin style={{ fontSize: scalePx(12) }} />
+        : <UnorderedListOutlined style={{ fontSize: scalePx(12) }} />}
       执行计划
       {plan.status === 'planning' && <span style={{ fontWeight: 400, color: '#64748b' }}>正在规划…</span>}
     </div>
@@ -157,21 +159,21 @@ const ConfirmationCard: React.FC<{
         background: '#fffbeb',
         borderRadius: 10,
         padding: '10px 12px',
-        fontSize: 12,
+        fontSize: scalePx(12),
       }}
     >
       <div style={{ fontWeight: 600, color: '#92400e', marginBottom: 6 }}>
         {isOrder ? `写操作确认 — 订单 ${confirmation.order_no}` : `操作确认 — ${preview.title || confirmation.action_type}`}
-        <span style={{ marginLeft: 6, fontWeight: 400, color: '#b45309', fontSize: 11 }}>（服务端将再次校验权限与状态）</span>
+        <span style={{ marginLeft: 6, fontWeight: 400, color: '#b45309', fontSize: scalePx(11) }}>（服务端将再次校验权限与状态）</span>
       </div>
       {isOrder ? confirmation.fields.map(f => (
         <div key={f.field} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, color: '#78350f', flexWrap: 'wrap' }}>
           <span style={{ minWidth: 84, fontWeight: 500 }}>{WRITE_FIELD_LABELS[f.field] || f.field}</span>
-          <code style={{ background: '#fef3c7', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>
+          <code style={{ background: '#fef3c7', padding: '1px 6px', borderRadius: 4, fontSize: scalePx(11) }}>
             {f.old_value ?? '（空）'}
           </code>
-          <SwapRightOutlined style={{ fontSize: 10, color: '#b45309' }} />
-          <code style={{ background: '#fde68a', padding: '1px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+          <SwapRightOutlined style={{ fontSize: scalePx(10), color: '#b45309' }} />
+          <code style={{ background: '#fde68a', padding: '1px 6px', borderRadius: 4, fontSize: scalePx(11), fontWeight: 600 }}>
             {f.new_value ?? '（空）'}
           </code>
         </div>
@@ -203,7 +205,7 @@ const ConfirmationCard: React.FC<{
         <Alert
           type="success"
           showIcon
-          style={{ marginTop: 6, fontSize: 12 }}
+          style={{ marginTop: 6, fontSize: scalePx(12) }}
           message={
             confirmation.write_result?.updated_at
               ? `已执行（更新于 ${confirmation.write_result.updated_at}）`
@@ -215,7 +217,7 @@ const ConfirmationCard: React.FC<{
         <Alert
           type="error"
           showIcon
-          style={{ marginTop: 6, fontSize: 12 }}
+          style={{ marginTop: 6, fontSize: scalePx(12) }}
           message={confirmation.error || '写操作执行失败，请重新发起'}
         />
       )}
@@ -293,15 +295,15 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
       >
         {messages.length === 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100%', textAlign: 'center', padding: '24px 8px' }}>
-            <div style={{ fontSize: 16, fontWeight: 600, color: '#1e293b' }}>您好，我是 AI 智能助手</div>
-            <div style={{ fontSize: 12, marginTop: 6, color: '#94a3b8' }}>
+            <div style={{ fontSize: scalePx(16), fontWeight: 600, color: '#1e293b' }}>您好，我是 AI 智能助手</div>
+            <div style={{ fontSize: scalePx(12), marginTop: 6, color: '#94a3b8' }}>
               不仅能查询数据，还能给出行动建议
             </div>
 
             {/* 我的团队成员：点击填入并聚焦输入框 */}
             {teamAgents.length > 0 && (
               <>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 18, marginBottom: 8 }}>
+                <div style={{ fontSize: scalePx(11), color: '#94a3b8', marginTop: 18, marginBottom: 8 }}>
                   我的团队成员
                 </div>
                 <Space wrap size={[6, 6]} style={{ justifyContent: 'center', maxWidth: 320 }}>
@@ -309,7 +311,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
                     <Tag
                       key={agent.id}
                       title={(agent.capabilities || []).map(c => c.name).join('、')}
-                      style={{ cursor: 'pointer', fontSize: 12, borderRadius: 12, padding: '2px 10px', border: '1px solid #dbeafe', background: '#eff6ff', color: '#1d4ed8', margin: 0 }}
+                      style={{ cursor: 'pointer', fontSize: scalePx(12), borderRadius: 12, padding: '2px 10px', border: '1px solid #dbeafe', background: '#eff6ff', color: '#1d4ed8', margin: 0 }}
                       onClick={() => {
                         setInputValue(prev => prev.trim() ? prev : `请用「${agent.name}」`)
                         inputRef.current?.focus()
@@ -325,6 +327,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
         )}
         {messages.map((msg) => {
           const providerLabel = getProviderLabel(msg.provider)
+          const displayContent = msg.role === 'assistant' ? stripDsmlMarkup(msg.content) : msg.content
 
           return (
             <div
@@ -344,31 +347,31 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
                   borderRadius: msg.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
                   background: msg.role === 'user' ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' : '#fff',
                   color: msg.role === 'user' ? '#fff' : '#1e293b',
-                  fontSize: 13,
+                  fontSize: scalePx(13),
                   lineHeight: 1.65,
                   wordBreak: 'break-word',
-                  minHeight: msg.streaming && !msg.content ? 36 : undefined,
+                  minHeight: msg.streaming && !displayContent ? 36 : undefined,
                   boxShadow: msg.role === 'user' ? '0 4px 12px rgba(59,130,246,.25)' : '0 1px 3px rgba(15,23,42,.06)',
                   border: msg.role === 'user' ? 'none' : '1px solid #eef2f7',
                 }}
               >
                 {/* 流式思考状态 */}
-                {msg.streaming && msg.thinkingStage && !msg.content && (
+                {msg.streaming && msg.thinkingStage && !displayContent && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#999' }}>
-                    <LoadingOutlined spin style={{ fontSize: 12 }} />
-                    <span style={{ fontSize: 12 }}>{msg.thinkingStage}</span>
+                    <LoadingOutlined spin style={{ fontSize: scalePx(12) }} />
+                    <span style={{ fontSize: scalePx(12) }}>{msg.thinkingStage}</span>
                   </div>
                 )}
 
                 {/* 消息内容 */}
-                {msg.role === 'assistant' && msg.content ? (
-                  <Markdown>{msg.content}</Markdown>
+                {msg.role === 'assistant' && displayContent ? (
+                  <Markdown>{displayContent}</Markdown>
                 ) : msg.role === 'user' ? (
                   msg.content
                 ) : null}
 
                 {/* 流式光标 */}
-                {msg.streaming && msg.content && (
+                {msg.streaming && displayContent && (
                   <span
                     style={{
                       display: 'inline-block',
@@ -400,14 +403,14 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
               {/* 时间戳和Provider标签 */}
               {!msg.streaming && (
                 <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <Text type="secondary" style={{ fontSize: 11 }}>
+                  <Text type="secondary" style={{ fontSize: scalePx(11) }}>
                     {formatTimestamp(msg.timestamp)}
                   </Text>
                   {providerLabel && (
                     <Tag
                       icon={<RobotOutlined />}
                       color="blue"
-                      style={{ fontSize: 10, lineHeight: '16px', margin: 0 }}
+                      style={{ fontSize: scalePx(10), lineHeight: '16px', margin: 0 }}
                     >
                       {providerLabel}
                     </Tag>
@@ -433,7 +436,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
                   {msg.suggestions.map((s, i) => (
                     <Tag
                       key={i}
-                      style={{ cursor: 'pointer', fontSize: 12, borderRadius: 12, padding: '2px 10px', border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4338ca', margin: 0 }}
+                      style={{ cursor: 'pointer', fontSize: scalePx(12), borderRadius: 12, padding: '2px 10px', border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4338ca', margin: 0 }}
                       onClick={() => onSend(s)}
                     >
                       {s}
@@ -447,21 +450,21 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
                 <Collapse
                   ghost
                   size="small"
-                  style={{ marginTop: 8, fontSize: 11 }}
+                  style={{ marginTop: 8, fontSize: scalePx(11) }}
                   items={[
                     {
                       key: 'diagnostics',
                       label: (
                         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <BugOutlined style={{ fontSize: 10 }} />
+                          <BugOutlined style={{ fontSize: scalePx(10) }} />
                           诊断信息
                         </span>
                       ),
                       children: (
-                        <Descriptions size="small" column={1} bordered style={{ fontSize: 11 }}>
+                        <Descriptions size="small" column={1} bordered style={{ fontSize: scalePx(11) }}>
                           {msg.diagnostics.trace_id && (
                             <Descriptions.Item label="Trace ID">
-                              <code style={{ fontSize: 10 }}>{msg.diagnostics.trace_id}</code>
+                              <code style={{ fontSize: scalePx(10) }}>{msg.diagnostics.trace_id}</code>
                             </Descriptions.Item>
                           )}
                           {msg.diagnostics.total_duration_ms && (
@@ -481,13 +484,13 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
                           )}
                           {msg.diagnostics.fallback && (
                             <Descriptions.Item label="降级">
-                              <Tag color="orange" style={{ fontSize: 10 }}>是</Tag>
+                              <Tag color="orange" style={{ fontSize: scalePx(10) }}>是</Tag>
                             </Descriptions.Item>
                           )}
                           {msg.diagnostics.skills && msg.diagnostics.skills.length > 0 && (
                             <Descriptions.Item label="技能调用">
                               {msg.diagnostics.skills.map((s: any, i: number) => (
-                                <Tag key={i} color={s.status === 'success' ? 'green' : 'red'} style={{ fontSize: 10, marginBottom: 2 }}>
+                                <Tag key={i} color={s.status === 'success' ? 'green' : 'red'} style={{ fontSize: scalePx(10), marginBottom: 2 }}>
                                   {s.name} ({s.attempts}次, {s.duration_ms}ms)
                                 </Tag>
                               ))}
@@ -496,19 +499,19 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
                           {msg.diagnostics.tools && msg.diagnostics.tools.length > 0 && (
                             <Descriptions.Item label="工具调用">
                               {msg.diagnostics.tools.slice(0, 5).map((t: any, i: number) => (
-                                <Tag key={i} color={t.status === 'success' ? 'blue' : 'red'} style={{ fontSize: 10, marginBottom: 2 }}>
+                                <Tag key={i} color={t.status === 'success' ? 'blue' : 'red'} style={{ fontSize: scalePx(10), marginBottom: 2 }}>
                                   {t.name} ({t.duration_ms}ms)
                                 </Tag>
                               ))}
                               {msg.diagnostics.tools.length > 5 && (
-                                <span style={{ fontSize: 10, color: '#999' }}>...共 {msg.diagnostics.tools.length} 个工具</span>
+                                <span style={{ fontSize: scalePx(10), color: '#999' }}>...共 {msg.diagnostics.tools.length} 个工具</span>
                               )}
                             </Descriptions.Item>
                           )}
                           {msg.diagnostics.errors && msg.diagnostics.errors.length > 0 && (
                             <Descriptions.Item label="错误">
                               {msg.diagnostics.errors.map((e: any, i: number) => (
-                                <div key={i} style={{ fontSize: 10, color: '#ff4d4f', marginBottom: 2 }}>
+                                <div key={i} style={{ fontSize: scalePx(10), color: '#ff4d4f', marginBottom: 2 }}>
                                   [{e.stage}] {e.message}
                                 </div>
                               ))}
@@ -570,7 +573,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onC
               size="small"
               icon={<ClearOutlined />}
               onClick={onClear}
-              style={{ fontSize: 11, color: '#94a3b8', height: 24, padding: '0 8px' }}
+              style={{ fontSize: scalePx(11), color: '#94a3b8', height: 24, padding: '0 8px' }}
             >
               清空对话
             </Button>

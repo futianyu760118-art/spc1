@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field, field_validator
@@ -127,6 +127,12 @@ async def _call_items(db: AsyncSession, rows: List[AgentCallLog]) -> List[dict]:
 
 class TeamCheckIn(BaseModel):
     agent_id: int
+
+
+class BindUsersIn(BaseModel):
+    agent_ids: List[int]
+    user_ids: List[int]
+    action: Literal["bind", "unbind"] = "bind"
 
 
 class AgentUpsertIn(BaseModel):
@@ -526,6 +532,49 @@ async def admin_stats(
             "active_agents": active_agents,
             "calls_by_status": {row[0]: int(row[1]) for row in call_rows},
         })
+    except Exception as exc:
+        return _capture(exc)
+
+
+@router.get("/admin/users")
+async def admin_users(
+    keyword: str = "",
+    limit: int = Query(500, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(PermissionChecker("ai.agent.admin", "read")),
+):
+    try:
+        return _ok({"items": await team_service.admin_user_options(
+            db, keyword=keyword, limit=limit,
+        )})
+    except Exception as exc:
+        return _capture(exc)
+
+
+@router.post("/admin/users/bind")
+async def admin_bind_users(
+    body: BindUsersIn,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(PermissionChecker("ai.agent.admin", "update")),
+):
+    try:
+        operator = await _load_user(db, current_user)
+        result = await team_service.admin_bind_users(
+            db,
+            agent_ids=body.agent_ids,
+            user_ids=body.user_ids,
+            action=body.action,
+            operator_id=int(operator.id),
+        )
+        summary = (
+            f"agents={len(set(body.agent_ids))} users={len(set(body.user_ids))} "
+            f"created={result['created']} removed={result['removed']} skipped={result['skipped']}"
+        )
+        await log_audit(
+            db, "agent_team", 0, f"batch_{body.action}", field_name="batch",
+            new_value=summary, operator=operator.username,
+        )
+        return _ok(result, "已绑定" if body.action == "bind" else "已解绑")
     except Exception as exc:
         return _capture(exc)
 

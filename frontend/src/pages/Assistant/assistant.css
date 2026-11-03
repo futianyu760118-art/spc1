@@ -1,0 +1,76 @@
+.assistant-page {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-typography {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page h5.ant-typography {
+  font-size: calc(16px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-card-head-title {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-card-extra {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-list-item-meta-title {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-list-item-meta-description {
+  font-size: calc(12px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-btn {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-btn-sm {
+  font-size: calc(12px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-input {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-tag {
+  font-size: calc(12px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-descriptions-item-label,
+.assistant-page .ant-descriptions-item-content {
+  font-size: calc(12px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-progress-text {
+  font-size: calc(12px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ant-empty-description {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ac-fs-2xs {
+  font-size: calc(11px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ac-fs-xs {
+  font-size: calc(12px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ac-fs-sm {
+  font-size: calc(13px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ac-fs-md {
+  font-size: calc(14px * var(--font-size-scale, 1));
+}
+
+.assistant-page .ac-fs-xl {
+  font-size: calc(20px * var(--font-size-scale, 1));
+}
