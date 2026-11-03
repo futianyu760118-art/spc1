@@ -11,22 +11,9 @@ from app.services.ai_config import (
     render_system_prompt,
     _validate,
 )
-from app.services.assistant.tool_registry import get_all_tools
-
-
 def test_coerce_int_float_json():
     assert coerce_value(ASSISTANT_CONFIG_DEFS["max_tokens"], "4096") == 4096
     assert coerce_value(ASSISTANT_CONFIG_DEFS["temperature"], "0.5") == 0.5
-    assert coerce_value(ASSISTANT_CONFIG_DEFS["disabled_tools"], '["a"]') == ["a"]
-    with pytest.raises(ValueError):
-        coerce_value(ASSISTANT_CONFIG_DEFS["disabled_tools"], '"just-a-string"')
-
-
-def test_validate_disabled_tools_rejects_unknown():
-    with pytest.raises(ValueError):
-        _validate(ASSISTANT_CONFIG_DEFS["disabled_tools"], ["no_such_tool"])
-    known = get_all_tools()[0].name
-    assert _validate(ASSISTANT_CONFIG_DEFS["disabled_tools"], [known]) == [known]
 
 
 def test_validate_log_level():

@@ -159,8 +159,7 @@ async def run(
     provider_name = ai_service.current_provider()
 
     rt = await _load_runtime_config(db)
-    disabled = set(rt.get("disabled_tools") or [])
-    system_prompt = resolve_system_prompt(rt.get("system_prompt"), disabled)
+    system_prompt = resolve_system_prompt(rt.get("system_prompt"))
     if user_context is not None:
         system_prompt = build_agent_system_prompt(system_prompt, user_context)
     intent_prompt = (rt.get("intent_prompt") or "").strip() or None
@@ -292,7 +291,7 @@ async def run(
             system_prompt=system_prompt, model_override=model_override,
             temperature=rt.get("temperature", 0.1), max_tokens=rt.get("max_tokens", 4096),
             max_tool_rounds=rt.get("max_tool_rounds", 6), max_agent_calls=rt.get("max_agent_calls", 8),
-            disabled_tools=disabled, session_id=session_id, trace_id=trace_id, user_id=user_id,
+            session_id=session_id, trace_id=trace_id, user_id=user_id,
             run_logger=run_logger, provider_name=provider_name,
             stream_final=False,
             db=db, user_context=user_context,

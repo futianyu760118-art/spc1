@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Button, Col, Form, Input, InputNumber, Row, Spin, Switch,
-  Table, message,
+  Button, Col, Form, Input, InputNumber, Row, Spin, message,
 } from 'antd'
 import { agentApi } from '../../../services/agent'
 
-interface ToolItem { name: string; display_name: string; description: string; disabled: boolean }
-
 export default function AssistantConfigTab() {
   const [form] = Form.useForm()
-  const [tools, setTools] = useState<ToolItem[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -17,9 +13,7 @@ export default function AssistantConfigTab() {
     setLoading(true)
     try {
       const res: any = await agentApi.assistantConfig()
-      const d = res.data
-      form.setFieldsValue(d.config)
-      setTools(d.tools)
+      form.setFieldsValue(res.data?.config)
     } catch (e: any) {
       message.error(String(e?.message || e))
     } finally {
@@ -31,14 +25,10 @@ export default function AssistantConfigTab() {
 
   const save = async () => {
     const values = await form.validateFields()
-    const disabled = tools.filter((t) => t.disabled).map((t) => t.name)
     setSaving(true)
     try {
-      const res: any = await agentApi.saveAssistantConfig({
-        config: { ...values, disabled_tools: disabled },
-      })
+      const res: any = await agentApi.saveAssistantConfig({ config: values })
       message.success(`已保存（版本 v${res.data.version}，即时生效）`)
-      if (res.data.warning) message.warning(res.data.warning)
       refresh()
     } catch (e: any) {
       message.error(String(e?.message || e))
@@ -47,14 +37,12 @@ export default function AssistantConfigTab() {
     }
   }
 
-  const enabledCount = tools.filter((t) => !t.disabled).length
-
   return (
     <div className="sc-page">
       <Spin spinning={loading}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 960 }}>
           <div style={{ padding: '10px 14px', background: '#eef0fe', borderRadius: 10, color: '#4c4dc2', fontSize: 13 }}>
-            系统提示词支持 <code>{'{{TOOLS}}'}</code> 占位符：构建对话时自动注入当前启用工具清单；两段提示词留空即恢复内置默认。
+            系统提示词支持 <code>{'{{TOOLS}}'}</code> 占位符：构建对话时自动注入已注册工具清单；两段提示词留空即恢复内置默认。实际可用性由智能体的能力与技能配置决定。
           </div>
 
           <div className="sc-card" style={{ padding: '0 16px 16px' }}>
@@ -106,28 +94,6 @@ export default function AssistantConfigTab() {
                 </Col>
               </Row>
             </Form>
-          </div>
-
-          <div className="sc-card" style={{ padding: '0 0 4px' }}>
-            <div className="sc-card-head" style={{ padding: '12px 16px' }}>
-              <h3>工具启停</h3>
-              <span className="sc-hint sc-mono">{enabledCount}/{tools.length} 启用</span>
-            </div>
-            <Table rowKey="name" size="small" pagination={false}
-                   dataSource={tools}
-                   columns={[
-                     { title: '工具', dataIndex: 'display_name', width: 220 },
-                     { title: '说明', dataIndex: 'description', ellipsis: true },
-                     {
-                       title: '启用', dataIndex: 'disabled', width: 90,
-                       render: (v: boolean, row: ToolItem) => (
-                         <Switch checked={!v} onChange={(checked) => {
-                           setTools((prev) => prev.map((t) =>
-                             t.name === row.name ? { ...t, disabled: !checked } : t))
-                         }}/>
-                       ),
-                     },
-                   ]}/>
           </div>
 
           <div>

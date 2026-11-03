@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import PermissionChecker
 from app.schemas.common import ResponseModel
-from app.services.assistant.tool_registry import get_all_tools
-# tool_registry 必须先于 ai_config 导入：agent 包是 v1 路由中最先加载的域，
-# 若 ai_config 先入口会触发 ai_config → assistant 包 → execution_agents → ai_config 的部分初始化循环
+import app.services.assistant.tool_registry  # noqa: F401 — 必须先于 ai_config 导入，避免部分初始化循环
+# agent 包是 v1 路由中最先加载的域；若 ai_config 先入口会触发
+# ai_config → assistant 包 → execution_agents → ai_config 的部分初始化循环
 from app.services.ai_config import (
     ASSISTANT_SCOPE,
     SCOPE_DEFS,
@@ -107,19 +107,9 @@ async def get_assistant_config(
     config["system_prompt"] = config["system_prompt"] or SYSTEM_PROMPT
     config["intent_prompt"] = config["intent_prompt"] or INTENT_RECOGNITION_PROMPT
     config["model_name"] = config["model_name"] or get_settings().AI_OPENAI_MODEL
-    disabled = set(config.get("disabled_tools") or [])
     return ResponseModel(data={
         "version": await get_scope_version(db, ASSISTANT_SCOPE),
         "config": config,
-        "tools": [
-            {
-                "name": t.name,
-                "display_name": t.display_name or t.name,
-                "description": t.description,
-                "disabled": t.name in disabled,
-            }
-            for t in get_all_tools()
-        ],
         "defs": {k: {"label": d.label, "description": d.description} for k, d in SCOPE_DEFS[ASSISTANT_SCOPE].items()},
     })
 
@@ -134,9 +124,4 @@ async def update_assistant_config(
         version = await save_scope_config(db, ASSISTANT_SCOPE, body.config, operator_name(current_user))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if body.config.get("disabled_tools") is not None:
-        known = {t.name for t in get_all_tools()}
-        if known and known.issubset(set(body.config["disabled_tools"])):
-            return ResponseModel(
-                data={"version": version, "warning": "全部工具已禁用，助手将无法查询业务数据"})
     return ResponseModel(data={"version": version})

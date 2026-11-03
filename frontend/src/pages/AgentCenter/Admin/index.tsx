@@ -153,8 +153,8 @@ export default function AgentAdmin() {
         await agentApi.updateAgent(editingAgent.id, payload)
         message.success('已保存')
       } else {
-        await agentApi.createAgent(payload)
-        message.success('已创建')
+        const res: any = await agentApi.createAgent(payload)
+        message.success(`已创建（${res.data?.agent_no || '编码自动生成'}）`)
       }
       setModalOpen(false)
       await Promise.all([loadAgents(), loadStats()])
@@ -328,6 +328,13 @@ export default function AgentAdmin() {
         destroyOnClose
       >
         <Form form={form} layout="vertical">
+          <Form.Item label="编码">
+            <Input
+              value={editingAgent?.agent_no || ''}
+              disabled
+              placeholder="保存后自动生成（AG-xxxxxx）"
+            />
+          </Form.Item>
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入智能体名称' }]}>
             <Input maxLength={64} placeholder="全局唯一，如：订单查询员" />
           </Form.Item>

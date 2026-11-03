@@ -16,7 +16,7 @@ async def test_assistant_config_whitelist_and_version(client):
     assert r.json().get("code") != 0
 
     r = await client.put("/api/v1/agents/admin/assistant/config",
-                         json={"config": {"temperature": 0.5, "disabled_tools": ["call_order_agent"]}},
+                         json={"config": {"temperature": 0.5, "max_tool_rounds": 7}},
                          headers=headers)
     body = r.json()
     assert body["code"] == 0
@@ -30,8 +30,8 @@ async def test_assistant_config_whitelist_and_version(client):
     r = await client.get("/api/v1/agents/admin/assistant/config", headers=headers)
     config = r.json()["data"]["config"]
     assert config["temperature"] == 0.7
-    tools = {t["name"]: t for t in r.json()["data"]["tools"]}
-    assert tools["call_order_agent"]["disabled"] is True
+    assert config["max_tool_rounds"] == 7
+    assert "disabled_tools" not in config
 
 
 async def test_assistant_stats_and_runs(client, db):

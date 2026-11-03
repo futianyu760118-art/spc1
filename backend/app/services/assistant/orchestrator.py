@@ -1686,8 +1686,7 @@ async def resolve_confirmation(
         logger.warning(f"[orchestrator] 续跑读取配置失败，使用默认值: {e}")
         from app.services.ai_config import ASSISTANT_CONFIG_DEFS
         rt = {k: d.default for k, d in ASSISTANT_CONFIG_DEFS.items()}
-    disabled = set(rt.get("disabled_tools") or [])
-    system_prompt = resolve_system_prompt(rt.get("system_prompt"), disabled)
+    system_prompt = resolve_system_prompt(rt.get("system_prompt"))
     model_override = (rt.get("model_name") or "").strip() or None
     history = await session_store.get_history(session_id)
     continuation = (
@@ -1724,7 +1723,7 @@ async def resolve_confirmation(
             system_prompt=system_prompt, model_override=model_override,
             temperature=rt.get("temperature", 0.1), max_tokens=rt.get("max_tokens", 4096),
             max_tool_rounds=rt.get("max_tool_rounds", 6), max_agent_calls=rt.get("max_agent_calls", 8),
-            disabled_tools=disabled, session_id=session_id, trace_id=trace_id,
+            session_id=session_id, trace_id=trace_id,
             user_id=record_user, run_logger=run_logger,
             provider_name=ai_service.current_provider(),
             limits=CONTINUATION_LIMITS, include_order_tool=False, stream_final=False,
