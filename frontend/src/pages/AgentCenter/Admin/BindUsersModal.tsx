@@ -145,7 +145,7 @@ export default function BindUsersModal({
       okText="执行"
       width={640}
       destroyOnClose
-      className="sc-page"
+      className="sc-page ai-center"
     >
       <Form form={form} layout="vertical">
         <Form.Item name="action" label="操作" rules={[{ required: true }]}>

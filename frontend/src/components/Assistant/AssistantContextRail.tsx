@@ -34,7 +34,7 @@ export default function AssistantContextRail({ teamAgents, messages, onCollapse 
   return (
     <aside className="ai-chat-context">
       <div className="ai-context-head">
-        <strong>上下文</strong>
+        <strong>本会话上下文</strong>
         <Button type="text" size="small" icon={<RightOutlined />} onClick={onCollapse} title="收起上下文" />
       </div>
       <div className="ai-context-body">
@@ -56,7 +56,7 @@ export default function AssistantContextRail({ teamAgents, messages, onCollapse 
         </section>
 
         <section className="ai-context-section">
-          <h4>能力与技能</h4>
+          <h4>已启用能力</h4>
           {capabilities.length === 0 && skills.length === 0 ? (
             <div className="ai-context-empty">暂无能力或技能</div>
           ) : (
@@ -72,7 +72,7 @@ export default function AssistantContextRail({ teamAgents, messages, onCollapse 
         </section>
 
         <section className="ai-context-section">
-          <h4>本会话执行链</h4>
+          <h4>执行链</h4>
           {!latest ? (
             <div className="ai-context-empty">发起对话后，这里会显示助手的计划与执行步骤</div>
           ) : (
@@ -111,6 +111,9 @@ export default function AssistantContextRail({ teamAgents, messages, onCollapse 
             </div>
           )}
         </section>
+      </div>
+      <div className="ai-context-note">
+        上下文 {messages.length} 条消息 · {teamAgents.length} 位成员
       </div>
     </aside>
   )

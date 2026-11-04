@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Button, Drawer, Form, Input, Radio, Select, Switch, message,
+  Button, Checkbox, Drawer, Form, Input, Radio, Select, Switch, message,
 } from 'antd'
 import { userApi } from '../../../services/api'
 import { agentApi, AgentCapability, AgentSkillBrief } from '../../../services/agent'
@@ -84,37 +84,42 @@ export default function AgentEditDrawer({ open, agent, onClose, onSaved }: Props
   return (
     <Drawer
       title={agent ? `编辑智能体 · ${agent.name}` : '新建智能体'}
-      width={560}
+      width={520}
       open={open}
       onClose={onClose}
       destroyOnClose
-      className="sc-page"
+      className="sc-page ai-center"
       footer={(
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="ac-hint" style={{ marginRight: 'auto' }}>能力变更立即生效</span>
           <Button onClick={onClose}>取消</Button>
           <Button type="primary" loading={saving} onClick={submit}>保存</Button>
         </div>
       )}
     >
       <Form form={form} layout="vertical">
-        <Form.Item label="编码">
-          <Input value={agent?.agent_no || ''} disabled placeholder="保存后自动生成（AG-xxxxxx）" />
-        </Form.Item>
         <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入智能体名称' }]}>
           <Input maxLength={64} placeholder="全局唯一，如：订单查询员" />
         </Form.Item>
+        <Form.Item label="编码">
+          <Input value={agent?.agent_no || ''} disabled placeholder="保存后自动生成（AG-xxxxxx）" />
+        </Form.Item>
+        <Form.Item name="description" label="说明">
+          <Input.TextArea rows={3} maxLength={500} placeholder="展示给用户，并帮助助手选择合适的成员" />
+        </Form.Item>
         <Form.Item
-          name="capabilities" label="能力"
+          name="capabilities"
+          label="能力"
           extra="可选；技能型智能体可以不选能力，技能不授予数据/写能力"
         >
-          <Select
-            mode="multiple"
-            placeholder="选择该智能体具备的能力（可多选）"
-            options={capabilities.map(cap => ({
-              value: cap.code,
-              label: `${cap.name}（${cap.code}）`,
-            }))}
-          />
+          <Checkbox.Group className="ac-cap-check-grid">
+            {capabilities.map(cap => (
+              <Checkbox key={cap.code} value={cap.code} className="ac-cap-check">
+                <span className="ac-check-name">{cap.name}</span>
+                <span className="ac-check-code">{cap.code}</span>
+              </Checkbox>
+            ))}
+          </Checkbox.Group>
         </Form.Item>
         <Form.Item name="skill_ids" label="技能" extra="最多绑定 10 个；技能只提供方法与上下文，不授予能力">
           <Select
@@ -140,7 +145,8 @@ export default function AgentEditDrawer({ open, agent, onClose, onSaved }: Props
         </Form.Item>
         {scopeType === 'roles' && (
           <Form.Item
-            name="scope_role_ids" label="开放角色"
+            name="scope_role_ids"
+            label="开放角色"
             rules={[{ required: true, message: '请选择至少一个角色' }]}
           >
             <Select
@@ -150,9 +156,6 @@ export default function AgentEditDrawer({ open, agent, onClose, onSaved }: Props
             />
           </Form.Item>
         )}
-        <Form.Item name="description" label="说明">
-          <Input.TextArea rows={3} maxLength={500} placeholder="展示给用户，并帮助助手选择合适的成员" />
-        </Form.Item>
         <Form.Item name="status" label="启用" valuePropName="checked" style={{ marginBottom: 0 }}>
           <Switch />
         </Form.Item>

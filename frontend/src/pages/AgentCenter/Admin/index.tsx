@@ -1,22 +1,22 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Tabs, message } from 'antd'
-import {
-  ApiOutlined, PlusOutlined, RobotOutlined, SafetyCertificateOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons'
+import { message } from 'antd'
+import { PlusOutlined, TeamOutlined } from '@ant-design/icons'
 import { agentApi } from '../../../services/agent'
 import { useAuthStore } from '../../../store/auth'
 import PageHeader from '../../../components/Agent/PageHeader'
-import StatCard from '../../../components/Agent/StatCard'
 import AgentDirectoryTab from './AgentDirectoryTab'
 import SkillLibraryTab from './SkillLibraryTab'
 import AssistantOpsTab from './AssistantOpsTab'
 import BindUsersModal from './BindUsersModal'
 import '../agent-center.css'
+import '../agent-center-v3.css'
+
+type AdminZone = 'agents' | 'skills' | 'ops'
 
 export default function AgentAdmin() {
   const [stats, setStats] = useState<any>(null)
-  const [zone, setZone] = useState('agents')
+  const [skillsTotal, setSkillsTotal] = useState(0)
+  const [zone, setZone] = useState<AdminZone>('agents')
   const [createSignal, setCreateSignal] = useState(0)
   const [bindOpen, setBindOpen] = useState(false)
   const [bindAgentIds, setBindAgentIds] = useState<number[]>([])
@@ -25,8 +25,12 @@ export default function AgentAdmin() {
 
   const loadStats = useCallback(async () => {
     try {
-      const res: any = await agentApi.adminStats()
-      setStats(res.data)
+      const [statsRes, skillsRes]: any = await Promise.all([
+        agentApi.adminStats(),
+        agentApi.adminSkills({ page: 1, page_size: 1 }).catch(() => ({ data: { total: 0 } })),
+      ])
+      setStats(statsRes.data)
+      setSkillsTotal(Number(skillsRes.data?.total || 0))
     } catch (e: any) {
       message.error(String(e?.message || e))
     }
@@ -52,52 +56,73 @@ export default function AgentAdmin() {
   }
 
   return (
-    <div className="sc-page ai-center ai-page">
+    <div className="sc-page ai-center ai-page ac-page">
       <PageHeader
         title="智能体管理"
-        subtitle="管理智能体目录、技能与助手运营"
-        extra={(
+        extra={canConfig ? (
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button onClick={() => openBindUsers()}>批量绑定用户</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建智能体</Button>
+            <button type="button" className="ac-btn" onClick={() => openBindUsers()}>
+              <TeamOutlined /> 批量绑定用户
+            </button>
+            <button type="button" className="ac-btn primary" onClick={openCreate}>
+              <PlusOutlined /> 新建智能体
+            </button>
           </div>
-        )}
+        ) : undefined}
       />
 
-      <div className="ai-stat-grid">
-        <StatCard icon={<RobotOutlined />} label="智能体总数" value={stats?.agents || 0} unit="个" />
-        <StatCard icon={<SafetyCertificateOutlined />} label="启用智能体" value={stats?.active_agents || 0} unit="个" accent="#16a34a" accentBg="#f0fdf4" />
-        <StatCard icon={<ApiOutlined />} label="能力调用" value={callTotal.toLocaleString('zh-CN')} unit="次" accent="#0284c7" accentBg="#f0f9ff" />
-        <StatCard icon={<ThunderboltOutlined />} label="失败 / 超时 / 拒绝" value={callFailed.toLocaleString('zh-CN')} unit="次" accent="#dc2626" accentBg="#fef2f2" />
+      <div className="ac-stat-strip">
+        <div className="ac-stat"><b>{stats?.agents || 0}</b><span>智能体</span></div>
+        <div className="ac-stat"><b>{stats?.active_agents || 0}</b><span>已启用</span></div>
+        <div className="ac-stat"><b>{callTotal.toLocaleString('zh-CN')}</b><span>能力调用</span></div>
+        <div className="ac-stat"><b>{callFailed.toLocaleString('zh-CN')}</b><span>异常调用</span></div>
+        <div className="ac-stat"><b>{skillsTotal}</b><span>技能</span></div>
+        <div className="ac-stat-note"><i className="ac-live-dot" />目录数据实时加载</div>
       </div>
 
-      <Tabs
-        activeKey={zone}
-        onChange={setZone}
-        items={[
-          {
-            key: 'agents',
-            label: '智能体',
-            children: (
-              <AgentDirectoryTab
-                createSignal={createSignal}
-                onCreateConsumed={() => setCreateSignal(0)}
-                onBindUsers={openBindUsers}
-              />
-            ),
-          },
-          {
-            key: 'skills',
-            label: '技能库',
-            children: <SkillLibraryTab />,
-          },
-          {
-            key: 'ops',
-            label: '助手运营',
-            children: <AssistantOpsTab canConfig={canConfig} />,
-          },
-        ]}
-      />
+      <nav className="ac-admin-tabs" aria-label="智能体管理分区">
+        <button
+          type="button"
+          className={zone === 'agents' ? 'active' : ''}
+          onClick={() => setZone('agents')}
+        >
+          智能体<span className="ac-count">{stats?.agents || 0}</span>
+        </button>
+        <button
+          type="button"
+          className={zone === 'skills' ? 'active' : ''}
+          onClick={() => setZone('skills')}
+        >
+          技能库<span className="ac-count">{skillsTotal}</span>
+        </button>
+        <button
+          type="button"
+          className={zone === 'ops' ? 'active' : ''}
+          onClick={() => setZone('ops')}
+        >
+          助手运营<span className="ac-count">30d</span>
+        </button>
+      </nav>
+
+      {zone === 'agents' && (
+        <AgentDirectoryTab
+          stats={stats}
+          canManage={canConfig}
+          createSignal={createSignal}
+          onCreateConsumed={() => setCreateSignal(0)}
+          onBindUsers={openBindUsers}
+          onChanged={loadStats}
+          onOpenOps={() => setZone('ops')}
+        />
+      )}
+      {zone === 'skills' && (
+        <SkillLibraryTab
+          canManage={canConfig}
+          onOpenAgents={() => setZone('agents')}
+          onChanged={loadStats}
+        />
+      )}
+      {zone === 'ops' && <AssistantOpsTab canConfig={canConfig} />}
 
       <BindUsersModal
         open={bindOpen}

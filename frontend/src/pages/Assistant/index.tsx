@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { Button, Drawer } from 'antd'
-import { ClearOutlined, HistoryOutlined } from '@ant-design/icons'
+import { AppstoreOutlined, ClearOutlined, HistoryOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
 import ChatPanel from '../../components/Assistant/ChatPanel'
 import ChatHistorySidebar from '../../components/Assistant/ChatHistorySidebar'
@@ -10,6 +10,7 @@ import { TeamAgent } from '../../components/Assistant/types'
 import { agentApi } from '../../services/agent'
 import '../../components/Assistant/assistant.css'
 import '../AgentCenter/agent-center.css'
+import '../AgentCenter/agent-center-v3.css'
 
 interface ConversationItem {
   id: number
@@ -85,9 +86,11 @@ export default function AssistantPage() {
   }
 
   const manageTeam = () => navigate('/agents')
+  const activeTitle = conversations.find(item => item.id === activeConversationId)?.title
+    || 'AI 智能助手'
 
   return (
-    <div className="sc-page ai-center ai-chat-page">
+    <div className="sc-page ai-center ai-chat-page ac-page">
       <div className="ai-chat">
         <ChatHistorySidebar
           conversations={conversations}
@@ -101,9 +104,9 @@ export default function AssistantPage() {
 
         <div className="ai-chat-main">
           <div className="ai-chat-head">
-            <span className="ai-online-dot" />
-            <strong>AI 智能助手</strong>
-            <span className="ai-muted">{teamAgents.length} 位团队成员</span>
+            <strong title={activeTitle}>{activeTitle}</strong>
+            <span className="ai-online"><i />在线</span>
+            <span className="ai-chat-head-hint">{teamAgents.length} 位成员待命</span>
             <div className="ai-chat-head-actions">
               <Button
                 type="text"
@@ -111,26 +114,24 @@ export default function AssistantPage() {
                 icon={<HistoryOutlined />}
                 className="ai-history-toggle"
                 onClick={() => setHistoryOpen(true)}
-              >
-                历史
-              </Button>
+                title="历史会话"
+              />
               <Button
                 type="text"
                 size="small"
                 icon={<ClearOutlined />}
                 disabled={messages.length === 0}
                 onClick={newChat}
-              >
-                清空
-              </Button>
+                title="清空对话"
+              />
               <Button
                 type="text"
                 size="small"
+                icon={<AppstoreOutlined />}
                 className="ai-context-toggle"
                 onClick={() => setContextOpen(value => !value)}
-              >
-                {contextOpen ? '收起上下文' : '展开上下文'}
-              </Button>
+                title={contextOpen ? '收起上下文' : '展开上下文'}
+              />
             </div>
           </div>
 
@@ -159,7 +160,7 @@ export default function AssistantPage() {
         width={300}
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
-        className="sc-page"
+        className="sc-page ai-center"
         styles={{ body: { padding: 0 } }}
       >
         <ChatHistorySidebar

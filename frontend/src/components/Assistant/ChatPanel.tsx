@@ -1,4 +1,4 @@
-﻿import React, { useRef, useEffect, useState } from 'react'
+﻿import React, { useCallback, useRef, useEffect, useState } from 'react'
 import { Alert, Button, Collapse, Descriptions, Tag, Tooltip } from 'antd'
 import {
   AppstoreOutlined, BugOutlined, CheckOutlined, CloseOutlined, EditOutlined,
@@ -116,6 +116,7 @@ const PlanCard: React.FC<{ plan: AssistantPlan }> = ({ plan }) => (
         ? <LoadingOutlined spin style={{ fontSize: scalePx(12) }} />
         : <UnorderedListOutlined style={{ fontSize: scalePx(12) }} />}
       执行计划
+      {plan.status === 'ready' && <span className="ai-muted">· {plan.steps.length} 步</span>}
       {plan.status === 'planning' && <span className="ai-muted">正在规划…</span>}
     </div>
     {plan.status === 'ready' && (
@@ -181,7 +182,6 @@ const ConfirmationCard: React.FC<{
         <div className="ai-confirm-actions">
           <Button
             type="primary"
-            danger
             size="small"
             icon={<CheckOutlined />}
             loading={confirming}
@@ -224,28 +224,45 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onS
   const inputRef = useRef<any>(null)
   const shouldAutoScrollRef = useRef(true)
   const listRef = useRef<HTMLDivElement>(null)
+  const previousFirstMessageIdRef = useRef<number | string | null>(null)
+
+  const scrollToBottom = useCallback(() => {
+    const scroll = () => {
+      const list = listRef.current
+      if (list) list.scrollTop = list.scrollHeight
+    }
+    requestAnimationFrame(() => {
+      scroll()
+      requestAnimationFrame(scroll)
+    })
+  }, [])
 
   useEffect(() => {
-    const list = listRef.current
-    if (!list) return
+    const firstMessageId = messages[0]?.id ?? null
+    const conversationChanged = firstMessageId !== previousFirstMessageIdRef.current
+    previousFirstMessageIdRef.current = firstMessageId
+    const lastMessage = messages[messages.length - 1]
 
-    const lastMsg = messages[messages.length - 1]
-    if (lastMsg?.role === 'user') {
+    // 发送新消息、切换会话时强制回到底部；其余消息更新只在用户原本接近底部时跟随
+    if (conversationChanged || lastMessage?.role === 'user' || shouldAutoScrollRef.current) {
       shouldAutoScrollRef.current = true
+      scrollToBottom()
     }
-
-    if (shouldAutoScrollRef.current) {
-      list.scrollTop = list.scrollHeight
-    }
-  }, [messages, loading])
+  }, [messages, loading, scrollToBottom])
 
   useEffect(() => {
     const list = listRef.current
-    if (!list) return
-    if (shouldAutoScrollRef.current) {
-      list.scrollTop = list.scrollHeight
-    }
-  })
+    if (!list || typeof ResizeObserver === 'undefined') return
+    const stream = list.firstElementChild
+    if (!stream) return
+    const observer = new ResizeObserver(() => {
+      if (shouldAutoScrollRef.current) {
+        list.scrollTop = list.scrollHeight
+      }
+    })
+    observer.observe(stream)
+    return () => observer.disconnect()
+  }, [])
 
   const handleScroll = () => {
     const list = listRef.current
@@ -254,9 +271,15 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onS
     shouldAutoScrollRef.current = distanceToBottom < 40
   }
 
+  const sendMessage = (text: string) => {
+    shouldAutoScrollRef.current = true
+    scrollToBottom()
+    onSend(text)
+  }
+
   const handleSend = () => {
     if (inputValue.trim()) {
-      onSend(inputValue)
+      sendMessage(inputValue)
       setInputValue('')
     }
   }
@@ -333,7 +356,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onS
 
             return (
               <div key={message.id} className="ai-msg assistant">
-                <div className="ai-msg-avatar"><RobotOutlined /></div>
+                <div className="ai-msg-avatar">AI</div>
                 <div className="ai-msg-main">
                   {message.streaming && message.thinkingStage && !displayContent && (
                     <div className="ai-thinking">
@@ -353,7 +376,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onS
 
                   {clarification && (
                     <div className="ai-clarification">
-                      <ClarificationCard spec={clarification} onSubmit={onSend} />
+                      <ClarificationCard spec={clarification} onSubmit={sendMessage} />
                     </div>
                   )}
 
@@ -376,7 +399,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onS
                           key={index}
                           type="button"
                           className="ai-suggestion"
-                          onClick={() => onSend(suggestion)}
+                          onClick={() => sendMessage(suggestion)}
                         >
                           {suggestion}
                         </button>

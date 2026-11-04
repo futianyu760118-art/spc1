@@ -39,24 +39,26 @@ export default function ChatComposer({
         />
         {loading && onStop ? (
           <Button
-            shape="circle"
             icon={<PauseCircleOutlined />}
             onClick={onStop}
             danger
             title="停止生成"
-          />
+          >
+            停止
+          </Button>
         ) : (
           <Button
             type="primary"
-            shape="circle"
             icon={<SendOutlined />}
             onClick={onSend}
             disabled={!value.trim() || disabled}
             title="发送"
-          />
+          >
+            发送
+          </Button>
         )}
       </div>
-      <div className="ai-composer-hint">Enter 发送 · Shift+Enter 换行</div>
+      <div className="ai-composer-hint">Enter 发送 · Shift + Enter 换行</div>
     </div>
   )
 }
