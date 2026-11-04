@@ -189,10 +189,12 @@ const DATA_ISSUE_LABELS: Record<string, string> = {
   demand_without_bom: '需求行缺BOM',
   no_bom: '无有效BOM',
   material_property_missing: '物料属性缺失',
+  bom_parent_property_missing: 'BOM父件属性缺失',
   bom_cycle: 'BOM环路',
   subcontract_date_approx: '委外日期近似',
   param_fallback: '参数回退统计',
   stale_supply_excluded: '历史供给未计入',
+  sync_stale: 'K3 同步过期',
 }
 
 const SUPPLY_TYPE_LABELS: Record<string, string> = {

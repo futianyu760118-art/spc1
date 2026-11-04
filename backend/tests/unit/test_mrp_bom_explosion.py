@@ -12,7 +12,7 @@ from app.services.mrp.bom_explosion import (
 )
 
 
-def _comp(mid, qty, scrap="0", offset=0, valid=None, invalid=None):
+def _comp(mid, qty, scrap="0", offset=0, valid=None, invalid=None, base="1"):
     return BomComponent(
         material_id=mid,
         standard_qty=Decimal(qty),
@@ -20,6 +20,7 @@ def _comp(mid, qty, scrap="0", offset=0, valid=None, invalid=None):
         lead_offset_days=offset,
         valid_date=valid,
         invalid_date=invalid,
+        base_qty=Decimal(base),
     )
 
 
@@ -43,10 +44,19 @@ def test_low_level_codes_cycle_detected():
 
 def test_explode_qty_scrap_and_offset():
     parent_start = date(2026, 10, 1)
-    reqs = explode(parent_start, Decimal("10"), [_comp(2, "3", scrap="0.05", offset=2)])
+    reqs = explode(parent_start, Decimal("10"), [_comp(2, "3", scrap="2", offset=2)])
     assert len(reqs) == 1
     assert reqs[0].need_date == date(2026, 9, 29)
-    assert reqs[0].qty == Decimal("10") * Decimal("3") * Decimal("1.05")
+    # K3 FScrap 是百分数：2 表示 2%，不是 200%
+    assert reqs[0].qty == Decimal("10") * Decimal("3") * Decimal("1.02")
+
+
+def test_explode_base_qty_divides_standard_qty():
+    parent_start = date(2026, 10, 1)
+    reqs = explode(parent_start, Decimal("10"), [_comp(2, "3", base="5")])
+    assert len(reqs) == 1
+    # 标准用量 3 是每 5 个父件用量，10 个父件需要 6
+    assert reqs[0].qty == Decimal("6")
 
 
 def test_explode_validity_filtered_by_child_date():
@@ -68,3 +78,15 @@ def test_flatten_phantom_penetrates():
     assert len(result) == 1
     assert result[0].material_id == 3
     assert result[0].qty == Decimal("5") * Decimal("2") * Decimal("3")
+
+
+def test_flatten_phantom_applies_scrap_and_base_qty():
+    comps = {1: [_comp(2, "2", scrap="2", base="2")]}
+    result = flatten_phantom(
+        1, date(2026, 10, 1), Decimal("10"),
+        get_components=lambda mid: comps.get(mid, []),
+        is_phantom=lambda mid: False,
+    )
+    assert len(result) == 1
+    # 10 × (2 ÷ 2) × 1.02 = 10.2
+    assert result[0].qty == Decimal("10.2")

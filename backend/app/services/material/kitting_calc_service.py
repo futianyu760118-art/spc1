@@ -4,7 +4,7 @@
 持久化到 kitting_run / kitting_result / kitting_shortage。
 
 与页面口径 kit_analysis_service 的差异（有意为之，勿合并）：
-- 毛需求 = 标准用量 × (1+损耗率) 逐层复合；页面口径不做损耗复合
+- 毛需求 = 标准用量 ÷ 基础用量 × (1+损耗率/100) 逐层复合；页面口径不做损耗复合
 - 可用库存 = Σ (qty_on_hand − locked_qty)（现存 − 锁定；本账套 K3 FQtyLock/FBal 恒 0，
   故实际等于现存；映射修正后锁定自动生效）
 - 自制(2)/委外(3) 物料计入需求并由 PRODUCTION/OUTSOURCE 供给满足，不向下展开其 BOM；
@@ -40,6 +40,7 @@ from app.models.material.subcontract_order import SubcontractOrder
 from app.models.material.subcontract_order_detail import SubcontractOrderDetail
 from app.models.material.transfer_order import TransferOrder
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.services.common.bom_math import scrap_multiplier
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +152,13 @@ def _expand_bom_unit(ctx: dict, bom_id: str, visited: frozenset) -> dict[int, De
         return memo[bom_id]
     visited = visited | {bom_id}
     result: dict[int, Decimal] = {}
+    base_qty = ctx.get("base_qty_by_bom", {}).get(bom_id) or Decimal("1")
+    if base_qty <= 0:
+        base_qty = Decimal("1")
     for material_id, standard_qty, scrap_rate, prop in ctx["details_by_bom"].get(bom_id, []):
         if material_id is None or standard_qty is None:
             continue
-        qty = standard_qty * (Decimal("1") + (scrap_rate or _ZERO))
+        qty = standard_qty / base_qty * scrap_multiplier(scrap_rate)
         if prop == 5:
             child = ctx["child_bom_by_material"].get(material_id)
             if child:
@@ -213,6 +217,7 @@ async def _load_context(db: AsyncSession) -> dict:
     ctx: dict = {
         "demands": [],
         "details_by_bom": {},
+        "base_qty_by_bom": {},
         "child_bom_by_material": {},
         "bom_version_by_id": {},
         "material_property_by_id": {},
@@ -254,11 +259,16 @@ async def _load_context(db: AsyncSession) -> dict:
             if status != 1 or is_deleted == 1:
                 ctx["blocked_codes"].add(code)
 
-    bom_rows = (await db.execute(select(Bom.bom_id, Bom.material_id, Bom.bom_version))).all()
-    for bom_id, material_id, bom_version in bom_rows:
+    bom_rows = (
+        await db.execute(select(Bom.bom_id, Bom.material_id, Bom.bom_version, Bom.base_qty))
+    ).all()
+    for bom_id, material_id, bom_version, base_qty in bom_rows:
         if bom_id and material_id is not None:
             ctx["child_bom_by_material"].setdefault(material_id, bom_id)
             ctx["bom_version_by_id"][bom_id] = bom_version
+            ctx["base_qty_by_bom"][bom_id] = (
+                Decimal(str(base_qty)) if base_qty is not None else Decimal("1")
+            )
 
     detail_rows = (
         await db.execute(

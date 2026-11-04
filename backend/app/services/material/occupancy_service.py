@@ -20,6 +20,7 @@ from app.schemas.material.occupancy import (
     OrderLineOccupancy,
     OrderOccupancyResponse,
 )
+from app.services.common.bom_math import scrap_multiplier
 
 STATUS_MET = "met"
 STATUS_PARTIAL = "partial"
@@ -70,12 +71,16 @@ def _expand_bom(
         return {}
     visited.add(bom_id)
     result: dict[int, list] = {}
+    base_qty = ctx.get("base_qty_by_bom", {}).get(bom_id) or Decimal("1")
+    if base_qty <= 0:
+        base_qty = Decimal("1")
     for material_id, standard_qty, scrap_rate in ctx["details_by_bom"].get(bom_id, []):
-        _merge_unit(result, material_id, standard_qty, 1, scrap_rate)
+        qty = standard_qty / base_qty * scrap_multiplier(scrap_rate)
+        _merge_unit(result, material_id, qty, 1, scrap_rate)
         child_bom_id = ctx["child_bom_by_material"].get(material_id)
         if child_bom_id and child_bom_id not in visited:
             for sub_id, sub in _expand_bom(ctx, child_bom_id, visited).items():
-                _merge_unit(result, sub_id, standard_qty * sub[0], sub[1] + 1, sub[2])
+                _merge_unit(result, sub_id, qty * sub[0], sub[1] + 1, sub[2])
     visited.discard(bom_id)
     memo[bom_id] = result
     return result
@@ -109,7 +114,7 @@ async def _build_context(db: AsyncSession) -> dict:
         )
     ).all()
 
-    bom_rows = (await db.execute(select(Bom.bom_id, Bom.material_id))).all()
+    bom_rows = (await db.execute(select(Bom.bom_id, Bom.material_id, Bom.base_qty))).all()
     detail_rows = (
         await db.execute(
             select(
@@ -125,12 +130,16 @@ async def _build_context(db: AsyncSession) -> dict:
         "line_rows": [],
         "skipped_lines": 0,
         "details_by_bom": {},
+        "base_qty_by_bom": {},
         "child_bom_by_material": {},
         "unit_qty_memo": {},
     }
-    for bom_id, material_id in bom_rows:
+    for bom_id, material_id, base_qty in bom_rows:
         if bom_id and material_id is not None:
             ctx["child_bom_by_material"][material_id] = bom_id
+            ctx["base_qty_by_bom"][bom_id] = (
+                Decimal(str(base_qty)) if base_qty is not None else Decimal("1")
+            )
     for d in detail_rows:
         if d.bom_id and d.material_id is not None and d.standard_qty is not None:
             ctx["details_by_bom"].setdefault(d.bom_id, []).append(

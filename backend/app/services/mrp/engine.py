@@ -26,6 +26,7 @@ from app.services.mrp.bom_explosion import (
     flatten_phantom,
 )
 from app.services.mrp.comparison import build_comparison
+from app.services.mrp.data_quality import check_sync_freshness
 from app.services.mrp.exception_detector import (
     EXC_BELOW_SAFETY,
     EXC_NO_BOM,
@@ -184,6 +185,9 @@ class MrpEngine:
                         select(MrpSubstitute).where(MrpSubstitute.enabled.is_(True))
                     )
                 ).scalars().all()
+                freshness_issues = await check_sync_freshness(db)
+                if freshness_issues:
+                    snapshot.data_issues["sync_stale"] = freshness_issues
             substitute_rules = [
                 SubstituteRule(
                     id=row.id,
@@ -243,6 +247,7 @@ class MrpEngine:
                         lead_offset_days=c.lead_offset_days,
                         valid_date=c.valid_date,
                         invalid_date=c.invalid_date,
+                        base_qty=snapshot.base_qty_by_bom.get(bom_id, Decimal("1")),
                     )
                     for c in snapshot.details_by_bom.get(bom_id, [])
                 ]
@@ -591,6 +596,10 @@ class MrpEngine:
                         "replace_skipped": substitute_stats["replace_skipped"],
                     },
                     "duration_sec": round(time.time() - started, 2),
+                    "data_quality": {
+                        "sync_freshness_ok": not freshness_issues,
+                        "sync_stale_count": len(freshness_issues),
+                    },
                     "data_issues": {
                         key: len(value) for key, value in snapshot.data_issues.items()
                     },

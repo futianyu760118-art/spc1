@@ -5,6 +5,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Callable, Iterable, Optional
 
+from app.services.common.bom_math import bom_component_qty
+
 
 @dataclass(frozen=True)
 class BomComponent:
@@ -14,6 +16,7 @@ class BomComponent:
     lead_offset_days: int
     valid_date: Optional[date]
     invalid_date: Optional[date]
+    base_qty: Decimal = Decimal("1")
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,7 @@ def explode(
         check_date = ref_date or child_date
         if not component_valid_at(comp, check_date):
             continue
-        qty = parent_qty * comp.standard_qty * (Decimal("1") + comp.scrap_rate)
+        qty = bom_component_qty(parent_qty, comp.standard_qty, comp.scrap_rate, comp.base_qty)
         if qty <= 0:
             continue
         result.append(ChildRequirement(comp.material_id, child_date, qty))
@@ -89,7 +92,7 @@ def flatten_phantom(
         child_date = need_date if comp.lead_offset_days == 0 else need_date - _days(comp.lead_offset_days)
         if not component_valid_at(comp, child_date):
             continue
-        child_qty = qty * comp.standard_qty * (Decimal("1") + comp.scrap_rate)
+        child_qty = bom_component_qty(qty, comp.standard_qty, comp.scrap_rate, comp.base_qty)
         if child_qty <= 0:
             continue
         if is_phantom(comp.material_id):

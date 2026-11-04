@@ -23,7 +23,7 @@ class BomDetail(Base):
     config_type = Column(String(32), nullable=True, comment="配置类型")
     lead_offset_days = Column(Integer, nullable=True, default=0, comment="前期偏移天数")
     back_flush = Column(Integer, nullable=False, default=0, comment="是否倒冲 0否1是")
-    scrap_rate = Column(Numeric(10, 4), nullable=True, default=0, comment="损耗率")
+    scrap_rate = Column(Numeric(10, 4), nullable=True, default=0, comment="损耗率(百分数，K3 FScrap 原值，2 表示 2%)")
     oper_sn = Column(String(32), nullable=True, comment="工序号(FOperSN)")
     process_id = Column(String(32), nullable=True, comment="工序ID")
     warehouse_id = Column(String(32), nullable=True, comment="仓库ID")
