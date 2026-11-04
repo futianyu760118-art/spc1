@@ -88,6 +88,12 @@ const PATHS: Record<string, JSX.Element> = {
     </>
   ),
   close: <path d="M6 6l12 12M18 6L6 18" />,
+  bell: (
+    <>
+      <path d="M18 9a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" />
+      <path d="M10.5 19a2 2 0 0 0 3 0" />
+    </>
+  ),
   cube: (
     <>
       <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z" />

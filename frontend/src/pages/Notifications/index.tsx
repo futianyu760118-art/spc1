@@ -9,6 +9,7 @@ import {
 import { notificationApi } from '../../services/api'
 import { notificationStream } from '../../services/notificationStream'
 import { notificationJump } from '../../utils/notificationJump'
+import { formatNotificationTime } from '../../utils/notificationTime'
 import { useAuthStore } from '../../store/auth'
 import './index.css'
 
@@ -54,21 +55,6 @@ const TYPE_DEFS = [
 const KNOWN_TYPES = TYPE_DEFS.map(t => t.key)
 
 const typeDef = (type: string) => TYPE_DEFS.find(t => t.key === type)
-
-// 后端返回 "YYYY-MM-DD HH:mm" → 今天/昨天用相对表述，其余本月/跨年缩写（对齐原型）
-function fmtTime(s: string) {
-  const d = new Date(s.replace(' ', 'T'))
-  if (isNaN(d.getTime())) return s
-  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  const now = new Date()
-  const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-  const yesterday = new Date(now)
-  yesterday.setDate(now.getDate() - 1)
-  if (sameDay(d, now)) return `今天 ${hm}`
-  if (sameDay(d, yesterday)) return `昨天 ${hm}`
-  const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}`
-  return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}-${md}`
-}
 
 // 数据里出现枚举外的新类型时，追加到分类导航（label 用原始 type）
 const extraTypeDef = (type: string) => ({ key: type, label: type, icon: BellOutlined, color: '#64748b', bg: '#f1f5f9' })
@@ -319,7 +305,7 @@ export default function Notifications() {
                         <div className="nm-snip">{n.sender_name ? `${n.sender_name}：` : ''}{n.content || '—'}</div>
                       </div>
                       <div className="nm-side">
-                        <span className="nm-time">{fmtTime(n.created_at)}</span>
+                        <span className="nm-time">{formatNotificationTime(n.created_at)}</span>
                       </div>
                     </div>
                   )
@@ -361,7 +347,7 @@ export default function Notifications() {
               </div>
               <h2>{selected.title}</h2>
               <div className="nm-meta">
-                <span>{fmtTime(selected.created_at)}</span>
+                <span>{formatNotificationTime(selected.created_at)}</span>
                 {selectedType && <span>类型：{selectedType.label}</span>}
                 {selected.sender_name && <span>提出人：{selected.sender_name}</span>}
               </div>
