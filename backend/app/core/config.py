@@ -118,6 +118,7 @@ class Settings(BaseSettings):
     # 第二阶段：技能脚本沙箱（UDS 优先；URL 仅本地调试）
     SKILL_SANDBOX_UDS: str = ""
     SKILL_SANDBOX_URL: str = ""
+    SKILL_SANDBOX_ORCHESTRATOR_URL: str = ""
     SKILL_SANDBOX_TOKEN: str = ""
     SKILL_SCRIPT_TIMEOUT_S: int = 30
     SKILL_SCRIPT_MAX_OUTPUT_BYTES: int = 8000

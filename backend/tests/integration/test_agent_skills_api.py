@@ -449,3 +449,21 @@ async def test_run_skill_script_tool_with_fake_sandbox(monkeypatch, client):
             db=session, user_context=ctx,
         )
         assert wrong["ok"] is False
+
+async def test_create_agent_with_skill_only(client):
+    headers = await login(client, "admin")
+    r = await _import_skill(
+        client, headers,
+        _zip_bytes({"SKILL.md": _skill_md("skill-only", "skill only agent")}, top="skill-only"),
+    )
+    skill = r.json()["data"]
+
+    r = await client.post(
+        AGENTS,
+        json={"name": "skill-only-agent", "capabilities": [], "skill_ids": [skill["id"]]},
+        headers=headers,
+    )
+    body = r.json()
+    assert body["code"] == 0, r.text
+    assert body["data"]["capabilities"] == []
+    assert [item["id"] for item in body["data"]["skills"]] == [skill["id"]]

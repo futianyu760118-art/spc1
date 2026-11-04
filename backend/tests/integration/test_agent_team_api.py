@@ -49,8 +49,8 @@ async def test_admin_crud_duplicate_and_unknown_capability(client):
 
     r = await client.post(
         ADMIN_AGENTS, json=_payload("空白能力员", capabilities=[]), headers=headers)
-    assert r.json()["code"] == 400
-    assert "至少选择一个能力" in r.json()["message"]
+    assert r.json()["code"] == 0, r.text
+    assert r.json()["data"]["capabilities"] == []
 
     r = await client.put(
         f"{ADMIN_AGENTS}/{created['id']}",

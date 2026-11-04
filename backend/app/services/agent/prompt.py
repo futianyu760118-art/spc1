@@ -9,7 +9,7 @@ from app.services.agent.skills import SKILL_INDEX_DESCRIPTION_MAX
 
 def _capability_names(ctx: UserContext) -> str:
     if not ctx.effective_capabilities:
-        return "无（仅基础对话）"
+        return "无（仅技能与基础对话）"
     from app.services.agent.capabilities import CONFIGURABLE_CAPABILITIES
     names = [
         CONFIGURABLE_CAPABILITIES[code].name
@@ -111,4 +111,14 @@ def build_agent_system_prompt(base_prompt: str, ctx: UserContext) -> str:
             )
         rules.append("- 创建/安装后需在智能体管理中绑定才能使用。")
         lines.extend(rules)
+    lines.extend([
+        "",
+        "【需要用户确认时】",
+        "- 如果你需要用户做选择或补充信息才能继续，请自行判断交互类型（单选、多选、填空），并在最终回复末尾追加：",
+        "```spc-confirm",
+        '{"title":"需要确认","questions":[{"id":"q1","type":"single","label":"请选择","options":[{"label":"选项A","value":"a"},{"label":"选项B","value":"b"}],"required":true}]}',
+        "```",
+        "- type 只能是 single、multiple、text；single/multiple 必须提供至少两个 options；text 可提供 placeholder。",
+        "- 不需要用户确认时不要输出该代码块；不要在正文里重复同一组选项。",
+    ])
     return "\n".join(lines)

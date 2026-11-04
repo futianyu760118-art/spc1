@@ -43,3 +43,18 @@ def test_parse_dsml_keeps_plain_text_untouched():
 
     assert text == "正常回复"
     assert calls == []
+XML_TOOL_CALL_CONTENT = """I will install the skill.
+
+<tool_call>
+{"name": "install_skill", "arguments": {"skill": "@zcwl/multi-search-engine"}}
+</tool_call>"""
+
+
+def test_parse_xml_tool_call_json():
+    text, calls = parse_dsml_tool_calls(XML_TOOL_CALL_CONTENT)
+
+    assert "<tool_call>" not in text
+    assert text == "I will install the skill."
+    assert len(calls) == 1
+    assert calls[0].name == "install_skill"
+    assert calls[0].arguments == {"skill": "@zcwl/multi-search-engine"}

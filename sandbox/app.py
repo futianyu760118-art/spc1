@@ -3,7 +3,7 @@
 安全边界：
 - 容器无网络、只读根文件系统、非 root、cap_drop ALL；
 - 每次请求只接收一个技能 zip，解压到独立临时目录；
-- 仅允许 scripts/ 下 .py/.js/.sh；
+- 仅允许 scripts/ 下 .py/.js/.cjs/.mjs/.sh；
 - 限时、限内存、限输出、限文件大小；
 - 输入 params 通过 stdin JSON 传入。
 """
@@ -34,6 +34,8 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 SANDBOX_TOKEN = os.environ.get("SANDBOX_TOKEN", "").strip()
 MAX_PACKAGE_BYTES = int(os.environ.get("SANDBOX_MAX_PACKAGE_BYTES", "20971520"))
 MAX_TIMEOUT_S = int(os.environ.get("SANDBOX_MAX_TIMEOUT_S", "60"))
+DEP_INSTALL_TIMEOUT_S = int(os.environ.get("SANDBOX_DEP_INSTALL_TIMEOUT_S", "60"))
+DEPS_DIR = ".deps"
 MAX_OUTPUT_BYTES = int(os.environ.get("SANDBOX_MAX_OUTPUT_BYTES", "65536"))
 MAX_FILES = 500
 MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -43,13 +45,15 @@ WORK_ROOT = Path(os.environ.get("SANDBOX_WORK_ROOT", "/tmp"))
 SCRIPT_RUNTIMES = {
     ".py": [sys.executable],
     ".js": ["node"],
+    ".cjs": ["node"],
+    ".mjs": ["node"],
     ".sh": ["bash"],
 }
 MAX_ARTIFACT_FILES = 20
 MAX_ARTIFACT_BYTES = 20 * 1024 * 1024
 MAX_INPUT_FILES = 10
 MAX_INPUT_BYTES = 512 * 1024
-ARTIFACT_SKIP_DIRS = {"__pycache__", "tmp", ".git", ".cache"}
+ARTIFACT_SKIP_DIRS = {"__pycache__", "tmp", ".git", ".cache", DEPS_DIR}
 ARTIFACT_SKIP_NAMES = {"wps_stats.db"}
 ARTIFACT_SKIP_SUFFIXES = {".pyc", ".pyo", ".log", ".tmp"}
 
@@ -59,11 +63,13 @@ app = FastAPI(title="SPC Skill Sandbox", docs_url=None, redoc_url=None, openapi_
 def _snapshot(work: Path) -> Dict[str, tuple]:
     snapshot: Dict[str, tuple] = {}
     for path in work.rglob("*"):
-        if path.is_file() and not path.is_symlink():
-            stat_result = path.stat()
-            snapshot[path.relative_to(work).as_posix()] = (
-                stat_result.st_size, stat_result.st_mtime_ns,
-            )
+        if not path.is_file() or path.is_symlink():
+            continue
+        relative = path.relative_to(work).as_posix()
+        if any(part in ARTIFACT_SKIP_DIRS for part in PurePosixPath(relative).parts):
+            continue
+        stat_result = path.stat()
+        snapshot[relative] = (stat_result.st_size, stat_result.st_mtime_ns)
     return snapshot
 
 
@@ -186,6 +192,44 @@ def _write_input_files(work: Path, inputs: dict) -> None:
         target.write_text(content, encoding="utf-8")
 
 
+def _rewrite_file_args(args: list, work: Path) -> list:
+    """把脚本参数中的文件路径改为沙箱工作目录内的实际文件。
+
+    Skill 脚本常用 --input_file 等参数接收文件，绝对路径会指向后端容器
+    或宿主机；这里统一改写为解压后的工作目录路径，找不到则保持原值。
+    """
+    file_flags = {
+        "--input_file", "-i", "--input", "--file",
+        "--authoring_file", "--outline_file", "--annotations_file",
+    }
+    rewritten = list(args or [])
+    work = work.resolve()
+    for index in range(len(rewritten) - 1):
+        flag = rewritten[index]
+        if flag not in file_flags and not flag.endswith("_file"):
+            continue
+        value = rewritten[index + 1]
+        if not value or value.startswith("-"):
+            continue
+        candidate = Path(value)
+        target = None
+        if candidate.is_absolute():
+            try:
+                if candidate.is_relative_to(work) and candidate.is_file():
+                    continue
+            except ValueError:
+                pass
+            target = (work / candidate.name).resolve()
+        else:
+            target = (work / value).resolve()
+        try:
+            if target.is_relative_to(work) and target.is_file():
+                rewritten[index + 1] = str(target)
+        except ValueError:
+            pass
+    return rewritten
+
+
 def _limit_resources() -> None:
     """子进程资源限制（Linux）；失败不阻断（沙箱外层仍有容器限额）。"""
     try:
@@ -238,10 +282,8 @@ def _kill_process_group(proc) -> None:
         pass
 
 
-async def _execute(
-    command: list, script_path: Path, work: Path, params_json: str, timeout_s: int,
-    script_args: Optional[list] = None,
-) -> Dict:
+def _sandbox_env(work: Path) -> dict:
+    deps = work / DEPS_DIR
     env = {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "HOME": str(work),
@@ -251,7 +293,118 @@ async def _execute(
         "PYTHONIOENCODING": "utf-8",
         "PYTHONDONTWRITEBYTECODE": "1",
         "NODE_NO_WARNINGS": "1",
+        "PIP_NO_CACHE_DIR": "1",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_ROOT_USER_ACTION": "ignore",
     }
+    python_paths = [str(deps)] if deps.is_dir() else []
+    existing = os.environ.get("PYTHONPATH", "")
+    if existing:
+        python_paths.extend(item for item in existing.split(os.pathsep) if item)
+    if python_paths:
+        env["PYTHONPATH"] = os.pathsep.join(python_paths)
+    node_modules = deps / "node_modules"
+    if node_modules.is_dir():
+        env["NODE_PATH"] = str(node_modules)
+    return env
+
+
+async def _run_install_command(command: list, work: Path, timeout_s: int) -> Dict:
+    env = _sandbox_env(work)
+    (work / "tmp").mkdir(parents=True, exist_ok=True)
+    proc = await asyncio.create_subprocess_exec(
+        *command,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(work),
+        env=env,
+        preexec_fn=_limit_resources if os.name == "posix" else None,
+    )
+    stdout_task = asyncio.create_task(_read_limited(proc.stdout, MAX_OUTPUT_BYTES))
+    stderr_task = asyncio.create_task(_read_limited(proc.stderr, MAX_OUTPUT_BYTES))
+    timed_out = False
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout_s)
+    except asyncio.TimeoutError:
+        timed_out = True
+        _kill_process_group(proc)
+        await proc.wait()
+    stdout, out_truncated = await stdout_task
+    stderr, err_truncated = await stderr_task
+    return {
+        "ok": proc.returncode == 0 and not timed_out,
+        "timed_out": timed_out,
+        "stdout": stdout.decode("utf-8", errors="replace"),
+        "stderr": stderr.decode("utf-8", errors="replace"),
+        "truncated": out_truncated or err_truncated,
+    }
+
+
+async def _install_dependencies(work: Path) -> None:
+    """安装技能包声明的 requirements.txt / package.json 依赖。
+
+    依赖统一安装到工作目录的 .deps 下，避免写入只读根文件系统；
+    安装失败或超时直接报错，不带缺失依赖继续执行脚本。
+    """
+    requirements = work / "requirements.txt"
+    package_json = work / "package.json"
+    deps = work / DEPS_DIR
+    if not requirements.is_file() and not package_json.is_file():
+        return
+    deps.mkdir(parents=True, exist_ok=True)
+    if requirements.is_file():
+        result = await _run_install_command(
+            [
+                sys.executable, "-m", "pip", "install",
+                "--target", str(deps),
+                "--no-cache-dir",
+                "--disable-pip-version-check",
+                "--no-input",
+                "--progress-bar", "off",
+                "--retries", "3",
+                "--timeout", "30",
+                "-r", str(requirements),
+            ],
+            work, DEP_INSTALL_TIMEOUT_S,
+        )
+        if not result["ok"]:
+            detail = (result["stderr"] or result["stdout"] or "dependency install failed").strip()
+            raise HTTPException(
+                status_code=400,
+                detail=f"dependency install failed: {detail[:500]}",
+            )
+    if package_json.is_file():
+        npm = shutil.which("npm")
+        if npm is None:
+            raise HTTPException(
+                status_code=400,
+                detail="dependency install failed: npm is not available in sandbox",
+            )
+        shutil.copyfile(package_json, deps / "package.json")
+        lock_file = work / "package-lock.json"
+        if lock_file.is_file():
+            shutil.copyfile(lock_file, deps / "package-lock.json")
+        result = await _run_install_command(
+            [
+                npm, "install", "--prefix", str(deps),
+                "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund",
+            ],
+            work, DEP_INSTALL_TIMEOUT_S,
+        )
+        if not result["ok"]:
+            detail = (result["stderr"] or result["stdout"] or "npm install failed").strip()
+            raise HTTPException(
+                status_code=400,
+                detail=f"dependency install failed: {detail[:500]}",
+            )
+
+
+async def _execute(
+    command: list, script_path: Path, work: Path, params_json: str, timeout_s: int,
+    script_args: Optional[list] = None,
+) -> Dict:
+    env = _sandbox_env(work)
     (work / "tmp").mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     proc = await asyncio.create_subprocess_exec(
@@ -308,40 +461,22 @@ async def health():
     return {"ok": True, "token_configured": bool(SANDBOX_TOKEN)}
 
 
-@app.post("/run")
-async def run(
-    package: UploadFile = File(...),
-    script: str = Form(...),
-    params: str = Form("{}"),
-    args: str = Form("[]"),
-    input_files: str = Form("{}"),
-    timeout_s: int = Form(30),
-    x_sandbox_token: Optional[str] = Header(default=None),
-):
-    _check_token(x_sandbox_token)
-    if getattr(package, "size", None) and package.size > MAX_PACKAGE_BYTES:
-        raise HTTPException(status_code=413, detail="package too large")
-    data = await package.read()
+async def run_task(
+    data: bytes,
+    script: str,
+    parsed_params: dict,
+    parsed_args: list,
+    parsed_inputs: dict,
+    timeout_s: int,
+) -> Dict:
     if len(data) > MAX_PACKAGE_BYTES:
         raise HTTPException(status_code=413, detail="package too large")
-    try:
-        parsed_params = json.loads(params or "{}")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="params must be valid JSON")
     if not isinstance(parsed_params, dict):
         raise HTTPException(status_code=400, detail="params must be an object")
-    try:
-        parsed_args = json.loads(args or "[]")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="args must be valid JSON")
     if not isinstance(parsed_args, list) or not all(isinstance(item, str) for item in parsed_args):
         raise HTTPException(status_code=400, detail="args must be an array of strings")
     if len(parsed_args) > 32 or any(len(item) > 2000 or "\x00" in item for item in parsed_args):
         raise HTTPException(status_code=400, detail="args too large")
-    try:
-        parsed_inputs = json.loads(input_files or "{}")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="input_files must be valid JSON")
     if not isinstance(parsed_inputs, dict):
         raise HTTPException(status_code=400, detail="input_files must be an object")
     normalized = (script or "").strip().replace("\\", "/")
@@ -365,6 +500,8 @@ async def run(
         work = Path(tmp)
         _extract_package(data, work)
         _write_input_files(work, parsed_inputs)
+        await _install_dependencies(work)
+        parsed_args = _rewrite_file_args(parsed_args, work)
         script_path = (work / normalized).resolve()
         if not script_path.is_relative_to(work.resolve()) or not script_path.is_file():
             raise HTTPException(status_code=400, detail="script not found")
@@ -391,3 +528,30 @@ async def run(
             ]
             result["artifacts_truncated"] = truncated
     return result
+
+
+@app.post("/run")
+async def run(
+    package: UploadFile = File(...),
+    script: str = Form(...),
+    params: str = Form("{}"),
+    args: str = Form("[]"),
+    input_files: str = Form("{}"),
+    timeout_s: int = Form(30),
+    x_sandbox_token: Optional[str] = Header(default=None),
+):
+    _check_token(x_sandbox_token)
+    data = await package.read()
+    try:
+        parsed_params = json.loads(params or "{}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="params must be valid JSON")
+    try:
+        parsed_args = json.loads(args or "[]")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="args must be valid JSON")
+    try:
+        parsed_inputs = json.loads(input_files or "{}")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="input_files must be valid JSON")
+    return await run_task(data, script, parsed_params, parsed_args, parsed_inputs, timeout_s)

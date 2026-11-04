@@ -1,8 +1,9 @@
-"""DeepSeek DSML tool-call fallback.
+"""Text tool-call fallback for providers that return markup as content.
 
-deepseek-v4-pro can put DSML tool-call markup in ``message.content`` instead of
-returning OpenAI ``tool_calls``. The markup is not meant to be shown to users,
-so normalize it into ToolCall objects and strip it from the reply text.
+deepseek-v4-pro can put DSML or ``<tool_call>{...}</tool_call>`` markup in
+``message.content`` instead of returning OpenAI ``tool_calls``. The markup is
+not meant to be shown to users, so normalize it into ToolCall objects and strip
+it from the reply text.
 """
 
 from __future__ import annotations
@@ -32,6 +33,10 @@ _PARAM_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _ANY_TAG_RE = re.compile(r"</?\|+\s*DSML\s*\|+\s*[^>]*>", re.IGNORECASE)
+_XML_TOOL_CALL_RE = re.compile(
+    r"<tool_call\b[^>]*>(.*?)</tool_call\s*>", re.IGNORECASE | re.DOTALL,
+)
+_XML_TOOL_CALL_TAG_RE = re.compile(r"</?tool_call\b[^>]*>", re.IGNORECASE)
 
 
 def _normalize(content: str) -> str:
@@ -57,8 +62,48 @@ def _parameter_value(raw: str, string_attr: str) -> object:
     return value
 
 
+def _load_json_payload(raw: str) -> object:
+    payload = raw.strip()
+    if payload.startswith("```"):
+        payload = re.sub(r"^```(?:json)?\s*", "", payload, flags=re.IGNORECASE)
+        payload = re.sub(r"\s*```$", "", payload)
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        start, end = payload.find("{"), payload.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(payload[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+def _xml_tool_calls(body: str, offset: int = 0) -> List[ToolCall]:
+    payload = _load_json_payload(html.unescape(body))
+    items = payload if isinstance(payload, list) else [payload]
+    calls: List[ToolCall] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("tool") or "").strip()
+        arguments = item.get("arguments", item.get("args", {}))
+        if isinstance(arguments, str):
+            arguments = _load_json_payload(arguments) or {}
+        if not isinstance(arguments, dict):
+            arguments = {"value": arguments}
+        if name:
+            calls.append(ToolCall(
+                id=f"xml_{offset + len(calls) + 1}",
+                name=name,
+                arguments=arguments,
+            ))
+    return calls
+
+
 def parse_dsml_tool_calls(content: str) -> Tuple[str, List[ToolCall]]:
-    if "DSML" not in (content or "").upper():
+    upper = (content or "").upper()
+    if "DSML" not in upper and "<TOOL_CALL" not in upper:
         return content or "", []
 
     normalized = _normalize(content)
@@ -83,13 +128,18 @@ def parse_dsml_tool_calls(content: str) -> Tuple[str, List[ToolCall]]:
             arguments=arguments,
         ))
 
-    clean = _ROOT_RE.sub("", normalized)
+    for xml_call in _XML_TOOL_CALL_RE.finditer(normalized):
+        calls.extend(_xml_tool_calls(xml_call.group(1), offset=len(calls)))
+
+    clean = _XML_TOOL_CALL_RE.sub("", normalized)
+    clean = _ROOT_RE.sub("", clean)
     clean = _INVOKE_RE.sub("", clean)
     clean = _PARAM_RE.sub("", clean)
-    clean = _ANY_TAG_RE.sub("", clean).strip()
+    clean = _ANY_TAG_RE.sub("", clean)
+    clean = _XML_TOOL_CALL_TAG_RE.sub("", clean).strip()
     if calls:
         logger.warning(
-            "[DSML] parsed %d tool call(s) from assistant content: %s",
+            "[tool-call] parsed %d text tool call(s) from assistant content: %s",
             len(calls), ", ".join(call.name for call in calls),
         )
     return clean, calls

@@ -1,5 +1,6 @@
-"""技能脚本沙箱客户端：通过 UDS（生产）或 HTTP（本地调试）调用独立 sandbox。"""
+"""技能脚本沙箱客户端：优先调用任务级 Docker orchestrator，保留旧 UDS/HTTP fallback。"""
 
+import base64
 import json
 import logging
 from typing import Any, Dict, Optional, Tuple
@@ -14,18 +15,69 @@ from app.services.agent.skills import package_skill_folder
 logger = logging.getLogger(__name__)
 
 
-def _sandbox_config() -> Tuple[str, str, str]:
+def _sandbox_config() -> Tuple[str, str, str, str]:
     settings = get_settings()
     return (
         (settings.SKILL_SANDBOX_UDS or "").strip(),
         (settings.SKILL_SANDBOX_URL or "").strip(),
+        (settings.SKILL_SANDBOX_ORCHESTRATOR_URL or "").strip(),
         (settings.SKILL_SANDBOX_TOKEN or "").strip(),
     )
 
 
 def is_sandbox_enabled() -> bool:
-    uds, url, token = _sandbox_config()
-    return bool(token and (uds or url))
+    uds, url, orchestrator_url, token = _sandbox_config()
+    return bool(token and (uds or url or orchestrator_url))
+
+
+def _detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+        return str(payload.get("detail") or payload.get("message") or "")
+    except ValueError:
+        return response.text[:200]
+
+
+async def _run_orchestrator(
+    url: str,
+    token: str,
+    package: bytes,
+    script: str,
+    params: Dict[str, Any],
+    script_args: list,
+    input_files: Dict[str, str],
+    timeout_s: int,
+) -> Dict[str, Any]:
+    payload = {
+        "package_b64": base64.b64encode(package).decode("ascii"),
+        "script": script,
+        "params": params,
+        "args": script_args,
+        "input_files": input_files,
+        "timeout_s": max(1, timeout_s),
+    }
+    try:
+        async with httpx.AsyncClient(
+            base_url=url.rstrip("/"),
+            timeout=timeout_s + 120,
+        ) as client:
+            response = await client.post(
+                "/run",
+                json=payload,
+                headers={"X-Sandbox-Token": token},
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("[skill-sandbox] orchestrator 调用失败: %s", exc)
+        raise AgentError(f"技能沙箱不可用：{str(exc)[:200]}") from exc
+    if response.status_code != 200:
+        raise AgentError(f"技能沙箱拒绝执行：{_detail(response) or response.status_code}")
+    try:
+        result = response.json()
+    except ValueError as exc:
+        raise AgentError("技能沙箱返回非法响应") from exc
+    if not isinstance(result, dict):
+        raise AgentError("技能沙箱返回非法响应")
+    return result
 
 
 async def run_skill_script(
@@ -35,12 +87,24 @@ async def run_skill_script(
     script_args: Optional[list] = None,
     input_files: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """把技能目录打包后交给 sandbox 执行脚本；返回 sandbox 原始结果。"""
+    """把技能目录打包后交给沙箱执行脚本；返回沙箱结构化结果。"""
     if not is_sandbox_enabled():
         raise AgentError("脚本沙箱未配置，无法执行技能脚本")
-    uds, url, token = _sandbox_config()
+    uds, url, orchestrator_url, token = _sandbox_config()
     timeout_s = int(get_settings().SKILL_SCRIPT_TIMEOUT_S or 30)
     package = package_skill_folder(skill)
+    if orchestrator_url:
+        return await _run_orchestrator(
+            orchestrator_url,
+            token,
+            package,
+            script,
+            params or {},
+            script_args or [],
+            input_files or {},
+            timeout_s,
+        )
+
     headers = {"X-Sandbox-Token": token}
     data = {
         "script": script,
@@ -67,13 +131,7 @@ async def run_skill_script(
         raise AgentError(f"技能沙箱不可用：{str(exc)[:200]}") from exc
 
     if response.status_code != 200:
-        detail = ""
-        try:
-            payload = response.json()
-            detail = payload.get("detail") or payload.get("message") or ""
-        except ValueError:
-            detail = response.text[:200]
-        raise AgentError(f"技能沙箱拒绝执行：{detail or response.status_code}")
+        raise AgentError(f"技能沙箱拒绝执行：{_detail(response) or response.status_code}")
     try:
         payload = response.json()
     except ValueError as exc:
