@@ -69,6 +69,11 @@ import ProductionOverview from '../pages/ProductionCenter/ProductionOverview/ind
 import Dashboard372 from '../pages/ProductionCenter/Dashboard372/index'
 import SchedulePlans from '../pages/ProductionCenter/SchedulePlans/index'
 import ScheduleDateAdjust from '../pages/ProductionCenter/ScheduleDateAdjust/index'
+import MonthlyCapacityPlan from '../pages/ProductionCenter/MonthlyCapacityPlan/index'
+import NewSchedulePlans from '../pages/EngineeringCenter/NewSchedulePlans/index'
+import LaborPrices from '../pages/EngineeringCenter/LaborPrices/index'
+import LaborPriceNew from '../pages/EngineeringCenter/LaborPrices/New'
+import LaborPriceChanges from '../pages/EngineeringCenter/LaborPriceChanges/index'
 import TodoWorkbench from '../pages/ProductionCenter/TodoWorkbench/index'
 import ChangeEvents from '../pages/ProductionCenter/ChangeEvents/index'
 import ScheduleBoard from '../pages/ProductionCenter/ScheduleBoard/index'
@@ -104,7 +109,6 @@ import AssistantPage from '../pages/Assistant'
 
 export const contentRoutes = (
     <>
-        <Route index element={<Navigate to="/dashboard" replace/>}/>
         <Route path="/profile" element={<Profile/>}/>
         <Route path="/dashboard" element={<Dashboard/>}/>
         <Route path="/orders" element={<OrderList/>}/>
@@ -140,6 +144,11 @@ export const contentRoutes = (
         <Route path="/production-dashboard" element={<Dashboard372/>}/>
         <Route path="/schedule-plans" element={<SchedulePlans/>}/>
         <Route path="/schedule-date-adjust" element={<ScheduleDateAdjust/>}/>
+        <Route path="/production/monthly-capacity-plan" element={<MonthlyCapacityPlan/>}/>
+        <Route path="/engineering/new-schedule/plans" element={<NewSchedulePlans/>}/>
+        <Route path="/engineering/labor-prices" element={<LaborPrices/>}/>
+        <Route path="/engineering/labor-prices/new" element={<LaborPriceNew/>}/>
+        <Route path="/engineering/labor-price-changes" element={<LaborPriceChanges/>}/>
         <Route path="/todo-workbench" element={<TodoWorkbench/>}/>
         <Route path="/change-events" element={<ChangeEvents/>}/>
         <Route path="/schedule-board" element={<ScheduleBoard/>}/>

@@ -36,6 +36,9 @@ from app.models.production.schedule_plan import ProductionSchedulePlan
 from app.models.production.production_task_order import ProductionTaskOrder
 from app.models.production.front_process_record import FrontProcessRecord
 from app.models.production.production_daily_report import ProductionDailyReport  # noqa: F401
+from app.models.production.labor_price import LaborPriceMain, LaborPriceDetail  # noqa: F401
+from app.models.production.monthly_schedule_plan import MonthlySchedulePlan  # noqa: F401
+from app.models.production.monthly_capacity_scenario import MonthlyCapacityScenario  # noqa: F401
 from app.models.production.production_report import ProductionReport  # noqa: F401
 from app.models.production.workshop_daily_report import (  # noqa: F401
     WorkshopDailyReport,
@@ -449,6 +452,9 @@ class DatabaseInitializer:
             },
             "supplier_claim": {
                 "clause_snapshot": "JSONB",
+            },
+            "labor_price_main": {
+                "remark": "TEXT",
             },
             "notification": {
                 "sender_id": "INTEGER",

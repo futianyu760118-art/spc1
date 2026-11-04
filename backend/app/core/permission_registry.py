@@ -139,6 +139,7 @@ MIGRATE_AUDIT_ACTIONS = ("materials.stock_check_audit",)
 ADDED_PERMISSION_ACTIONS = {
     # 调价单「查看全部」:采购员只看自己,管理者/审批人凭此动作看全部
     "purchase.price_change": ["read_all"],
+    "production.monthly_capacity_plan": ["manage"],
 }
 
 # 一次性改名迁移：DB 是权限定义的真相源，sync_permissions_to_db 只首次插入不覆盖既有行，
@@ -370,6 +371,7 @@ declare_permission("production.exceptions", "工序异常池", module="productio
 declare_permission("production.daily_report", "生产日报表", module="production", parent_code="production", route_path="/daily-reports", sort_order=10)
 declare_permission("production.labor_price_audit", "工价审核", module="production", parent_code="production", route_path="/labor-price-audits", sort_order=11)
 declare_permission("production.order_wage_lookup", "订单工价查询", module="production", parent_code="production", route_path="/order-wage-lookup", sort_order=12, actions=["read"])
+declare_permission("production.monthly_capacity_plan", "月度产能规划", module="production", parent_code="production", route_path="/production/monthly-capacity-plan", sort_order=13, actions=["read", "manage"])
 
 # 异常与质量中心
 declare_permission("exceptions", "异常与质量中心", module="exceptions", sort_order=6)

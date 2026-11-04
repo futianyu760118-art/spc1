@@ -11,6 +11,7 @@ import {
   ApiOutlined,
 } from '@ant-design/icons'
 import { authApi, REDIRECT_AFTER_LOGIN_KEY } from '../services/api'
+import { resolveEmployeeLoginTarget } from '../utils/landing'
 import { useAuthStore } from '../store/auth'
 import { SUPPLIER_PORTAL_PATHS } from '../constants/permissions'
 
@@ -58,6 +59,8 @@ const PATH_TO_PERMISSION: Record<string, string> = {
   '/supplier-risk': 'materials.supplier_risk',
   '/supplier-payment': 'materials.supplier_payment',
 }
+
+
 
 const LOGIN_TYPE_OPTIONS: Array<{ label: string; value: LoginType }> = [
   { label: '员工登录', value: 'employee' },
@@ -158,7 +161,7 @@ export default function Login() {
       const meRes: any = await authApi.getMe()
       setAuth(token, meRes.data)
       message.success('登录成功')
-      navigate(from || '/dashboard', { replace: true })
+      navigate(resolveEmployeeLoginTarget(meRes.data, from), { replace: true })
     } catch {
       // /wecom-login 失败由全局拦截器 toast；此处仅结束 loading
     } finally {
@@ -220,7 +223,10 @@ export default function Login() {
       })
       navigate(firstAllowedPath || '/purchase-plan', { replace: true })
     } else {
-      navigate(from || '/dashboard', { replace: true })
+      navigate(
+        resolveEmployeeLoginTarget(useAuthStore.getState().currentUser, from),
+        { replace: true },
+      )
     }
   }, [currentToken, code, from, navigate])
 
@@ -256,7 +262,7 @@ export default function Login() {
         })
         navigate(firstAllowedPath || '/purchase-plan')
       } else {
-        navigate(from || '/dashboard', { replace: true })
+        navigate(resolveEmployeeLoginTarget(user, from), { replace: true })
       }
     } catch (error: any) {
       message.error(error?.message || '登录失败，请检查用户名和密码')

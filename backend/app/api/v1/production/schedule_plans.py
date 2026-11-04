@@ -11,7 +11,7 @@ import logging
 from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, or_, select, and_, tuple_
+from sqlalchemy import case, func, inspect, or_, select, and_, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import log_audit
@@ -413,6 +413,7 @@ def _invalidate_schedule_runtime_caches() -> None:
     _schedule_plan_list_cache.clear()
     _delete_preview_cache.clear()
     _production_schedule_read_permission_cache.clear()
+    _split_rules_cache.clear()
     # 驾驶舱今日卡片/KPI 也在进程内缓存，排产变更后必须一起失效
     invalidate_kpi_cache()
 
@@ -1843,6 +1844,8 @@ async def _query_todo_snapshot_source_rows(
         SaleOrderLine.shipping_plan >= first_day,
         SaleOrderLine.shipping_plan <= last_day,
         SaleOrderLine.status != "closed",
+        # HJY 为样品单，不参与排产
+        ~SaleOrderLine.order_no.ilike("HJY%"),
         # Y 开头的 BOM 不参与排产(业务规则)
         or_(
             SaleOrderLine.bom_no.is_(None),
@@ -2499,6 +2502,18 @@ async def _resolve_conflict_free_window(
     adjusted_start = start_date
     adjusted_end = end_date
     touched_conflicts: dict[int, ProductionSchedulePlan] = {}
+    earliest_allowed = _get_earliest_fill_date()
+    forward_search = False
+
+    def _forward_window(anchor: date) -> tuple[date, date]:
+        window_start = simulation_service.get_next_production_day(anchor, include_sunday)
+        window_end = simulation_service.shift_production_days(
+            window_start,
+            max(days_needed - 1, 0),
+            include_sunday=include_sunday,
+            forward=True,
+        )
+        return window_start, window_end
 
     for _ in range(180):
         conflicts = await _find_active_plan_conflicts(
@@ -2510,7 +2525,24 @@ async def _resolve_conflict_free_window(
             exclude_plan_ids=exclude_plan_ids,
         )
         if not conflicts:
-            return adjusted_start, adjusted_end, list(touched_conflicts.values())
+            if forward_search or not earliest_allowed or adjusted_start >= earliest_allowed:
+                return adjusted_start, adjusted_end, list(touched_conflicts.values())
+            forward_search = True
+            adjusted_start, adjusted_end = _forward_window(earliest_allowed)
+            continue
+
+        if forward_search:
+            latest_conflict_end = max(
+                (_plan_window_end(item) or adjusted_end)
+                for item in conflicts
+            )
+            anchor = latest_conflict_end + timedelta(days=1)
+            if earliest_allowed:
+                anchor = max(anchor, earliest_allowed)
+            adjusted_start, adjusted_end = _forward_window(anchor)
+            for item in conflicts:
+                touched_conflicts[item.id] = item
+            continue
 
         if daily_work_hours and max_daily_capacity:
             candidate_days = _iter_production_dates(
@@ -2542,16 +2574,21 @@ async def _resolve_conflict_free_window(
                 (_plan_window_start(item) or adjusted_start)
                 for item in conflicts
             )
-        adjusted_end = simulation_service.get_previous_production_day(
+        earlier_end = simulation_service.get_previous_production_day(
             earliest_conflict_start - timedelta(days=1),
             include_sunday,
         )
-        adjusted_start = simulation_service.shift_production_days(
-            adjusted_end,
+        earlier_start = simulation_service.shift_production_days(
+            earlier_end,
             max(days_needed - 1, 0),
             include_sunday=include_sunday,
             forward=False,
         )
+        if earliest_allowed and earlier_start < earliest_allowed:
+            forward_search = True
+            adjusted_start, adjusted_end = _forward_window(earliest_allowed)
+            continue
+        adjusted_start, adjusted_end = earlier_start, earlier_end
 
     bucket_label = SCHEDULE_BUCKET_LABELS.get(schedule_bucket, "当前排产段")
     raise HTTPException(status_code=400, detail=f"{bucket_label}存在循环冲突，请先调整已排计划后再重试")
@@ -3065,8 +3102,8 @@ async def _get_default_daily_work_hours(db: AsyncSession, schedule_bucket: Optio
     return float(work_hours_config["default_daily_work_hours"])
 
 
-# split_rules 单 BOM 进程内缓存（连 ERP 查 ~1 秒，5 分钟复用）
-# ERP 是小时级同步，5 分钟滞后可接受
+# split_rules 单 BOM 进程内缓存（本地产能计算，5 分钟复用）
+# OA 产能是小时级同步，5 分钟滞后可接受
 SPLIT_RULES_CACHE_TTL_SECONDS = 300
 _split_rules_cache: dict[str, tuple[float, dict]] = {}
 
@@ -3093,12 +3130,13 @@ async def _build_split_rules_map(db: AsyncSession, bom_codes: list[Optional[str]
             missed.append(code)
 
     if missed:
-        try:
-            fresh = await AssemblyRollScheduleService(db).get_stage_rules_bulk(missed)
-        except Exception as exc:
-            # OA 工序规则只是排产增强信息，ERP/OA 不可用时不能让订单池整页 500
-            logger.warning("[split_rules] 工序规则批量查询失败，降级为空: %s", exc)
-            fresh = {}
+        fresh: dict[str, dict] = {}
+        upph_service = UpphCalculationService(db)
+        for code in missed:
+            try:
+                fresh[code] = await upph_service.build_local_stage_rules(bom_code=code)
+            except Exception as exc:
+                logger.warning("[split_rules] 本地工序规则计算失败 bom=%s: %s", code, exc)
         for code, payload in fresh.items():
             _split_rules_cache[code] = (now, payload)
             result[code] = payload
@@ -3585,6 +3623,9 @@ async def _create_schedule_plan_from_request(
             )
             if calculation_result.get("recommended_daily_hours"):
                 resolved_daily_hours = float(calculation_result["recommended_daily_hours"])
+        if daily_work_hours is None and base_condition.get("daily_work_hours"):
+            resolved_daily_hours = float(base_condition["daily_work_hours"])
+            calculation_result["recommended_daily_hours"] = resolved_daily_hours
         calculation_result["plan_date"] = plan_date or calculation_result["start_date"]
         record = await _save_schedule_plan_record(
             db,
@@ -4579,6 +4620,7 @@ async def list_schedule_plans(
     is_active: Optional[bool] = Query(True),
     schedule_bucket: Optional[str] = Query(None, pattern="^(lean|assembly|packaging|mixed|pending)$"),
     time_zone: Optional[str] = Query(None, pattern="^(today|frozen|material|pending)$"),
+    sort_by: Optional[str] = Query(None, pattern="^(date|order|day)$"),
     read_context: dict = Depends(_get_production_schedule_read_context),
 ):
     # 列表查询优先走数据库已固化字段，避免切页时全量动态重算。
@@ -4711,6 +4753,26 @@ async def list_schedule_plans(
     if bucket_condition is not None:
         conditions.append(bucket_condition)
 
+    window_start = func.coalesce(
+        ProductionSchedulePlan.start_date,
+        ProductionSchedulePlan.plan_date,
+    )
+    if sort_by == "order":
+        order_clauses = (
+            ProductionSchedulePlan.order_no.asc().nulls_last(),
+            ProductionSchedulePlan.line_no.asc().nulls_last(),
+            window_start.asc(),
+            ProductionSchedulePlan.id.asc(),
+        )
+    elif sort_by == "day":
+        order_clauses = (
+            window_start.asc(),
+            ProductionSchedulePlan.order_no.asc().nulls_last(),
+            ProductionSchedulePlan.line_no.asc().nulls_last(),
+            ProductionSchedulePlan.id.asc(),
+        )
+    else:
+        order_clauses = (window_start.asc(), ProductionSchedulePlan.id.asc())
     page_stmt = (
         select(ProductionSchedulePlan, ProductionOrderScheduleSnapshot)
         .select_from(ProductionSchedulePlan)
@@ -4722,13 +4784,7 @@ async def list_schedule_plans(
             ),
         )
         .where(*conditions)
-        .order_by(
-            func.coalesce(
-                ProductionSchedulePlan.start_date,
-                ProductionSchedulePlan.plan_date,
-            ).asc(),
-            ProductionSchedulePlan.id.asc(),
-        )
+        .order_by(*order_clauses)
     )
     start = (page - 1) * page_size
 
@@ -6957,6 +7013,11 @@ async def auto_schedule(
         manpower=data.manpower,
         include_sunday=data.include_sunday,
     )
+    records = await _auto_split_multiday_records(
+        db,
+        records,
+        operator=current_user["username"],
+    )
     await db.commit()
     await _sync_snapshot_schedule_state_for_keys(
         db,
@@ -6979,6 +7040,75 @@ async def auto_schedule(
     ))
 
 
+async def _auto_split_multiday_records(
+    db: AsyncSession,
+    records: list[ProductionSchedulePlan],
+    *,
+    operator: str,
+) -> list[ProductionSchedulePlan]:
+    """排产后自动把多天计划拆成每天一条；单天计划保持原样。"""
+    from app.models.production.capacity_slot import CapacitySlot
+    from app.services.production.plan_insert_service import split_schedule_plan
+
+    result: list[ProductionSchedulePlan] = []
+    seen_plan_ids: set[int] = set()
+    for plan in records:
+        if not plan or plan.id is None or plan.id in seen_plan_ids:
+            continue
+        seen_plan_ids.add(plan.id)
+        slot_rows = (await db.execute(
+            select(CapacitySlot.slot_date, CapacitySlot.hours)
+            .where(
+                CapacitySlot.plan_id == plan.id,
+                CapacitySlot.is_active == True,
+            )
+            .order_by(CapacitySlot.slot_date)
+        )).all()
+        if len(slot_rows) <= 1:
+            result.append(plan)
+            continue
+
+        total_qty = float(plan.quantity or 0)
+        upph = float(plan.upph or plan.source_upph or 0)
+        manpower = int(plan.manpower or 10)
+        if total_qty <= 0 or upph <= 0 or manpower <= 0:
+            result.append(plan)
+            continue
+
+        remaining = total_qty
+        batches: list[dict] = []
+        for index, (slot_date, hours) in enumerate(slot_rows):
+            quantity = min(int(upph * manpower * float(hours or 0)), int(remaining))
+            if index == len(slot_rows) - 1:
+                quantity = round(remaining, 2)
+            if quantity > 0:
+                batches.append({
+                    "quantity": quantity,
+                    "target_date": slot_date.date() if isinstance(slot_date, datetime) else slot_date,
+                })
+                remaining -= quantity
+            if remaining <= 0:
+                break
+        if len(batches) <= 1:
+            result.append(plan)
+            continue
+
+        try:
+            new_plans, _, _, _ = await split_schedule_plan(
+                db,
+                plan_id=plan.id,
+                batches=batches,
+                push_conflicts=False,
+                break_frozen_reason="自动按天拆分（保持原计划日期）",
+                operator=operator,
+            )
+            result.extend(new_plans)
+        except Exception as exc:
+            logger.warning("自动按天拆分失败 plan_id=%s: %s", plan.id, exc)
+            result.append(plan)
+    return result
+
+
 async def _merge_mixed_order_plans(
     db: AsyncSession,
     plans: list[ProductionSchedulePlan],
@@ -6991,6 +7121,10 @@ async def _merge_mixed_order_plans(
         MAX_DAILY_HOURS,
         recompute_plan_slots,
     )
+
+    plans = [p for p in plans if inspect(p).identity is not None]
+    for plan in plans:
+        await db.refresh(plan)
 
     assembly_plans = [p for p in plans if (p.source_process_type or "") == "assembly"]
     packaging_plans = [p for p in plans if (p.source_process_type or "") == "packaging"]
@@ -7091,6 +7225,7 @@ async def batch_auto_schedule(
     delay_warning_count = 0
     created_plan_ids: list[int] = []
     synced_keys: set[tuple[str, str]] = set()
+    all_records: list[ProductionSchedulePlan] = []
 
     mergeable_buckets = {"lean", "assembly", "packaging"}
     if data.merge_same_order:
@@ -7158,6 +7293,7 @@ async def batch_auto_schedule(
                 for record in records:
                     await db.refresh(record)
                 group_records.extend(records)
+                all_records.extend(records)
 
                 if can_merge and index == 0 and anchor_date is None:
                     bucket_dates = [
@@ -7204,6 +7340,26 @@ async def batch_auto_schedule(
             if merged_count:
                 await db.commit()
                 _invalidate_schedule_runtime_caches()
+
+    if all_records:
+        all_records = await _auto_split_multiday_records(
+            db,
+            all_records,
+            operator=current_user["username"],
+        )
+        await db.commit()
+        created_plan_ids = [record.id for record in all_records if record.id]
+        first_plan_by_key: dict[tuple[str, str], int] = {}
+        for record in all_records:
+            if record.order_no and record.line_no:
+                first_plan_by_key.setdefault((record.order_no, record.line_no), record.id)
+        for item in items:
+            if item.success and item.order_no and item.line_no:
+                item.plan_id = first_plan_by_key.get(
+                    (item.order_no, item.line_no),
+                    item.plan_id,
+                )
+        _invalidate_schedule_runtime_caches()
 
     if created_plan_ids:
         await _log_schedule_operation(
