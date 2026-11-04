@@ -617,7 +617,8 @@ function getRequiredPermission(pathname: string, dynamicMap?: Record<string, str
   if (pathname.startsWith('/approvals/create')) return 'approval.initiate'
   if (pathname === '/agents' || pathname === '/agents/') return 'ai.agent.assistant'
   if (pathname.startsWith('/agents/admin')) return 'ai.agent.admin'
-  if (pathname.startsWith('/agents')) return 'ai.agent.self'
+  // 旧路由 /agents/me /agents/team 已合并为 /agents，不再映射到有效权限
+  if (pathname.startsWith('/agents/')) return undefined
   return undefined
 }
 
@@ -895,7 +896,10 @@ export default function MainLayout() {
       return filterSupplierPortalMenu(dynamicMenuItems, hasPermission)
     }
     const pruneAgentTeam = (items: PermissionAwareItem[]): PermissionAwareItem[] => {
+      // 旧「我的智能体」/「我的团队」已合并为「我的助手」，彻底剔除旧菜单节点，避免残留入口
+      const OLD_AGENT_KEYS = new Set(['ai.agent.self.me', 'ai.agent.team', '/agents/me', '/agents/team'])
       return items.flatMap(item => {
+        if (OLD_AGENT_KEYS.has(item.key)) return []
         if (item.key === 'ai.agent.self' && agentLoaded && !agentEnabled) return []
         const next = item.children ? { ...item, children: pruneAgentTeam(item.children) } : item
         if (next.children && next.children.length === 0 && !String(next.key).startsWith('/')) return []
