@@ -1,26 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Card, Empty, List, Space, Tag, Typography } from 'antd'
-import { HistoryOutlined, PlusOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons'
+import { Button, Drawer } from 'antd'
+import { ClearOutlined, HistoryOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate } from 'react-router-dom'
 import ChatPanel from '../../components/Assistant/ChatPanel'
+import ChatHistorySidebar from '../../components/Assistant/ChatHistorySidebar'
+import AssistantContextRail from '../../components/Assistant/AssistantContextRail'
 import { useAssistantChat } from '../../components/Assistant/useAssistantChat'
+import { TeamAgent } from '../../components/Assistant/types'
 import { agentApi } from '../../services/agent'
-import './assistant.css'
-import { scalePx } from '../../utils/fontSize'
-
-const { Text, Title } = Typography
+import '../../components/Assistant/assistant.css'
+import '../AgentCenter/agent-center.css'
 
 interface ConversationItem {
   id: number
   title?: string
   last_message_at?: string
-}
-
-interface TeamAgent {
-  id: number
-  name: string
-  capabilities?: Array<{ code: string; name: string }>
-  status?: string
 }
 
 export default function AssistantPage() {
@@ -30,6 +24,8 @@ export default function AssistantPage() {
   const [conversations, setConversations] = useState<ConversationItem[]>([])
   const [loadingConversations, setLoadingConversations] = useState(false)
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null)
+  const [contextOpen, setContextOpen] = useState(() => window.innerWidth >= 1200)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const {
     messages, loading, send, clearMessages, stopStreaming,
     confirmWrite, cancelWrite, loadConversation,
@@ -88,95 +84,94 @@ export default function AssistantPage() {
     loadConversation(conversationId)
   }
 
-  return (
-    <div className="assistant-page" style={{ display: 'flex', gap: 16, height: 'calc(100vh - 150px)', minHeight: 520 }}>
-      <Card
-        title={<Space><HistoryOutlined />历史会话</Space>}
-        extra={(
-          <Button
-            type="text"
-            size="small"
-            icon={<ReloadOutlined />}
-            loading={loadingConversations}
-            onClick={loadConversations}
-          />
-        )}
-        style={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column' }}
-        styles={{ body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 12 } }}
-      >
-        <Button type="primary" icon={<PlusOutlined />} block onClick={newChat}>
-          新建对话
-        </Button>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', marginTop: 12 }}>
-          {conversations.length === 0 && !loadingConversations ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史会话" />
-          ) : (
-            <List
-              size="small"
-              dataSource={conversations}
-              loading={loadingConversations}
-              renderItem={(item: ConversationItem) => (
-                <List.Item
-                  onClick={() => openConversation(item.id)}
-                  style={{
-                    cursor: 'pointer',
-                    padding: '8px 10px',
-                    borderRadius: 8,
-                    background: activeConversationId === item.id ? '#eef2ff' : undefined,
-                  }}
-                >
-                  <List.Item.Meta
-                    title={<span style={{ fontSize: scalePx(13) }}>{item.title || `会话 #${item.id}`}</span>}
-                    description={(
-                      <span style={{ fontSize: scalePx(11) }}>
-                        {item.last_message_at ? new Date(item.last_message_at).toLocaleString('zh-CN') : ''}
-                      </span>
-                    )}
-                  />
-                </List.Item>
-              )}
-            />
-          )}
-        </div>
-        <Text type="secondary" className="ac-fs-xs">
-          团队成员 {teamAgents.length} 个
-        </Text>
-      </Card>
+  const manageTeam = () => navigate('/agents')
 
-      <Card
-        style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}
-        styles={{ body: { flex: 1, minHeight: 0, padding: 0, display: 'flex', flexDirection: 'column' } }}
-      >
-        <div style={{
-          padding: '12px 16px',
-          borderBottom: '1px solid #f0f0f0',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}>
-          <Space>
-            <RobotOutlined style={{ color: '#4f46e5' }} />
-            <Title level={5} style={{ margin: 0 }}>AI 智能助手</Title>
-            <Tag color="blue">{teamAgents.length} 个团队成员</Tag>
-          </Space>
-          <Text type="secondary" className="ac-fs-xs">
-            工具由团队智能体的能力与技能配置决定
-          </Text>
-        </div>
-        <div style={{ flex: 1, minHeight: 0, background: '#f8fafc' }}>
+  return (
+    <div className="sc-page ai-center ai-chat-page">
+      <div className="ai-chat">
+        <ChatHistorySidebar
+          conversations={conversations}
+          loading={loadingConversations}
+          activeId={activeConversationId}
+          teamCount={teamAgents.length}
+          onNew={newChat}
+          onOpen={openConversation}
+          onManageTeam={manageTeam}
+        />
+
+        <div className="ai-chat-main">
+          <div className="ai-chat-head">
+            <span className="ai-online-dot" />
+            <strong>AI 智能助手</strong>
+            <span className="ai-muted">{teamAgents.length} 位团队成员</span>
+            <div className="ai-chat-head-actions">
+              <Button
+                type="text"
+                size="small"
+                icon={<HistoryOutlined />}
+                className="ai-history-toggle"
+                onClick={() => setHistoryOpen(true)}
+              >
+                历史
+              </Button>
+              <Button
+                type="text"
+                size="small"
+                icon={<ClearOutlined />}
+                disabled={messages.length === 0}
+                onClick={newChat}
+              >
+                清空
+              </Button>
+              <Button
+                type="text"
+                size="small"
+                className="ai-context-toggle"
+                onClick={() => setContextOpen(value => !value)}
+              >
+                {contextOpen ? '收起上下文' : '展开上下文'}
+              </Button>
+            </div>
+          </div>
+
           <ChatPanel
             messages={messages}
             loading={loading}
             teamAgents={teamAgents}
-            onSend={(text) => { send(text) }}
-            onClear={newChat}
+            onSend={text => send(text)}
             onStop={stopStreaming}
             onConfirm={confirmWrite}
             onCancelConfirmation={cancelWrite}
           />
         </div>
-      </Card>
+
+        {contextOpen && (
+          <AssistantContextRail
+            teamAgents={teamAgents}
+            messages={messages}
+            onCollapse={() => setContextOpen(false)}
+          />
+        )}
+      </div>
+
+      <Drawer
+        placement="left"
+        width={300}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        className="sc-page"
+        styles={{ body: { padding: 0 } }}
+      >
+        <ChatHistorySidebar
+          conversations={conversations}
+          loading={loadingConversations}
+          activeId={activeConversationId}
+          teamCount={teamAgents.length}
+          onNew={() => { setHistoryOpen(false); newChat() }}
+          onOpen={(id) => { setHistoryOpen(false); openConversation(id) }}
+          onManageTeam={() => { setHistoryOpen(false); manageTeam() }}
+        />
+      </Drawer>
     </div>
   )
 }

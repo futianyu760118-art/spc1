@@ -131,33 +131,35 @@ export default function SkillLibraryTab() {
   }
 
   return (
-    <Space direction="vertical" style={{ width: '100%', height: '100%' }} size={8}>
-      <Space wrap>
-        <Text type="secondary" className="ac-fs-xs">
-          技能以磁盘文件夹为准：每个技能一个目录，包含 SKILL.md（frontmatter: name/description），可带 references/assets/scripts。
-        </Text>
-      </Space>
-      <Space wrap>
+    <div className="ai-card">
+      <div className="ai-card-head">
+        <h3>技能库</h3>
+        <span className="ai-hint">技能以磁盘文件夹为准，SKILL.md 定义能力说明</span>
+      </div>
+
+      <div className="ai-toolbar">
         <Input.Search
           placeholder="名称 / 文件夹 / 说明" allowClear style={{ width: 260 }}
-          onSearch={v => { setKeyword(v); setPage(1) }}
+          onSearch={value => { setKeyword(value); setPage(1) }}
         />
         <Select
           value={source} style={{ width: 130 }}
-          onChange={v => { setSource(v); setPage(1) }}
+          onChange={value => { setSource(value); setPage(1) }}
           options={SOURCE_OPTIONS}
         />
         <Select
           value={status} style={{ width: 130 }}
-          onChange={v => { setStatus(v); setPage(1) }}
+          onChange={value => { setStatus(value); setPage(1) }}
           options={STATUS_OPTIONS}
         />
         <Button icon={<ReloadOutlined />} onClick={sync}>同步技能目录</Button>
         <Button type="primary" onClick={() => { setImportFile(null); setImportOpen(true) }}>导入技能 zip</Button>
-      </Space>
+        <span className="ai-toolbar-meta">共 {total} 个</span>
+      </div>
 
       <Table
         size="small" rowKey="id" loading={loading} dataSource={skills} tableLayout="fixed"
+        scroll={{ x: 980 }}
         pagination={{
           current: page, pageSize: PAGE_SIZE, total, size: 'small', showSizeChanger: false,
           onChange: setPage,
@@ -217,6 +219,7 @@ export default function SkillLibraryTab() {
         confirmLoading={importing}
         okText="导入"
         destroyOnClose
+        className="sc-page"
       >
         <Upload.Dragger
           accept=".zip"
@@ -236,6 +239,7 @@ export default function SkillLibraryTab() {
         width={720}
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}
+        className="sc-page"
       >
         {detail ? (
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -297,7 +301,7 @@ export default function SkillLibraryTab() {
                 <Markdown>{detail.instructions || ''}</Markdown>
               </div>
             </div>
-            <Text type="secondary" className="ac-fs-xs">
+            <Text type="secondary" className="ai-muted">
               {detail.script_execution_available
                 ? '脚本可在隔离沙箱中执行；参数通过 stdin JSON 传入。'
                 : '脚本执行未启用（未配置沙箱）；只能读取文本资源。'}
@@ -305,6 +309,6 @@ export default function SkillLibraryTab() {
           </Space>
         ) : <Empty />}
       </Drawer>
-    </Space>
+    </div>
   )
 }

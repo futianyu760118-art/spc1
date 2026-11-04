@@ -1100,35 +1100,43 @@ class DatabaseInitializer:
                 print(f"  sys_user.permissions migration skipped: {e}")
 
     async def migrate_agent_center_permissions(self):
-        """智能体中心从「任务闭环」收敛为「层级 + 能力 + 委派」：清理旧菜单权限。"""
+        """智能中心：我的智能体 / 我的团队合并为我的助手；清理旧权限并登记新页面权限。"""
         print("Migrating agent center permissions...")
         async with self.engine.begin() as conn:
             try:
                 await conn.execute(text(
                     "DELETE FROM sys_permission WHERE code IN ("
-                    "'ai.agent.self.tasks','ai.agent.team.tasks','ai.agent.team.config'"
+                    "'ai.agent.self.tasks','ai.agent.team.tasks','ai.agent.team.config',"
+                    "'ai.agent.self.me','ai.agent.team'"
                     ")"
                 ))
                 await conn.execute(text(
-                    "UPDATE sys_permission SET name = '智能体中心' WHERE code = 'ai.agent.self'"
-                ))
-                await conn.execute(text(
-                    "UPDATE sys_permission SET name = '我的智能体', parent_code = 'ai.agent.self', "
-                    "route_path = '/agents/me', actions = '[\"read\"]'::jsonb "
-                    "WHERE code = 'ai.agent.self.me'"
-                ))
-                await conn.execute(text(
-                    "UPDATE sys_permission SET name = '我的团队', parent_code = 'ai.agent.self', "
-                    "route_path = '/agents/team', actions = '[\"read\"]'::jsonb "
-                    "WHERE code = 'ai.agent.team'"
-                ))
-                await conn.execute(text(
-                    "UPDATE sys_permission SET name = '智能体管理', parent_code = 'ai.agent.self' "
-                    "WHERE code = 'ai.agent.admin'"
-                ))
-                await conn.execute(text(
                     "UPDATE sys_role SET permissions = permissions "
-                    "- 'ai.agent.self.tasks' - 'ai.agent.team.tasks' - 'ai.agent.team.config'"
+                    "- 'ai.agent.self.tasks' - 'ai.agent.team.tasks' - 'ai.agent.team.config' "
+                    "- 'ai.agent.self.me' - 'ai.agent.team'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_user SET permissions = permissions "
+                    "- 'ai.agent.self.tasks' - 'ai.agent.team.tasks' - 'ai.agent.team.config' "
+                    "- 'ai.agent.self.me' - 'ai.agent.team' "
+                    "WHERE permissions IS NOT NULL"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '智能中心' WHERE code = 'ai.agent.self'"
+                ))
+                await conn.execute(text(
+                    "INSERT INTO sys_permission "
+                    "(code, name, module, parent_code, actions, route_path, sort_order, is_active) "
+                    "VALUES ('ai.agent.assistant', '我的助手', 'agent', 'ai.agent.self', "
+                    "'[\"read\"]'::jsonb, '/agents', 1, TRUE) "
+                    "ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, "
+                    "parent_code = EXCLUDED.parent_code, route_path = EXCLUDED.route_path, "
+                    "actions = EXCLUDED.actions, sort_order = EXCLUDED.sort_order, is_active = TRUE"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '智能体管理', parent_code = 'ai.agent.self', "
+                    "route_path = '/agents/admin', sort_order = 2 "
+                    "WHERE code = 'ai.agent.admin'"
                 ))
                 print("  agent center permissions migrated")
             except Exception as e:

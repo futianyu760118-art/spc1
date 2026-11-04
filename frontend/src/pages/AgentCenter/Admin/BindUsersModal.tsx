@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react'
-import { Alert, Form, Modal, Radio, Select, Space, Typography, message } from 'antd'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Alert, Button, Form, Input, Modal, Radio, Select, Space, Typography, message } from 'antd'
 import { agentApi, AgentInfo, AgentUserOption } from '../../../services/agent'
 
 const { Text } = Typography
@@ -19,16 +19,34 @@ export default function BindUsersModal({
   const [users, setUsers] = useState<AgentUserOption[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [roleId, setRoleId] = useState<number | undefined>()
+  const [userKeyword, setUserKeyword] = useState('')
   const selectedAgents = Form.useWatch('agent_ids', form) || []
   const selectedUsers = Form.useWatch('user_ids', form) || []
   const preselectKey = preselectedAgentIds.join(',')
+
+  const roleOptions = useMemo(() => {
+    const roles = new Map<number, string>()
+    users.forEach(user => {
+      if (user.role_id != null && user.role_name) {
+        roles.set(user.role_id, user.role_name)
+      }
+    })
+    return Array.from(roles, ([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+  }, [users])
+
+  const roleUserCount = useMemo(
+    () => users.filter(user => user.role_id === roleId).length,
+    [users, roleId],
+  )
 
   const loadOptions = useCallback(async () => {
     setLoading(true)
     try {
       const [agentRes, userRes]: any = await Promise.all([
         agentApi.adminAgents({ page_size: 100 }),
-        agentApi.adminUsers({ limit: 500 }),
+        agentApi.adminUsers({ limit: 1000 }),
       ])
       setAgents(agentRes.data?.items || [])
       setUsers(userRes.data?.items || [])
@@ -40,6 +58,8 @@ export default function BindUsersModal({
   useEffect(() => {
     if (!open) return
     form.resetFields()
+    setRoleId(undefined)
+    setUserKeyword('')
     form.setFieldsValue({
       action: 'bind',
       agent_ids: preselectedAgentIds,
@@ -47,6 +67,29 @@ export default function BindUsersModal({
     })
     loadOptions()
   }, [open, preselectKey, form, loadOptions])
+
+  const addUserIds = (ids: number[]) => {
+    const current: number[] = form.getFieldValue('user_ids') || []
+    form.setFieldValue('user_ids', Array.from(new Set([...current, ...ids])))
+  }
+
+  const addRoleUsers = () => {
+    if (roleId == null) return
+    addUserIds(users.filter(user => user.role_id === roleId).map(user => user.id))
+  }
+
+  const addMatchedUsers = () => {
+    const keyword = userKeyword.trim().toLowerCase()
+    if (!keyword) return
+    addUserIds(users.filter(user =>
+      [user.display_name, user.username, user.role_name]
+        .some(value => (value || '').toLowerCase().includes(keyword)),
+    ).map(user => user.id))
+  }
+
+  const selectAllUsers = () => {
+    form.setFieldValue('user_ids', users.map(user => user.id))
+  }
 
   const submit = async () => {
     const values = await form.validateFields()
@@ -102,6 +145,7 @@ export default function BindUsersModal({
       okText="执行"
       width={640}
       destroyOnClose
+      className="sc-page"
     >
       <Form form={form} layout="vertical">
         <Form.Item name="action" label="操作" rules={[{ required: true }]}>
@@ -148,8 +192,44 @@ export default function BindUsersModal({
             }))}
           />
         </Form.Item>
+        <div style={{ marginTop: -10, marginBottom: 12 }}>
+          <Text type="secondary" className="ai-muted">快速选择：按角色、关键字批量添加</Text>
+          <Space wrap size={[8, 8]} style={{ marginTop: 6 }}>
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="按角色"
+              style={{ width: 160 }}
+              value={roleId}
+              onChange={setRoleId}
+              options={roleOptions}
+            />
+            <Button size="small" disabled={roleId == null || roleUserCount === 0} onClick={addRoleUsers}>
+              添加角色（{roleUserCount}）
+            </Button>
+            <Input.Search
+              allowClear
+              size="small"
+              placeholder="姓名 / 登录名 / 角色"
+              style={{ width: 180 }}
+              value={userKeyword}
+              onChange={event => setUserKeyword(event.target.value)}
+              onSearch={addMatchedUsers}
+            />
+            <Button size="small" disabled={!userKeyword.trim()} onClick={addMatchedUsers}>
+              添加匹配
+            </Button>
+            <Button size="small" disabled={users.length === 0} onClick={selectAllUsers}>
+              全选（{users.length}）
+            </Button>
+            <Button size="small" disabled={selectedUsers.length === 0} onClick={() => form.setFieldValue('user_ids', [])}>
+              清空
+            </Button>
+          </Space>
+        </div>
         <Space direction="vertical" size={4}>
-          <Text type="secondary" className="ac-fs-xs">
+          <Text type="secondary" className="ai-muted">
             本次将处理 {selectedAgents.length} 个智能体 × {selectedUsers.length} 个用户
             = {selectedAgents.length * selectedUsers.length} 个关系（单次上限 10000）。
           </Text>

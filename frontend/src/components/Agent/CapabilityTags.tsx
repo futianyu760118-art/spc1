@@ -1,21 +1,21 @@
 import React from 'react'
-import { Space, Tag } from 'antd'
 import { AgentCapabilityItem } from '../../services/agent'
 
 interface CapabilityTagsProps {
   items?: AgentCapabilityItem[] | null
   max?: number
+  emptyText?: string
 }
 
-export function CapabilityTags({ items, max = 3 }: CapabilityTagsProps) {
+export function CapabilityTags({ items, max = 3, emptyText = '未配置能力' }: CapabilityTagsProps) {
   const list = items || []
   return (
-    <Space size={4} wrap>
+    <span className="ai-tag-list">
       {list.slice(0, max).map(item => (
-        <Tag key={item.code} style={{ marginInlineEnd: 0 }}>{item.name}</Tag>
+        <span key={item.code} className="sc-tag sc-tag-plain">{item.name}</span>
       ))}
-      {list.length > max && <Tag style={{ marginInlineEnd: 0 }}>+{list.length - max}</Tag>}
-      {list.length === 0 && <Tag style={{ marginInlineEnd: 0 }}>无</Tag>}
-    </Space>
+      {list.length > max && <span className="sc-tag sc-tag-plain">+{list.length - max}</span>}
+      {list.length === 0 && <span className="ai-muted">{emptyText}</span>}
+    </span>
   )
 }

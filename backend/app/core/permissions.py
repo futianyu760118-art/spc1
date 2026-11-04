@@ -7,7 +7,7 @@ FULL_ACTIONS = ["create", "read", "update", "delete"]
 # 智能体中心通用权限：所有内部角色可用；ai.agent.admin 仅管理员
 INTERNAL_AGENT_PERMISSIONS: Dict[str, List[str]] = {
     "ai.agent.self": ["read"],
-    "ai.agent.team": ["read"],
+    "ai.agent.assistant": ["read"],
 }
 RESTRICTED_PERMISSION_ROLES = {"supplier", "api_caller", "share"}
 
@@ -37,7 +37,7 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "backup": ["read", "manage"],
         "ai.execution_agent": ["read", "update"],
         "ai.agent.self": ["read"],
-        "ai.agent.team": ["read"],
+        "ai.agent.assistant": ["read"],
         "ai.agent.admin": ["read", "update"],
         "ai.skill.manage": ["read", "update"],
     },

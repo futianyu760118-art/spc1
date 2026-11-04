@@ -124,6 +124,9 @@ DEPRECATED_PERMISSION_CODES = (
     # 智能助手监控/配置已合并进 ai.agent.admin（2026-10-30），页面并入智能体中心
     "ai.assistant_monitor",
     "ai.assistant_config",
+    # 我的智能体 / 我的团队已合并为「我的助手」（2026-11-03），权限由 ai.agent.assistant 取代
+    "ai.agent.self.me",
+    "ai.agent.team",
 )
 
 # 一次性动作迁移:盘点抽检曾声明为 read/manage,现回归标准增删改查。
@@ -277,10 +280,18 @@ async def cleanup_deprecated_permissions(db: AsyncSession) -> int:
 
     removed = 0
     for code in DEPRECATED_PERMISSION_CODES:
-        # 1) sys_role.permissions: 移除 JSONB 中的 key
+        # 1) sys_role.permissions / sys_user.permissions: 移除 JSONB 中的 key
         await db.execute(
             text(
                 "UPDATE sys_role "
+                "SET permissions = permissions - CAST(:code AS text) "
+                "WHERE permissions ? CAST(:code AS text)"
+            ),
+            {"code": code},
+        )
+        await db.execute(
+            text(
+                "UPDATE sys_user "
                 "SET permissions = permissions - CAST(:code AS text) "
                 "WHERE permissions ? CAST(:code AS text)"
             ),
@@ -475,25 +486,20 @@ declare_permission(
     route_path="/purchase-requisitions", sort_order=15,
 )
 
-# 智能体中心 — 智能体目录、勾选式团队、团队能力门控
+# 智能中心 — 我的助手、智能体管理
 declare_permission(
-    "ai.agent.self", "智能体中心",
+    "ai.agent.self", "智能中心",
     module="agent", actions=["read"], sort_order=15,
 )
 declare_permission(
-    "ai.agent.self.me", "我的智能体",
+    "ai.agent.assistant", "我的助手",
     module="agent", parent_code="ai.agent.self", actions=["read"],
-    route_path="/agents/me", sort_order=1,
-)
-declare_permission(
-    "ai.agent.team", "我的团队",
-    module="agent", parent_code="ai.agent.self", actions=["read"],
-    route_path="/agents/team", sort_order=2,
+    route_path="/agents", sort_order=1,
 )
 declare_permission(
     "ai.agent.admin", "智能体管理",
     module="agent", parent_code="ai.agent.self", actions=["read", "update"],
-    route_path="/agents/admin", sort_order=3,
+    route_path="/agents/admin", sort_order=2,
 )
 declare_permission(
     "ai.skill.manage", "技能管理（安装/创建/卸载）",

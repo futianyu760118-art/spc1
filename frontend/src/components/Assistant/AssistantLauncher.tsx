@@ -147,7 +147,7 @@ const AssistantLauncher: React.FC = () => {
         height: BALL_SIZE,
         border: 'none',
         borderRadius: '50%',
-        background: 'linear-gradient(135deg, #3b82f6 0%, #6366f1 100%)',
+        background: 'linear-gradient(135deg, #7a7de6 0%, #5b5bd6 100%)',
         color: '#fff',
         display: 'flex',
         alignItems: 'center',
@@ -158,10 +158,10 @@ const AssistantLauncher: React.FC = () => {
         touchAction: 'none',
         transform: dockReady ? 'scale(1.08)' : (hovering && !dragging ? 'scale(1.08)' : 'scale(1)'),
         boxShadow: dockReady
-          ? '0 0 0 4px rgba(99,102,241,.35), 0 10px 28px rgba(59,130,246,.5)'
+          ? '0 0 0 4px rgba(91,91,214,.35), 0 10px 28px rgba(91,91,214,.45)'
           : (hovering && !dragging
-            ? '0 10px 28px rgba(59,130,246,.5)'
-            : '0 6px 20px rgba(59,130,246,.35)'),
+            ? '0 10px 28px rgba(91,91,214,.45)'
+            : '0 6px 20px rgba(91,91,214,.32)'),
         transition: dragging ? 'none' : 'transform .2s ease, box-shadow .2s ease',
         opacity: dragging ? 0.92 : 1,
       }}

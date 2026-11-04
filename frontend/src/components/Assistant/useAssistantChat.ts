@@ -72,10 +72,44 @@ const CANCEL_COMMANDS = new Set(['取消', '取消操作', '不确认'])
 const NO_PENDING_CONFIRMATION_REPLY = '当前没有待确认的操作。如需修改订单或执行任务动作，请先发起。'
 
 function parseConfirmationCommand(text: string): 'confirm' | 'cancel' | null {
-  const command = text.trim().replace(/[。！!，,]+$/g, '')
+  const command = text.trim().replace(/[。！!?]+$/g, '')
   if (CONFIRM_COMMANDS.has(command)) return 'confirm'
   if (CANCEL_COMMANDS.has(command)) return 'cancel'
   return null
+}
+
+const CHOICE_HEADING_RE = /(下一步|请选择|请选一项|可选项|可选方案|你可以选择|选择一项)/
+const NUMBERED_OPTION_RE = /^\s*(\d{1,2})[.、)）]\s*(.+?)\s*$/
+
+export function extractChoiceSuggestions(text: string): string[] {
+  const lines = (text || '').split(/\r?\n/)
+  let start = -1
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (CHOICE_HEADING_RE.test(lines[index])) {
+
+      start = index + 1
+      break
+    }
+  }
+  if (start < 0) return []
+
+  const options: string[] = []
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index].trim()
+    if (!line) {
+      if (options.length > 0) break
+      continue
+    }
+    const match = line.match(NUMBERED_OPTION_RE)
+    if (!match) {
+      if (options.length > 0) break
+      continue
+    }
+    const label = match[2].replace(/[。；;]+$/, '').trim()
+    if (label) options.push(`${match[1]}. ${label}`)
+    if (options.length >= 8) break
+  }
+  return options.length >= 2 ? options : []
 }
 
 function mergeConfirmation(
@@ -171,7 +205,10 @@ export function useAssistantChat() {
               suggestions: data.suggestions || [],
             }
 
-          case 'done':
+          case 'done': {
+            const suggestions = data.suggestions?.length
+              ? data.suggestions
+              : (m.suggestions?.length ? m.suggestions : extractChoiceSuggestions(m.content))
             return {
               ...m,
               streaming: false,
@@ -180,7 +217,9 @@ export function useAssistantChat() {
               intent: data.intent,
               steps: data.steps ?? m.steps,
               confirmation: mergeConfirmation(m.confirmation, data.confirmation),
+              suggestions,
             }
+          }
 
           case 'error':
             return {
@@ -427,7 +466,9 @@ export function useAssistantChat() {
                   ...m,
                   content: data.text || '',
                   cards: data.cards || [],
-                  suggestions: data.suggestions || [],
+                  suggestions: data.suggestions?.length
+                    ? data.suggestions
+                    : extractChoiceSuggestions(data.text || ''),
                   intent: data.intent,
                   provider: data.provider,
                   streaming: false,
@@ -501,7 +542,7 @@ export function useAssistantChat() {
           content: item.content || '',
           timestamp: item.created_at ? new Date(item.created_at).getTime() : Date.now(),
           cards: [],
-          suggestions: [],
+          suggestions: item.role === 'assistant' ? extractChoiceSuggestions(item.content || '') : [],
           steps: steps.length > 0 ? steps : undefined,
           plan,
           confirmation,

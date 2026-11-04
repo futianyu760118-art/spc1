@@ -137,7 +137,7 @@ class BindUsersIn(BaseModel):
 
 class AgentUpsertIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
-    capabilities: List[str]
+    capabilities: List[str] = Field(default_factory=list)
     scope_type: str = "all"
     scope_role_ids: Optional[List[int]] = None
     description: Optional[str] = Field(default=None, max_length=500)
@@ -279,7 +279,7 @@ async def archive_conversation(
 @router.get("/me/team")
 async def my_team(
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.team", "read")),
+    current_user=Depends(PermissionChecker("ai.agent.assistant", "read")),
 ):
     try:
         user = await _load_user(db, current_user)
@@ -293,7 +293,7 @@ async def my_team(
 async def team_candidates(
     keyword: str = "",
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.team", "read")),
+    current_user=Depends(PermissionChecker("ai.agent.assistant", "read")),
 ):
     try:
         user = await _load_user(db, current_user)
@@ -306,7 +306,7 @@ async def team_candidates(
 async def add_team_member(
     body: TeamCheckIn,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.team", "read")),
+    current_user=Depends(PermissionChecker("ai.agent.assistant", "read")),
 ):
     try:
         user = await _load_user(db, current_user)
@@ -320,7 +320,7 @@ async def add_team_member(
 async def remove_team_member(
     agent_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(PermissionChecker("ai.agent.team", "read")),
+    current_user=Depends(PermissionChecker("ai.agent.assistant", "read")),
 ):
     try:
         user = await _load_user(db, current_user)
@@ -342,8 +342,6 @@ async def capability_catalog(
 # ───────────────────────────── 管理员 ─────────────────────────────
 
 def _validate_upsert(body: AgentUpsertIn) -> Optional[str]:
-    if not body.capabilities:
-        return "至少选择一个能力"
     unknown = [code for code in body.capabilities if code not in ALL_CONFIGURABLE_CODES]
     if unknown:
         return f"未知能力：{'、'.join(unknown)}"

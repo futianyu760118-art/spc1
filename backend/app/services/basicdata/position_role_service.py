@@ -30,7 +30,7 @@ COMMON_INTERNAL_PERMISSIONS = {
     "topbar.font_size": READ,
     "topbar.notifications": READ,
     "ai.agent.self": READ,
-    "ai.agent.team": READ,
+    "ai.agent.assistant": READ,
 }
 
 

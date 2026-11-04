@@ -153,8 +153,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'finance.data': <AccountBookOutlined />,
   agent: <RobotOutlined />,
   'ai.agent.self': <RobotOutlined />,
-  'ai.agent.self.me': <RobotOutlined />,
-  'ai.agent.team': <TeamOutlined />,
+  'ai.agent.assistant': <RobotOutlined />,
   'ai.agent.admin': <SafetyCertificateOutlined />,
 }
 
@@ -616,7 +615,7 @@ function getRequiredPermission(pathname: string, dynamicMap?: Record<string, str
   if (pathname.startsWith('/orders/')) return 'orders.list'
   if (pathname.startsWith('/stock-check/')) return 'materials.stock_check'
   if (pathname.startsWith('/approvals/create')) return 'approval.initiate'
-  if (pathname.startsWith('/agents/team')) return 'ai.agent.team'
+  if (pathname === '/agents' || pathname === '/agents/') return 'ai.agent.assistant'
   if (pathname.startsWith('/agents/admin')) return 'ai.agent.admin'
   if (pathname.startsWith('/agents')) return 'ai.agent.self'
   return undefined
