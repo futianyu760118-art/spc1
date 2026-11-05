@@ -5,17 +5,58 @@ export interface AgentCapabilityItem {
   name: string
 }
 
+export interface AgentSkillBrief {
+  id: number
+  skill_key?: string | null
+  name: string
+  description: string
+  executor_name?: string | null
+  source?: 'builtin' | 'imported'
+  status: 'active' | 'disabled'
+}
+
+export interface AgentSkillFile {
+  path: string
+  size: number
+  kind: 'skill' | 'script' | 'reference' | 'asset' | 'file'
+}
+
 export interface AgentInfo {
   id: number
   agent_no: string
   name: string
   capabilities: AgentCapabilityItem[]
+  skills?: AgentSkillBrief[]
+  skill_count?: number
   scope_type?: 'all' | 'roles'
   scope_role_ids?: number[]
   description?: string | null
   status: 'active' | 'disabled'
   created_at?: string
   teams_count?: number
+}
+
+export interface AgentSkill extends AgentSkillBrief {
+  instructions?: string
+  files?: AgentSkillFile[]
+  file_count?: number
+  has_scripts?: boolean
+  folder_exists?: boolean
+  executor_available?: boolean
+  script_execution_available?: boolean
+  bound_agents_count?: number
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface SkillExecutor {
+  name: string
+  display_name: string
+  description: string
+  parameters: Record<string, any>
+  required_capabilities: string[]
+  timeout_s: number
+  read_only: boolean
 }
 
 export interface AgentCapability {
@@ -26,6 +67,23 @@ export interface AgentCapability {
   read_only?: boolean
   grantable?: boolean
   structural?: boolean
+}
+
+export interface AgentUserOption {
+  id: number
+  username: string
+  display_name: string
+  role_id?: number | null
+  role_name?: string
+}
+
+export interface AgentBindResult {
+  action: 'bind' | 'unbind'
+  created: number
+  removed: number
+  skipped: number
+  errors: string[]
+  skipped_details?: Array<{ agent_id: number; user_id: number; reason: string }>
 }
 
 export interface AgentCall {
@@ -46,6 +104,7 @@ export interface TeamMember {
   agent_no: string
   name: string
   capabilities: AgentCapabilityItem[]
+  skills?: AgentSkillBrief[]
   description?: string | null
   status: 'active' | 'disabled'
   created_at?: string
@@ -69,6 +128,29 @@ export const agentApi = {
     api.put(`/agents/admin/agents/${agentId}`, data) as any,
   adminCalls: (params: Record<string, any> = {}) => api.get('/agents/admin/calls', { params }) as any,
   adminStats: () => api.get('/agents/admin/stats') as any,
+  adminUsers: (params: Record<string, any> = {}) => api.get('/agents/admin/users', { params }) as any,
+  bindAgentUsers: (data: Record<string, any>) => api.post('/agents/admin/users/bind', data) as any,
+  adminSkills: (params: Record<string, any> = {}) => api.get('/agents/admin/skills', { params }) as any,
+  adminSkill: (skillId: number) => api.get(`/agents/admin/skills/${skillId}`) as any,
+  adminSkillFile: (skillId: number, path: string) =>
+    api.get(`/agents/admin/skills/${skillId}/file`, { params: { path } }) as any,
+  importSkill: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post('/agents/admin/skills/import', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }) as any
+  },
+  syncSkills: () => api.post('/agents/admin/skills/sync') as any,
+  updateSkillStatus: (skillId: number, status: 'active' | 'disabled') =>
+    api.put(`/agents/admin/skills/${skillId}/status`, { status }) as any,
+  deleteSkill: (skillId: number) => api.delete(`/agents/admin/skills/${skillId}`) as any,
+  skillExecutors: () => api.get('/agents/admin/skill-executors') as any,
   adminConversation: (id: number, reason: string) =>
     api.get(`/agents/admin/conversations/${id}`, { params: { reason } }) as any,
+  assistantStats: (params: Record<string, any> = {}) => api.get('/agents/admin/assistant/stats', { params }) as any,
+  assistantRuns: (params: Record<string, any> = {}) => api.get('/agents/admin/assistant/runs', { params }) as any,
+  assistantConfig: () => api.get('/agents/admin/assistant/config') as any,
+  saveAssistantConfig: (data: { config: Record<string, any> }) =>
+    api.put('/agents/admin/assistant/config', data) as any,
 }

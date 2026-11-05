@@ -36,6 +36,9 @@ from app.models.production.schedule_plan import ProductionSchedulePlan
 from app.models.production.production_task_order import ProductionTaskOrder
 from app.models.production.front_process_record import FrontProcessRecord
 from app.models.production.production_daily_report import ProductionDailyReport  # noqa: F401
+from app.models.production.labor_price import LaborPriceMain, LaborPriceDetail  # noqa: F401
+from app.models.production.monthly_schedule_plan import MonthlySchedulePlan  # noqa: F401
+from app.models.production.monthly_capacity_scenario import MonthlyCapacityScenario  # noqa: F401
 from app.models.production.production_report import ProductionReport  # noqa: F401
 from app.models.production.workshop_daily_report import (  # noqa: F401
     WorkshopDailyReport,
@@ -449,6 +452,9 @@ class DatabaseInitializer:
             },
             "supplier_claim": {
                 "clause_snapshot": "JSONB",
+            },
+            "labor_price_main": {
+                "remark": "TEXT",
             },
             "notification": {
                 "sender_id": "INTEGER",
@@ -1100,35 +1106,37 @@ class DatabaseInitializer:
                 print(f"  sys_user.permissions migration skipped: {e}")
 
     async def migrate_agent_center_permissions(self):
-        """智能体中心从「任务闭环」收敛为「层级 + 能力 + 委派」：清理旧菜单权限。"""
+        """智能中心：我的智能体 / 我的团队合并为我的助手；清理旧权限并登记新页面权限。"""
         print("Migrating agent center permissions...")
         async with self.engine.begin() as conn:
             try:
                 await conn.execute(text(
                     "DELETE FROM sys_permission WHERE code IN ("
-                    "'ai.agent.self.tasks','ai.agent.team.tasks','ai.agent.team.config'"
+                    "'ai.agent.self.tasks','ai.agent.team.tasks','ai.agent.team.config',"
+                    "'ai.agent.self.me','ai.agent.team'"
                     ")"
                 ))
                 await conn.execute(text(
-                    "UPDATE sys_permission SET name = '智能体中心' WHERE code = 'ai.agent.self'"
-                ))
-                await conn.execute(text(
-                    "UPDATE sys_permission SET name = '我的智能体', parent_code = 'ai.agent.self', "
-                    "route_path = '/agents/me', actions = '[\"read\"]'::jsonb "
-                    "WHERE code = 'ai.agent.self.me'"
-                ))
-                await conn.execute(text(
-                    "UPDATE sys_permission SET name = '我的团队', parent_code = 'ai.agent.self', "
-                    "route_path = '/agents/team', actions = '[\"read\"]'::jsonb "
-                    "WHERE code = 'ai.agent.team'"
-                ))
-                await conn.execute(text(
-                    "UPDATE sys_permission SET name = '智能体管理', parent_code = 'ai.agent.self' "
-                    "WHERE code = 'ai.agent.admin'"
-                ))
-                await conn.execute(text(
                     "UPDATE sys_role SET permissions = permissions "
-                    "- 'ai.agent.self.tasks' - 'ai.agent.team.tasks' - 'ai.agent.team.config'"
+                    "- 'ai.agent.self.tasks' - 'ai.agent.team.tasks' - 'ai.agent.team.config' "
+                    "- 'ai.agent.self.me' - 'ai.agent.team'"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '智能中心' WHERE code = 'ai.agent.self'"
+                ))
+                await conn.execute(text(
+                    "INSERT INTO sys_permission "
+                    "(code, name, module, parent_code, actions, route_path, sort_order, is_active) "
+                    "VALUES ('ai.agent.assistant', '我的助手', 'agent', 'ai.agent.self', "
+                    "'[\"read\"]'::jsonb, '/agents', 1, TRUE) "
+                    "ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, "
+                    "parent_code = EXCLUDED.parent_code, route_path = EXCLUDED.route_path, "
+                    "actions = EXCLUDED.actions, sort_order = EXCLUDED.sort_order, is_active = TRUE"
+                ))
+                await conn.execute(text(
+                    "UPDATE sys_permission SET name = '智能体管理', parent_code = 'ai.agent.self', "
+                    "route_path = '/agents/admin', sort_order = 2 "
+                    "WHERE code = 'ai.agent.admin'"
                 ))
                 print("  agent center permissions migrated")
             except Exception as e:
@@ -1240,6 +1248,26 @@ class DatabaseInitializer:
                     "config_version = config_version + 1 WHERE id = :id"
                 ), {"codes": json.dumps(deduped), "id": row.id})
         print("Agent write capability split done.")
+
+    async def migrate_agent_skills(self):
+        """技能索引字段（磁盘文件夹版）：为旧 DB-only 技能表补列并清理无文件标识的行。"""
+        async with self.engine.begin() as conn:
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS skill_key VARCHAR(128)"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS source VARCHAR(16) NOT NULL DEFAULT 'builtin'"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS file_count INTEGER NOT NULL DEFAULT 0"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ADD COLUMN IF NOT EXISTS has_scripts BOOLEAN NOT NULL DEFAULT false"))
+            await conn.execute(text(
+                "ALTER TABLE agent_skill ALTER COLUMN description TYPE TEXT"))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_agent_skill_skill_key ON agent_skill (skill_key)"))
+            await conn.execute(text("DELETE FROM agent_skill WHERE skill_key IS NULL"))
+        print("Agent skill index migration done.")
 
     async def rebuild_mrp_plan_order(self):
         """按 PRD 重建 mrp_plan_order 表（销售订单ID + 物料ID 联合主键）。
@@ -2885,6 +2913,7 @@ ORDER BY [{safe_order_alias}]
             await self.migrate_agent_team_redesign()
             await self.migrate_agent_multi_capability()
             await self.migrate_agent_write_capability_split()
+            await self.migrate_agent_skills()
             await self.drop_pto_sale_order_id_fk()
             await self.ensure_indexes()
             await self.migrate_stock_check_k3_writeback_counter_manager()

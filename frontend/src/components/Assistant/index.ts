@@ -1,3 +1,4 @@
-export { default as FloatingAssistant } from './FloatingAssistant'
+export { default as AssistantDockItem } from './AssistantDockItem'
+export { default as AssistantLauncher } from './AssistantLauncher'
 export { default as ChatPanel } from './ChatPanel'
 export { useAssistantChat } from './useAssistantChat'

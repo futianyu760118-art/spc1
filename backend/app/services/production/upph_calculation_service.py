@@ -7,8 +7,9 @@ from app.models.production.product_process_capacity import (
     LEAN_WORKSHOP_NAME,
     ProductProcessCapacity,
     parse_capacity_metadata,
+    resolve_capacity_upph,
 )
-from app.services.production.assembly_roll_schedule_service import AssemblyRollScheduleService
+from app.services.production.upph_formula_config_service import UpphFormulaConfigService
 
 ASSEMBLY_WORKSHOP_NAME = "装配车间"
 ASSEMBLY_PROCESS_TYPES = {"组装", "组装前加工"}
@@ -193,6 +194,115 @@ class UpphCalculationService:
             "used_capacities": used_capacities,
         }
 
+    @staticmethod
+    def _resolve_oa_main_id(metadata: dict[str, Any]) -> int:
+        try:
+            return int(str(metadata.get("oa_main_id") or "0").strip())
+        except (TypeError, ValueError):
+            return 0
+
+    async def build_local_stage_rules(
+        self,
+        bom_code: Optional[str],
+        capacities: Optional[List[ProductProcessCapacity]] = None,
+    ) -> dict[str, Any]:
+        """用本地已同步的 OA 产能构建装配拆分规则，排产时不再实时查 OA。
+
+        同一 BOM + 子工序可能有多个有效工价明细，按有效明细汇总；
+        完全相同的工序明细去重，最后按组装段/包装段计算 UPPH。
+        """
+        if capacities is None:
+            capacities = await self.get_matched_capacities(bom_code=bom_code)
+        config_service = UpphFormulaConfigService(self.db)
+        config_map = await config_service.get_active_config_map()
+
+        stage_definitions = (
+            ("assembly", "组装", ASSEMBLY_PROCESS_TYPES),
+            ("packaging", "包装", PACKAGING_PROCESS_TYPES),
+        )
+        stage_rules: dict[str, dict[str, Any]] = {}
+        stage_price_totals = {"assembly": 0.0, "packaging": 0.0}
+        matched_buckets: list[str] = []
+        selected_main_ids: list[int] = []
+
+        for bucket, stage_process_type, process_types in stage_definitions:
+            selected: list[ProductProcessCapacity] = []
+            seen_details: set[tuple] = set()
+            for capacity in capacities:
+                metadata = parse_capacity_metadata(capacity.remark)
+                if metadata.get("oa_workshop_name") != ASSEMBLY_WORKSHOP_NAME:
+                    continue
+                if not metadata.get("is_schedulable", True):
+                    continue
+                if capacity.process_type not in process_types:
+                    continue
+                # 相同工序、备注、单价、PPH 视为同一条工序明细，避免旧版本重复相加
+                signature = (
+                    capacity.process_type,
+                    metadata.get("raw_remark"),
+                    round(float(metadata.get("gjje") or 0), 4),
+                    round(float(metadata.get("oa_raw_upph") or 0), 2),
+                )
+                if signature in seen_details:
+                    continue
+                seen_details.add(signature)
+                selected.append(capacity)
+                selected_main_ids.append(self._resolve_oa_main_id(metadata))
+
+            total_price = 0.0
+            fallback_hour_price: Optional[float] = None
+            for capacity in selected:
+                metadata = parse_capacity_metadata(capacity.remark)
+                total_price += float(metadata.get("gjje") or 0)
+                if fallback_hour_price is None and metadata.get("hour_price"):
+                    fallback_hour_price = float(metadata["hour_price"])
+
+            _, configured_hour_price = await config_service.resolve_formula_inputs(
+                ASSEMBLY_WORKSHOP_NAME,
+                stage_process_type,
+                config_map,
+            )
+            upph_payload = resolve_capacity_upph(
+                workshop_name=ASSEMBLY_WORKSHOP_NAME,
+                process_type=stage_process_type,
+                gjje=total_price,
+                hour_price=configured_hour_price if configured_hour_price is not None else fallback_hour_price,
+            )
+            effective_upph = float(upph_payload.get("effective_upph") or 0)
+            if total_price > 0 and effective_upph > 0:
+                matched_buckets.append(bucket)
+            stage_price_totals[bucket] = round(total_price, 4)
+            stage_rules[bucket] = {
+                "price_total": round(total_price, 4),
+                "upph": round(effective_upph, 2),
+                "hour_price": upph_payload.get("hour_price"),
+                "process_type": stage_process_type,
+            }
+
+        schedule_bucket = "pending"
+        if set(matched_buckets) == {"assembly", "packaging"}:
+            schedule_bucket = "mixed"
+        elif matched_buckets == ["assembly"]:
+            schedule_bucket = "assembly"
+        elif matched_buckets == ["packaging"]:
+            schedule_bucket = "packaging"
+
+        selected_main_id = str(max(selected_main_ids)) if selected_main_ids else None
+        return {
+            "bom_code": bom_code,
+            "resolved": bool(selected_main_id),
+            "stage_price_totals": stage_price_totals,
+            "selected_main_id": selected_main_id,
+            "matched_buckets": matched_buckets,
+            "schedule_bucket": schedule_bucket,
+            "total_upph": round(
+                sum(float(stage_rules[bucket]["upph"] or 0) for bucket in ("assembly", "packaging")),
+                2,
+            ),
+            "split_rule_ready": schedule_bucket in {"assembly", "packaging", "mixed"},
+            "stage_rules": stage_rules,
+        }
+
     async def summarize_schedule_context(
         self,
         product_code: Optional[str] = None,
@@ -204,8 +314,10 @@ class UpphCalculationService:
         if summary.get("schedule_bucket") in {"assembly", "packaging", "mixed"}:
             split_rules = preloaded_split_rules
             if split_rules is None:
-                split_service = AssemblyRollScheduleService(self.db)
-                split_rules = await split_service.get_stage_rules(bom_code=bom_code)
+                split_rules = await self.build_local_stage_rules(
+                    bom_code=bom_code,
+                    capacities=capacities,
+                )
             if split_rules.get("split_rule_ready"):
                 summary["schedule_bucket"] = split_rules.get("schedule_bucket") or summary.get("schedule_bucket")
                 summary["matched_buckets"] = split_rules.get("matched_buckets") or summary.get("matched_buckets")

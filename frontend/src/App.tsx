@@ -10,6 +10,7 @@ import {useAuthStore} from './store/auth'
 import {useThemeStore} from './store/theme'
 import {setGlobalMessageApi} from './utils/antdMessage'
 import { contentRoutes } from './router/contentRoutes'
+import { resolveEmployeeLandingPath } from './utils/landing'
 
 function AntdMessageBridge() {
     const {message} = AntdApp.useApp()
@@ -64,6 +65,11 @@ function ShareRouteGuard({children}: { children: React.ReactNode }) {
     )
 }
 
+function RoleLanding() {
+    const currentUser = useAuthStore((state) => state.currentUser)
+    return <Navigate to={resolveEmployeeLandingPath(currentUser)} replace />
+}
+
 export default function App() {
     const {fontSizeScale} = useThemeStore()
 
@@ -106,6 +112,7 @@ export default function App() {
                                 </PrivateRoute>
                             }
                         >
+                            <Route index element={<RoleLanding/>}/>
                             {contentRoutes}
                         </Route>
                     </Routes>

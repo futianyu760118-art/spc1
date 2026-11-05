@@ -32,7 +32,7 @@ COPY . .
 COPY --from=agents_shared order-write-operations.json /app/app/services/order/write_operations.json
 
 # 文件存储目录（会被 docker-compose volume 挂载覆盖）
-RUN mkdir -p /app/uploads
+RUN mkdir -p /app/uploads /app/skills-imported
 
 EXPOSE 8000
 

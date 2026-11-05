@@ -12,6 +12,7 @@ from app.models.agent.team import AgentTeamMember
 from app.models.basicdata.user import SysRole, SysUser
 from app.services.agent import cache
 from app.services.agent.capabilities import allowed_tool_names
+from app.services.agent.skills import TeamSkillInfo, list_team_skill_briefs
 
 
 @dataclass
@@ -33,6 +34,7 @@ class UserContext:
     members: List[TeamMemberInfo] = field(default_factory=list)
     effective_capabilities: Set[str] = field(default_factory=set)
     allowed_tools: Set[str] = field(default_factory=set)
+    skills: List[TeamSkillInfo] = field(default_factory=list)
 
     @property
     def display_name(self) -> str:
@@ -46,6 +48,9 @@ class UserContext:
 
     def member_by_id(self, agent_id: int) -> Optional[TeamMemberInfo]:
         return next((m for m in self.members if m.agent_id == int(agent_id)), None)
+
+    def skill_by_id(self, skill_id: int) -> Optional[TeamSkillInfo]:
+        return next((s for s in self.skills if s.skill_id == int(skill_id)), None)
 
 
 async def load_user_permissions(db: AsyncSession, user: SysUser) -> tuple[str, Dict[str, List[str]]]:
@@ -87,6 +92,7 @@ async def load_user_context(
     role_code, permissions = await load_user_permissions(db, user)
     members = await list_team_members(db, user.id)
     active = [m for m in members if m.status == "active"]
+    skills = await list_team_skill_briefs(db, [m.agent_id for m in active])
     version_key = "-".join(f"{m.agent_id}v{m.config_version}" for m in sorted(active, key=lambda m: m.agent_id))
     cache_key = f"userctx:{user.id}:{version_key}"
     if use_cache:
@@ -96,6 +102,7 @@ async def load_user_context(
             return UserContext(
                 user=user, role_code=role_code, permissions=permissions,
                 members=members, effective_capabilities=effective, allowed_tools=tools,
+                skills=skills,
             )
     effective = {code for m in active for code in m.capabilities}
     tools = allowed_tool_names(effective)
@@ -104,4 +111,5 @@ async def load_user_context(
     return UserContext(
         user=user, role_code=role_code, permissions=permissions,
         members=members, effective_capabilities=effective, allowed_tools=tools,
+        skills=skills,
     )

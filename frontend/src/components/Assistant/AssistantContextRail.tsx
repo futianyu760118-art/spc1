@@ -1,0 +1,140 @@
+import React, { useState } from 'react'
+import { Button } from 'antd'
+import { RightOutlined } from '@ant-design/icons'
+import { ChatMessage } from './useAssistantChat'
+import { TeamAgent } from './types'
+
+interface Props {
+  teamAgents: TeamAgent[]
+  messages: ChatMessage[]
+  onCollapse: () => void
+}
+
+const STEP_STATUS_META: Record<string, { cls: string; text: string }> = {
+  running: { cls: 'running', text: '执行中' },
+  completed: { cls: 'done', text: '完成' },
+  failed: { cls: 'failed', text: '失败' },
+  blocked: { cls: 'blocked', text: '已拦截' },
+  pending_confirmation: { cls: 'pending', text: '待确认' },
+  cancelled: { cls: 'muted', text: '已取消' },
+}
+
+export default function AssistantContextRail({ teamAgents, messages, onCollapse }: Props) {
+  const [showAllTeam, setShowAllTeam] = useState(false)
+  const [showAllCaps, setShowAllCaps] = useState(false)
+
+  const capabilities = Array.from(new Map(
+    teamAgents.flatMap(agent => agent.capabilities || []).map(item => [item.code, item.name]),
+  ).entries())
+  const skills = Array.from(new Map(
+    teamAgents.flatMap(agent => (agent.skills || []).map(skill => [`${skill.id}-${skill.name}`, skill.name])),
+  ).entries())
+  const allCapabilities = [
+    ...capabilities.map(([key, name]) => ({ key, name, kind: 'capability' as const })),
+    ...skills.map(([key, name]) => ({ key, name, kind: 'skill' as const })),
+  ]
+  const visibleCapabilities = showAllCaps ? allCapabilities : allCapabilities.slice(0, 6)
+  const visibleTeam = showAllTeam ? teamAgents : teamAgents.slice(0, 3)
+
+  const latest = [...messages].reverse().find(
+    message => message.role === 'assistant' && (message.plan || (message.steps && message.steps.length > 0)),
+  )
+
+  return (
+    <aside className="ai-chat-context">
+      <div className="ai-context-head">
+        <strong>会话上下文</strong>
+        <Button type="text" size="small" icon={<RightOutlined />} onClick={onCollapse} title="收起上下文" />
+      </div>
+      <div className="ai-context-body">
+        <section className="ai-context-section">
+          <h4>团队成员 <span className="ai-context-count">{teamAgents.length} 位</span></h4>
+          {teamAgents.length === 0 ? (
+            <div className="ai-context-empty">还没有团队成员，去「我的助手」添加</div>
+          ) : (
+            <>
+              <div className="ai-context-team">
+                {visibleTeam.map(agent => (
+                  <div key={agent.id} className="ai-context-team-row">
+                    <div className="ai-avatar sm">{(agent.name || '?').slice(0, 1)}</div>
+                    <span className="ai-context-team-name">{agent.name}</span>
+                    <span className="ai-context-team-count">{(agent.capabilities || []).length} 项能力</span>
+                  </div>
+                ))}
+              </div>
+              {teamAgents.length > 3 && !showAllTeam && (
+                <button type="button" className="ai-context-more" onClick={() => setShowAllTeam(true)}>
+                  查看全部 {teamAgents.length} 位 →
+                </button>
+              )}
+            </>
+          )}
+        </section>
+
+        <section className="ai-context-section">
+          <h4>本会话执行链</h4>
+          {!latest ? (
+            <div className="ai-context-empty">发起对话后，这里会显示助手的计划与执行步骤</div>
+          ) : (
+            <div className="ai-context-trace">
+              {latest.plan && (
+                <div className="ai-context-plan">
+                  <div className="ai-context-plan-title">
+                    {latest.plan.status === 'planning' ? '正在规划…' : '执行计划'}
+                  </div>
+                  {latest.plan.status === 'ready' && (
+                    <ol>
+                      {latest.plan.steps.map((step, index) => <li key={index}>{step}</li>)}
+                    </ol>
+                  )}
+                </div>
+              )}
+              {(latest.steps || []).length > 0 && (
+                <div className="ai-context-steps">
+                  {latest.steps!.map(step => {
+                    const meta = STEP_STATUS_META[step.status] || { cls: 'muted', text: step.status }
+                    return (
+                      <div key={step.step_id} className="ai-context-step">
+                        <span className={`ai-step-dot ${meta.cls}`} />
+                        <span className="ai-context-step-label">
+                          {step.agent_label || step.tool}
+                        </span>
+                        <span className={`ai-step-state ${meta.cls}`}>{meta.text}</span>
+                        {step.duration_ms != null && (
+                          <span className="ai-context-step-time">{Math.round(step.duration_ms)}ms</span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
+        <section className="ai-context-section">
+          <h4>已启用能力 <span className="ai-context-count">{allCapabilities.length} 项</span></h4>
+          {allCapabilities.length === 0 ? (
+            <div className="ai-context-empty">暂无能力或技能</div>
+          ) : (
+            <div className="ai-context-caps">
+              {visibleCapabilities.map(item => (
+                <span
+                  key={`${item.kind}-${item.key}`}
+                  className={`sc-tag ${item.kind === 'skill' ? 'sc-tag-purple' : 'sc-tag-kit'}`}
+                >
+                  {item.name}
+                </span>
+              ))}
+              {allCapabilities.length > 6 && !showAllCaps && (
+                <button type="button" className="ai-context-cap-more" onClick={() => setShowAllCaps(true)}>
+                  +{allCapabilities.length - 6} 更多
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+    </aside>
+  )
+}

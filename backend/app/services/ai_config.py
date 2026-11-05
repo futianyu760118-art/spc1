@@ -53,7 +53,6 @@ ASSISTANT_CONFIG_DEFS: Dict[str, ConfigDef] = {
                                  "AI 自主规划步骤的模型轮数上限"),
     "max_agent_calls": ConfigDef("max_agent_calls", "int", 8, "智能体调用次数上限（编排器）",
                                  "单次任务最多调用执行面智能体的次数"),
-    "disabled_tools": ConfigDef("disabled_tools", "json", [], "禁用工具列表", "JSON 数组"),
     "gap_notify_enabled": ConfigDef(
         "gap_notify_enabled", "bool", True, "缺字段通知开关",
         "关闭后不再发送缺字段站内信（对话内提示保留）",
@@ -128,11 +127,6 @@ def coerce_value(def_: ConfigDef, raw: Any) -> Any:
 
 def _validate(def_: ConfigDef, value: Any) -> Any:
     value = coerce_value(def_, value)
-    if def_.key == "disabled_tools":
-        known = {t.name for t in get_all_tools()}
-        unknown = [t for t in value if t not in known]
-        if unknown:
-            raise ValueError(f"未知工具: {unknown}")
     if def_.key == "log_level" and value not in ("debug", "info", "warn", "error"):
         raise ValueError("log_level 必须是 debug|info|warn|error")
     if def_.key == "query_timeout_ms" and not (1000 <= value <= 120000):

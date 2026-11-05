@@ -197,6 +197,27 @@ CAPABILITIES: Dict[str, Capability] = {
         tool_names=("create_feedback", "revoke_feedback"),
         description="代用户提交问题反馈，并可撤销本人待处理的反馈",
     ),
+    "skill.create": Capability(
+        code="skill.create", name="创建技能", category="skill", read_only=False,
+        scope_mode="global",
+        required_permissions={"ai.skill.manage": "update"},
+        tool_names=("create_skill",),
+        description="创建技能库中的技能（默认只写指令与资源，脚本需显式开关）",
+    ),
+    "skill.install": Capability(
+        code="skill.install", name="安装技能", category="skill", read_only=False,
+        scope_mode="global",
+        required_permissions={"ai.skill.manage": "update"},
+        tool_names=("install_skill",),
+        description="从 SkillHub 专家包或 HTTPS zip 安装技能",
+    ),
+    "skill.uninstall": Capability(
+        code="skill.uninstall", name="卸载技能", category="skill", read_only=False,
+        scope_mode="global",
+        required_permissions={"ai.skill.manage": "update"},
+        tool_names=("uninstall_skill",),
+        description="卸载导入的技能或 SkillHub 专家包（内置技能不可卸载）",
+    ),
     "team.manage": Capability(
         code="team.manage", name="团队管理", category="team", read_only=False,
         structural=True,
@@ -219,6 +240,24 @@ CONFIGURABLE_CAPABILITIES: Dict[str, Capability] = {
 }
 
 ALL_CONFIGURABLE_CODES: Set[str] = set(CONFIGURABLE_CAPABILITIES)
+
+SKILL_ADMIN_TOOL_NAMES = ("create_skill", "install_skill", "uninstall_skill")
+
+
+def allowed_skill_admin_tools(
+    permissions: Dict[str, List[str]], effective: Set[str]
+) -> Set[str]:
+    """技能管理工具：用户权限全量；否则按团队能力的 tool_names 并集。"""
+    from app.core.security import can_manage_skills
+
+    if can_manage_skills(permissions or {}):
+        return set(SKILL_ADMIN_TOOL_NAMES)
+    allowed: Set[str] = set()
+    for code in effective or set():
+        cap = CONFIGURABLE_CAPABILITIES.get(code)
+        if cap:
+            allowed.update(set(cap.tool_names) & set(SKILL_ADMIN_TOOL_NAMES))
+    return allowed
 
 
 def allowed_tool_names(effective: Set[str]) -> Set[str]:

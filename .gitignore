@@ -22,6 +22,7 @@ frontend/dist/
 # Docker
 pg_data/
 data/uploads/
+backend/skills-imported/
 
 # OS
 .DS_Store

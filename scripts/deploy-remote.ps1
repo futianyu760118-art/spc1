@@ -154,6 +154,10 @@ if (-not $SkipUpload) {
         if ($LASTEXITCODE -ne 0) { throw "frontend 镜像构建失败" }
         & docker build -f (Join-Path $RepoRoot "agents\gateway-agent\Dockerfile") -t aeos-gateway:latest -t "aeos-gateway:$Version" (Join-Path $RepoRoot "agents")
         if ($LASTEXITCODE -ne 0) { throw "gateway 镜像构建失败" }
+        & docker build -t spc-v2-sandbox:latest -t "spc-v2-sandbox:$Version" (Join-Path $RepoRoot "sandbox")
+        if ($LASTEXITCODE -ne 0) { throw "sandbox build failed" }
+        & docker build -t spc-v2-sandbox-orchestrator:latest -t "spc-v2-sandbox-orchestrator:$Version" (Join-Path $RepoRoot "sandbox-orchestrator")
+        if ($LASTEXITCODE -ne 0) { throw "sandbox 镜像构建失败" }
     } else {
         & docker tag spc-v2-backend:latest "spc-v2-backend:$Version"
         if ($LASTEXITCODE -ne 0) { throw "本机不存在 spc-v2-backend:latest，无法 -SkipBuild（请先完整构建）" }
@@ -163,13 +167,21 @@ if (-not $SkipUpload) {
         if ($LASTEXITCODE -ne 0) { throw "本机不存在 aeos-gateway:latest，无法 -SkipBuild（请先完整构建）" }
         & docker tag aeos-gateway:latest "aeos-gateway:$Version"
         if ($LASTEXITCODE -ne 0) { throw "gateway 镜像打版本标签失败" }
+        & docker image inspect spc-v2-sandbox:latest | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "本机不存在 spc-v2-sandbox:latest，无法 -SkipBuild（请先完整构建）" }
+        & docker tag spc-v2-sandbox:latest "spc-v2-sandbox:$Version"
+        if ($LASTEXITCODE -ne 0) { throw "sandbox version tag failed" }
+        & docker image inspect spc-v2-sandbox-orchestrator:latest | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "sandbox orchestrator image missing" }
+        & docker tag spc-v2-sandbox-orchestrator:latest "spc-v2-sandbox-orchestrator:$Version"
+        if ($LASTEXITCODE -ne 0) { throw "sandbox 镜像打版本标签失败" }
     }
     Show-StepElapsed "2/6"
 
     Write-Host "[3/6] 打包镜像与配置 ..."
     # 公共镜像包只压缩一次；每台服务器另有小 config bundle（compose + nginx.conf + 该台 .env）
     $imagesTar = Join-Path $tmpDir "images.tar"
-    & docker save -o $imagesTar "spc-v2-backend:$Version" "spc-v2-frontend:$Version" "aeos-gateway:latest" "aeos-gateway:$Version"
+    & docker save -o $imagesTar "spc-v2-backend:$Version" "spc-v2-frontend:$Version" "spc-v2-sandbox:$Version" "spc-v2-sandbox-orchestrator:$Version" "aeos-gateway:latest" "aeos-gateway:$Version"
     if ($LASTEXITCODE -ne 0) { throw "docker save 失败" }
     & gzip -f $imagesTar
     if ($LASTEXITCODE -ne 0) { throw "images.tar 压缩失败" }
@@ -195,6 +207,8 @@ gunzip -f images.tar.gz
 docker load -i images.tar
 docker tag "spc-v2-backend:__V__" spc-v2-backend:latest
 docker tag "spc-v2-frontend:__V__" spc-v2-frontend:latest
+docker tag "spc-v2-sandbox:__V__" spc-v2-sandbox:latest
+docker tag "spc-v2-sandbox-orchestrator:__V__" spc-v2-sandbox-orchestrator:latest
 mkdir -p .bundle-new
 tar -xzf bundle.tar.gz -C .bundle-new
 cp -f .bundle-new/docker-compose-prod.yml ./docker-compose-prod.yml
@@ -210,7 +224,7 @@ cp .env docker-compose-prod.yml docker-compose-app.yml "versions/__V__/"
 printf 'version=%s\ncreated=%s\ngit=%s\nnote=%s\ncompose=%s\n' '__V__' '__CREATED__' '__GIT__' '__NOTE__' '__COMPOSE__' > "versions/__V__/meta.txt"
 echo __N__ > last_version.txt
 echo '__V__' > current.txt
-docker compose -f "$COMPOSE_FILE" up -d
+docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 docker compose -f "$COMPOSE_FILE" ps
 (for i in {1..20}; do
   if curl -s -o /dev/null http://localhost:18085/api/v1/common/ping; then echo BACKEND-OK; exit 0; fi
@@ -361,7 +375,7 @@ echo DEPLOY-VERSIONED __V__
     foreach ($s in $targetServers) {
         $compose = Get-ComposeFileForRole -Role $s.Role
         Initialize-DeploySsh -TempDir $tmpDir -Server $s
-        Invoke-Remote "export PATH=/opt/homebrew/bin:/usr/local/bin:`$PATH; cd $($s.Path) && docker compose -f $compose down && docker compose -f $compose up -d && docker compose -f $compose ps"
+        Invoke-Remote "export PATH=/opt/homebrew/bin:/usr/local/bin:`$PATH; cd $($s.Path) && docker compose -f $compose down && docker compose -f $compose up -d --remove-orphans && docker compose -f $compose ps"
     }
     $results = foreach ($s in $targetServers) {
         [pscustomobject]@{ Name = $s.Name; Role = $s.Role; Success = $true; Message = "已重启"; ElapsedSec = 0 }

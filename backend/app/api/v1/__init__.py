@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import agent, approval, assistant, basicdata, common, dashboard, exception, external, internal, masterdata, material, mrp, order, production, purchase, quality, rules, system, writeback
+from app.api.v1 import agent, approval, assistant, basicdata, common, dashboard, engineering, exception, external, internal, masterdata, material, mrp, order, production, purchase, quality, rules, system, writeback
 
 api_router = APIRouter()
 
@@ -42,6 +42,9 @@ api_router.include_router(mrp.order_coverage_router, prefix="/mrp", tags=["MRP-�
 
 # Production center
 api_router.include_router(production.router, prefix="/production", tags=["生产协同中心"])
+
+# Engineering center
+api_router.include_router(engineering.router, prefix="/engineering", tags=["工程管理"])
 
 # Exception and quality center
 api_router.include_router(exception.issues_router, prefix="/exceptions", tags=["异常与质量中心"])
@@ -106,7 +109,6 @@ api_router.include_router(approval.approvals_router, prefix="/approvals", tags=[
 
 # System（系统管理 · 备份管理）
 api_router.include_router(system.backups_router, prefix="/system/backups", tags=["系统管理-备份管理"])
-api_router.include_router(system.ai_assistant_router, prefix="/system/ai-assistant", tags=["系统管理-智能助手"])
 api_router.include_router(system.execution_agent_router, prefix="/system/execution-agent", tags=["系统管理-执行面智能体"])
 api_router.include_router(
     system.execution_agents_router,

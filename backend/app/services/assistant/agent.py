@@ -6,6 +6,7 @@ orchestrator.run_reaction，由 AI 逐步决定调用 query / reasoning / order 
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -55,6 +56,7 @@ INTENT_RECOGNITION_PROMPT = """你是一个意图识别助手。分析用户的�
     - "查一下这个产品的BOM明细"
     - "帮我提个反馈：优化系统界面"
     - "撤销刚才的反馈"
+    - "安装/卸载/创建技能，或提到 SkillHub、技能包"
 
 2. ANALYZE_HISTORY - 仅分析聊天历史中已有的数据（不需要调用智能体）
    示例：
@@ -71,12 +73,46 @@ INTENT_RECOGNITION_PROMPT = """你是一个意图识别助手。分析用户的�
 判断规则：
 - 如果用户明确提到要"查询"、"搜索"、"显示"、"找"某个具体的订单号、供应商、物料等，判断为 QUERY_DATA
 - 如果用户要求"分析"、"评估"某业务对象的风险/交期/齐套/品质/生产，判断为 QUERY_DATA
+- 如果用户要求搜索、查找、核实公开信息、新闻、资料，判断为 QUERY_DATA
 - 如果用户要求修改订单数据（出货计划、发货完成、验货、上线时间），判断为 QUERY_DATA
 - 如果用户要求提交问题反馈/建议/咨询，或撤销反馈，判断为 QUERY_DATA
+- 如果用户要求安装/卸载/创建/使用/执行技能，或提到 SkillHub、技能包、技能安装，判断为 QUERY_DATA
 - 如果用户使用"这些"、"上面"、"刚才"等指代词，且要求对已有数据做分析、总结、对比，判断为 ANALYZE_HISTORY
 - 其他情况判断为 GENERAL_CHAT
 
 请只返回意图类型（QUERY_DATA、ANALYZE_HISTORY 或 GENERAL_CHAT），不要有其他内容。"""
+
+
+_SKILL_TOOL_MARK_RE = re.compile(
+    r"(skillhub|install_skill|uninstall_skill|create_skill|use_skill|"
+    r"run_skill_script|read_skill_file|run_skill_executor)",
+    re.IGNORECASE,
+)
+_SKILL_WORD_RE = re.compile(r"(技能|skill)", re.IGNORECASE)
+_SKILL_ACTION_RE = re.compile(
+    r"(安装|卸载|创建|删除|绑定|加载|使用|执行|读取|技能包|安装包)",
+    re.IGNORECASE,
+)
+_SKILL_PACKAGE_RE = re.compile(r"@[a-z0-9_.-]+/[a-z0-9_.-]+", re.IGNORECASE)
+_SEARCH_ACTION_RE = re.compile(
+    r"(搜索|搜一下|搜最近|查一下|查询|查找|找一下|多找|新闻|资料|核实)",
+    re.IGNORECASE,
+)
+
+
+def _is_skill_management_request(message: str) -> bool:
+    text = (message or "").strip()
+    if not text:
+        return False
+    if _SKILL_TOOL_MARK_RE.search(text):
+        return True
+    if _SKILL_WORD_RE.search(text) and _SKILL_ACTION_RE.search(text):
+        return True
+    return bool(_SKILL_PACKAGE_RE.search(text) and _SKILL_ACTION_RE.search(text))
+
+
+def _is_search_request(message: str) -> bool:
+    return bool(_SEARCH_ACTION_RE.search((message or "").strip()))
 
 
 async def _load_runtime_config(db: AsyncSession) -> Dict[str, Any]:
@@ -104,6 +140,8 @@ async def _recognize_intent(
     intent_prompt: Optional[str] = None,
     model_override: Optional[str] = None,
 ) -> str:
+    if _is_skill_management_request(message) or _is_search_request(message):
+        return "QUERY_DATA"
     try:
         intent_system = intent_prompt or INTENT_RECOGNITION_PROMPT
         messages = [ChatMessage(role="system", content=intent_system)]
@@ -159,8 +197,7 @@ async def run(
     provider_name = ai_service.current_provider()
 
     rt = await _load_runtime_config(db)
-    disabled = set(rt.get("disabled_tools") or [])
-    system_prompt = resolve_system_prompt(rt.get("system_prompt"), disabled)
+    system_prompt = resolve_system_prompt(rt.get("system_prompt"))
     if user_context is not None:
         system_prompt = build_agent_system_prompt(system_prompt, user_context)
     intent_prompt = (rt.get("intent_prompt") or "").strip() or None
@@ -292,7 +329,7 @@ async def run(
             system_prompt=system_prompt, model_override=model_override,
             temperature=rt.get("temperature", 0.1), max_tokens=rt.get("max_tokens", 4096),
             max_tool_rounds=rt.get("max_tool_rounds", 6), max_agent_calls=rt.get("max_agent_calls", 8),
-            disabled_tools=disabled, session_id=session_id, trace_id=trace_id, user_id=user_id,
+            session_id=session_id, trace_id=trace_id, user_id=user_id,
             run_logger=run_logger, provider_name=provider_name,
             stream_final=False,
             db=db, user_context=user_context,

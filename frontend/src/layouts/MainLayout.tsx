@@ -46,6 +46,7 @@ import {
   AlertOutlined,
   HomeOutlined,
   RobotOutlined,
+  ControlOutlined,
 } from '@ant-design/icons'
 import { useAuthStore } from '../store/auth'
 import { usePermissionStore, PermNode } from '../store/permission'
@@ -55,7 +56,7 @@ import { notificationStream } from '../services/notificationStream'
 import { notificationJump } from '../utils/notificationJump'
 import FeedbackButton from '../pages/BasicDataCenter/FeedbackManagement/FeedbackButton'
 import ShareButton from '../components/ShareButton'
-import { FloatingAssistant } from '../components/Assistant'
+import { AssistantDockItem, AssistantLauncher } from '../components/Assistant'
 import GlobalSearch from '../components/GlobalSearch/GlobalSearch'
 import FontSizeSetting from '../components/FontSizeSetting'
 import { usePageTitle } from '../hooks'
@@ -64,6 +65,20 @@ import AppTabs, { TabbedContent } from './AppTabs'
 import { useTabsStore } from '../store/tabs'
 import { contentRoutes } from '../router/contentRoutes'
 import { resolveCrumb, pathMatches, type PermissionAwareItem } from './navUtils'
+import { useUiPreferencesStore } from '../store/uiPreferences'
+
+import { useAssistantLauncherStore } from '../store/assistantLauncher'
+import SidebarMorePanel from './SidebarMorePanel'
+import SidebarCustomizeModal from './SidebarCustomizeModal'
+import {
+  DEFAULT_SIDEBAR_MENU_PREFS,
+  SIDEBAR_MENU_PREF_KEY,
+  buildMoreSections,
+  buildSidebarEntries,
+  buildSidebarLayout,
+  normalizeSidebarMenuPrefs,
+  type SidebarMenuPrefs,
+} from './sidebarMenuPrefs'
 
 const { Sider, Content } = Layout
 
@@ -138,8 +153,7 @@ const PERMISSION_ICON_MAP: Record<string, React.ReactNode> = {
   'finance.data': <AccountBookOutlined />,
   agent: <RobotOutlined />,
   'ai.agent.self': <RobotOutlined />,
-  'ai.agent.self.me': <RobotOutlined />,
-  'ai.agent.team': <TeamOutlined />,
+  'ai.agent.assistant': <RobotOutlined />,
   'ai.agent.admin': <SafetyCertificateOutlined />,
 }
 
@@ -248,6 +262,17 @@ const allMenuItems: PermissionAwareItem[] = [
     ],
   },
   {
+    key: 'engineering-center',
+    icon: <ToolOutlined />,
+    label: '排产中心',
+    permission: 'production.labor_price_audit',
+    children: [
+      { key: '/engineering/labor-prices', icon: <ProfileOutlined />, label: '工价管理', permission: 'production.labor_price_audit' },
+      { key: '/production/monthly-capacity-plan', icon: <ProjectOutlined />, label: '月度产能规划', permission: 'production.monthly_capacity_plan' },
+      { key: '/engineering/new-schedule/plans', icon: <ScheduleOutlined />, label: '新排产方案', permission: 'production.monthly_capacity_plan' },
+    ],
+  },
+  {
     key: 'exception-center',
     icon: <WarningOutlined />,
     label: '异常与质量中心',
@@ -305,7 +330,6 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/share-management', icon: <SendOutlined />, label: '分享管理', permission: 'basicdata.share_management' },
       { key: '/sync-config', icon: <SwapOutlined />, label: '同步SQL配置', permission: 'settings' },
       { key: '/backups', icon: <DatabaseOutlined />, label: '备份管理', permission: 'backup' },
-      { key: '/ai-assistant', icon: <RobotOutlined />, label: '智能助手管理', permission: 'ai.assistant_monitor', anyOfPermissions: ['ai.assistant_config'] },
       { key: '/execution-agent', icon: <ApiOutlined />, label: '执行面智能体', permission: 'ai.execution_agent' },
       { key: '/basicdata/data-supply', icon: <ApiOutlined />, label: '数据供给', permission: 'basicdata.data_supply' },
       { key: '/basicdata/feedback', icon: <MessageOutlined />, label: '问题反馈', permission: 'basicdata.feedback' },
@@ -455,6 +479,7 @@ const pathToGroupKey: Record<string, string> = {
   '/production-overview': 'production-center',
   '/schedule-plans': 'production-center',
   '/schedule-date-adjust': 'production-center',
+  '/production/monthly-capacity-plan': 'engineering-center',
   '/product-process-capacities': 'production-center',
   '/order-wage-lookup': 'production-center',
   '/front-process': 'production-center',
@@ -473,6 +498,10 @@ const pathToGroupKey: Record<string, string> = {
   '/assembly': 'production-center',
   '/packaging': 'production-center',
   '/process-exceptions': 'production-center',
+  '/engineering/labor-prices': 'engineering-center',
+  '/engineering/labor-prices/new': 'engineering-center',
+  '/engineering/labor-price-changes': 'engineering-center',
+  '/engineering/new-schedule/plans': 'engineering-center',
   '/issues': 'exception-center',
   '/quality-issues': 'exception-center',
   '/product-samples': 'exception-center',
@@ -501,7 +530,6 @@ const pathToGroupKey: Record<string, string> = {
   '/share-management': 'basicdata-center',
   '/sync-config': 'basicdata-center',
   '/backups': 'basicdata-center',
-  '/ai-assistant': 'basicdata-center',
   '/execution-agent': 'basicdata-center',
   '/basicdata/feedback': 'basicdata-center',
   '/basicdata/files': 'basicdata-center',
@@ -511,6 +539,7 @@ const pathToGroupKey: Record<string, string> = {
 
 const pathToPermission: Record<string, string> = {
   '/dashboard': 'dashboard',
+  '/ai-assistant': 'topbar.ai_search',
   '/orders': 'orders.list',
   '/run-orders': 'orders.run_orders',
   '/domestic-orders': 'orders.list',
@@ -543,6 +572,7 @@ const pathToPermission: Record<string, string> = {
   '/production-overview': 'production.overview',
   '/schedule-plans': 'production.schedule_plans',
   '/schedule-date-adjust': 'production.schedule_date_adjust',
+  '/production/monthly-capacity-plan': 'production.monthly_capacity_plan',
   '/product-process-capacities': 'production.product_process_capacities',
   '/order-wage-lookup': 'production.order_wage_lookup',
   '/front-process': 'production.front_process',
@@ -553,6 +583,10 @@ const pathToPermission: Record<string, string> = {
   '/assembly': 'production.assembly',
   '/packaging': 'production.packaging',
   '/process-exceptions': 'production.exceptions',
+  '/engineering/labor-prices': 'production.labor_price_audit',
+  '/engineering/labor-prices/new': 'production.labor_price_audit',
+  '/engineering/labor-price-changes': 'production.labor_price_audit',
+  '/engineering/new-schedule/plans': 'production.monthly_capacity_plan',
   '/import': 'basicdata.import',
   '/risk-rules': 'rules.risk_rules',
   '/node-standards': 'rules.node_standards',
@@ -564,7 +598,6 @@ const pathToPermission: Record<string, string> = {
   '/share-management': 'basicdata.share_management',
   '/sync-config': 'settings',
   '/backups': 'backup',
-  '/ai-assistant': 'ai.assistant_monitor',
   '/execution-agent': 'ai.execution_agent',
   '/permissions': 'permissions',
   '/basicdata/customers': 'basicdata.data',
@@ -603,9 +636,10 @@ function getRequiredPermission(pathname: string, dynamicMap?: Record<string, str
   if (pathname.startsWith('/orders/')) return 'orders.list'
   if (pathname.startsWith('/stock-check/')) return 'materials.stock_check'
   if (pathname.startsWith('/approvals/create')) return 'approval.initiate'
-  if (pathname.startsWith('/agents/team')) return 'ai.agent.team'
+  if (pathname === '/agents' || pathname === '/agents/') return 'ai.agent.assistant'
   if (pathname.startsWith('/agents/admin')) return 'ai.agent.admin'
-  if (pathname.startsWith('/agents')) return 'ai.agent.self'
+  // 旧路由 /agents/me /agents/team 已合并为 /agents，不再映射到有效权限
+  if (pathname.startsWith('/agents/')) return undefined
   return undefined
 }
 
@@ -618,6 +652,7 @@ export default function MainLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [collapsed, setCollapsed] = useState(false)
+  const assistantLauncherDocked = useAssistantLauncherStore(state => state.mode === 'docked')
   const [bellOpen, setBellOpen] = useState(false)
   const [notifList, setNotifList] = useState<any[]>([])
   const [notifLoading, setNotifLoading] = useState(false)
@@ -626,6 +661,23 @@ export default function MainLayout() {
   const [forcePwdForm] = Form.useForm()
   const [forcePwdDismissable, setForcePwdDismissable] = useState(false)
   const toastShown = useRef(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [customizeOpen, setCustomizeOpen] = useState(false)
+
+  const sidebarPrefsRaw = useUiPreferencesStore(state => state.preferences[SIDEBAR_MENU_PREF_KEY])
+  const setUiFlag = useUiPreferencesStore(state => state.setFlag)
+  const sidebarPrefs = useMemo(() => {
+    const normalized = normalizeSidebarMenuPrefs(sidebarPrefsRaw)
+    if (
+      normalized.userId !== undefined
+      && currentUser?.id !== undefined
+      && String(normalized.userId) !== String(currentUser.id)
+    ) {
+      return { ...DEFAULT_SIDEBAR_MENU_PREFS, pageOrder: {} }
+    }
+    return normalized
+  }, [sidebarPrefsRaw, currentUser?.id])
+
 
   // 加载权限树
   useEffect(() => {
@@ -679,6 +731,34 @@ export default function MainLayout() {
           label: '采购中心',
           permission: 'purchase',
           children: purchaseChildren,
+        })
+      }
+      if (!merged.some((item) => item.key === 'engineering-center')) {
+        merged.push({
+          key: 'engineering-center',
+          icon: <ToolOutlined />,
+          label: '排产中心',
+          permission: 'production.labor_price_audit',
+          children: [
+            {
+              key: '/engineering/labor-prices',
+              icon: <ProfileOutlined />,
+              label: '工价管理',
+              permission: 'production.labor_price_audit',
+            },
+            {
+              key: '/production/monthly-capacity-plan',
+              icon: <ProjectOutlined />,
+              label: '月度产能规划',
+              permission: 'production.monthly_capacity_plan',
+            },
+            {
+              key: '/engineering/new-schedule/plans',
+              icon: <ScheduleOutlined />,
+              label: '新排产方案',
+              permission: 'production.monthly_capacity_plan',
+            },
+          ],
         })
       }
       return merged
@@ -860,7 +940,10 @@ export default function MainLayout() {
       return filterSupplierPortalMenu(dynamicMenuItems, hasPermission)
     }
     const pruneAgentTeam = (items: PermissionAwareItem[]): PermissionAwareItem[] => {
+      // 旧「我的智能体」/「我的团队」已合并为「我的助手」，彻底剔除旧菜单节点，避免残留入口
+      const OLD_AGENT_KEYS = new Set(['ai.agent.self.me', 'ai.agent.team', '/agents/me', '/agents/team'])
       return items.flatMap(item => {
+        if (OLD_AGENT_KEYS.has(item.key)) return []
         if (item.key === 'ai.agent.self' && agentLoaded && !agentEnabled) return []
         const next = item.children ? { ...item, children: pruneAgentTeam(item.children) } : item
         if (next.children && next.children.length === 0 && !String(next.key).startsWith('/')) return []
@@ -868,21 +951,70 @@ export default function MainLayout() {
       })
     }
     const tree = pruneAgentTeam(filterMenuByPermission(dynamicMenuItems, hasPermission))
+    // 排产中心使用单菜单工作区，避免工程角色看到整棵业务菜单
+    if (
+      location.pathname.startsWith('/engineering')
+      || location.pathname === '/production/monthly-capacity-plan'
+    ) {
+      const engineeringParent = dynamicMenuItems.find((item) => item.key === 'engineering-center')
+      const children = (engineeringParent?.children || []).filter(
+        (item) => !item.permission || hasPermission(item.permission, 'read'),
+      )
+      return children
+    }
     // 个人工作区：站内信（对全部持有 topbar.notifications 权限的内部用户可见）
     if (hasPermission('topbar.notifications', 'read')) {
       tree.push({ key: '/notifications', icon: <BellOutlined />, label: '站内信' } as any)
     }
     return tree
-  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems, agentEnabled, agentLoaded])
+  }, [hasPermission, currentUser, isSupplierUser, isShareUser, getShareTargetPath, dynamicMenuItems, agentEnabled, agentLoaded, location.pathname])
+
+  const canCustomizeSidebar = !isSupplierUser() && !isShareUser()
+  const effectiveSidebarPrefs = canCustomizeSidebar ? sidebarPrefs : DEFAULT_SIDEBAR_MENU_PREFS
+  const sidebarLayout = useMemo(
+    () => buildSidebarLayout(navTree, effectiveSidebarPrefs),
+    [navTree, effectiveSidebarPrefs],
+  )
+  const sidebarEntries = useMemo(
+    () => buildSidebarEntries(sidebarLayout, effectiveSidebarPrefs),
+    [sidebarLayout, effectiveSidebarPrefs],
+  )
+  // 不按高度自动收纳一级菜单；仅“手动移入更多”的页面进入「更多」
+  const visibleEntries = sidebarEntries
+  const moreSections = useMemo(
+    () => buildMoreSections(sidebarLayout, []),
+    [sidebarLayout],
+  )
+  const concealedPageCount = useMemo(
+    () => moreSections.reduce((total, section) => total + section.pages.length, 0),
+    [moreSections],
+  )
+  const showMore = canCustomizeSidebar && moreSections.length > 0
+  const sidebarMenuItems = useMemo(
+    () => visibleEntries.map(entry => ({
+      key: entry.item.key,
+      icon: entry.item.icon,
+      label: entry.item.label,
+      className: entry.kind === 'pinned' ? 'sidebar-pinned-item' : undefined,
+      ...(entry.item.children && entry.item.children.length > 0
+        ? { children: toAntdItems(entry.item.children) }
+        : {}),
+    })),
+    [visibleEntries],
+  )
+
+  const updateSidebarPrefs = useCallback((next: SidebarMenuPrefs) => {
+    setUiFlag(SIDEBAR_MENU_PREF_KEY, { ...next, userId: currentUser?.id })
+  }, [setUiFlag, currentUser?.id])
+
+  useEffect(() => {
+    if (!showMore) setMoreOpen(false)
+  }, [showMore])
 
   const requiredPermission = getRequiredPermission(location.pathname, dynamicPathToPermission)
-  // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（如仅授 ai.assistant_config 也能进 /ai-assistant）
-  // 静态兜底：权限树未加载（接口失败/竞态）时动态映射为空，用静态映射保证放行逻辑不缺位
-  const STATIC_PATH_ANY_OF: Record<string, string[]> = {
-    '/ai-assistant': ['ai.assistant_monitor', 'ai.assistant_config'],
-  }
+  // any-of 放行：路径映射的权限或其同组 any-of 权限任一持有即可进页（权限树「页面 + Tab 子权限」节点自动展开）
   const pathAnyOfMap = useMemo(() => {
-    const map: Record<string, string[]> = { ...STATIC_PATH_ANY_OF }
+    const map: Record<string, string[]> = {}
     const walk = (nodes: PermNode[]) => {
       for (const n of nodes) {
         if (n.route_path) {
@@ -899,8 +1031,6 @@ export default function MainLayout() {
   const canViewCurrentPage = !requiredPermission
     || hasPermission(requiredPermission, 'read')
     || (pathAnyOfMap[location.pathname] || []).some(p => hasPermission(p, 'read'))
-
-  const menuItems = toAntdItems(navTree)
 
   const openKeys = useMemo(() => {
     // 动态子路由（如 /stock-check/:checkId）回退到父路径的分组，保持菜单组展开
@@ -930,7 +1060,7 @@ export default function MainLayout() {
           width={256}
           className="sidebar-modern"
           style={{
-            overflowY: 'auto',
+            overflow: 'hidden',
             height: '100vh',
             position: 'fixed',
             left: 0,
@@ -939,7 +1069,7 @@ export default function MainLayout() {
             zIndex: 10,
           }}
         >
-          <div className="flex items-center gap-3 px-6" style={{ height: 72, paddingTop: 16, paddingBottom: 16 }}>
+          <div className="flex items-center gap-3 px-6" style={{ height: 72, paddingTop: 16, paddingBottom: 16, flexShrink: 0 }}>
             <div style={{ width: 40, height: 40, borderRadius: 12, background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)' }}>
               <span style={{ color: '#fff', fontWeight: 700, fontSize: 'calc(1rem * var(--font-size-scale))', letterSpacing: 1 }}>S</span>
             </div>
@@ -955,14 +1085,55 @@ export default function MainLayout() {
             )}
           </div>
 
-          <Menu
-            theme="dark"
-            mode="inline"
-            selectedKeys={[findActiveKey(navTree, location.pathname) || location.pathname]}
-            defaultOpenKeys={openKeys}
-            items={menuItems}
-            onClick={({ key }) => navigate(key)}
-          />
+          <div className="sidebar-nav">
+            <Menu
+              theme="dark"
+              mode="inline"
+              selectedKeys={[findActiveKey(navTree, location.pathname) || location.pathname]}
+              defaultOpenKeys={openKeys}
+              items={sidebarMenuItems}
+              onClick={({ key }) => navigate(key)}
+            />
+          </div>
+          {showMore && (
+            <div className={`sidebar-more-slot has-more${collapsed ? ' is-collapsed' : ''}`}>
+                <Popover
+                  open={moreOpen}
+                  onOpenChange={setMoreOpen}
+                  trigger={['hover', 'click']}
+                  placement="rightBottom"
+                  styles={{
+                    root: { width: 300, maxWidth: 'calc(100vw - 24px)' },
+                    body: { maxHeight: 'calc(100vh - 120px)', overflow: 'hidden' },
+                  }}
+                  overlayClassName="sidebar-more-popover"
+                  content={(
+                    <SidebarMorePanel
+                      sections={moreSections}
+                      onNavigate={key => {
+                        setMoreOpen(false)
+                        navigate(key)
+                      }}
+                      onCustomize={() => {
+                        setMoreOpen(false)
+                        setCustomizeOpen(true)
+                      }}
+                    />
+                  )}
+                >
+                  <div className={`sidebar-more-entry${collapsed ? ' is-collapsed' : ''}`} title={collapsed ? '更多' : undefined}>
+                    <AppstoreOutlined />
+                    {!collapsed && <span className="sidebar-more-text">更多</span>}
+                    {!collapsed && concealedPageCount > 0 && (
+                      <span className="sidebar-more-count">{concealedPageCount}</span>
+                    )}
+                  </div>
+                </Popover>
+              </div>
+          )}
+          {!isShareUser() && !isSupplierUser() && canUseTopbar.aiSearch && assistantLauncherDocked && (
+            <AssistantDockItem collapsed={collapsed} />
+          )}
         </Sider>
       )}
 
@@ -1075,11 +1246,15 @@ export default function MainLayout() {
                 menu={{
                   items: [
                     { key: 'profile', icon: <IdcardOutlined />, label: '个人中心' },
+                    ...(canCustomizeSidebar
+                      ? [{ key: 'customizeMenu', icon: <ControlOutlined />, label: '自定义菜单' }]
+                      : []),
                     { type: 'divider' as const },
                     { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', danger: true },
                   ],
                   onClick: ({ key }) => {
                     if (key === 'profile') { navigate('/profile') }
+                    if (key === 'customizeMenu') { setCustomizeOpen(true) }
                     if (key === 'logout') { logout(); navigate('/login') }
                   },
                 }}
@@ -1136,6 +1311,16 @@ export default function MainLayout() {
           </Form>
         </Modal>
 
+        {canCustomizeSidebar && (
+          <SidebarCustomizeModal
+            open={customizeOpen}
+            onClose={() => setCustomizeOpen(false)}
+            navTree={navTree}
+            prefs={sidebarPrefs}
+            onChange={updateSidebarPrefs}
+          />
+        )}
+
         <Content style={{ padding: '20px 24px 32px' }}>
           {canViewCurrentPage ? (
             isShareUser() ? (
@@ -1153,8 +1338,7 @@ export default function MainLayout() {
         </Content>
       </Layout>
 
-      {/* AI 智能助手：右下角悬浮球，可自由拖动，闲置自动收进右侧边 */}
-      {!isSupplierUser() && canUseTopbar.aiSearch && <FloatingAssistant />}
+      {!isShareUser() && !isSupplierUser() && canUseTopbar.aiSearch && <AssistantLauncher />}
     </Layout>
   )
 }

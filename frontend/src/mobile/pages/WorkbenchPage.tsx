@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PullToRefresh, ErrorBlock, SpinLoading } from 'antd-mobile'
-import { dashboardApi, materialApi } from '@/services/api'
+import { dashboardApi, materialApi, notificationApi } from '@/services/api'
+import { approvalApi, type ApprovalItem } from '@/services/approval'
 import { useAuthStore } from '@/store/auth'
 import MIcon from '../components/MIcon'
+import { useNotificationRefresh } from '../hooks/useNotificationRefresh'
 
 interface Summary { total_orders: number; red_count: number; yellow_count: number; blue_count: number; green_count: number }
 
@@ -21,24 +23,76 @@ interface DueOrder {
 
 const RISK_COLORS: Record<string, string> = { red: '#ef4444', yellow: '#f59e0b', blue: '#3b82f6', green: '#10b981' }
 const RISK_LABELS: Record<string, string> = { red: '高风险', yellow: '中风险', blue: '低风险', green: '正常' }
-const RISK_CHIP: Record<string, string> = { red: 'm-chip--high', yellow: 'm-chip--mid', blue: 'm-chip--low' }
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
 
-const APP_GROUPS = [
+interface TodoEntry {
+  kind: 'approval'
+  key: string
+  kindLabel: string
+  title: string
+  subtitle: string
+  chip?: { text: string; cls: string }
+  path: string
+}
+
+const WAIT_RANK: Record<string, number> = { overdue: 0, soon: 1, normal: 2 }
+
+function buildApprovalTodos(items: ApprovalItem[]): TodoEntry[] {
+  return [...items]
+    .sort((a, b) => {
+      const rank = (WAIT_RANK[a.wait_level || 'normal'] ?? 2) - (WAIT_RANK[b.wait_level || 'normal'] ?? 2)
+      return rank !== 0 ? rank : (b.wait_hours ?? 0) - (a.wait_hours ?? 0)
+    })
+    .map((it) => ({
+      kind: 'approval',
+      key: `${it.biz_type}-${it.id}`,
+      kindLabel: '审批',
+      title: [it.biz_name, it.no].filter(Boolean).join(' · ') || it.title || '待审批单据',
+      subtitle: [
+        it.summary,
+        it.title && (!it.no || !it.title.includes(it.no)) ? it.title : '',
+        it.applicant && `申请人 ${it.applicant}`,
+        it.current_node,
+      ].filter(Boolean).join(' · '),
+      chip: it.wait_level === 'overdue'
+        ? { text: `已超时 ${it.wait_hours ?? '-'} 小时`, cls: 'm-chip--high' }
+        : it.wait_level === 'soon'
+          ? { text: `已等待 ${it.wait_hours ?? '-'} 小时`, cls: 'm-chip--mid' }
+          : undefined,
+      path: `/approvals/items/${encodeURIComponent(it.biz_type)}/${it.id}`,
+    }))
+}
+
+interface AppEntry {
+  key: string
+  title: string
+  icon: string
+  path: string
+  perm?: readonly [string, string]
+}
+
+const APP_GROUPS: Array<{ group: string; items: AppEntry[] }> = [
   {
     group: '智能仓储',
     items: [
-      { key: 'scan-count', title: '扫码盘点', icon: 'scan', path: '/scan-count', perm: ['materials.stock_check', 'read'] as const },
-      { key: 'stock-check', title: '物料盘点', icon: 'clipboard', path: '/stock-check', perm: ['materials.stock_check', 'read'] as const },
+      { key: 'scan-count', title: '扫码盘点', icon: 'scan', path: '/scan-count', perm: ['materials.stock_check', 'read'] },
+      { key: 'stock-check', title: '物料盘点', icon: 'clipboard', path: '/stock-check', perm: ['materials.stock_check', 'read'] },
+    ],
+  },
+  {
+    group: '个人中心',
+    items: [
+      { key: 'notifications', title: '消息中心', icon: 'bell', path: '/notifications', perm: ['topbar.notifications', 'read'] },
+      { key: 'me', title: '我的', icon: 'user', path: '/me' },
     ],
   },
 ]
 
-function AppGrid() {
+function AppGrid({ unread }: { unread: number }) {
   const navigate = useNavigate()
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const groups = APP_GROUPS
-    .map((g) => ({ ...g, items: g.items.filter((e) => hasPermission(e.perm[0], e.perm[1])) }))
+    .map((g) => ({ ...g, items: g.items.filter((e) => !e.perm || hasPermission(e.perm[0], e.perm[1])) }))
     .filter((g) => g.items.length > 0)
   if (groups.length === 0) return null
   return (
@@ -47,14 +101,18 @@ function AppGrid() {
         <div key={g.group}>
           <div className="app-group">{g.group}</div>
           <div className="app-grid">
-            {g.items.map((e) => (
-              <button className="app" key={e.key} onClick={() => navigate(e.path)}>
-                <div className="app__ic">
-                  <MIcon name={e.icon} size={24} />
-                </div>
-                <span>{e.title}</span>
-              </button>
-            ))}
+            {g.items.map((e) => {
+              const badge = e.key === 'notifications' ? unread : 0
+              return (
+                <button className="app" key={e.key} onClick={() => navigate(e.path)}>
+                  <div className="app__ic">
+                    <MIcon name={e.icon} size={24} />
+                    {badge > 0 && <span className="app__badge">{badge > 99 ? '99+' : badge}</span>}
+                  </div>
+                  <span>{e.title}</span>
+                </button>
+              )
+            })}
           </div>
         </div>
       ))}
@@ -73,35 +131,61 @@ export default function WorkbenchPage() {
   const [failed, setFailed] = useState(false)
   const [insight, setInsight] = useState<'dist' | 'trend'>('dist')
   const [todoExpanded, setTodoExpanded] = useState(false)
+  const canReadNotifications = useAuthStore((s) => s.hasPermission('topbar.notifications', 'read'))
+  const canReadApprovals = useAuthStore((s) => s.hasPermission('approval.pending', 'read'))
+  const [unread, setUnread] = useState(0)
+  const [todos, setTodos] = useState<ApprovalItem[]>([])
+  const [todoTotal, setTodoTotal] = useState(0)
+
+  const fetchUnread = useCallback(async () => {
+    if (!canReadNotifications) return
+    try {
+      const res: any = await notificationApi.unreadCount()
+      setUnread(Number(res.data?.total || 0))
+    } catch {
+      // 角标失败不影响工作台主体
+    }
+  }, [canReadNotifications])
 
   const load = useCallback(async () => {
     setFailed(false)
     try {
-      const [s, r, d, c] = await Promise.all([
+      const [s, r, d, c, t] = await Promise.all([
         dashboardApi.getSummary(),
         dashboardApi.getRollingRisk(),
         dashboardApi.getTodayDueOrders({ page: 1, page_size: 50 }),
         materialApi.getRecentStockChecks({ page: 1, page_size: 1, status: 'open,in_progress' }).catch(() => null),
+        canReadApprovals
+          ? approvalApi.pending({ page: 1, page_size: 50 }).catch(() => null)
+          : Promise.resolve(null),
       ])
       setSummary((s as any).data)
       setRolling(((r as any).data?.days || []) as RollingDay[])
       setDueOrders(((d as any).data?.items || (d as any).data || []) as DueOrder[])
       setActiveChecks(c ? Number((c as any).data?.total ?? 0) : null)
+      if (t) {
+        const todoData = (t as any).data
+        setTodos(todoData?.items || [])
+        setTodoTotal(Number(todoData?.total ?? (todoData?.items || []).length))
+      }
     } catch {
       setFailed(true)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [canReadApprovals])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => { fetchUnread() }, [fetchUnread])
+  useNotificationRefresh(canReadNotifications, fetchUnread)
 
   const now = new Date()
   const hour = now.getHours()
   const greet = hour < 12 ? '上午好' : hour < 18 ? '下午好' : '晚上好'
   const displayName = user && 'display_name' in user ? user.display_name || user.username : ''
   const due14 = rolling.reduce((a, b) => a + (b.due_count || 0), 0)
-  const shownTodos = todoExpanded ? dueOrders : dueOrders.slice(0, 3)
+  const todoEntries = buildApprovalTodos(todos)
+  const shownTodos = todoExpanded ? todoEntries : todoEntries.slice(0, 3)
 
   const trendMax = Math.max(1, ...rolling.map((d) => Math.max(d.red_count, d.yellow_count, d.due_count)))
   const trendTotals = rolling.reduce(
@@ -110,7 +194,7 @@ export default function WorkbenchPage() {
   )
 
   return (
-    <div className="m-page m-page--with-tabbar">
+    <div className="m-page">
       <PullToRefresh onRefresh={load}>
         <header className="wb-head">
           <div>
@@ -158,30 +242,40 @@ export default function WorkbenchPage() {
               </div>
             </div>
 
-            {dueOrders.length > 0 && (
+            {canReadApprovals && (
               <div className="m-card">
-                <div className="m-card__title">今日待办 · 到期订单</div>
-                {shownTodos.map((o, i) => (
-                  <div className="todo" key={`${o.order_no}-${o.line_no}-${i}`}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="todo-no">
-                        {o.order_no}{o.line_no ? `-${o.line_no}` : ''}
-                        {o.risk_level && RISK_CHIP[o.risk_level] && (
-                          <span className={`m-chip ${RISK_CHIP[o.risk_level]}`}>{RISK_LABELS[o.risk_level]}</span>
-                        )}
-                      </div>
-                      <div className="todo-sub">{[o.customer, o.product_name].filter(Boolean).join(' · ') || '-'}</div>
-                    </div>
-                    <span className="go"><MIcon name="chev" size={16} /></span>
+                <div className="m-card__title">
+                  今日待办
+                  {todoTotal > 0 && <span className="todo-total">共 {todoTotal} 项</span>}
+                </div>
+                {todoEntries.length === 0 ? (
+                  <div className="m-empty" style={{ padding: '18px 0' }}>
+                    <span>今日暂无待办</span>
                   </div>
-                ))}
-                {dueOrders.length > 3 && (
-                  <button className="todo-more" onClick={() => setTodoExpanded((v) => !v)}>
-                    {todoExpanded ? '收起' : `展开全部 ${dueOrders.length} 条`}
-                    <span style={{ display: 'inline-flex', transform: todoExpanded ? 'rotate(180deg)' : 'none' }}>
-                      <MIcon name="chev" size={14} />
-                    </span>
-                  </button>
+                ) : (
+                  <>
+                    {shownTodos.map((t) => (
+                      <button className="todo todo--btn" key={t.key} onClick={() => navigate(t.path)}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="todo-no">
+                            <span className="m-chip m-chip--progress">{t.kindLabel}</span>
+                            <span className="todo-name">{t.title}</span>
+                            {t.chip && <span className={`m-chip ${t.chip.cls}`}>{t.chip.text}</span>}
+                          </div>
+                          <div className="todo-sub">{t.subtitle || '-'}</div>
+                        </div>
+                        <span className="go"><MIcon name="chev" size={16} /></span>
+                      </button>
+                    ))}
+                    {todoEntries.length > 3 && (
+                      <button className="todo-more" onClick={() => setTodoExpanded((v) => !v)}>
+                        {todoExpanded ? '收起' : `展开全部 ${todoEntries.length} 项`}
+                        <span style={{ display: 'inline-flex', transform: todoExpanded ? 'rotate(180deg)' : 'none' }}>
+                          <MIcon name="chev" size={14} />
+                        </span>
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -257,7 +351,7 @@ export default function WorkbenchPage() {
           </>
         )}
 
-        <AppGrid />
+        <AppGrid unread={unread} />
       </PullToRefresh>
     </div>
   )

@@ -1,0 +1,168 @@
+/* 智能中心 · 精简版（覆盖 v3 编排台视觉，作用域 .ac-simple） */
+
+.ac-simple .ai-page-head {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.ac-simple .ai-page-head h1 {
+  font-family: inherit;
+  font-size: calc(20px * var(--font-size-scale, 1));
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.ac-simple .ai-page-head p {
+  margin-top: 3px;
+  font-size: calc(12px * var(--font-size-scale, 1));
+  line-height: 1.5;
+  color: var(--ai-muted);
+}
+
+/* 智能体卡片目录 */
+.ac-simple .ai-agent-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.ac-simple .ai-agent-card {
+  height: 164px;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.ac-simple .ai-agent-top {
+  padding: 10px 12px;
+  gap: 8px;
+}
+
+.ac-simple .ai-agent-card .ai-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  font-size: calc(13px * var(--font-size-scale, 1));
+}
+
+.ac-simple .ai-agent-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.ac-simple .ai-agent-name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ac-simple .ai-agent-name {
+  min-width: 0;
+  flex: 0 1 auto;
+  font-size: calc(13.5px * var(--font-size-scale, 1));
+}
+
+.ac-simple .ai-agent-no {
+  flex-shrink: 0;
+  font-size: calc(11px * var(--font-size-scale, 1));
+}
+
+.ac-simple .ai-agent-top > .sc-tag {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.ac-simple .ai-agent-desc {
+  margin: 0 12px 6px;
+  min-height: 36px;
+  max-height: 36px;
+  font-size: calc(12px * var(--font-size-scale, 1));
+  line-height: 1.5;
+}
+
+.ac-simple .ai-agent-tags {
+  margin: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.ac-simple .ai-agent-tags .sc-tag {
+  flex: none;
+  height: 20px;
+  font-size: calc(11px * var(--font-size-scale, 1));
+}
+
+.ac-simple .ai-agent-foot {
+  margin-top: auto;
+  padding: 6px 12px;
+  border-top: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  font-size: calc(11px * var(--font-size-scale, 1));
+  color: var(--ai-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ac-simple .ai-agent-foot > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ac-simple .ai-agent-edit {
+  margin-left: auto;
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--ai-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ai-text);
+  font-family: inherit;
+  font-size: calc(12px * var(--font-size-scale, 1));
+  cursor: pointer;
+}
+
+.ac-simple .ai-agent-edit:hover {
+  background: #f8fafc;
+  border-color: var(--ai-brand-line);
+}
+
+/* 目录工具栏 / 空态 */
+.ac-simple .ai-toolbar {
+  padding: 11px 12px;
+}
+
+.ac-simple .ai-empty {
+  padding: 32px 16px;
+}
+
+@media (max-width: 1200px) {
+  .ac-simple .ai-agent-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 960px) {
+  .ac-simple .ai-agent-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ac-simple .ai-agent-card {
+    height: auto;
+    min-height: 164px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ac-simple .ai-agent-card {
+    transition: none;
+  }
+}

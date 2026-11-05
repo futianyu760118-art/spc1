@@ -93,6 +93,7 @@ class Snapshot:
     name_by_material: dict[int, str] = field(default_factory=dict)
     property_by_material: dict[int, Optional[int]] = field(default_factory=dict)
     bom_parent_by_id: dict[str, int] = field(default_factory=dict)
+    base_qty_by_bom: dict[str, Decimal] = field(default_factory=dict)
     details_by_bom: dict[str, list[BomComponentRef]] = field(default_factory=dict)
     bom_by_material: dict[int, str] = field(default_factory=dict)
     phantom_ids: set[int] = field(default_factory=set)
@@ -129,14 +130,17 @@ async def _load_materials(db: AsyncSession, snapshot: Snapshot) -> dict[str, int
 async def _load_bom_context(db: AsyncSession, snapshot: Snapshot) -> None:
     bom_rows = (
         await db.execute(
-            select(Bom.bom_id, Bom.material_id, Bom.id)
+            select(Bom.bom_id, Bom.material_id, Bom.base_qty, Bom.id)
             .where(Bom.is_audited == 1, Bom.disabled_status == 0, Bom.void_flag == 0)
             .order_by(Bom.id)
         )
     ).all()
-    for bom_id, material_id, _pk in bom_rows:
+    for bom_id, material_id, base_qty, _pk in bom_rows:
         if bom_id and material_id is not None:
             snapshot.bom_parent_by_id[str(bom_id)] = int(material_id)
+            snapshot.base_qty_by_bom[str(bom_id)] = (
+                Decimal(str(base_qty)) if base_qty is not None else Decimal("1")
+            )
             snapshot.bom_by_material[int(material_id)] = str(bom_id)  # 后写覆盖=取 id 最大
 
     detail_rows = (
@@ -394,6 +398,13 @@ async def collect(
     snapshot = Snapshot()
     code_to_id = await _load_materials(db, snapshot)
     await _load_bom_context(db, snapshot)
+    missing_parent_property = [
+        material_id
+        for material_id in set(snapshot.bom_parent_by_id.values())
+        if snapshot.property_by_material.get(material_id) is None
+    ]
+    if missing_parent_property:
+        snapshot.data_issues["bom_parent_property_missing"] = missing_parent_property
     await _load_demands(db, snapshot, scope or {})
     await _load_supplies(db, snapshot, code_to_id, stale_supply_cutoff(date.today(), supply_valid_months))
     return snapshot

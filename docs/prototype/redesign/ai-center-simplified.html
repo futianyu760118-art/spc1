@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能中心 · 精简原型</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  /* ---------- 原型页壳 ---------- */
+  .proto-wrap { max-width: 1440px; margin: 0 auto; padding: 32px 24px 80px; font-family: "Inter","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif; }
+  .proto-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; padding-bottom: 14px; border-bottom: 1px solid var(--gray-200); }
+  .proto-tab { border: none; background: transparent; font-size: 14px; font-weight: 500; color: var(--text-2); cursor: pointer; padding: 6px 12px; border-radius: 7px; transition: all .12s; }
+  .proto-tab:hover { background: var(--gray-100); color: var(--text-1); }
+  .proto-tab.active { color: var(--brand-600); background: var(--brand-50); }
+
+  .proto-preview { display: flex; gap: 0; min-height: 700px; }
+  .proto-view { display: none; flex: 1; min-width: 0; }
+  .proto-view.active { display: block; }
+
+  /* ---------- 页面公共 ---------- */
+  .ai-page { display: flex; flex-direction: column; gap: 12px; height: 100%; min-height: 0; }
+  .ai-page-head { display: flex; align-items: flex-start; gap: 16px; }
+  .ai-page-head h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; color: var(--text-1); }
+  .ai-page-head p { margin: 4px 0 0; font-size: 12px; color: var(--text-3); }
+  .ai-page-head .ai-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  .ai-card { background: #fff; border: 1px solid var(--gray-200); border-radius: 8px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+  .ai-card-head { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid #f1f5f9; }
+  .ai-card-head h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-1); }
+  .ai-card-head .ai-hint { font-size: 11.5px; color: var(--text-3); }
+  .ai-card-head .ai-more { margin-left: auto; }
+  .ai-card-body { padding: 16px; }
+
+  .ai-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 7px; border: 1px solid transparent; background: #fff; color: var(--text-2); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .12s; font-family: inherit; }
+  .ai-btn:hover { background: #f8fafc; border-color: #cbd5e1; }
+  .ai-btn-primary { background: var(--brand-500); border-color: var(--brand-500); color: #fff; }
+  .ai-btn-primary:hover { background: var(--brand-600); }
+  .ai-btn-text { background: transparent; border: none; padding: 0 8px; height: auto; color: var(--text-2); font-size: 12.5px; }
+  .ai-btn-text:hover { color: var(--brand-600); background: #f1f5f9; text-decoration: none; }
+
+  .ai-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
+  .ai-tag-list { display: flex; flex-wrap: wrap; gap: 5px; }
+  .ai-tag {
+    display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 6px;
+    font-size: 11.5px; font-weight: 500; color: var(--text-2); background: #f1f5f9; border: 1px solid #e2e8f0; white-space: nowrap;
+  }
+  .ai-tag-brand { color: var(--brand-600); background: var(--brand-50); border-color: #c6cbfa; }
+  .ai-tag-purple { color: #7c3aed; background: #f5f3ff; border-color: #e9d5ff; }
+  .ai-muted { color: var(--text-3); font-size: 12px; }
+
+  .ai-empty { padding: 28px 16px; text-align: center; color: var(--text-3); font-size: 12.5px; }
+
+  /* ---------- 我的助手 ---------- */
+  .ai-assistant-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+  .ai-assistant-grid.reverse { grid-template-columns: 1fr 2fr; }
+
+  .ai-member-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+  .ai-member {
+    display: flex; gap: 10px; padding: 11px; border: 1px solid var(--gray-200); border-radius: 8px; background: #fff; transition: border-color .12s;
+  }
+  .ai-member:hover { border-color: #c6cbfa; }
+  .ai-member.disabled { opacity: 0.6; }
+  .ai-avatar { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg,#7a7de6,#5b5bd6); color: #fff; font-weight: 600; font-size: 14px; }
+  .ai-member-main { min-width: 0; flex: 1; }
+  .ai-member-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .ai-member-name { font-weight: 600; color: var(--text-1); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ai-member-no { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .ai-member-status { font-size: 10.5px; font-weight: 500; padding: 1px 6px; border-radius: 4px; background: #f1f5f9; color: #64748b; }
+  .ai-member-desc { margin-top: 3px; font-size: 12px; color: var(--text-2); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .ai-member-tags { margin-top: 5px; display: flex; flex-direction: column; gap: 4px; }
+  .ai-member-action { align-self: flex-start; flex-shrink: 0; }
+
+  .ai-list { display: flex; flex-direction: column; }
+  .ai-list-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; min-width: 0; cursor: pointer; }
+  .ai-list-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .ai-list-row:hover { background: #f8fafc; }
+  .ai-list-main { min-width: 0; flex: 1; }
+  .ai-list-title { font-size: 13px; font-weight: 500; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ai-list-sub { font-size: 11.5px; color: var(--text-3); }
+  .ai-list-actions { display: flex; gap: 2px; flex-shrink: 0; }
+
+  @media (max-width: 1024px) {
+    .ai-assistant-grid, .ai-assistant-grid.reverse { grid-template-columns: 1fr; }
+    .proto-preview { flex-direction: column; height: auto; }
+    .proto-view { width: 100%; }
+  }
+</style>
+</head>
+<body style="background: var(--gray-50); margin: 0;">
+
+<div class="proto-wrap">
+  <div class="proto-bar">
+    <span style="font-size:11px;letter-spacing:.08em;color:var(--text-3);text-transform:uppercase">原型 · 智能中心 精简版</span>
+    <button class="proto-tab active" onclick="switchView(this,'assistant')">我的助手</button>
+    <button class="proto-tab" onclick="switchView(this,'admin')">智能体管理</button>
+    <span style="margin-left:auto;font-size:11px;color:var(--text-3)">无顶部 KPI 统计卡 · 卡片式排版 · 功能全部保留</span>
+  </div>
+
+  <div class="proto-preview">
+    <!-- ================= 我的助手 ================= -->
+    <section class="proto-view active" id="view-assistant">
+      <div class="ai-page">
+        <div class="ai-page-head">
+          <div>
+            <h1>我的助手</h1>
+            <p>你的团队能力决定助手能做什么</p>
+          </div>
+          <div class="ai-actions">
+            <button class="ai-btn">打开助手</button>
+            <button class="ai-btn ai-btn-primary">新建对话</button>
+          </div>
+        </div>
+
+        <div class="ai-assistant-grid">
+          <!-- 团队成员 -->
+          <section class="ai-card">
+            <div class="ai-card-head">
+              <h3>团队成员</h3>
+              <span class="ai-hint">成员的技能与能力决定助手能做什么</span>
+              <div class="ai-more"><button class="ai-btn ai-btn-text">添加成员</button></div>
+            </div>
+            <div class="ai-card-body" style="padding-top:8px">
+              <div class="ai-member-grid">
+                <div class="ai-member">
+                  <div class="ai-avatar">订</div>
+                  <div class="ai-member-main">
+                    <div class="ai-member-title">
+                      <span class="ai-member-name">订单专员</span>
+                      <span class="ai-member-no">AG-SYS-ORDERS</span>
+                      <span class="ai-member-status">启用</span>
+                    </div>
+                    <div class="ai-member-desc">销售订单/明细只读查询与交期风险推理分析</div>
+                    <div class="ai-member-tags">
+                      <span class="ai-tag ai-tag-brand">订单查询</span>
+                      <span class="ai-tag ai-tag-brand">订单明细</span>
+                      <span class="ai-tag ai-tag-purple">+1</span>
+                    </div>
+                  </div>
+                  <div class="ai-member-action">
+                    <button class="ai-btn-text">移除</button>
+                  </div>
+                </div>
+                <div class="ai-member">
+                  <div class="ai-avatar">物</div>
+                  <div class="ai-member-main">
+                    <div class="ai-member-title">
+                      <span class="ai-member-name">物料专员</span>
+                      <span class="ai-member-no">AG-SYS-MATERIAL</span>
+                      <span class="ai-member-status">启用</span>
+                    </div>
+                    <div class="ai-member-desc">齐套/缺料/物料供给只读查询与齐套风险推理分析</div>
+                    <div class="ai-member-tags">
+                      <span class="ai-tag ai-tag-brand">齐套查询</span>
+                      <span class="ai-tag ai-tag-brand">物料供给查询</span>
+                      <span class="ai-tag ai-tag-purple">+1</span>
+                    </div>
+                  </div>
+                  <div class="ai-member-action">
+                    <button class="ai-btn-text">移除</button>
+                  </div>
+                </div>
+              </div>
+              <div style="margin-top:10px;display:flex;justify-content:flex-end">
+                <button class="ai-btn ai-btn-text">添加第一个成员</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- 团队能力 -->
+          <section class="ai-card">
+            <div class="ai-card-head">
+              <h3>团队能力</h3>
+              <span class="ai-hint">2 项</span>
+            </div>
+            <div class="ai-card-body">
+              <span class="ai-tag-list">
+                <span class="ai-tag ai-tag-brand">订单查询</span>
+                <span class="ai-tag ai-tag-brand">齐套查询</span>
+              </span>
+              <div style="margin-top:14px">
+                <div class="ai-card-head" style="padding:0;border-bottom:none">
+                  <h3>团队技能</h3>
+                  <span class="ai-hint">2 个</span>
+                </div>
+                <span class="ai-tag-list" style="margin-top:8px">
+                  <span class="ai-tag ai-tag-purple">SKILL-001 · 订单专员</span>
+                  <span class="ai-tag ai-tag-purple">SKILL-002 · 物料专员</span>
+                </span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="ai-assistant-grid reverse">
+          <!-- 最近会话 -->
+          <section class="ai-card">
+            <div class="ai-card-head">
+              <h3>最近会话</h3>
+              <div class="ai-more"><button class="ai-btn ai-btn-text">新建对话</button></div>
+            </div>
+            <div class="ai-card-body" style="padding-top:6px;padding-bottom:6px">
+              <div class="ai-list">
+                <div class="ai-list-row">
+                  <div class="ai-list-main">
+                    <div class="ai-list-title">改写订单 HJ202602-0009-0028 的交付日期为 2026-11-15</div>
+                    <div class="ai-list-sub">10/28 15:26</div>
+                  </div>
+                  <div class="ai-list-actions">
+                    <button class="ai-btn ai-btn-text">继续</button>
+                    <button class="ai-btn ai-btn-text">查看</button>
+                  </div>
+                </div>
+                <div class="ai-list-row">
+                  <div class="ai-list-main">
+                    <div class="ai-list-title">13169、13170 这个两个id的订单信息</div>
+                    <div class="ai-list-sub">10/28 15:21</div>
+                  </div>
+                  <div class="ai-list-actions">
+                    <button class="ai-btn ai-btn-text">继续</button>
+                    <button class="ai-btn ai-btn-text">查看</button>
+                  </div>
+                </div>
+                <div class="ai-list-row">
+                  <div class="ai-list-main">
+                    <div class="ai-list-title">修改 HJ202606-0013-0135 计划出货为明天。</div>
+                    <div class="ai-list-sub">10/28 08:42</div>
+                  </div>
+                  <div class="ai-list-actions">
+                    <button class="ai-btn ai-btn-text">继续</button>
+                    <button class="ai-btn ai-btn-text">查看</button>
+                  </div>
+                </div>
+                <div class="ai-empty" style="margin-top:8px">暂无更多会话</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 最近调用 -->
+          <section class="ai-card">
+            <div class="ai-card-head">
+              <h3>最近调用</h3>
+              <span class="ai-hint">最近 0 次</span>
+            </div>
+            <div class="ai-card-body" style="padding-top:6px">
+              <div class="ai-empty">暂无调用</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 智能体管理 ================= -->
+    <section class="proto-view" id="view-admin">
+      <div class="ai-page">
+        <div class="ai-page-head">
+          <div>
+            <h1>智能体管理</h1>
+            <p>管理智能体目录、技能与助手运营</p>
+          </div>
+          <div class="ai-actions">
+            <button class="ai-btn">批量绑定用户</button>
+            <button class="ai-btn ai-btn-primary">新建智能体</button>
+          </div>
+        </div>
+
+        <div class="ai-card">
+          <div class="ai-card-head" style="padding-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;overflow-x:auto">
+              <button class="ai-btn ai-btn-text ai-tab active">智能体</button>
+              <button class="ai-btn ai-btn-text ai-tab">技能库</button>
+              <button class="ai-btn ai-btn-text ai-tab">助手运营</button>
+            </div>
+          </div>
+
+          <!-- 智能体目录 -->
+          <div class="ai-tab-panel active">
+            <div class="ai-toolbar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid #f1f5f9">
+              <input type="text" placeholder="搜索名称 / 编号" style="width:260px;height:30px;border:1px solid #e2e8f0;border-radius:7px;padding:0 10px;font-size:13px">
+              <select style="width:130px;height:30px;border:1px solid #e2e8f0;border-radius:7px;padding:0 10px;font-size:13px">
+                <option>全部状态</option><option>启用</option><option>停用</option>
+              </select>
+              <span style="margin-left:auto;font-size:12px;color:var(--text-3)">共 9 个</span>
+            </div>
+            <div class="ai-agent-grid">
+              <div class="ai-agent-card">
+                <div class="ai-agent-top">
+                  <div class="ai-avatar">订</div>
+                  <div class="ai-agent-title">
+                    <div class="ai-agent-name">订单专员</div>
+                    <div class="ai-agent-no">AG-SYS-ORDERS</div>
+                  </div>
+                  <span class="ai-tag ai-tag-brand">启用</span>
+                </div>
+                <div class="ai-agent-desc">销售订单/明细只读查询与交期风险推理分析</div>
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <span class="ai-tag-list">
+                    <span class="ai-tag ai-tag-brand">订单查询</span>
+                    <span class="ai-tag ai-tag-brand">订单明细</span>
+                    <span class="ai-tag ai-tag-purple">+1</span>
+                  </span>
+                </div>
+                <div class="ai-agent-foot">
+                  <span>所有人可勾选</span>
+                  <span>团队 1</span>
+                  <div class="ai-more">
+                    <button class="ai-btn ai-btn-text">编辑</button>
+                    <button class="ai-btn ai-btn-text">绑定用户</button>
+                  </div>
+                </div>
+              </div>
+              <div class="ai-agent-card">
+                <div class="ai-agent-top">
+                  <div class="ai-avatar">物</div>
+                  <div class="ai-agent-title">
+                    <div class="ai-agent-name">物料专员</div>
+                    <div class="ai-agent-no">AG-SYS-MATERIAL</div>
+                  </div>
+                  <span class="ai-tag ai-tag-brand">启用</span>
+                </div>
+                <div class="ai-agent-desc">齐套/缺料/物料供给只读查询与齐套风险推理分析</div>
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <span class="ai-tag-list">
+                    <span class="ai-tag ai-tag-brand">齐套查询</span>
+                    <span class="ai-tag ai-tag-brand">物料供给查询</span>
+                    <span class="ai-tag ai-tag-purple">+1</span>
+                  </span>
+                </div>
+                <div class="ai-agent-foot">
+                  <span>指定角色 × 1</span>
+                  <span>团队 1</span>
+                  <div class="ai-more">
+                    <button class="ai-btn ai-btn-text">编辑</button>
+                    <button class="ai-btn ai-btn-text">绑定用户</button>
+                  </div>
+                </div>
+              </div>
+              <div class="ai-agent-card">
+                <div class="ai-agent-top">
+                  <div class="ai-avatar">主</div>
+                  <div class="ai-agent-title">
+                    <div class="ai-agent-name">主数据查询员</div>
+                    <div class="ai-agent-no">AG-SYS-MASTERDATA</div>
+                  </div>
+                  <span class="ai-tag ai-tag-brand">启用</span>
+                </div>
+                <div class="ai-agent-desc">物料/供应商/BOM/库存等全局共享主数据只读查询</div>
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <span class="ai-tag-list">
+                    <span class="ai-tag ai-tag-brand">物料查询</span>
+                    <span class="ai-tag ai-tag-brand">供应商查询</span>
+                    <span class="ai-tag ai-tag-purple">+2</span>
+                  </span>
+                </div>
+                <div class="ai-agent-foot">
+                  <span>所有人可勾选</span>
+                  <span>团队 1</span>
+                  <div class="ai-more">
+                    <button class="ai-btn ai-btn-text">编辑</button>
+                    <button class="ai-btn ai-btn-text">绑定用户</button>
+                  </div>
+                </div>
+              </div>
+              <div class="ai-agent-card">
+                <div class="ai-agent-top">
+                  <div class="ai-avatar">计</div>
+                  <div class="ai-agent-title">
+                    <div class="ai-agent-name">计划写入员</div>
+                    <div class="ai-agent-no">AG-SYS-WRITE</div>
+                  </div>
+                  <span class="ai-tag ai-tag-brand">启用</span>
+                </div>
+                <div class="ai-agent-desc">修改订单计划日期（必须人工确认）</div>
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <span class="ai-tag-list">
+                    <span class="ai-tag ai-tag-brand">修改合同交期</span>
+                    <span class="ai-tag ai-tag-brand">修改出货计划</span>
+                    <span class="ai-tag ai-tag-purple">+3</span>
+                  </span>
+                </div>
+                <div class="ai-agent-foot">
+                  <span>所有人可勾选</span>
+                  <span>团队 1</span>
+                  <div class="ai-more">
+                    <button class="ai-btn ai-btn-text">编辑</button>
+                    <button class="ai-btn ai-btn-text">绑定用户</button>
+                  </div>
+                </div>
+              </div>
+              <div class="ai-agent-card">
+                <div class="ai-agent-top">
+                  <div class="ai-avatar">问</div>
+                  <div class="ai-agent-title">
+                    <div class="ai-agent-name">问题反馈智能体</div>
+                    <div class="ai-agent-no">AG-SYS-SERVICE</div>
+                  </div>
+                  <span class="ai-tag ai-tag-brand">启用</span>
+                </div>
+                <div class="ai-agent-desc">代提交问题反馈，并支持撤销本人待处理的反馈</div>
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  <span class="ai-tag-list">
+                    <span class="ai-tag ai-tag-brand">创建问题反馈</span>
+                  </span>
+                </div>
+                <div class="ai-agent-foot">
+                  <span>所有人可勾选</span>
+                  <span>团队 1</span>
+                  <div class="ai-more">
+                    <button class="ai-btn ai-btn-text">编辑</button>
+                    <button class="ai-btn ai-btn-text">绑定用户</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;padding:8px 16px">
+              <span style="font-size:11px;color:var(--text-3)">1 / 2</span>
+            </div>
+          </div>
+
+          <!-- 技能库 -->
+          <div class="ai-tab-panel" style="display:none">
+            <div style="padding:16px">
+              <div class="ai-toolbar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+                <input type="text" placeholder="名称 / 文件夹 / 说明" style="width:260px;height:30px;border:1px solid #e2e8f0;border-radius:7px;padding:0 10px;font-size:13px">
+                <button class="ai-btn">同步技能目录</button>
+                <button class="ai-btn ai-btn-primary">导入技能 zip</button>
+              </div>
+              <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+                <thead>
+                  <tr style="background:#f8fafc">
+                    <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;font-weight:500">名称</th>
+                    <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;font-weight:500">文件夹</th>
+                    <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;font-weight:500">说明</th>
+                    <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;font-weight:500;white-space:nowrap">来源</th>
+                    <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;font-weight:500;white-space:nowrap">执行器</th>
+                    <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;font-weight:500;white-space:nowrap">状态</th>
+                    <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;font-weight:500;white-space:nowrap">绑定智能体</th>
+                    <th style="text-align:left;padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;font-weight:500;white-space:nowrap">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom:1px solid #f1f5f9">
+                    <td style="padding:8px 12px;font-weight:500;color:var(--text-1)">订单风险分析</td>
+                    <td style="padding:8px 12px;color:var(--text-3)">order-risk</td>
+                    <td style="padding:8px 12px;color:var(--text-2)">交期风险推理与建议处理方式</td>
+                    <td style="padding:8px 12px"><span class="ai-tag ai-tag-brand">内置</span></td>
+                    <td style="padding:8px 12px"><span class="ai-tag ai-tag-purple">Python 沙箱</span></td>
+                    <td style="padding:8px 12px"><label style="display:flex;align-items:center"><input type="checkbox" style="accent-color:#5b5bd6;margin-right:4px">启用</label></td>
+                    <td style="padding:8px 12px;color:var(--text-3)">2</td>
+                    <td style="padding:8px 12px"><button class="ai-btn ai-btn-text">预览</button> <button class="ai-btn ai-btn-text" style="color:#dc2626">删除</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 助手运营 -->
+          <div class="ai-tab-panel" style="display:none">
+            <div style="padding:16px">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+                <button class="ai-btn ai-btn-text ai-seg active">概览</button>
+                <button class="ai-btn ai-btn-text ai-seg">运行记录</button>
+                <button class="ai-btn ai-btn-text ai-seg">调用审计</button>
+                <button class="ai-btn ai-btn-text ai-seg">会话审计</button>
+                <button class="ai-btn ai-btn-text ai-seg">助手配置</button>
+              </div>
+              <div class="ai-card">
+                <div class="ai-card-body">
+                  <div class="ai-empty">概览：总对话 257 次 · 成功率 89.5% · 平均耗时 24.2s · 累计 token 1,771,871 · 活跃用户 5 人</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  function switchView(btn, view) {
+    document.querySelectorAll('.proto-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.proto-view').forEach(v => v.classList.remove('active'));
+    document.getElementById('view-' + view).classList.add('active');
+  }
+  // Tab 切换（仅原型演示）
+  document.querySelectorAll('.ai-tab').forEach(tab => {
+    tab.addEventListener('click', function() {
+      this.parentNode.querySelectorAll('.ai-tab').forEach(t => t.classList.remove('active'));
+      this.classList.add('active');
+      const panels = this.closest('.ai-card').querySelectorAll('.ai-tab-panel');
+      panels.forEach(p => p.style.display = 'none');
+      const idx = Array.from(this.parentNode.children).indexOf(this);
+      panels[idx].style.display = 'block';
+    });
+  });
+  document.querySelectorAll('.ai-seg').forEach(tab => {
+    tab.addEventListener('click', function() {
+      this.parentNode.querySelectorAll('.ai-seg').forEach(t => t.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>

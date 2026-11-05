@@ -29,7 +29,7 @@ export function notificationJump(item: NotificationJumpItem): NotificationJumpTa
     }
   }
   if (item.type === 'agent_config' || item.type === 'agent_hierarchy' || item.type === 'agent_team') {
-    return { label: '智能体中心', path: '/agents/team' }
+    return { label: '智能中心', path: '/agents' }
   }
   return null
 }

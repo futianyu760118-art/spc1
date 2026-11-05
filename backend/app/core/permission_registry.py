@@ -121,6 +121,12 @@ DEPRECATED_PERMISSION_CODES = (
     "quality.supplier_claim.pending",
     "quality.supplier_claim.config",
     "deploy_versions",
+    # 智能助手监控/配置已合并进 ai.agent.admin（2026-10-30），页面并入智能体中心
+    "ai.assistant_monitor",
+    "ai.assistant_config",
+    # 我的智能体 / 我的团队已合并为「我的助手」（2026-11-03），权限由 ai.agent.assistant 取代
+    "ai.agent.self.me",
+    "ai.agent.team",
 )
 
 # 一次性动作迁移:盘点抽检曾声明为 read/manage,现回归标准增删改查。
@@ -133,6 +139,7 @@ MIGRATE_AUDIT_ACTIONS = ("materials.stock_check_audit",)
 ADDED_PERMISSION_ACTIONS = {
     # 调价单「查看全部」:采购员只看自己,管理者/审批人凭此动作看全部
     "purchase.price_change": ["read_all"],
+    "production.monthly_capacity_plan": ["manage"],
 }
 
 # 一次性改名迁移：DB 是权限定义的真相源，sync_permissions_to_db 只首次插入不覆盖既有行，
@@ -201,6 +208,37 @@ async def migrate_permission_actions(db: AsyncSession) -> int:
     return changed
 
 
+async def migrate_assistant_permissions_to_agent_admin(db: AsyncSession) -> int:
+    """把 ai.assistant_monitor / ai.assistant_config 的存量角色授权并入 ai.agent.admin。
+
+    动作按并集映射：仅 monitor → read；含 config → read, update。
+    必须在 cleanup_deprecated_permissions 之前执行（清理会移除角色 JSON 里的旧键）。
+    幂等：旧键被清理后本函数 WHERE 不再命中。每次启动执行。
+    """
+    from sqlalchemy import text
+
+    result = await db.execute(text(
+        "UPDATE sys_role SET permissions = jsonb_set( "
+        "  permissions, ARRAY['ai.agent.admin'], "
+        "  ( "
+        "    SELECT COALESCE(jsonb_agg(DISTINCT x.a ORDER BY x.a), '[]'::jsonb) "
+        "    FROM ( "
+        "      SELECT jsonb_array_elements_text(COALESCE(permissions -> 'ai.agent.admin', '[]'::jsonb)) AS a "
+        "      UNION SELECT 'read' "
+        "        WHERE permissions ? 'ai.assistant_monitor' OR permissions ? 'ai.assistant_config' "
+        "      UNION SELECT 'update' WHERE permissions ? 'ai.assistant_config' "
+        "    ) x "
+        "  ) "
+        ") "
+        "WHERE permissions ? 'ai.assistant_monitor' OR permissions ? 'ai.assistant_config'"
+    ))
+    changed = result.rowcount or 0
+    await db.commit()
+    if changed:
+        logger.info(f"[权限注册] 智能助手权限并入 ai.agent.admin，涉及 {changed} 个角色")
+    return changed
+
+
 async def migrate_added_permission_actions(db: AsyncSession) -> int:
     """把代码侧新增的权限动作追加进 sys_permission.actions（幂等，每次启动执行）。
 
@@ -243,7 +281,7 @@ async def cleanup_deprecated_permissions(db: AsyncSession) -> int:
 
     removed = 0
     for code in DEPRECATED_PERMISSION_CODES:
-        # 1) sys_role.permissions: 移除 JSONB 中的 key
+        # 1) sys_role.permissions / sys_user.permissions: 移除 JSONB 中的 key
         await db.execute(
             text(
                 "UPDATE sys_role "
@@ -325,6 +363,7 @@ declare_permission("production.exceptions", "工序异常池", module="productio
 declare_permission("production.daily_report", "生产日报表", module="production", parent_code="production", route_path="/daily-reports", sort_order=10)
 declare_permission("production.labor_price_audit", "工价审核", module="production", parent_code="production", route_path="/labor-price-audits", sort_order=11)
 declare_permission("production.order_wage_lookup", "订单工价查询", module="production", parent_code="production", route_path="/order-wage-lookup", sort_order=12, actions=["read"])
+declare_permission("production.monthly_capacity_plan", "月度产能规划", module="production", parent_code="production", route_path="/production/monthly-capacity-plan", sort_order=13, actions=["read", "manage"])
 
 # 异常与质量中心
 declare_permission("exceptions", "异常与质量中心", module="exceptions", sort_order=6)
@@ -390,19 +429,6 @@ declare_permission(
     route_path="/backups", sort_order=12,
 )
 
-# 智能体管理台（2026-10-15）— 智能助手监控/配置 + 执行面智能体管理
-declare_permission(
-    "ai.assistant_monitor", "智能助手管理",
-    module="basicdata", parent_code="basicdata",
-    actions=["read"],
-    route_path="/ai-assistant", sort_order=13,
-)
-# Tab 级权限（页内二次校验，同 approval.business 模式；无独立路由）
-declare_permission(
-    "ai.assistant_config", "助手配置",
-    module="basicdata", parent_code="ai.assistant_monitor",
-    actions=["read", "update"], sort_order=1,
-)
 declare_permission(
     "ai.execution_agent", "执行面智能体",
     module="basicdata", parent_code="basicdata",
@@ -454,23 +480,23 @@ declare_permission(
     route_path="/purchase-requisitions", sort_order=15,
 )
 
-# 智能体中心 — 智能体目录、勾选式团队、团队能力门控
+# 智能中心 — 我的助手、智能体管理
 declare_permission(
-    "ai.agent.self", "智能体中心",
+    "ai.agent.self", "智能中心",
     module="agent", actions=["read"], sort_order=15,
 )
 declare_permission(
-    "ai.agent.self.me", "我的智能体",
+    "ai.agent.assistant", "我的助手",
     module="agent", parent_code="ai.agent.self", actions=["read"],
-    route_path="/agents/me", sort_order=1,
-)
-declare_permission(
-    "ai.agent.team", "我的团队",
-    module="agent", parent_code="ai.agent.self", actions=["read"],
-    route_path="/agents/team", sort_order=2,
+    route_path="/agents", sort_order=1,
 )
 declare_permission(
     "ai.agent.admin", "智能体管理",
     module="agent", parent_code="ai.agent.self", actions=["read", "update"],
-    route_path="/agents/admin", sort_order=3,
+    route_path="/agents/admin", sort_order=2,
+)
+declare_permission(
+    "ai.skill.manage", "技能管理（安装/创建/卸载）",
+    module="agent", parent_code="ai.agent.self", actions=["read", "update"],
+    sort_order=4,
 )

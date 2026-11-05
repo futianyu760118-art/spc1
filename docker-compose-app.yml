@@ -50,6 +50,11 @@ services:
       AEOS_SYSTEM_ID: ${AEOS_SYSTEM_ID:-}
       AEOS_SYSTEM_TOKEN: ${AEOS_SYSTEM_TOKEN:-}
       AEOS_HUB_CA_CERT: ${AEOS_HUB_CA_CERT:-/app/certs/caddy-root.crt}
+      # Agent Skills：导入技能目录（内置技能随镜像 /app/skills）
+      SKILLS_IMPORT_DIR: ${SKILLS_IMPORT_DIR:-/app/skills-imported}
+      SKILL_SANDBOX_ORCHESTRATOR_URL: ${SKILL_SANDBOX_ORCHESTRATOR_URL:-http://sandbox-orchestrator:8792}
+      SKILL_SANDBOX_TOKEN: ${SKILL_SANDBOX_TOKEN:-}
+      SKILL_SCRIPT_TIMEOUT_S: ${SKILL_SCRIPT_TIMEOUT_S:-30}
       # SPC 单一网关（主服务器 aeos-gateway；app 服务器 backend 通过该地址访问）
       GATEWAY_BASE_URL: ${GATEWAY_BASE_URL:-}
       GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN:-}
@@ -65,8 +70,30 @@ services:
     volumes:
       - ./data/uploads:${STORAGE_LOCAL_ROOT:-/app/uploads}
       - ./data/backups:/app/backups
+      - ./data/skills:/app/skills-imported
     command: >
       sh -c "python init_database.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  sandbox-orchestrator:
+    image: spc-v2-sandbox-orchestrator:latest
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 256m
+    environment:
+      SANDBOX_ORCHESTRATOR_TOKEN: ${SKILL_SANDBOX_TOKEN:-}
+      SANDBOX_IMAGE: spc-v2-sandbox:latest
+      SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-runc}
+      SANDBOX_TASK_NETWORK: ${SANDBOX_TASK_NETWORK:-none}
+      SANDBOX_MAX_CONCURRENCY: ${SANDBOX_MAX_CONCURRENCY:-2}
+      SANDBOX_DEP_INSTALL_TIMEOUT_S: 60
+      SANDBOX_KEEP_TASK_CONTAINERS: ${SANDBOX_KEEP_TASK_CONTAINERS:-false}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    tmpfs:
+      - /tmp:size=64m,mode=1777,nosuid,nodev
 
   frontend:
     image: spc-v2-frontend:latest

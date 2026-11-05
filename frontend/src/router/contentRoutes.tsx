@@ -48,7 +48,6 @@ import {
 } from '../pages/BasicDataCenter'
 import WritebackConfig from '../pages/BasicDataCenter/WritebackConfig'
 import Backup from '../pages/SystemCenter/Backup'
-import AssistantManagement from '../pages/SystemCenter/AssistantManagement'
 import ExecutionAgentManagement from '../pages/SystemCenter/ExecutionAgentManagement'
 import WritebackMonitor from '../pages/WritebackMonitor/index'
 import Notifications from '../pages/Notifications'
@@ -70,6 +69,11 @@ import ProductionOverview from '../pages/ProductionCenter/ProductionOverview/ind
 import Dashboard372 from '../pages/ProductionCenter/Dashboard372/index'
 import SchedulePlans from '../pages/ProductionCenter/SchedulePlans/index'
 import ScheduleDateAdjust from '../pages/ProductionCenter/ScheduleDateAdjust/index'
+import MonthlyCapacityPlan from '../pages/ProductionCenter/MonthlyCapacityPlan/index'
+import NewSchedulePlans from '../pages/EngineeringCenter/NewSchedulePlans/index'
+import LaborPrices from '../pages/EngineeringCenter/LaborPrices/index'
+import LaborPriceNew from '../pages/EngineeringCenter/LaborPrices/New'
+import LaborPriceChanges from '../pages/EngineeringCenter/LaborPriceChanges/index'
 import TodoWorkbench from '../pages/ProductionCenter/TodoWorkbench/index'
 import ChangeEvents from '../pages/ProductionCenter/ChangeEvents/index'
 import ScheduleBoard from '../pages/ProductionCenter/ScheduleBoard/index'
@@ -99,13 +103,12 @@ import ApprovalItem from '../pages/ApprovalCenter/Item'
 import ApprovalCreate from '../pages/ApprovalCenter/Create'
 import ApprovalCreateForm from '../pages/ApprovalCenter/Create/FormPage'
 import SubjectBalances from '../pages/FinanceCenter/SubjectBalances/index'
-import AgentMyAgent from '../pages/AgentCenter/MyAgent'
-import AgentTeamConfig from '../pages/AgentCenter/TeamConfig'
+import MyAssistant from '../pages/AgentCenter/MyAssistant'
 import AgentAdmin from '../pages/AgentCenter/Admin'
+import AssistantPage from '../pages/Assistant'
 
 export const contentRoutes = (
     <>
-        <Route index element={<Navigate to="/dashboard" replace/>}/>
         <Route path="/profile" element={<Profile/>}/>
         <Route path="/dashboard" element={<Dashboard/>}/>
         <Route path="/orders" element={<OrderList/>}/>
@@ -141,6 +144,11 @@ export const contentRoutes = (
         <Route path="/production-dashboard" element={<Dashboard372/>}/>
         <Route path="/schedule-plans" element={<SchedulePlans/>}/>
         <Route path="/schedule-date-adjust" element={<ScheduleDateAdjust/>}/>
+        <Route path="/production/monthly-capacity-plan" element={<MonthlyCapacityPlan/>}/>
+        <Route path="/engineering/new-schedule/plans" element={<NewSchedulePlans/>}/>
+        <Route path="/engineering/labor-prices" element={<LaborPrices/>}/>
+        <Route path="/engineering/labor-prices/new" element={<LaborPriceNew/>}/>
+        <Route path="/engineering/labor-price-changes" element={<LaborPriceChanges/>}/>
         <Route path="/todo-workbench" element={<TodoWorkbench/>}/>
         <Route path="/change-events" element={<ChangeEvents/>}/>
         <Route path="/schedule-board" element={<ScheduleBoard/>}/>
@@ -169,7 +177,7 @@ export const contentRoutes = (
         <Route path="/permissions" element={<PermissionManagement/>}/>
         <Route path="/audit" element={<AuditLog/>}/>
         <Route path="/backups" element={<Backup/>} key="backups"/>
-        <Route path="/ai-assistant" element={<AssistantManagement/>} key="ai-assistant"/>
+        <Route path="/ai-assistant" element={<AssistantPage/>}/>
         <Route path="/execution-agent" element={<ExecutionAgentManagement/>} key="execution-agent"/>
         <Route path="/share-management" element={<ShareManagement/>}/>
         <Route path="/sync-config" element={<SyncSqlConfig/>}/>
@@ -210,8 +218,7 @@ export const contentRoutes = (
         <Route path="/approvals/create/:bizType" element={<ApprovalCreateForm/>}/>
         <Route path="/approvals/create/:bizType/:id" element={<ApprovalCreateForm/>}/>
         <Route path="/finance/subject-balances" element={<SubjectBalances/>} key="finance-subject-balances"/>
-        <Route path="/agents/me" element={<AgentMyAgent/>}/>
-        <Route path="/agents/team" element={<AgentTeamConfig/>}/>
+        <Route path="/agents" element={<MyAssistant/>}/>
         <Route path="/agents/admin" element={<AgentAdmin/>}/>
     </>
 )

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, List, Tag, Button, Typography } from 'antd';
 import { LinkOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import { scalePx } from '../../utils/fontSize'
 
 const { Text } = Typography;
 
@@ -58,7 +59,7 @@ const ExceptionListCard: React.FC<ExceptionListCardProps> = ({ title, items, tot
       title={`${title}（共${total}条）`} 
       size="small" 
       style={{ marginBottom: 16 }}
-      headStyle={{ fontSize: 14, fontWeight: 500 }}
+      headStyle={{ fontSize: scalePx(14), fontWeight: 500 }}
     >
       <List
         size="small"
@@ -84,10 +85,10 @@ const ExceptionListCard: React.FC<ExceptionListCardProps> = ({ title, items, tot
             <List.Item.Meta
               title={
                 <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                  <Text strong style={{ fontSize: 13, color: '#262626' }}>{item.title}</Text>
+                  <Text strong style={{ fontSize: scalePx(13), color: '#262626' }}>{item.title}</Text>
                   {getSeverityIcon(item.severity || '')}
                   {item.tags.map((tag: string) => (
-                    <Tag key={tag} color={getStatusColor(tag)} style={{ fontSize: 11, lineHeight: '16px' }}>
+                    <Tag key={tag} color={getStatusColor(tag)} style={{ fontSize: scalePx(11), lineHeight: '16px' }}>
                       {tag}
                     </Tag>
                   ))}
@@ -95,37 +96,37 @@ const ExceptionListCard: React.FC<ExceptionListCardProps> = ({ title, items, tot
               }
               description={
                 <div style={{ marginTop: 4 }}>
-                  <div style={{ color: '#8c8c8c', fontSize: 12, marginBottom: 4, lineHeight: '1.4' }}>
+                  <div style={{ color: '#8c8c8c', fontSize: scalePx(12), marginBottom: 4, lineHeight: '1.4' }}>
                     {item.subtitle}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px' }}>
                     {item.order_no && (
-                      <Text type="secondary" style={{ fontSize: 12, color: '#595959' }}>
+                      <Text type="secondary" style={{ fontSize: scalePx(12), color: '#595959' }}>
                         订单: {item.order_no}
                       </Text>
                     )}
                     {item.defect_type && (
-                      <Text type="secondary" style={{ fontSize: 12, color: '#595959' }}>
+                      <Text type="secondary" style={{ fontSize: scalePx(12), color: '#595959' }}>
                         缺陷类型: {item.defect_type}
                       </Text>
                     )}
                     {item.recorder && (
-                      <Text type="secondary" style={{ fontSize: 12, color: '#595959' }}>
+                      <Text type="secondary" style={{ fontSize: scalePx(12), color: '#595959' }}>
                         记录人: {item.recorder}
                       </Text>
                     )}
                     {item.record_date && (
-                      <Text type="secondary" style={{ fontSize: 12, color: '#595959' }}>
+                      <Text type="secondary" style={{ fontSize: scalePx(12), color: '#595959' }}>
                         记录日期: {item.record_date}
                       </Text>
                     )}
                     {item.modifier && (
-                      <Text type="secondary" style={{ fontSize: 12, color: '#595959' }}>
+                      <Text type="secondary" style={{ fontSize: scalePx(12), color: '#595959' }}>
                         修改人: {item.modifier}
                       </Text>
                     )}
                     {item.change_date && (
-                      <Text type="secondary" style={{ fontSize: 12, color: '#595959' }}>
+                      <Text type="secondary" style={{ fontSize: scalePx(12), color: '#595959' }}>
                         修改日期: {item.change_date}
                       </Text>
                     )}

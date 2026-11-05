@@ -810,6 +810,20 @@ def test_query_step_summary_shows_page():
     ) == "查询 销售订单列表"
 
 
+def test_query_step_summary_shows_filters():
+    """同一路径不同筛选条件必须在时间线上可区分。"""
+    summary = orchestrator._step_summary(
+        "call_query_agent",
+        {
+            "path": "/external/orders/list",
+            "params": {"keyword": "HJ-1", "status": "in_progress", "page": 1},
+        },
+    )
+    assert "keyword=HJ-1" in summary
+    assert "status=in_progress" in summary
+    assert "第1页" in summary
+
+
 async def test_identical_page_query_calls_blocked(monkeypatch):
     """完全相同的页码与参数重复拉取会被重复调用拦截。"""
     def same_call():

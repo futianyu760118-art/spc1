@@ -110,3 +110,46 @@ async def test_chat_passes_per_request_timeout():
     await provider.chat(_tool_messages(), ChatOptions(timeout=170))
 
     assert provider._client.completions.requests[0]["timeout"] == 170
+
+
+async def test_chat_with_tools_parses_deepseek_dsml_content():
+    content = """<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="install_skill">
+<｜｜DSML｜｜ parameter name="skill_key" string="true">@zcwl/multi-search-engine</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>"""
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(
+            message=SimpleNamespace(content=content, reasoning_content=None, tool_calls=None),
+            finish_reason="stop",
+        )],
+        usage=None,
+    )
+    provider = _provider(response)
+
+    result = await provider.chat_with_tools(_tool_messages(), [], ChatOptions())
+
+    assert result.text in (None, "")
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "install_skill"
+    assert result.tool_calls[0].arguments == {"skill_key": "@zcwl/multi-search-engine"}
+
+async def test_chat_with_tools_parses_xml_tool_call_content():
+    content = """<tool_call>
+{"name": "install_skill", "arguments": {"skill": "@zcwl/multi-search-engine"}}
+</tool_call>"""
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(
+            message=SimpleNamespace(content=content, reasoning_content=None, tool_calls=None),
+            finish_reason="stop",
+        )],
+        usage=None,
+    )
+    provider = _provider(response)
+
+    result = await provider.chat_with_tools(_tool_messages(), [], ChatOptions())
+
+    assert result.text in (None, "")
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "install_skill"
+    assert result.tool_calls[0].arguments == {"skill": "@zcwl/multi-search-engine"}

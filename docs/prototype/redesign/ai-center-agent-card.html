@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能体卡片 · 精简原型</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  :root {
+    --brand-50: #eef0fe;
+    --brand-500: #5b5bd6;
+    --brand-600: #4c4dc2;
+    --gray-50: #f8fafc;
+    --gray-100: #f1f5f9;
+    --gray-200: #e2e8f0;
+    --text-1: #0f172a;
+    --text-2: #475569;
+    --text-3: #94a3b8;
+    --radius: 8px;
+    --shadow: 0 1px 2px rgba(15,23,42,.04);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Inter","Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif; background: var(--gray-50); color: var(--text-1); font-size: 13px; }
+
+  .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+  .bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--gray-200); }
+  .bar h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  .bar p { margin: 4px 0 0; font-size: 12px; color: var(--text-3); }
+  .bar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+
+  /* 卡片 */
+  .card {
+    display: flex; flex-direction: column; height: 164px; /* 固定高度，网格整齐 */
+    background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .card:hover { border-color: #c6cbfa; box-shadow: 0 4px 12px rgba(15,23,42,.08); }
+
+  .card-head {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px; flex: 0 0 auto;
+  }
+  .avatar {
+    width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #7a7de6, #5b5bd6);
+    color: #fff; font-weight: 700; font-size: 13px;
+  }
+  .head-main { min-width: 0; flex: 1; }
+  .name-row { display: flex; align-items: baseline; gap: 6px; }
+  .name { font-weight: 600; font-size: 13.5px; color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .no { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .status {
+    font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px;
+    background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0;
+    margin-left: auto;
+  }
+
+  .card-body { flex: 1; padding: 8px 12px; display: flex; flex-direction: column; overflow: hidden; }
+  .desc {
+    font-size: 12px; color: var(--text-2); line-height: 1.5;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    margin-bottom: 6px;
+  }
+
+  .tags {
+    display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: auto; /* 推到底部，但留给操作区 */
+    min-height: 0;
+  }
+  .tag {
+    height: 20px; padding: 0 7px; border-radius: 5px; font-size: 11px; font-weight: 500;
+    color: var(--text-2); background: #f1f5f9; border: 1px solid var(--gray-200); white-space: nowrap;
+  }
+  .tag-brand { color: var(--brand-600); background: var(--brand-50); border-color: #c6cbfa; }
+  .tag-purple { color: #7c3aed; background: #f5f3ff; border-color: #e9d5ff; }
+
+  .foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 12px; border-top: 1px solid var(--gray-100); flex: 0 0 auto;
+  }
+  .foot-left { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--text-3); }
+  .foot-btn {
+    display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px;
+    border-radius: 6px; border: 1px solid var(--gray-200); background: #fff;
+    color: var(--text-2); font-size: 12px; cursor: pointer;
+  }
+  .foot-btn:hover { background: #f8fafc; border-color: #c6cbfa; }
+
+  /* 状态标签（停用） */
+  .status-off { background: #f1f5f9; color: #94a3b8; border-color: #e2e8f0; }
+
+  /* 示例：更多能力折叠 */
+  .more-tag { font-size: 10px; color: var(--text-3); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="bar">
+    <div>
+      <h1>智能体管理</h1>
+      <p>智能体目录 · 点击卡片编辑，共 9 个</p>
+    </div>
+    <div class="right">
+      <button style="height:30px;padding:0 12px;border:1px solid var(--gray-200);border-radius:6px;background:#fff;font-size:13px;cursor:pointer">批量绑定用户</button>
+      <button style="height:30px;padding:0 14px;border:none;border-radius:6px;background:var(--brand-500);color:#fff;font-size:13px;font-weight:500;cursor:pointer">新建智能体</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- 卡片 1 -->
+    <div class="card">
+      <div class="card-head">
+        <div class="avatar">订</div>
+        <div class="head-main">
+          <div class="name-row">
+            <span class="name">订单专员</span>
+            <span class="no">AG-SYS-ORDERS</span>
+            <span class="status">启用</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="desc">销售订单/明细只读查询与交期风险推理分析</div>
+        <div class="tags">
+          <span class="tag tag-brand">订单查询</span>
+          <span class="tag tag-brand">订单明细</span>
+          <span class="tag tag-purple">+1</span>
+        </div>
+      </div>
+      <div class="foot">
+        <div class="foot-left">所有人可勾选 · 团队 1</div>
+        <button class="foot-btn">编辑</button>
+      </div>
+    </div>
+
+    <!-- 卡片 2 -->
+    <div class="card">
+      <div class="card-head">
+        <div class="avatar">物</div>
+        <div class="head-main">
+          <div class="name-row">
+            <span class="name">物料专员</span>
+            <span class="no">AG-SYS-MATERIAL</span>
+            <span class="status">启用</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="desc">齐套/缺料/物料供给只读查询与齐套风险推理分析</div>
+        <div class="tags">
+          <span class="tag tag-brand">齐套查询</span>
+          <span class="tag tag-brand">物料供给查询</span>
+          <span class="tag tag-purple">+1</span>
+        </div>
+      </div>
+      <div class="foot">
+        <div class="foot-left">指定角色 × 1 · 团队 1</div>
+        <button class="foot-btn">编辑</button>
+      </div>
+    </div>
+
+    <!-- 卡片 3 -->
+    <div class="card">
+      <div class="card-head">
+        <div class="avatar">主</div>
+        <div class="head-main">
+          <div class="name-row">
+            <span class="name">主数据查询员</span>
+            <span class="no">AG-SYS-MASTERDATA</span>
+            <span class="status">启用</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="desc">物料/供应商/BOM/库存等全局共享主数据只读查询</div>
+        <div class="tags">
+          <span class="tag tag-brand">物料查询</span>
+          <span class="tag tag-brand">供应商查询</span>
+          <span class="tag tag-purple">+2</span>
+        </div>
+      </div>
+      <div class="foot">
+        <div class="foot-left">所有人可勾选 · 团队 1</div>
+        <button class="foot-btn">编辑</button>
+      </div>
+    </div>
+
+    <!-- 卡片 4：描述较长，测试截断 -->
+    <div class="card">
+      <div class="card-head">
+        <div class="avatar">计</div>
+        <div class="head-main">
+          <div class="name-row">
+            <span class="name">计划写入员</span>
+            <span class="no">AG-SYS-WRITE</span>
+            <span class="status">启用</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="desc">修改订单计划日期（必须人工确认），支持合同交期、出货计划等多字段写回。</div>
+        <div class="tags">
+          <span class="tag tag-brand">修改合同交期</span>
+          <span class="tag tag-brand">修改出货计划</span>
+          <span class="tag tag-purple">+3</span>
+        </div>
+      </div>
+      <div class="foot">
+        <div class="foot-left">所有人可勾选 · 团队 1</div>
+        <button class="foot-btn">编辑</button>
+      </div>
+    </div>
+
+    <!-- 卡片 5：停用状态 -->
+    <div class="card" style="opacity:0.62">
+      <div class="card-head">
+        <div class="avatar">问</div>
+        <div class="head-main">
+          <div class="name-row">
+            <span class="name">问题反馈智能体</span>
+            <span class="no">AG-SYS-SERVICE</span>
+            <span class="status status-off">停用</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="desc">代提交问题反馈，并支持撤销本人待处理的反馈。</div>
+        <div class="tags">
+          <span class="tag tag-brand">创建问题反馈</span>
+        </div>
+      </div>
+      <div class="foot">
+        <div class="foot-left">所有人可勾选 · 团队 1</div>
+        <button class="foot-btn">编辑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

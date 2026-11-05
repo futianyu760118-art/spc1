@@ -5,7 +5,7 @@ export type PermissionAwareItem = {
   icon?: ReactNode
   label: string
   permission?: string
-  /** 任一满足即可见/可进入（如 智能助手管理：monitor 或 config 任一） */
+  /** 任一满足即可见/可进入（页面子权限 Tab 级任一授予即可进页） */
   anyOfPermissions?: string[]
   children?: PermissionAwareItem[]
 }

@@ -17,7 +17,7 @@ class Agent(Base):
     display_name = Column(String(64), nullable=False, comment="智能体名称（全局唯一）")
     capability_codes = Column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"),
-        comment="能力码列表（非空、去重），见 capabilities.CONFIGURABLE_CAPABILITIES",
+        comment="能力码列表（可空、去重），见 capabilities.CONFIGURABLE_CAPABILITIES",
     )
     scope_type = Column(String(16), nullable=False, default="all", server_default="all", comment="all|roles")
     scope_role_ids = Column(JSONB, nullable=True, comment="scope_type=roles 时的角色 id 列表")
