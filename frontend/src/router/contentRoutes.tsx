@@ -52,6 +52,7 @@ import ExecutionAgentManagement from '../pages/SystemCenter/ExecutionAgentManage
 import WritebackMonitor from '../pages/WritebackMonitor/index'
 import Notifications from '../pages/Notifications'
 import Profile from '../pages/Profile'
+import M10 from '../pages/M10'
 import Customers from '../pages/BasicDataCenter/Customers'
 import Suppliers from '../pages/BasicDataCenter/Suppliers'
 import SupplierMaterialMap from '../pages/BasicDataCenter/SupplierMaterialMap'
@@ -110,6 +111,7 @@ import AssistantPage from '../pages/Assistant'
 export const contentRoutes = (
     <>
         <Route path="/profile" element={<Profile/>}/>
+        <Route path="/m10" element={<M10/>}/>
         <Route path="/dashboard" element={<Dashboard/>}/>
         <Route path="/orders" element={<OrderList/>}/>
         <Route path="/run-orders" element={<RunOrderList/>}/>
