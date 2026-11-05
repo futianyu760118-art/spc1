@@ -82,6 +82,15 @@ import {
 
 const { Sider, Content } = Layout
 
+// M10 微系统公网入口（对齐 PLM 的「微系统」顶部入口）
+function m10BaseUrl(): string {
+  const env = (import.meta as any).env?.VITE_M10_BASE_URL?.trim()
+  if (env) return env.replace(/\/$/, '')
+  const host = window.location.hostname || '127.0.0.1'
+  if (window.location.protocol === 'https:') return 'https://wxt.hengyou-soft.com'
+  return `http://${host}:4173`
+}
+
 // 模块 code → 图标映射（数据库不存储图标，由前端约定）
 const MODULE_ICON_MAP: Record<string, React.ReactNode> = {
   dashboard: <DashboardOutlined />,
@@ -1147,6 +1156,18 @@ export default function MainLayout() {
           {!isShareUser() && <AppTabs navTree={navTree} />}
           {!isShareUser() && <GlobalSearch items={navTree} />}
           <div className="tbv2-actions">
+            {!isShareUser() && (
+              <Button
+                type="text"
+                size="small"
+                icon={<AppstoreOutlined />}
+                title="M10 微系统"
+                style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', color: '#475569' }}
+                onClick={() => window.open(m10BaseUrl(), '_blank', 'noopener')}
+              >
+                M10 微系统
+              </Button>
+            )}
             {!isShareUser() && !isSupplierUser() && canUseTopbar.share && <ShareButton />}
             {!isSupplierUser() && canUseTopbar.feedback && <FeedbackButton />}
             {canUseTopbar.fontSize && <FontSizeSetting />}
