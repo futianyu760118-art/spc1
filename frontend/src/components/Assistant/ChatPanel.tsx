@@ -221,6 +221,7 @@ const ConfirmationCard: React.FC<{
 
 const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onStop, onConfirm, onCancelConfirmation }) => {
   const [inputValue, setInputValue] = useState('')
+  const [showAllMembers, setShowAllMembers] = useState(false)
   const inputRef = useRef<any>(null)
   const shouldAutoScrollRef = useRef(true)
   const listRef = useRef<HTMLDivElement>(null)
@@ -292,7 +293,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onS
   const hasPendingConfirmation = messages.some(message => message.confirmation?.status === 'pending')
   const placeholder = hasPendingConfirmation
     ? '请先点击上方确认卡片中的「确认执行」或「取消」'
-    : '输入问题，如“今天有什么需要关注的？”'
+    : '问订单、物料、品质，或让我修改计划日期...'
 
   return (
     <div className="ai-chat-panel">
@@ -323,7 +324,7 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onS
 
               {teamAgents.length > 0 && (
                 <div className="ai-team-chips">
-                  {teamAgents.map(agent => (
+                  {(showAllMembers ? teamAgents : teamAgents.slice(0, 4)).map(agent => (
                     <button
                       key={agent.id}
                       type="button"
@@ -334,6 +335,15 @@ const ChatPanel: React.FC<Props> = ({ messages, loading, teamAgents, onSend, onS
                       {agent.name}
                     </button>
                   ))}
+                  {teamAgents.length > 4 && !showAllMembers && (
+                    <button
+                      type="button"
+                      className="ai-team-more"
+                      onClick={() => setShowAllMembers(true)}
+                    >
+                      +{teamAgents.length - 4} 更多
+                    </button>
+                  )}
                 </div>
               )}
             </div>

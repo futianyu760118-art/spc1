@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { Routes, useNavigate, useLocation } from 'react-router-dom'
 import { Layout, Menu, Button, Dropdown, Space, Modal, Form, Input, message, Result, Badge, Popover, List, Tag, Typography, notification as antNotification } from 'antd'
 import {
@@ -66,7 +66,7 @@ import { useTabsStore } from '../store/tabs'
 import { contentRoutes } from '../router/contentRoutes'
 import { resolveCrumb, pathMatches, type PermissionAwareItem } from './navUtils'
 import { useUiPreferencesStore } from '../store/uiPreferences'
-import { useThemeStore } from '../store/theme'
+
 import { useAssistantLauncherStore } from '../store/assistantLauncher'
 import SidebarMorePanel from './SidebarMorePanel'
 import SidebarCustomizeModal from './SidebarCustomizeModal'
@@ -663,11 +663,7 @@ export default function MainLayout() {
   const toastShown = useRef(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [customizeOpen, setCustomizeOpen] = useState(false)
-  const [overflowCount, setOverflowCount] = useState(0)
-  const [measureTick, setMeasureTick] = useState(0)
-  const navRef = useRef<HTMLDivElement>(null)
-  const openChangeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const didMountReset = useRef(false)
+
   const sidebarPrefsRaw = useUiPreferencesStore(state => state.preferences[SIDEBAR_MENU_PREF_KEY])
   const setUiFlag = useUiPreferencesStore(state => state.setFlag)
   const sidebarPrefs = useMemo(() => {
@@ -681,8 +677,7 @@ export default function MainLayout() {
     }
     return normalized
   }, [sidebarPrefsRaw, currentUser?.id])
-  const fontSizeScale = useThemeStore(state => state.fontSizeScale)
-  const lastFontScale = useRef(fontSizeScale)
+
 
   // 加载权限树
   useEffect(() => {
@@ -984,24 +979,11 @@ export default function MainLayout() {
     () => buildSidebarEntries(sidebarLayout, effectiveSidebarPrefs),
     [sidebarLayout, effectiveSidebarPrefs],
   )
-  const effectiveOverflowCount = canCustomizeSidebar
-    ? Math.min(overflowCount, sidebarEntries.length)
-    : 0
-  const visibleEntries = useMemo(
-    () => (canCustomizeSidebar
-      ? sidebarEntries.slice(0, sidebarEntries.length - effectiveOverflowCount)
-      : sidebarEntries),
-    [sidebarEntries, canCustomizeSidebar, effectiveOverflowCount],
-  )
-  const overflowEntries = useMemo(
-    () => (canCustomizeSidebar
-      ? sidebarEntries.slice(sidebarEntries.length - effectiveOverflowCount)
-      : []),
-    [sidebarEntries, canCustomizeSidebar, effectiveOverflowCount],
-  )
+  // 不按高度自动收纳一级菜单；仅“手动移入更多”的页面进入「更多」
+  const visibleEntries = sidebarEntries
   const moreSections = useMemo(
-    () => buildMoreSections(sidebarLayout, overflowEntries),
-    [sidebarLayout, overflowEntries],
+    () => buildMoreSections(sidebarLayout, []),
+    [sidebarLayout],
   )
   const concealedPageCount = useMemo(
     () => moreSections.reduce((total, section) => total + section.pages.length, 0),
@@ -1022,79 +1004,8 @@ export default function MainLayout() {
   )
 
   const updateSidebarPrefs = useCallback((next: SidebarMenuPrefs) => {
-    setOverflowCount(0)
     setUiFlag(SIDEBAR_MENU_PREF_KEY, { ...next, userId: currentUser?.id })
   }, [setUiFlag, currentUser?.id])
-
-  const scheduleOverflowRecompute = useCallback(() => {
-    if (openChangeTimer.current) clearTimeout(openChangeTimer.current)
-    openChangeTimer.current = setTimeout(() => {
-      setOverflowCount(0)
-      setMeasureTick(tick => tick + 1)
-    }, 260)
-  }, [])
-
-  useEffect(() => () => {
-    if (openChangeTimer.current) clearTimeout(openChangeTimer.current)
-  }, [])
-
-  useLayoutEffect(() => {
-    if (!canCustomizeSidebar) return
-    const container = navRef.current
-    if (!container) return
-    const menuRoot = container.querySelector('.ant-menu') as HTMLElement | null
-    if (!menuRoot) return
-    const itemNodes = Array.from(menuRoot.children)
-      .filter(node => node.tagName === 'LI') as HTMLElement[]
-    const available = container.clientHeight
-    const menuTop = menuRoot.getBoundingClientRect().top
-    let keep = 0
-    for (const node of itemNodes) {
-      const style = getComputedStyle(node)
-      const marginBottom = Number.parseFloat(style.marginBottom) || 0
-      const bottom = node.getBoundingClientRect().bottom - menuTop + marginBottom
-      if (bottom > available - 6) break
-      keep += 1
-    }
-    const next = Math.max(0, Math.min(sidebarEntries.length, sidebarEntries.length - keep))
-    if (next !== overflowCount) setOverflowCount(next)
-  }, [canCustomizeSidebar, sidebarEntries.length, visibleEntries, overflowCount, measureTick])
-
-  useLayoutEffect(() => {
-    if (!canCustomizeSidebar) return
-    const container = navRef.current
-    if (!container) return
-    let firstCallback = true
-    const observer = new ResizeObserver(() => {
-      if (firstCallback) {
-        firstCallback = false
-        return
-      }
-      setOverflowCount(0)
-      setMeasureTick(tick => tick + 1)
-    })
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [canCustomizeSidebar])
-
-  useLayoutEffect(() => {
-    if (!didMountReset.current) {
-      didMountReset.current = true
-      return
-    }
-    setOverflowCount(0)
-    setMeasureTick(tick => tick + 1)
-  }, [collapsed, navTree])
-
-  useEffect(() => {
-    if (lastFontScale.current === fontSizeScale) return
-    lastFontScale.current = fontSizeScale
-    const frame = requestAnimationFrame(() => {
-      setOverflowCount(0)
-      setMeasureTick(tick => tick + 1)
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [fontSizeScale])
 
   useEffect(() => {
     if (!showMore) setMoreOpen(false)
@@ -1174,7 +1085,7 @@ export default function MainLayout() {
             )}
           </div>
 
-          <div className="sidebar-nav" ref={navRef}>
+          <div className="sidebar-nav">
             <Menu
               theme="dark"
               mode="inline"
@@ -1182,18 +1093,19 @@ export default function MainLayout() {
               defaultOpenKeys={openKeys}
               items={sidebarMenuItems}
               onClick={({ key }) => navigate(key)}
-              onOpenChange={() => {
-                if (canCustomizeSidebar) scheduleOverflowRecompute()
-              }}
             />
-            {showMore && (
-              <div className={`sidebar-more-slot has-more${collapsed ? ' is-collapsed' : ''}`}>
+          </div>
+          {showMore && (
+            <div className={`sidebar-more-slot has-more${collapsed ? ' is-collapsed' : ''}`}>
                 <Popover
                   open={moreOpen}
                   onOpenChange={setMoreOpen}
                   trigger={['hover', 'click']}
                   placement="rightBottom"
-                  overlayStyle={{ width: 300 }}
+                  styles={{
+                    root: { width: 300, maxWidth: 'calc(100vw - 24px)' },
+                    body: { maxHeight: 'calc(100vh - 120px)', overflow: 'hidden' },
+                  }}
                   overlayClassName="sidebar-more-popover"
                   content={(
                     <SidebarMorePanel
@@ -1218,8 +1130,7 @@ export default function MainLayout() {
                   </div>
                 </Popover>
               </div>
-            )}
-          </div>
+          )}
           {!isShareUser() && !isSupplierUser() && canUseTopbar.aiSearch && assistantLauncherDocked && (
             <AssistantDockItem collapsed={collapsed} />
           )}

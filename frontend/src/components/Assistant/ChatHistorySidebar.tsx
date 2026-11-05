@@ -65,8 +65,9 @@ export default function ChatHistorySidebar({
   return (
     <aside className="ai-chat-side">
       <div className="ai-side-head">
-        <Button type="primary" block icon={<PlusOutlined />} onClick={onNew}>
-          新建对话
+        <h2>历史会话</h2>
+        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={onNew}>
+          新建
         </Button>
       </div>
       <div className="ai-side-list">

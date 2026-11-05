@@ -86,8 +86,6 @@ export default function AssistantPage() {
   }
 
   const manageTeam = () => navigate('/agents')
-  const activeTitle = conversations.find(item => item.id === activeConversationId)?.title
-    || 'AI 智能助手'
 
   return (
     <div className="sc-page ai-center ai-chat-page ac-page">
@@ -104,9 +102,9 @@ export default function AssistantPage() {
 
         <div className="ai-chat-main">
           <div className="ai-chat-head">
-            <strong title={activeTitle}>{activeTitle}</strong>
+            <strong>AI 智能助手</strong>
             <span className="ai-online"><i />在线</span>
-            <span className="ai-chat-head-hint">{teamAgents.length} 位成员待命</span>
+            <span className="ai-chat-head-hint">{teamAgents.length} 位团队成员</span>
             <div className="ai-chat-head-actions">
               <Button
                 type="text"
@@ -115,7 +113,9 @@ export default function AssistantPage() {
                 className="ai-history-toggle"
                 onClick={() => setHistoryOpen(true)}
                 title="历史会话"
-              />
+              >
+                历史
+              </Button>
               <Button
                 type="text"
                 size="small"
@@ -123,7 +123,9 @@ export default function AssistantPage() {
                 disabled={messages.length === 0}
                 onClick={newChat}
                 title="清空对话"
-              />
+              >
+                清空
+              </Button>
               <Button
                 type="text"
                 size="small"
@@ -131,7 +133,9 @@ export default function AssistantPage() {
                 className="ai-context-toggle"
                 onClick={() => setContextOpen(value => !value)}
                 title={contextOpen ? '收起上下文' : '展开上下文'}
-              />
+              >
+                上下文
+              </Button>
             </div>
           </div>
 

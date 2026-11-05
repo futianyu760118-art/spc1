@@ -1,6 +1,6 @@
 import React from 'react'
-import { Button, Input } from 'antd'
-import { PauseCircleOutlined, SendOutlined } from '@ant-design/icons'
+import { Button, Input, message } from 'antd'
+import { PaperClipOutlined, PauseCircleOutlined, SendOutlined } from '@ant-design/icons'
 
 interface Props {
   value: string
@@ -28,37 +28,42 @@ export default function ChatComposer({
       <div className="ai-composer-box">
         <Input.TextArea
           ref={inputRef}
+          className="ai-composer-input"
           value={value}
           onChange={event => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           variant="borderless"
-          autoSize={{ minRows: 1, maxRows: 4 }}
+          autoSize={{ minRows: 2, maxRows: 4 }}
           disabled={disabled || loading}
-          style={{ flex: 1, padding: '4px 0', resize: 'none' }}
         />
-        {loading && onStop ? (
+        <div className="ai-composer-tools">
           <Button
-            icon={<PauseCircleOutlined />}
-            onClick={onStop}
-            danger
-            title="停止生成"
-          >
-            停止
-          </Button>
-        ) : (
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={onSend}
-            disabled={!value.trim() || disabled}
-            title="发送"
-          >
-            发送
-          </Button>
-        )}
+            type="text"
+            size="small"
+            className="ai-attach-btn"
+            icon={<PaperClipOutlined />}
+            title="附件功能暂未开放"
+            onClick={() => message.info('附件功能暂未开放')}
+          />
+          <span className="ai-composer-tip">Enter 发送 · Shift + Enter 换行</span>
+          {loading && onStop ? (
+            <Button danger icon={<PauseCircleOutlined />} onClick={onStop} title="停止生成">
+              停止
+            </Button>
+          ) : (
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              onClick={onSend}
+              disabled={disabled}
+              title="发送"
+            >
+              发送
+            </Button>
+          )}
+        </div>
       </div>
-      <div className="ai-composer-hint">Enter 发送 · Shift + Enter 换行</div>
     </div>
   )
 }

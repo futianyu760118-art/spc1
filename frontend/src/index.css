@@ -163,8 +163,12 @@ body {
   background: #6366f1; color: #fff; font-size: 11px; line-height: 20px; text-align: center;
 }
 
-.sidebar-more-popover .ant-popover-inner { padding: 8px; border-radius: 14px; }
-.sidebar-more-panel { max-height: 60vh; overflow-y: auto; }
+.sidebar-more-popover { max-width: calc(100vw - 24px); }
+.sidebar-more-popover .ant-popover-inner {
+  padding: 8px; border-radius: 14px;
+  max-height: calc(100vh - 120px); overflow: hidden;
+}
+.sidebar-more-panel { max-height: calc(100vh - 160px); overflow-y: auto; }
 .sidebar-more-section + .sidebar-more-section { margin-top: 4px; }
 .sidebar-more-section-title {
   padding: 8px 10px 4px; color: #94a3b8; font-weight: 600; letter-spacing: .04em;
