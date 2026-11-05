@@ -1,13 +1,12 @@
 import { useMemo, useState } from 'react'
 import { ExportOutlined } from '@ant-design/icons'
 
-// M10 微系统内嵌页：视觉与 M10 原 demo（统一门户 portal.html）保持一致
-// 深蓝渐变头 + 白色卡片 + 浅灰底；页签切换 M10 各工作台，右侧可新窗口打开。
+// M10 微系统内嵌页：默认打开「岗位微系统」(/m)，页签切换 M10 各工作台。
 const TABS = [
-  { key: 'portal', label: '门户', path: '/' },
-  { key: 'plm2', label: '研发工作台', path: '/plm2' },
+  { key: 'm', label: '岗位微系统', path: '/m' },
   { key: 'taskhub', label: '待办总表', path: '/taskhub' },
-  { key: 'hlc', label: '人力后勤', path: '/hlc' },
+  { key: 'plm2', label: '研发工作台', path: '/plm2' },
+  { key: 'portal', label: '门户', path: '/' },
 ]
 
 function m10Base(): string {
@@ -19,7 +18,7 @@ function m10Base(): string {
 }
 
 export default function M10Page() {
-  const [tab, setTab] = useState('portal')
+  const [tab, setTab] = useState('m')
   const base = useMemo(m10Base, [])
   const cur = TABS.find(x => x.key === tab) || TABS[0]
   const frameUrl = useMemo(() => base + cur.path, [base, cur])
@@ -31,7 +30,7 @@ export default function M10Page() {
       <div style={{ background: 'linear-gradient(135deg, #10233b, #1b3d63)', color: '#fff', padding: '18px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <div>
-            <div style={{ margin: 0, fontSize: 20, fontWeight: 800, lineHeight: 1.3 }}>M10 微系统 · 统一门户</div>
+            <div style={{ margin: 0, fontSize: 20, fontWeight: 800, lineHeight: 1.3 }}>M10 岗位微系统</div>
             <div style={{ marginTop: 4, fontSize: 13, opacity: 0.75 }}>岗位与个人运营微系统 · 与 PLM / SPC / 会议 / HLC 实时同步</div>
           </div>
           <button
