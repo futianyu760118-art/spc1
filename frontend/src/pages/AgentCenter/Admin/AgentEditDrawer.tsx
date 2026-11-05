@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import {
   Button, Checkbox, Drawer, Form, Input, Radio, Select, Switch, message,
 } from 'antd'
+import { TeamOutlined } from '@ant-design/icons'
 import { userApi } from '../../../services/api'
 import { agentApi, AgentCapability, AgentSkillBrief } from '../../../services/agent'
 
@@ -15,9 +16,10 @@ interface Props {
   agent: any | null
   onClose: () => void
   onSaved: () => void
+  onBindUsers?: (agentId: number) => void
 }
 
-export default function AgentEditDrawer({ open, agent, onClose, onSaved }: Props) {
+export default function AgentEditDrawer({ open, agent, onClose, onSaved, onBindUsers }: Props) {
   const [form] = Form.useForm()
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([])
   const [skillOptions, setSkillOptions] = useState<AgentSkillBrief[]>([])
@@ -91,9 +93,13 @@ export default function AgentEditDrawer({ open, agent, onClose, onSaved }: Props
       className="sc-page ai-center"
       footer={(
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="ac-hint" style={{ marginRight: 'auto' }}>能力变更立即生效</span>
-          <Button onClick={onClose}>取消</Button>
-          <Button type="primary" loading={saving} onClick={submit}>保存</Button>
+          {agent && onBindUsers && (
+            <Button icon={<TeamOutlined />} onClick={() => onBindUsers(agent.id)}>绑定用户</Button>
+          )}
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <Button onClick={onClose}>取消</Button>
+            <Button type="primary" loading={saving} onClick={submit}>保存</Button>
+          </div>
         </div>
       )}
     >

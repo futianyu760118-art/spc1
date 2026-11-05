@@ -290,14 +290,6 @@ async def cleanup_deprecated_permissions(db: AsyncSession) -> int:
             ),
             {"code": code},
         )
-        await db.execute(
-            text(
-                "UPDATE sys_user "
-                "SET permissions = permissions - CAST(:code AS text) "
-                "WHERE permissions ? CAST(:code AS text)"
-            ),
-            {"code": code},
-        )
         # 2) sys_permission: 删除行
         result = await db.execute(
             text("DELETE FROM sys_permission WHERE code = CAST(:code AS text)"),

@@ -1122,12 +1122,6 @@ class DatabaseInitializer:
                     "- 'ai.agent.self.me' - 'ai.agent.team'"
                 ))
                 await conn.execute(text(
-                    "UPDATE sys_user SET permissions = permissions "
-                    "- 'ai.agent.self.tasks' - 'ai.agent.team.tasks' - 'ai.agent.team.config' "
-                    "- 'ai.agent.self.me' - 'ai.agent.team' "
-                    "WHERE permissions IS NOT NULL"
-                ))
-                await conn.execute(text(
                     "UPDATE sys_permission SET name = '智能中心' WHERE code = 'ai.agent.self'"
                 ))
                 await conn.execute(text(

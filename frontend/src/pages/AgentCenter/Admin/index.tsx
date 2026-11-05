@@ -10,6 +10,7 @@ import AssistantOpsTab from './AssistantOpsTab'
 import BindUsersModal from './BindUsersModal'
 import '../agent-center.css'
 import '../agent-center-v3.css'
+import '../agent-center-simple.css'
 
 type AdminZone = 'agents' | 'skills' | 'ops'
 
@@ -38,13 +39,6 @@ export default function AgentAdmin() {
 
   useEffect(() => { loadStats() }, [loadStats])
 
-  const callTotal = Object.values(stats?.calls_by_status || {}).reduce(
-    (sum: number, value: any) => sum + Number(value || 0), 0,
-  )
-  const callFailed = ['failed', 'timeout', 'rejected'].reduce(
-    (sum, key) => sum + Number((stats?.calls_by_status || {})[key] || 0), 0,
-  )
-
   const openCreate = () => {
     setZone('agents')
     setCreateSignal(value => value + 1)
@@ -56,7 +50,7 @@ export default function AgentAdmin() {
   }
 
   return (
-    <div className="sc-page ai-center ai-page ac-page">
+    <div className="sc-page ai-center ai-page ac-page ac-simple">
       <PageHeader
         title="智能体管理"
         extra={canConfig ? (
@@ -70,15 +64,6 @@ export default function AgentAdmin() {
           </div>
         ) : undefined}
       />
-
-      <div className="ac-stat-strip">
-        <div className="ac-stat"><b>{stats?.agents || 0}</b><span>智能体</span></div>
-        <div className="ac-stat"><b>{stats?.active_agents || 0}</b><span>已启用</span></div>
-        <div className="ac-stat"><b>{callTotal.toLocaleString('zh-CN')}</b><span>能力调用</span></div>
-        <div className="ac-stat"><b>{callFailed.toLocaleString('zh-CN')}</b><span>异常调用</span></div>
-        <div className="ac-stat"><b>{skillsTotal}</b><span>技能</span></div>
-        <div className="ac-stat-note"><i className="ac-live-dot" />目录数据实时加载</div>
-      </div>
 
       <nav className="ac-admin-tabs" aria-label="智能体管理分区">
         <button
@@ -106,13 +91,11 @@ export default function AgentAdmin() {
 
       {zone === 'agents' && (
         <AgentDirectoryTab
-          stats={stats}
           canManage={canConfig}
           createSignal={createSignal}
           onCreateConsumed={() => setCreateSignal(0)}
           onBindUsers={openBindUsers}
           onChanged={loadStats}
-          onOpenOps={() => setZone('ops')}
         />
       )}
       {zone === 'skills' && (

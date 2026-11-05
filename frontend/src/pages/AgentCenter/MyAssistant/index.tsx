@@ -15,6 +15,7 @@ import { useAuthStore } from '../../../store/auth'
 import AddMemberDrawer from './AddMemberDrawer'
 import '../agent-center.css'
 import '../agent-center-v3.css'
+import '../agent-center-simple.css'
 
 interface ConversationItem {
   id: number
@@ -56,16 +57,6 @@ const CALL_STATUS_META: Record<string, { cls: string; text: string }> = {
   rejected: { cls: 'bad', text: '拒绝' },
   running: { cls: '', text: '进行中' },
   cancelled: { cls: '', text: '已取消' },
-}
-
-function formatNumber(value: number): string {
-  return value.toLocaleString('zh-CN')
-}
-
-function formatTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
-  return String(value)
 }
 
 function formatTime(value?: string): string {
@@ -213,14 +204,8 @@ export default function MyAssistant() {
     return result
   }, [team])
 
-  const coveredCount = useMemo(
-    () => catalog.filter(item => coverage.has(item.code)).length,
-    [catalog, coverage],
-  )
-
   const skills = me?.skills || []
   const calls = me?.recent_calls || []
-  const usages = me?.usage_7d || { runs: 0, total_tokens: 0 }
 
   if (error) {
     return (
@@ -254,7 +239,7 @@ export default function MyAssistant() {
   }
 
   return (
-    <div className="sc-page ai-center ai-page ac-page">
+    <div className="sc-page ai-center ai-page ac-page ac-simple">
       <PageHeader
         title="我的助手"
         extra={(
@@ -268,15 +253,6 @@ export default function MyAssistant() {
           </div>
         )}
       />
-
-      <div className="ac-stat-strip">
-        <div className="ac-stat"><b>{team.length}</b><span>团队成员</span></div>
-        <div className="ac-stat"><b>{coveredCount}</b><span>覆盖能力</span></div>
-        <div className="ac-stat"><b>{skills.length}</b><span>已绑定技能</span></div>
-        <div className="ac-stat"><b>{formatNumber(usages.runs)}</b><span>近 7 天对话</span></div>
-        <div className="ac-stat"><b>{formatTokens(usages.total_tokens)}</b><span>近 7 天 Token</span></div>
-        <div className="ac-stat-note"><i className="ac-live-dot" />团队能力实时生效</div>
-      </div>
 
       <section className="ac-surface" aria-labelledby="teamTitle">
         <div className="ac-surface-head">
