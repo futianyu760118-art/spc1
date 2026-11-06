@@ -112,6 +112,7 @@ async def _compute_monthly_capacity_plan(
                 SaleOrderLine.product_name,
                 SaleOrderLine.bom_no,
                 SaleOrderLine.order_qty,
+                SaleOrderLine.warehouse_in_qty,
                 SaleOrderLine.shipping_plan,
                 SaleOrderLine.status,
                 SaleOrder.completed_qty,
@@ -157,14 +158,43 @@ async def _compute_monthly_capacity_plan(
         has_schedule = key in scheduled_keys
         if has_schedule and not include_scheduled:
             continue
-        qty = _to_float(row.order_qty)
+        order_qty = _to_float(row.order_qty)
+        warehouse_in_qty = _to_float(row.warehouse_in_qty)
+        remaining_qty = max(order_qty - warehouse_in_qty, 0.0)
+        is_fully_stock_in = order_qty > 0 and remaining_qty <= 0
+        qty = remaining_qty
         bom_code = str(row.bom_no or "").strip()
-        if qty <= 0:
+        if order_qty <= 0:
             missing.append({
                 "order_no": row.order_no,
                 "line_no": row.line_no,
                 "bom_no": bom_code or None,
                 "reason": "订单数量为空或为 0",
+            })
+            continue
+        if is_fully_stock_in:
+            orders.append({
+                "order_no": row.order_no,
+                "line_no": row.line_no,
+                "product_code": row.product_code,
+                "product_name": row.product_name,
+                "bom_no": bom_code or None,
+                "shipping_plan": row.shipping_plan.isoformat() if row.shipping_plan else None,
+                "quantity": 0,
+                "order_qty": round(order_qty, 2),
+                "warehouse_in_qty": round(warehouse_in_qty, 2),
+                "remaining_qty": 0,
+                "is_fully_stock_in": True,
+                "status": row.status,
+                "schedule_bucket": None,
+                "assembly_price": 0,
+                "packaging_price": 0,
+                "assembly_upph": 0,
+                "packaging_upph": 0,
+                "assembly_hours": 0,
+                "packaging_hours": 0,
+                "total_hours": 0,
+                "has_schedule": has_schedule,
             })
             continue
         if not bom_code:
@@ -227,6 +257,10 @@ async def _compute_monthly_capacity_plan(
             "bom_no": bom_code,
             "shipping_plan": row.shipping_plan.isoformat() if row.shipping_plan else None,
             "quantity": round(qty, 2),
+            "order_qty": round(order_qty, 2),
+            "warehouse_in_qty": round(warehouse_in_qty, 2),
+            "remaining_qty": round(remaining_qty, 2),
+            "is_fully_stock_in": False,
             "status": row.status,
             "schedule_bucket": rules.get("schedule_bucket"),
             "assembly_price": round(assembly_price, 4),
@@ -750,7 +784,9 @@ async def generate_monthly_schedule_plans(
             "plan_date": allocation["date"],
             "quantity": quantity,
             "upph": upph,
-            "source_qty": _to_float(order.get("quantity")),
+            "source_qty": _to_float(
+                order.get("order_qty") if order.get("order_qty") is not None else order.get("quantity")
+            ),
             "order": order,
         })
 

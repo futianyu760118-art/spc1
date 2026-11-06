@@ -145,6 +145,8 @@ _SHARE_PATH_TO_RESOURCE: dict[str, str] = {
     "/assembly": "production.assembly",
     "/packaging": "production.packaging",
     "/process-exceptions": "production.exceptions",
+    "/weekly-capacity": "production.weekly_capacity",
+    "/weekly-share.html": "production.weekly_capacity",
     "/import": "basicdata.import",
     "/risk-rules": "rules.risk_rules",
     "/node-standards": "rules.node_standards",
@@ -406,7 +408,10 @@ class PermissionChecker:
             share_permissions = payload.get("share_permissions", ["read"])
             # 优先从数据库动态获取映射，fallback 到硬编码
             try:
-                path_to_resource = await _get_share_path_to_resource(db)
+                path_to_resource = {
+                    **_SHARE_PATH_TO_RESOURCE,
+                    **await _get_share_path_to_resource(db),
+                }
             except Exception:
                 path_to_resource = _SHARE_PATH_TO_RESOURCE
             allowed_resource = path_to_resource.get(share_target_path)

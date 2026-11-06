@@ -298,7 +298,11 @@ export default function ScheduleDateAdjust() {
         page: 1,
         page_size: 50,
       })
-      setOrderOptions(res.data?.items || [])
+      setOrderOptions((res.data?.items || []).filter((order: any) => {
+        const orderQty = Number(order.order_qty ?? 0)
+        const warehouseInQty = Number(order.warehouse_in_qty ?? 0)
+        return !(orderQty > 0 && warehouseInQty >= orderQty)
+      }))
     } catch {
       // 错误已由全局拦截器提示
       setOrderOptions([])
@@ -399,7 +403,7 @@ export default function ScheduleDateAdjust() {
       line_no: order.line_no,
       product_code: order.product_code,
       model_code: order.product_model,
-      quantity: order.order_qty,
+      quantity: order.remaining_qty ?? order.order_qty,
       upph: order.upph,
       schedule_bucket: bucket,
       allow_duplicate: !!order.has_schedule,
@@ -1066,7 +1070,7 @@ export default function ScheduleDateAdjust() {
                       value: `${order.order_no}::${order.line_no}`,
                       label: `${order.order_no} / ${order.line_no} · ${order.product_code || '-'} · ${
                         order.schedule_bucket_label || '未分类'
-                      } · 数 ${order.order_qty ?? '-'}`,
+                      } · 待排 ${order.remaining_qty ?? order.order_qty ?? '-'}`,
                     }))}
                   />
                 </Form.Item>

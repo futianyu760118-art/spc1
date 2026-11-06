@@ -10,23 +10,25 @@ import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.models.basicdata.employee import Employee
+from app.models.basicdata.organization import Organization
+from app.models.basicdata.position import Position
 from app.models.basicdata.share_link import ShareLink
-from app.models.basicdata.user import SysUser
+from app.models.basicdata.user import SysRole, SysUser
 from app.models.production.monthly_schedule_plan import MonthlySchedulePlan
+from app.models.production.weekly_capacity import WeeklyPlanSnapshot, WeeklyPushRecipient
 from app.services.basicdata.wecom.client import get_wecom_client
 
 logger = logging.getLogger(__name__)
 
 STAGE_LABELS = {"assembly": "组装", "packaging": "包装"}
 WEEKDAY_LABELS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-# 测试阶段只推送陈巧霞；全量 13 人名单见 docs/下周排产计划推送-计划书.md
-TEST_RECIPIENT_USERNAMES = ("chenqiaoxia",)
 SHARE_EXPIRES_DAYS = 30
-WEEKLY_CAPACITY_PATH = "/weekly-capacity"
+WEEKLY_SHARE_PATH = "/weekly-share.html"
 
 
 def resolve_next_week_range(today: Optional[date] = None) -> tuple[date, date]:
@@ -192,23 +194,6 @@ async def build_weekly_capacity(
     }
 
 
-async def _resolve_recipients(
-    db: AsyncSession,
-    usernames: tuple[str, ...],
-) -> list[SysUser]:
-    if not usernames:
-        return []
-    result = await db.execute(
-        select(SysUser).where(
-            SysUser.username.in_(usernames),
-            SysUser.is_active == True,  # noqa: E712
-            SysUser.wecom_user_id.isnot(None),
-            SysUser.wecom_user_id != "",
-        )
-    )
-    return list(result.scalars().all())
-
-
 def _frontend_base() -> str:
     settings = get_settings()
     base = settings.frontend_base_url or "http://localhost:3000"
@@ -217,26 +202,291 @@ def _frontend_base() -> str:
     return base.rstrip("/")
 
 
-async def push_weekly_capacity(
+def _serialize_snapshot(snapshot: WeeklyPlanSnapshot) -> dict[str, Any]:
+    data = dict(snapshot.detail_json or {})
+    data.update({
+        "snapshot_id": snapshot.id,
+        "snapshot_no": snapshot.snapshot_no,
+        "snapshot_status": snapshot.status,
+        "published_at": snapshot.published_at.isoformat() if snapshot.published_at else None,
+    })
+    return data
+
+
+async def list_weekly_recipients(db: AsyncSession) -> list[dict[str, Any]]:
+    rows = (
+        await db.execute(
+            select(WeeklyPushRecipient, SysUser)
+            .join(SysUser, WeeklyPushRecipient.user_id == SysUser.id)
+            .order_by(WeeklyPushRecipient.category.asc(), WeeklyPushRecipient.id.asc())
+        )
+    ).all()
+    return [
+        {
+            "id": recipient.id,
+            "user_id": user.id,
+            "username": user.username,
+            "display_name": user.display_name or user.username,
+            "category": recipient.category,
+            "enabled": bool(recipient.enabled),
+            "wecom_user_id": user.wecom_user_id,
+            "remark": recipient.remark,
+        }
+        for recipient, user in rows
+    ]
+
+
+async def list_weekly_recipient_options(db: AsyncSession) -> dict[str, Any]:
+    orgs = (
+        await db.execute(
+            select(Organization.id, Organization.org_name, Organization.parent_id)
+            .where(Organization.status == 1)
+            .order_by(Organization.parent_id.asc().nullsfirst(), Organization.id.asc())
+        )
+    ).all()
+    roles = (
+        await db.execute(
+            select(SysRole.role_code, SysRole.role_name)
+            .where(SysRole.role_code != "supplier")
+            .order_by(SysRole.role_name.asc())
+        )
+    ).all()
+    return {
+        "orgs": [
+            {"id": int(org_id), "name": org_name, "parent_id": int(parent_id) if parent_id else None}
+            for org_id, org_name, parent_id in orgs
+        ],
+        "roles": [
+            {"value": role_code, "label": role_name}
+            for role_code, role_name in roles
+        ],
+    }
+
+
+async def list_weekly_recipient_candidates(
     db: AsyncSession,
     *,
-    operator_id: int,
+    keyword: Optional[str] = None,
+    org_id: Optional[int] = None,
+    role_code: Optional[str] = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    query = (
+        select(SysUser, SysRole, Employee, Position, Organization)
+        .join(SysRole, SysUser.role_id == SysRole.id)
+        .outerjoin(Employee, SysUser.scm_employee_id == Employee.id)
+        .outerjoin(Position, Employee.position_id == Position.id)
+        .outerjoin(Organization, cast(Employee.org_id, String) == Organization.oa_org_id)
+        .where(
+            SysUser.is_active == True,  # noqa: E712
+            SysRole.role_code != "supplier",
+        )
+    )
+    if keyword:
+        like = f"%{keyword.strip()}%"
+        query = query.where(
+            or_(
+                SysUser.username.ilike(like),
+                SysUser.display_name.ilike(like),
+                Employee.emp_name.ilike(like),
+            )
+        )
+    if org_id is not None:
+        query = query.where(Organization.id == org_id)
+    if role_code:
+        query = query.where(SysRole.role_code == role_code)
+
+    rows = (
+        await db.execute(
+            query.order_by(
+                Organization.org_name.asc().nulls_last(),
+                SysUser.display_name.asc().nulls_last(),
+                SysUser.id.asc(),
+            ).limit(limit)
+        )
+    ).all()
+    recipient_rows = (await db.execute(select(WeeklyPushRecipient))).scalars().all()
+    recipient_map = {row.user_id: row for row in recipient_rows}
+    return [
+        {
+            "user_id": user.id,
+            "username": user.username,
+            "display_name": user.display_name or (employee.emp_name if employee else None) or user.username,
+            "role_code": role.role_code,
+            "role_name": role.role_name,
+            "org_id": int(org.id) if org else None,
+            "org_name": org.org_name if org else None,
+            "position_name": position.position_name if position else None,
+            "wecom_user_id": user.wecom_user_id,
+            "is_recipient": user.id in recipient_map,
+            "enabled": bool(recipient_map[user.id].enabled) if user.id in recipient_map else False,
+        }
+        for user, role, employee, position, org in rows
+    ]
+
+
+async def update_weekly_recipients(
+    db: AsyncSession,
+    *,
+    items: list[dict[str, Any]],
+    operator: str | None = None,
+) -> list[dict[str, Any]]:
+    for item in items:
+        recipient = None
+        if item.get("id"):
+            recipient = await db.get(WeeklyPushRecipient, int(item["id"]))
+        if recipient is None and item.get("user_id"):
+            recipient = (
+                await db.execute(
+                    select(WeeklyPushRecipient).where(
+                        WeeklyPushRecipient.user_id == int(item["user_id"])
+                    )
+                )
+            ).scalar_one_or_none()
+        if recipient is None and item.get("user_id"):
+            user = await db.get(SysUser, int(item["user_id"]))
+            if user and user.is_active:
+                recipient = WeeklyPushRecipient(
+                    user_id=user.id,
+                    category=str(item.get("category") or "").strip() or None,
+                    enabled=bool(item.get("enabled", True)),
+                    created_by=operator,
+                )
+                db.add(recipient)
+        if recipient is None:
+            continue
+        if "enabled" in item:
+            recipient.enabled = bool(item["enabled"])
+        if item.get("category"):
+            recipient.category = str(item["category"]).strip() or None
+        if item.get("remark") is not None:
+            recipient.remark = str(item["remark"]).strip() or None
+        if operator:
+            recipient.created_by = recipient.created_by or operator
+        db.add(recipient)
+    await db.flush()
+    return await list_weekly_recipients(db)
+
+
+async def generate_weekly_snapshot(
+    db: AsyncSession,
+    *,
+    week_start: Optional[date] = None,
+    operator: str | None = None,
 ) -> dict[str, Any]:
-    data = await build_weekly_capacity(db)
+    data = await build_weekly_capacity(db, week_start=week_start)
     if not data["has_plan"]:
         raise ValueError("下周暂无排产计划，请先生成并激活下周计划")
 
-    recipients = await _resolve_recipients(db, TEST_RECIPIENT_USERNAMES)
+    start = date.fromisoformat(data["week_start"])
+    count = (
+        await db.execute(
+            select(func.count()).select_from(WeeklyPlanSnapshot).where(
+                WeeklyPlanSnapshot.week_start == start
+            )
+        )
+    ).scalar() or 0
+    snapshot_no = f"WP{datetime.now():%Y%m%d}-{count + 1:03d}"
+    snapshot = WeeklyPlanSnapshot(
+        snapshot_no=snapshot_no,
+        week_start=start,
+        week_end=date.fromisoformat(data["week_end"]),
+        schedule_month=start.strftime("%Y-%m"),
+        summary_json=data["summary"],
+        detail_json=data,
+        status="draft",
+        generated_by=operator,
+    )
+    db.add(snapshot)
+    await db.flush()
+    logger.info("[下周排产] 生成快照 %s %s~%s", snapshot_no, data["week_start"], data["week_end"])
+    return _serialize_snapshot(snapshot)
+
+
+async def list_weekly_snapshots(
+    db: AsyncSession,
+    *,
+    week_start: Optional[date] = None,
+) -> list[dict[str, Any]]:
+    query = select(WeeklyPlanSnapshot).order_by(
+        WeeklyPlanSnapshot.generated_at.desc(),
+        WeeklyPlanSnapshot.id.desc(),
+    )
+    if week_start:
+        query = query.where(WeeklyPlanSnapshot.week_start == week_start)
+    rows = (await db.execute(query.limit(100))).scalars().all()
+    return [
+        {
+            "id": row.id,
+            "snapshot_no": row.snapshot_no,
+            "week_start": row.week_start.isoformat(),
+            "week_end": row.week_end.isoformat(),
+            "status": row.status,
+            "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+            "published_at": row.published_at.isoformat() if row.published_at else None,
+        }
+        for row in rows
+    ]
+
+
+async def get_weekly_snapshot(db: AsyncSession, snapshot_id: int) -> dict[str, Any]:
+    snapshot = await db.get(WeeklyPlanSnapshot, snapshot_id)
+    if not snapshot:
+        raise ValueError("周计划快照不存在")
+    return _serialize_snapshot(snapshot)
+
+
+async def get_latest_published_snapshot(db: AsyncSession) -> dict[str, Any] | None:
+    snapshot = (
+        await db.execute(
+            select(WeeklyPlanSnapshot)
+            .where(WeeklyPlanSnapshot.status == "published")
+            .order_by(WeeklyPlanSnapshot.week_start.desc(), WeeklyPlanSnapshot.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return _serialize_snapshot(snapshot) if snapshot else None
+
+
+async def _resolve_recipients(db: AsyncSession) -> list[SysUser]:
+    result = await db.execute(
+        select(SysUser)
+        .join(WeeklyPushRecipient, WeeklyPushRecipient.user_id == SysUser.id)
+        .where(
+            WeeklyPushRecipient.enabled == True,  # noqa: E712
+            SysUser.is_active == True,  # noqa: E712
+            SysUser.wecom_user_id.isnot(None),
+            SysUser.wecom_user_id != "",
+        )
+        .order_by(WeeklyPushRecipient.id.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def publish_weekly_snapshot(
+    db: AsyncSession,
+    *,
+    snapshot_id: int,
+    operator_id: int,
+) -> dict[str, Any]:
+    snapshot = await db.get(WeeklyPlanSnapshot, snapshot_id)
+    if not snapshot:
+        raise ValueError("周计划快照不存在")
+    data = dict(snapshot.detail_json or {})
+    if not data.get("has_plan"):
+        raise ValueError("该快照没有排产计划，不能推送")
+
+    recipients = await _resolve_recipients(db)
     if not recipients:
-        raise ValueError("未找到已绑定企业微信的测试收件人（陈巧霞）")
+        raise ValueError("没有启用的企业微信收件人，请先配置推送名单")
 
     token = secrets.token_urlsafe(24)
     share = ShareLink(
         token=token,
-        target_path=WEEKLY_CAPACITY_PATH,
-        target_params={"week_start": data["week_start"]},
+        target_path=WEEKLY_SHARE_PATH,
+        target_params={"token": token, "snapshot_id": snapshot.id},
         permissions=["read"],
-        reason="下周产能计划推送",
+        reason="下周排产计划推送",
         created_by=operator_id,
         expires_at=datetime.now(timezone.utc) + timedelta(days=SHARE_EXPIRES_DAYS),
     )
@@ -244,14 +494,14 @@ async def push_weekly_capacity(
     await db.flush()
 
     share_url = f"{_frontend_base()}/share/{token}"
-    summary = data["summary"]
-    stage_hours = summary["stage_hours"]
-    title = f"下周产能计划 {data['week_start'][5:]} ~ {data['week_end'][5:]}"
+    summary = data.get("summary") or {}
+    stage_hours = summary.get("stage_hours") or {}
+    title = f"下周排产计划 {data.get('week_start', '')[5:]} ~ {data.get('week_end', '')[5:]}"
     description = (
-        f"订单 {summary['order_count']} 个 / 明细 {summary['line_count']} 行 / "
-        f"数量 {summary['total_qty']} 件\n"
-        f"组装 {stage_hours.get('assembly', 0):.1f} 人时 / "
-        f"包装 {stage_hours.get('packaging', 0):.1f} 人时"
+        f"订单 {summary.get('order_count', 0)} 个 / 明细 {summary.get('line_count', 0)} 行 / "
+        f"数量 {summary.get('total_qty', 0)} 件\n"
+        f"组装 {float(stage_hours.get('assembly', 0)):.1f} 人时 / "
+        f"包装 {float(stage_hours.get('packaging', 0)):.1f} 人时"
     )
     textcard = {
         "title": title,
@@ -269,28 +519,70 @@ async def push_weekly_capacity(
         "textcard": textcard,
     }
     result = {
-        "week_start": data["week_start"],
-        "week_end": data["week_end"],
+        "snapshot_id": snapshot.id,
+        "snapshot_no": snapshot.snapshot_no,
+        "week_start": data.get("week_start"),
+        "week_end": data.get("week_end"),
         "share_url": share_url,
         "recipients": [user.display_name or user.username for user in recipients],
         "summary": summary,
+        "success": False,
+        "failed": [],
     }
     try:
         resp = await client.send_app_message(payload)
-    except Exception as exc:  # 企微未配置/接口异常不应吞掉已生成的分享链接
-        logger.exception("[下周产能] 企业微信推送异常: %s", exc)
-        return {**result, "success": False, "error": f"企业微信推送失败: {exc}"}
+        errcode = resp.get("errcode", 0)
+        if errcode != 0:
+            error_msg = f"errcode={errcode} {resp.get('errmsg', '')}"
+            logger.error("[下周排产] 企业微信推送失败: %s", error_msg)
+            result["failed"] = [
+                {"recipient_id": user.wecom_user_id, "name": user.display_name or user.username, "error_msg": error_msg}
+                for user in recipients
+            ]
+            result["error"] = error_msg
+            return result
+    except Exception as exc:
+        logger.exception("[下周排产] 企业微信推送异常: %s", exc)
+        result["failed"] = [
+            {"recipient_id": user.wecom_user_id, "name": user.display_name or user.username, "error_msg": str(exc)}
+            for user in recipients
+        ]
+        result["error"] = f"企业微信推送失败: {exc}"
+        return result
 
-    errcode = resp.get("errcode", 0)
-    if errcode != 0:
-        error_msg = f"errcode={errcode} {resp.get('errmsg', '')}"
-        logger.error("[下周产能] 企业微信推送失败: %s", error_msg)
-        return {**result, "success": False, "error": f"企业微信推送失败: {error_msg}"}
-
-    logger.info(
-        "[下周产能] 推送成功 -> %s %s~%s",
-        [user.username for user in recipients],
-        data["week_start"],
-        data["week_end"],
+    await db.execute(
+        update(WeeklyPlanSnapshot)
+        .where(
+            WeeklyPlanSnapshot.week_start == snapshot.week_start,
+            WeeklyPlanSnapshot.id != snapshot.id,
+            WeeklyPlanSnapshot.status == "published",
+        )
+        .values(status="superseded")
     )
-    return {**result, "success": True}
+    snapshot.status = "published"
+    snapshot.published_at = datetime.now()
+    snapshot.share_link_id = share.id
+    await db.flush()
+    result["success"] = True
+    result["published_at"] = snapshot.published_at.isoformat()
+    logger.info(
+        "[下周排产] 推送成功 -> %s %s~%s",
+        [user.username for user in recipients],
+        data.get("week_start"),
+        data.get("week_end"),
+    )
+    return result
+
+
+async def push_weekly_capacity(
+    db: AsyncSession,
+    *,
+    operator_id: int,
+) -> dict[str, Any]:
+    """兼容旧入口：生成快照后立即推送。"""
+    snapshot = await generate_weekly_snapshot(db, operator=str(operator_id))
+    return await publish_weekly_snapshot(
+        db,
+        snapshot_id=int(snapshot["snapshot_id"]),
+        operator_id=operator_id,
+    )

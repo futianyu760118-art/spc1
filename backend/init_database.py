@@ -39,6 +39,7 @@ from app.models.production.production_daily_report import ProductionDailyReport 
 from app.models.production.labor_price import LaborPriceMain, LaborPriceDetail  # noqa: F401
 from app.models.production.monthly_schedule_plan import MonthlySchedulePlan  # noqa: F401
 from app.models.production.monthly_capacity_scenario import MonthlyCapacityScenario  # noqa: F401
+from app.models.production.weekly_capacity import WeeklyPlanSnapshot, WeeklyPushRecipient  # noqa: F401
 from app.models.production.production_report import ProductionReport  # noqa: F401
 from app.models.production.workshop_daily_report import (  # noqa: F401
     WorkshopDailyReport,
@@ -195,6 +196,7 @@ class DatabaseInitializer:
                 "product_code": "VARCHAR(64)",
                 "product_name": "VARCHAR(256)",
                 "order_qty": "NUMERIC(15,2)",
+                "warehouse_in_qty": "NUMERIC(15,2)",
                 "order_amount": "NUMERIC(15,2)",
                 "promised_date": "DATE",
                 "shipping_plan": "DATE",
@@ -336,6 +338,7 @@ class DatabaseInitializer:
                 "shortage_material_count": "INTEGER",
                 "latest_material_eta": "DATE",
                 "kit_snapshot_at": "TIMESTAMP",
+                "warehouse_in_qty": "NUMERIC(15,2)",
             },
             "production_schedule_operation_log": {
                 "is_frozen_break": "BOOLEAN NOT NULL DEFAULT FALSE",
@@ -2839,6 +2842,57 @@ ORDER BY [{safe_order_alias}]
                 print(f"Error seeding writeback SQL config: {e}")
                 raise
 
+    async def seed_weekly_push_recipients(self):
+        """Seed default weekly-plan WeCom recipients (idempotent)."""
+        print("Seeding weekly push recipients...")
+        defaults = [
+            ("黎成友", "车间组长"),
+            ("吴建英", "车间组长"),
+            ("陈建婷", "车间组长"),
+            ("金辉", "车间主管"),
+            ("田鹏", "车间主管"),
+            ("赵申", "仓管员"),
+            ("江蜜", "仓管员"),
+            ("宋海跃", "仓管员"),
+            ("沈建凯", "品质主管"),
+            ("丁亚君", "采购员"),
+            ("朱燕迪", "采购员"),
+            ("方燕红", "采购员"),
+            ("廖新平", "采购经理"),
+        ]
+        async with AsyncSessionLocal() as session:
+            try:
+                for username, category in defaults:
+                    user = (
+                        await session.execute(
+                            select(SysUser).where(SysUser.username == username)
+                        )
+                    ).scalar_one_or_none()
+                    if not user:
+                        continue
+                    existing = (
+                        await session.execute(
+                            select(WeeklyPushRecipient).where(
+                                WeeklyPushRecipient.user_id == user.id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if existing:
+                        continue
+                    session.add(
+                        WeeklyPushRecipient(
+                            user_id=user.id,
+                            category=category,
+                            enabled=True,
+                            created_by="system",
+                        )
+                    )
+                await session.commit()
+                print("Weekly push recipients seeded.")
+            except Exception as exc:
+                await session.rollback()
+                print(f"Error seeding weekly push recipients: {exc}")
+
     async def seed_base_conditions(self):
         """Seed 车间排产基础条件默认值 (人数/工时/周日排产, 按排产阶段分桶).
 
@@ -2940,6 +2994,7 @@ ORDER BY [{safe_order_alias}]
             await self.seed_risk_rules()
             await self.seed_normal_order_standards()
             await self.seed_base_conditions()
+            await self.seed_weekly_push_recipients()
             await self.seed_sync_sql_config()
             await self.migrate_orders_sync_warehouse_dates()
             await self.seed_default_writeback_configs()

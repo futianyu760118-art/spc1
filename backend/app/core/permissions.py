@@ -144,6 +144,24 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
+# 下周排产计划：与月度产能规划使用同一批排产/车间角色
+for _weekly_capacity_role in (
+    "admin",
+    "planner",
+    "manager",
+    "org27_pos76",
+    "production_supervisor",
+    "org34_pos91",
+    "org40_pos91",
+    "org46_pos91",
+    "org44_pos97",
+    "org46_pos97",
+    "org59_pos97",
+):
+    ROLE_PERMISSION_ADDITIONS.setdefault(_weekly_capacity_role, {}).setdefault(
+        "production.weekly_capacity", ["read"]
+    )
+
 
 def merge_role_permission_additions(role_code: str, permissions: Dict[str, List[str]] | None) -> Dict[str, List[str]]:
     merged = deepcopy(permissions or {})

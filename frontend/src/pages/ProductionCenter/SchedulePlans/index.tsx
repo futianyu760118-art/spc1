@@ -838,6 +838,12 @@ export default function SchedulePlans() {
   }
 
   const openSchedule = (row: any) => {
+    const orderQty = Number(row.order_qty ?? row.quantity ?? 0)
+    const warehouseInQty = Number(row.warehouse_in_qty ?? 0)
+    if (orderQty > 0 && warehouseInQty >= orderQty) {
+      message.warning('该订单已全部入库，不能排产')
+      return
+    }
     setSelectedOrder(row)
     scheduleForm.resetFields()
     scheduleForm.setFieldsValue({
@@ -845,7 +851,7 @@ export default function SchedulePlans() {
       line_no: row.line_no,
       product_code: row.product_code,
       model_code: row.product_model,
-      quantity: row.order_qty,
+      quantity: row.remaining_qty ?? Math.max(orderQty - warehouseInQty, 0),
       promised_date: row.promised_date ? dayjs(row.promised_date) : null,
       department: '生产',
       plan_date: null,
@@ -1531,6 +1537,19 @@ export default function SchedulePlans() {
     ]
   }, [alertCounts.capacity_impact, alertCounts.reschedule_needed, planData, planScope, planTotal])
 
+  const renderStockInCell = (_: any, row: any) => {
+    const inQty = Number(row.warehouse_in_qty ?? 0)
+    const orderQty = Number(row.order_qty ?? row.quantity ?? 0)
+    if (!inQty) return <span style={{ color: '#8c8c8c' }}>未入库</span>
+    const full = orderQty > 0 && inQty >= orderQty
+    return (
+      <Space direction="vertical" size={0}>
+        <span>{`已入 ${inQty} / ${orderQty || '-'}`}</span>
+        <Tag color={full ? 'green' : 'orange'}>{full ? '已全部入库' : '部分入库'}</Tag>
+      </Space>
+    )
+  }
+
   const orderColumns = [
     {
       title: '订单号',
@@ -1547,6 +1566,7 @@ export default function SchedulePlans() {
     { title: 'BOM编码', dataIndex: 'bom_no', width: 160, ellipsis: true, render: (v: string) => renderCopyableText(v, 'BOM编码') },
     { title: '产品编码', dataIndex: 'product_code', width: 220, render: (v: string) => renderCopyableText(v, '产品编码') },
     { title: '数量', dataIndex: 'order_qty', width: 90, render: (v: number) => v ?? '-' },
+    { title: '入库情况', width: 150, render: renderStockInCell },
     { title: '出货计划', dataIndex: 'promised_date', width: 110, render: (v: string) => formatDate(v) },
     {
       title: '排产段',
@@ -1619,6 +1639,7 @@ export default function SchedulePlans() {
     { title: '产品编码', dataIndex: 'product_code', width: 220, render: (v: string) => renderCopyableText(v, '产品编码') },
     { title: 'BOM编码', dataIndex: 'bom_no', width: 160, ellipsis: true, render: (v: string) => renderCopyableText(v, 'BOM编码') },
     { title: '数量', width: 90, render: (_: any, row: any) => row.order_qty ?? row.quantity ?? '-' },
+    { title: '入库情况', width: 150, render: renderStockInCell },
     { title: '出货计划', width: 110, render: (_: any, row: any) => formatDate(row.promised_date || row.source_promised_date) },
     {
       title: '排产段',
@@ -1629,6 +1650,9 @@ export default function SchedulePlans() {
       title: '状态',
       width: 100,
       render: (_: any, row: any) => {
+        if (row.scheduling_reason_code === 'fully_stock_in') {
+          return <Tag color="green">已全部入库</Tag>
+        }
         const statusMeta = TODO_STATUS_META[row.todo_kind] || TODO_STATUS_META.pending
         return <Tag color={statusMeta.color}>{row.todo_status_label || statusMeta.label}</Tag>
       },
@@ -1659,6 +1683,15 @@ export default function SchedulePlans() {
       fixed: 'right' as const,
       render: (_: any, row: any) => {
         if (row.todo_kind === 'ready') {
+          const orderQty = Number(row.order_qty ?? row.quantity ?? 0)
+          const warehouseInQty = Number(row.warehouse_in_qty ?? 0)
+          if (orderQty > 0 && warehouseInQty >= orderQty) {
+            return (
+              <Button size="small" onClick={() => openOrderDetail(row, 'order_pool')}>
+                查看
+              </Button>
+            )
+          }
           return (
             <Button type="primary" size="small" icon={<ThunderboltOutlined />} onClick={() => openSchedule(row)}>
               {row.schedule_bucket === 'mixed' ? '生成两段' : '排产'}

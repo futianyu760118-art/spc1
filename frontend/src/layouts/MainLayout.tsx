@@ -270,6 +270,7 @@ const allMenuItems: PermissionAwareItem[] = [
       { key: '/engineering/labor-prices', icon: <ProfileOutlined />, label: '工价管理', permission: 'production.labor_price_audit' },
       { key: '/production/monthly-capacity-plan', icon: <ProjectOutlined />, label: '月度产能规划', permission: 'production.monthly_capacity_plan' },
       { key: '/engineering/new-schedule/plans', icon: <ScheduleOutlined />, label: '新排产方案', permission: 'production.monthly_capacity_plan' },
+      { key: '/weekly-capacity', icon: <ScheduleOutlined />, label: '下周排产计划', permission: 'production.weekly_capacity' },
     ],
   },
   {
@@ -502,6 +503,7 @@ const pathToGroupKey: Record<string, string> = {
   '/engineering/labor-prices/new': 'engineering-center',
   '/engineering/labor-price-changes': 'engineering-center',
   '/engineering/new-schedule/plans': 'engineering-center',
+  '/weekly-capacity': 'engineering-center',
   '/issues': 'exception-center',
   '/quality-issues': 'exception-center',
   '/product-samples': 'exception-center',
@@ -587,6 +589,7 @@ const pathToPermission: Record<string, string> = {
   '/engineering/labor-prices/new': 'production.labor_price_audit',
   '/engineering/labor-price-changes': 'production.labor_price_audit',
   '/engineering/new-schedule/plans': 'production.monthly_capacity_plan',
+  '/weekly-capacity': 'production.weekly_capacity',
   '/import': 'basicdata.import',
   '/risk-rules': 'rules.risk_rules',
   '/node-standards': 'rules.node_standards',
@@ -708,7 +711,12 @@ export default function MainLayout() {
       ]
       const merged = items.map(item =>
         item.permission === 'production'
-          ? { ...item, children: [...v2ExtraItems, ...(item.children || [])] }
+          ? {
+              ...item,
+              children: [...v2ExtraItems, ...(item.children || [])].filter(
+                (child) => child.key !== '/weekly-capacity',
+              ),
+            }
           : item
       )
       // 采购中心：若权限树已有则注入子菜单，否则新增整个模块
@@ -757,6 +765,12 @@ export default function MainLayout() {
               icon: <ScheduleOutlined />,
               label: '新排产方案',
               permission: 'production.monthly_capacity_plan',
+            },
+            {
+              key: '/weekly-capacity',
+              icon: <ScheduleOutlined />,
+              label: '下周排产计划',
+              permission: 'production.weekly_capacity',
             },
           ],
         })
@@ -955,6 +969,7 @@ export default function MainLayout() {
     if (
       location.pathname.startsWith('/engineering')
       || location.pathname === '/production/monthly-capacity-plan'
+      || location.pathname === '/weekly-capacity'
     ) {
       const engineeringParent = dynamicMenuItems.find((item) => item.key === 'engineering-center')
       const children = (engineeringParent?.children || []).filter(
