@@ -208,8 +208,9 @@ class UpphCalculationService:
     ) -> dict[str, Any]:
         """用本地已同步的 OA 产能构建装配拆分规则，排产时不再实时查 OA。
 
+        所有 BOM 的产能记录统一视为装配车间产能，不再校验来源车间；
         同一 BOM + 子工序可能有多个有效工价明细，按有效明细汇总；
-        完全相同的工序明细去重，最后按组装段/包装段计算 UPPH。
+        完全相同的工序明细去重，最后按工序类型归入组装段/包装段计算 UPPH。
         """
         if capacities is None:
             capacities = await self.get_matched_capacities(bom_code=bom_code)
@@ -230,10 +231,6 @@ class UpphCalculationService:
             seen_details: set[tuple] = set()
             for capacity in capacities:
                 metadata = parse_capacity_metadata(capacity.remark)
-                if metadata.get("oa_workshop_name") != ASSEMBLY_WORKSHOP_NAME:
-                    continue
-                if not metadata.get("is_schedulable", True):
-                    continue
                 if capacity.process_type not in process_types:
                     continue
                 # 相同工序、备注、单价、PPH 视为同一条工序明细，避免旧版本重复相加
@@ -287,7 +284,27 @@ class UpphCalculationService:
         elif matched_buckets == ["packaging"]:
             schedule_bucket = "packaging"
 
+        total_upph = round(
+            sum(float(stage_rules[bucket]["upph"] or 0) for bucket in ("assembly", "packaging")),
+            2,
+        )
         selected_main_id = str(max(selected_main_ids)) if selected_main_ids else None
+
+        # 纯精益车间 BOM 没有组装/包装拆分，复用统一口径补精益 UPPH，
+        # 否则调用方（如月度产能规划）会误判为「缺少有效工价/产能」。
+        if not matched_buckets:
+            lean_summary = self.summarize_schedule_context_from_capacities(capacities)
+            if lean_summary.get("schedule_bucket") == "lean":
+                schedule_bucket = "lean"
+                total_upph = round(float(lean_summary.get("total_upph") or 0), 2)
+                lean_main_ids = [
+                    self._resolve_oa_main_id({"oa_main_id": main_id})
+                    for main_id in lean_summary.get("lean_main_ids") or []
+                ]
+                lean_main_ids = [main_id for main_id in lean_main_ids if main_id]
+                if lean_main_ids:
+                    selected_main_id = str(max(lean_main_ids))
+
         return {
             "bom_code": bom_code,
             "resolved": bool(selected_main_id),
@@ -295,10 +312,7 @@ class UpphCalculationService:
             "selected_main_id": selected_main_id,
             "matched_buckets": matched_buckets,
             "schedule_bucket": schedule_bucket,
-            "total_upph": round(
-                sum(float(stage_rules[bucket]["upph"] or 0) for bucket in ("assembly", "packaging")),
-                2,
-            ),
+            "total_upph": total_upph,
             "split_rule_ready": schedule_bucket in {"assembly", "packaging", "mixed"},
             "stage_rules": stage_rules,
         }

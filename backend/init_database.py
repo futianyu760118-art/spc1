@@ -456,6 +456,12 @@ class DatabaseInitializer:
             "labor_price_main": {
                 "remark": "TEXT",
             },
+            "labor_price_detail": {
+                "original_price": "NUMERIC(15, 4)",
+                "bottleneck_hours": "NUMERIC(15, 2)",
+                "standard_capacity": "NUMERIC(15, 2)",
+                "manpower": "INTEGER",
+            },
             "notification": {
                 "sender_id": "INTEGER",
                 "sender_name": "VARCHAR(64)",
