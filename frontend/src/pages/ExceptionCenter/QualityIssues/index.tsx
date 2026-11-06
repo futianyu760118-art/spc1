@@ -1,4 +1,5 @@
 ﻿import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Table, Tag, Input, Select, Button, Space, message, Modal, Form,
   DatePicker, InputNumber, Row, Col, Popconfirm, Dropdown, Popover, Checkbox,
@@ -142,6 +143,7 @@ const ColumnSettingsPanel: React.FC<{
 }
 
 export default function QualityIssues() {
+  const [searchParams] = useSearchParams()
   const [data, setData] = useState<any[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -149,7 +151,7 @@ export default function QualityIssues() {
   const [pageSize, setPageSize] = useState(20)
   const [modalOpen, setModalOpen] = useState(false)
   const [editRecord, setEditRecord] = useState<any>(null)
-  const [keyword, setKeyword] = useState('')
+  const [keyword, setKeyword] = useState(searchParams.get('keyword') || '')
   const [tableFilters, setTableFilters] = useState<Record<string, any[] | null>>({})
   const [sorterState, setSorterState] = useState<{ field?: string; order?: string }>({})
   const [form] = Form.useForm()

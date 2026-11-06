@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Table, Tag, Input, InputNumber, Select, Button, Space, message, Modal, Form,
   DatePicker, Upload, Tooltip, Row, Col, Card, Dropdown, Switch,
@@ -67,6 +68,7 @@ const MATERIAL_PROPERTY_OPTIONS = [
 const MATERIAL_PROPERTY_MAP = Object.fromEntries(MATERIAL_PROPERTY_OPTIONS.map(item => [item.value, item.label]))
 
 export default function PurchasePlan() {
+  const [searchParams] = useSearchParams()
   const hasPermission = useAuthStore((s) => s.hasPermission)
   const canCreate = hasPermission('materials.purchase_plan', 'create')
   const canUpdate = hasPermission('materials.purchase_plan', 'update')
@@ -89,7 +91,7 @@ export default function PurchasePlan() {
     owner: '',
     order_no: '',
     arrival_hour_note: '',
-    po_no: '',
+    po_no: searchParams.get('po_no') || '',
     po_date: null as [string, string] | null,
     eta: null as [string, string] | null,
     actual_arrival_date: null as [string, string] | null,

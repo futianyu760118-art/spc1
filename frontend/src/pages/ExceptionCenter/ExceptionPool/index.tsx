@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Table, Tag, Input, Select, Button, Space, message, Row, Col,
 } from 'antd'
@@ -29,12 +30,13 @@ const SEVERITY_MAP: Record<string, { label: string; color: string }> = {
 }
 
 export default function ExceptionPool() {
+  const [searchParams] = useSearchParams()
   const [data, setData] = useState<any[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [filters, setFilters] = useState({ source_type: '', status: '', owner: '', keyword: '' })
+  const [filters, setFilters] = useState({ source_type: searchParams.get('source_type') || '', status: searchParams.get('status') || '', owner: searchParams.get('owner') || '', keyword: searchParams.get('keyword') || '' })
   const [scanning, setScanning] = useState(false)
 
   const load = useCallback(async () => {
