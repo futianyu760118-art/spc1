@@ -52,7 +52,6 @@ interface OrderRow {
   packaging_price: number
   assembly_hours: number
   packaging_hours: number
-  lean_hours: number
   total_hours: number
   has_schedule: boolean
 }
@@ -65,7 +64,6 @@ interface OrderMasterRow {
   shipping_plan_end?: string
   assembly_hours: number
   packaging_hours: number
-  lean_hours: number
   total_hours: number
   scheduled_count: number
   lines: OrderRow[]
@@ -74,6 +72,7 @@ interface OrderMasterRow {
 interface MissingRow {
   order_no: string
   line_no: string
+  bom_no?: string
   reason: string
 }
 
@@ -87,7 +86,6 @@ interface PlanData {
     daily_hours?: number
     assembly_manpower?: number
     packaging_manpower?: number
-    lean_manpower?: number
     include_sunday?: boolean
     include_scheduled?: boolean
   }
@@ -111,7 +109,6 @@ const STAGE_OPTIONS = [
   { value: 'all', label: '全部阶段' },
   { value: 'assembly', label: '组装' },
   { value: 'packaging', label: '包装' },
-  { value: 'lean', label: '精益' },
 ]
 
 function num(value?: number | null, digits = 2) {
@@ -131,7 +128,6 @@ interface SavedScenarioSettings {
   dailyHours?: number
   assemblyManpower?: number
   packagingManpower?: number
-  leanManpower?: number
   includeSunday?: boolean
   includeScheduled?: boolean
 }
@@ -156,7 +152,6 @@ export default function MonthlyCapacityPlan() {
   const [dailyHours, setDailyHours] = useState(savedScenario.dailyHours ?? 12)
   const [assemblyManpower, setAssemblyManpower] = useState(savedScenario.assemblyManpower ?? 12)
   const [packagingManpower, setPackagingManpower] = useState(savedScenario.packagingManpower ?? 9)
-  const [leanManpower, setLeanManpower] = useState(savedScenario.leanManpower ?? 4)
   const [includeSunday, setIncludeSunday] = useState(savedScenario.includeSunday ?? false)
   const [includeScheduled, setIncludeScheduled] = useState(savedScenario.includeScheduled ?? true)
   const [scenarioReady, setScenarioReady] = useState(false)
@@ -165,6 +160,7 @@ export default function MonthlyCapacityPlan() {
   const [data, setData] = useState<PlanData | null>(null)
   const [preview, setPreview] = useState<any>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [aiLoading, setAiLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [orderDrawerOpen, setOrderDrawerOpen] = useState(false)
 
@@ -177,7 +173,6 @@ export default function MonthlyCapacityPlan() {
           dailyHours,
           assemblyManpower,
           packagingManpower,
-          leanManpower,
           includeSunday,
           includeScheduled,
         }),
@@ -190,7 +185,6 @@ export default function MonthlyCapacityPlan() {
     dailyHours,
     includeSunday,
     includeScheduled,
-    leanManpower,
     packagingManpower,
     workdays,
   ])
@@ -206,7 +200,6 @@ export default function MonthlyCapacityPlan() {
         if (typeof scenario.daily_hours === 'number') setDailyHours(scenario.daily_hours)
         if (typeof scenario.assembly_manpower === 'number') setAssemblyManpower(scenario.assembly_manpower)
         if (typeof scenario.packaging_manpower === 'number') setPackagingManpower(scenario.packaging_manpower)
-        if (typeof scenario.lean_manpower === 'number') setLeanManpower(scenario.lean_manpower)
         if (typeof scenario.include_sunday === 'boolean') setIncludeSunday(scenario.include_sunday)
         if (typeof scenario.include_scheduled === 'boolean') setIncludeScheduled(scenario.include_scheduled)
       })
@@ -230,7 +223,6 @@ export default function MonthlyCapacityPlan() {
           daily_hours: dailyHours,
           assembly_manpower: assemblyManpower,
           packaging_manpower: packagingManpower,
-          lean_manpower: leanManpower,
           include_sunday: includeSunday,
           include_scheduled: includeScheduled,
         })
@@ -244,7 +236,6 @@ export default function MonthlyCapacityPlan() {
     dailyHours,
     includeSunday,
     includeScheduled,
-    leanManpower,
     packagingManpower,
     scenarioReady,
     workdays,
@@ -262,7 +253,6 @@ export default function MonthlyCapacityPlan() {
         daily_hours: dailyHours,
         assembly_manpower: assemblyManpower,
         packaging_manpower: packagingManpower,
-        lean_manpower: leanManpower,
         include_sunday: includeSunday,
         include_scheduled: includeScheduled,
         keyword: keyword.trim() || undefined,
@@ -279,7 +269,6 @@ export default function MonthlyCapacityPlan() {
     includeSunday,
     includeScheduled,
     keyword,
-    leanManpower,
     month,
     packagingManpower,
     stage,
@@ -304,7 +293,6 @@ export default function MonthlyCapacityPlan() {
         daily_hours: dailyHours,
         assembly_manpower: assemblyManpower,
         packaging_manpower: packagingManpower,
-        lean_manpower: leanManpower,
         include_sunday: includeSunday,
         include_scheduled: includeScheduled,
         keyword: keyword.trim() || undefined,
@@ -317,6 +305,41 @@ export default function MonthlyCapacityPlan() {
     }
   }
 
+  const generateAiPreview = async () => {
+    setAiLoading(true)
+    try {
+      const res: any = await monthlyCapacityPlanApi.getAiAllocationPreview({
+        year,
+        month,
+        stage,
+        workdays,
+        daily_hours: dailyHours,
+        assembly_manpower: assemblyManpower,
+        packaging_manpower: packagingManpower,
+        include_sunday: includeSunday,
+        include_scheduled: includeScheduled,
+        keyword: keyword.trim() || undefined,
+      })
+      setPreview(res.data || null)
+    } catch {
+      setPreview(null)
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const showGenerateResult = (result: any, label: string) => {
+    if (result.unscheduled_count || result.late_count) {
+      message.warning(
+        `已生成 ${result.created_count ?? 0} 条；未排完 ${result.unscheduled_count ?? 0} 条，延期 ${result.late_count ?? 0} 条`,
+        8,
+      )
+    } else {
+      message.success(`已生成${label} ${result.created_count ?? 0} 条`)
+    }
+    navigate('/engineering/new-schedule/plans')
+  }
+
   const generateSchedule = async () => {
     setGenerating(true)
     try {
@@ -327,20 +350,39 @@ export default function MonthlyCapacityPlan() {
         daily_hours: dailyHours,
         assembly_manpower: assemblyManpower,
         packaging_manpower: packagingManpower,
-        lean_manpower: leanManpower,
         include_sunday: includeSunday,
         include_scheduled: includeScheduled,
       })
-      const result = res.data || {}
-      if (result.unscheduled_count || result.late_count) {
-        message.warning(
-          `已生成 ${result.created_count ?? 0} 条；未排完 ${result.unscheduled_count ?? 0} 条，延期 ${result.late_count ?? 0} 条`,
-          8,
-        )
-      } else {
-        message.success(`已生成新排产方案 ${result.created_count ?? 0} 条`)
-      }
-      navigate('/engineering/new-schedule/plans')
+      showGenerateResult(res.data || {}, '新排产方案')
+    } catch {
+      // 全局拦截器提示
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const generateAiSchedule = async () => {
+    const orderSequence = preview?.ai?.order_sequence || []
+    if (!orderSequence.length) {
+      message.warning('请先生成 AI 排产预览')
+      return
+    }
+    setGenerating(true)
+    try {
+      const res: any = await monthlyCapacityPlanApi.generateAiMonthlyPlans(
+        {
+          year,
+          month,
+          workdays,
+          daily_hours: dailyHours,
+          assembly_manpower: assemblyManpower,
+          packaging_manpower: packagingManpower,
+          include_sunday: includeSunday,
+          include_scheduled: includeScheduled,
+        },
+        orderSequence,
+      )
+      showGenerateResult(res.data || {}, ' AI 排产方案')
     } catch {
       // 全局拦截器提示
     } finally {
@@ -367,7 +409,6 @@ export default function MonthlyCapacityPlan() {
           shipping_plan_end: row.shipping_plan,
           assembly_hours: 0,
           packaging_hours: 0,
-          lean_hours: 0,
           total_hours: 0,
           scheduled_count: 0,
           lines: [],
@@ -378,7 +419,6 @@ export default function MonthlyCapacityPlan() {
       group.total_quantity += row.quantity
       group.assembly_hours += row.assembly_hours
       group.packaging_hours += row.packaging_hours
-      group.lean_hours += row.lean_hours
       group.total_hours += row.total_hours
       group.scheduled_count += row.has_schedule ? 1 : 0
       group.lines.push(row)
@@ -439,13 +479,6 @@ export default function MonthlyCapacityPlan() {
       render: (value: number) => num(value),
     },
     {
-      title: '精益人时',
-      dataIndex: 'lean_hours',
-      width: 100,
-      align: 'right',
-      render: (value: number) => num(value),
-    },
-    {
       title: '合计人时',
       dataIndex: 'total_hours',
       width: 110,
@@ -491,13 +524,6 @@ export default function MonthlyCapacityPlan() {
     {
       title: '包装人时',
       dataIndex: 'packaging_hours',
-      width: 100,
-      align: 'right',
-      render: (value: number) => num(value),
-    },
-    {
-      title: '精益人时',
-      dataIndex: 'lean_hours',
       width: 100,
       align: 'right',
       render: (value: number) => num(value),
@@ -549,6 +575,7 @@ export default function MonthlyCapacityPlan() {
   const missingColumns: ColumnsType<MissingRow> = [
     { title: '订单号', dataIndex: 'order_no', width: 200 },
     { title: '行号', dataIndex: 'line_no', width: 80 },
+    { title: 'BOM', dataIndex: 'bom_no', width: 240, ellipsis: true, render: (value?: string) => value || '-' },
     { title: '原因', dataIndex: 'reason' },
   ]
 
@@ -624,6 +651,13 @@ export default function MonthlyCapacityPlan() {
     { title: '产品编码', dataIndex: 'product_code', width: 180, ellipsis: true },
     { title: '出货计划', dataIndex: 'shipping_plan', width: 110 },
     {
+      title: '当天数量',
+      dataIndex: 'quantity',
+      width: 100,
+      align: 'right',
+      render: (value: number) => num(value, 0),
+    },
+    {
       title: '当天工时',
       dataIndex: 'hours',
       width: 100,
@@ -660,7 +694,6 @@ export default function MonthlyCapacityPlan() {
       '包装单价',
       '组装人时',
       '包装人时',
-      '精益人时',
       '合计人时',
       '排产状态',
     ]
@@ -676,7 +709,6 @@ export default function MonthlyCapacityPlan() {
         row.packaging_price,
         row.assembly_hours,
         row.packaging_hours,
-        row.lean_hours,
         row.total_hours,
         row.has_schedule ? '已排' : '未排',
       ]
@@ -702,6 +734,9 @@ export default function MonthlyCapacityPlan() {
           title="月度产能规划"
           extra={
             <Space>
+              <Button onClick={generateAiPreview} loading={aiLoading}>
+                AI 排产
+              </Button>
               <Button type="primary" onClick={generatePreview} loading={previewLoading}>
                 生成每日预览
               </Button>
@@ -795,16 +830,6 @@ export default function MonthlyCapacityPlan() {
               />
             </span>
             <span>
-              精益人数
-              <InputNumber
-                min={1}
-                max={500}
-                value={leanManpower}
-                onChange={(value) => setLeanManpower(Number(value || 1))}
-                style={{ width: 90, marginLeft: 8 }}
-              />
-            </span>
-            <span>
               周日生产/加班
               <Switch
                 checked={includeSunday}
@@ -834,7 +859,7 @@ export default function MonthlyCapacityPlan() {
           showIcon
           message="只读预算：统计出货计划在所选月份的订单，不写排产计划、不修改基础条件。"
           description={
-            `组装、包装、精益分别计算；已按订单池规则排除 Y 开头 BOM、P- 样品行和 HJY 样品单。` +
+            `组装、包装分别计算；已按订单池规则排除 Y 开头 BOM、P- 样品行和 HJY 样品单。` +
             `本月实际可用工作日：${data?.params?.workdays ?? '-'} 天（填写 ${data?.params?.workdays_requested ?? workdays} 天）。` +
             `开启“周日生产/加班”后，周日会按人工确认计入可用产能。` +
             `缺 BOM、缺工价/产能的订单会进入数据缺失清单。人数、工时、工作天数会自动记住，刷新后保留；修改后点“重新计算”。`
@@ -907,8 +932,27 @@ export default function MonthlyCapacityPlan() {
         <Row gutter={[16, 16]}>{stageCards}</Row>
 
         {preview && (
-          <Card title="每日分配预览" size="small">
+          <Card title={preview.ai ? 'AI 每日分配预览' : '每日分配预览'} size="small">
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              {preview.ai && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={`AI 排产建议（${preview.ai.provider}）`}
+                  description={
+                    `${preview.ai.summary || ''}` +
+                    (preview.ai.risks?.length ? ` 风险：${preview.ai.risks.join('；')}` : '') +
+                    (preview.ai.appended_count
+                      ? ` 有 ${preview.ai.appended_count} 行未包含在 AI 顺序中，已按交期补到末尾。`
+                      : '')
+                  }
+                  action={
+                    <Button type="primary" size="small" loading={generating} onClick={generateAiSchedule}>
+                      确认生成 AI 批次
+                    </Button>
+                  }
+                />
+              )}
               <Alert
                 type={preview.late?.length || preview.unscheduled?.length ? 'warning' : 'success'}
                 showIcon
@@ -916,7 +960,7 @@ export default function MonthlyCapacityPlan() {
                   `预览工作日 ${preview.workdays} 天，分配 ${preview.allocations?.length || 0} 条，延期 ${preview.late?.length || 0} 条，未排 ${preview.unscheduled?.length || 0} 条` +
                   (preview.overflow_days ? `；产能不足，已顺延到后续月份 ${preview.overflow_days} 个工作日` : '')
                 }
-                description="只读预览，不写排产计划；同一订单优先排在一起，包装在组装完成后的下一个生产日。"
+                description="只读预览，不写排产计划；同一订单优先排在同一天，整单放不下才按整数数量拆分；包装在组装完成后的下一个生产日。"
               />
               <Table
                 rowKey={(row: any) => `${row.date}-${row.stage}-${row.order_no}-${row.line_no}`}

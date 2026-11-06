@@ -24,6 +24,11 @@ interface LaborPriceRow {
   process_type?: string
   workshop_name?: string
   price?: number
+  oa_pph?: number
+  bottleneck_hours?: number
+  standard_capacity?: number
+  manpower?: number
+  remark?: string
   oa_main_id?: string
   source?: string
   last_sync_time?: string
@@ -112,11 +117,46 @@ export default function LaborPrices() {
       render: (value?: string) => value || '-',
     },
     {
+      title: 'PPH',
+      dataIndex: 'oa_pph',
+      width: 90,
+      align: 'right',
+      render: (value?: number) => (value === null || value === undefined ? '-' : value),
+    },
+    {
+      title: '瓶颈工时',
+      dataIndex: 'bottleneck_hours',
+      width: 100,
+      align: 'right',
+      render: (value?: number) => (value === null || value === undefined ? '-' : value),
+    },
+    {
+      title: '标准产能',
+      dataIndex: 'standard_capacity',
+      width: 100,
+      align: 'right',
+      render: (value?: number) => (value === null || value === undefined ? '-' : value),
+    },
+    {
       title: '单价',
       dataIndex: 'price',
       width: 100,
       align: 'right',
       render: (value?: number) => (value === null || value === undefined ? '-' : value),
+    },
+    {
+      title: '人数',
+      dataIndex: 'manpower',
+      width: 80,
+      align: 'right',
+      render: (value?: number) => (value === null || value === undefined ? '-' : value),
+    },
+    {
+      title: '备注',
+      dataIndex: 'remark',
+      width: 160,
+      ellipsis: true,
+      render: (value?: string) => value || '-',
     },
     {
       title: 'OA 主表',
@@ -172,7 +212,7 @@ export default function LaborPrices() {
               <Button onClick={() => navigate(-1)}>返回订单</Button>
             )}
             <Button onClick={goMainSystem}>返回主系统</Button>
-            <Button onClick={() => navigate('/engineering/labor-price-changes')}>工价变更</Button>
+            <Button onClick={() => navigate('/engineering/labor-price-changes')}>工价历史</Button>
             <Button type="primary" onClick={() => navigate('/engineering/labor-prices/new')}>
               新建工价
             </Button>
@@ -219,7 +259,7 @@ export default function LaborPrices() {
             loading={loading}
             columns={columns}
             dataSource={rows}
-            scroll={{ x: 1450 }}
+            scroll={{ x: 1900 }}
             pagination={{
               current: page,
               pageSize,

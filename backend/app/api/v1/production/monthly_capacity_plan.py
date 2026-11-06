@@ -13,6 +13,7 @@ from app.services.production.monthly_capacity_plan_service import (
     activate_monthly_schedule_batch,
     build_daily_allocation_preview,
     generate_monthly_schedule_plans,
+    get_ai_allocation_preview,
     get_monthly_capacity_plan,
     list_monthly_schedule_batches,
     list_monthly_schedule_plans,
@@ -29,7 +30,6 @@ class MonthlyPlanScenarioIn(BaseModel):
     daily_hours: float = Field(..., ge=1, le=24)
     assembly_manpower: int = Field(..., ge=1, le=500)
     packaging_manpower: int = Field(..., ge=1, le=500)
-    lean_manpower: int = Field(..., ge=1, le=500)
     include_sunday: bool = False
     include_scheduled: bool = True
 
@@ -40,7 +40,6 @@ def _serialize_scenario(scenario: MonthlyCapacityScenario) -> dict:
         "daily_hours": float(scenario.daily_hours),
         "assembly_manpower": scenario.assembly_manpower,
         "packaging_manpower": scenario.packaging_manpower,
-        "lean_manpower": scenario.lean_manpower,
         "include_sunday": bool(scenario.include_sunday),
         "include_scheduled": bool(scenario.include_scheduled),
         "updated_by": scenario.updated_by,
@@ -75,7 +74,6 @@ async def update_monthly_plan_scenario(
     scenario.daily_hours = payload.daily_hours
     scenario.assembly_manpower = payload.assembly_manpower
     scenario.packaging_manpower = payload.packaging_manpower
-    scenario.lean_manpower = payload.lean_manpower
     scenario.include_sunday = payload.include_sunday
     scenario.include_scheduled = payload.include_scheduled
     scenario.updated_by = current_user.get("username")
@@ -88,12 +86,11 @@ async def update_monthly_plan_scenario(
 async def monthly_capacity_plan(
     year: int = Query(..., ge=2020, le=2100),
     month: int = Query(..., ge=1, le=12),
-    stage: str = Query("all", pattern="^(all|assembly|packaging|lean)$"),
+    stage: str = Query("all", pattern="^(all|assembly|packaging)$"),
     workdays: int = Query(26, ge=1, le=31),
     daily_hours: float = Query(12.0, ge=1, le=24),
     assembly_manpower: int = Query(14, ge=1, le=500),
     packaging_manpower: int = Query(14, ge=1, le=500),
-    lean_manpower: int = Query(10, ge=1, le=500),
     include_sunday: bool = Query(False),
     include_scheduled: bool = Query(True),
     keyword: Optional[str] = Query(None),
@@ -112,7 +109,6 @@ async def monthly_capacity_plan(
         daily_hours=daily_hours,
         assembly_manpower=assembly_manpower,
         packaging_manpower=packaging_manpower,
-        lean_manpower=lean_manpower,
         include_sunday=include_sunday,
         include_scheduled=include_scheduled,
         keyword=keyword,
@@ -123,12 +119,11 @@ async def monthly_capacity_plan(
 async def monthly_capacity_allocation_preview(
     year: int = Query(..., ge=2020, le=2100),
     month: int = Query(..., ge=1, le=12),
-    stage: str = Query("all", pattern="^(all|assembly|packaging|lean)$"),
+    stage: str = Query("all", pattern="^(all|assembly|packaging)$"),
     workdays: int = Query(26, ge=1, le=31),
     daily_hours: float = Query(12.0, ge=1, le=24),
     assembly_manpower: int = Query(14, ge=1, le=500),
     packaging_manpower: int = Query(14, ge=1, le=500),
-    lean_manpower: int = Query(10, ge=1, le=500),
     include_sunday: bool = Query(False),
     include_scheduled: bool = Query(True),
     keyword: Optional[str] = Query(None),
@@ -147,7 +142,6 @@ async def monthly_capacity_allocation_preview(
         daily_hours=daily_hours,
         assembly_manpower=assembly_manpower,
         packaging_manpower=packaging_manpower,
-        lean_manpower=lean_manpower,
         include_sunday=include_sunday,
         include_scheduled=include_scheduled,
         keyword=keyword,
@@ -159,14 +153,52 @@ async def monthly_capacity_allocation_preview(
         daily_hours=daily_hours,
         assembly_manpower=assembly_manpower,
         packaging_manpower=packaging_manpower,
-        lean_manpower=lean_manpower,
         include_sunday=include_sunday,
     )
     return ResponseModel(data={"summary": plan.get("summary"), "stages": plan.get("stages"), **preview})
 
+
+@router.get("/ai-allocation-preview", response_model=ResponseModel[dict])
+async def monthly_capacity_ai_allocation_preview(
+    year: int = Query(..., ge=2020, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    stage: str = Query("all", pattern="^(all|assembly|packaging)$"),
+    workdays: int = Query(26, ge=1, le=31),
+    daily_hours: float = Query(12.0, ge=1, le=24),
+    assembly_manpower: int = Query(14, ge=1, le=500),
+    packaging_manpower: int = Query(14, ge=1, le=500),
+    include_sunday: bool = Query(False),
+    include_scheduled: bool = Query(True),
+    keyword: Optional[str] = Query(None),
+    current_user: dict = Depends(
+        PermissionChecker("production.monthly_capacity_plan", "read")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI 决定订单行排产顺序，容量分摊后返回每日预览（只读，不写排产计划）。"""
+    try:
+        data = await get_ai_allocation_preview(
+            db,
+            year=year,
+            month=month,
+            stage=stage,
+            workdays=workdays,
+            daily_hours=daily_hours,
+            assembly_manpower=assembly_manpower,
+            packaging_manpower=packaging_manpower,
+            include_sunday=include_sunday,
+            include_scheduled=include_scheduled,
+            keyword=keyword,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return ResponseModel(data=data)
+
+
 class MonthlyPlanUpdateIn(BaseModel):
     plan_date: Optional[date] = None
     daily_work_hours: Optional[float] = None
+    schedule_bucket: Optional[str] = Field(None, pattern="^(assembly|packaging)$")
 
 
 @router.post("/plans/generate", response_model=ResponseModel[dict])
@@ -177,7 +209,6 @@ async def generate_monthly_plan(
     daily_hours: float = Query(12.0, ge=1, le=24),
     assembly_manpower: int = Query(14, ge=1, le=500),
     packaging_manpower: int = Query(14, ge=1, le=500),
-    lean_manpower: int = Query(10, ge=1, le=500),
     include_sunday: bool = Query(False),
     include_scheduled: bool = Query(True),
     current_user: dict = Depends(
@@ -194,10 +225,57 @@ async def generate_monthly_plan(
         daily_hours=daily_hours,
         assembly_manpower=assembly_manpower,
         packaging_manpower=packaging_manpower,
-        lean_manpower=lean_manpower,
         operator=current_user["username"],
         include_sunday=include_sunday,
         include_scheduled=include_scheduled,
+    )
+    return ResponseModel(data=result)
+
+
+class AiScheduleOrderKeyIn(BaseModel):
+    order_no: str
+    line_no: str
+
+
+class AiMonthlyPlanGenerateIn(BaseModel):
+    order_sequence: list[AiScheduleOrderKeyIn] = Field(default_factory=list)
+
+
+@router.post("/plans/generate-ai", response_model=ResponseModel[dict])
+async def generate_ai_monthly_plan(
+    payload: AiMonthlyPlanGenerateIn,
+    year: int = Query(..., ge=2020, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    workdays: int = Query(26, ge=1, le=31),
+    daily_hours: float = Query(12.0, ge=1, le=24),
+    assembly_manpower: int = Query(14, ge=1, le=500),
+    packaging_manpower: int = Query(14, ge=1, le=500),
+    include_sunday: bool = Query(False),
+    include_scheduled: bool = Query(True),
+    current_user: dict = Depends(
+        PermissionChecker("production.monthly_capacity_plan", "manage")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """按 AI 预览确认的订单行顺序生成独立月度排产批次（确定性容量分摊）。"""
+    order_sequence = [
+        (item.order_no.strip(), item.line_no.strip())
+        for item in payload.order_sequence
+        if item.order_no.strip()
+    ]
+    result = await generate_monthly_schedule_plans(
+        db,
+        year=year,
+        month=month,
+        workdays=workdays,
+        daily_hours=daily_hours,
+        assembly_manpower=assembly_manpower,
+        packaging_manpower=packaging_manpower,
+        operator=current_user["username"],
+        include_sunday=include_sunday,
+        include_scheduled=include_scheduled,
+        order_sequence=order_sequence,
+        scheme_label="AI月度排产方案",
     )
     return ResponseModel(data=result)
 
@@ -238,7 +316,7 @@ async def activate_monthly_plan_batch(
 async def monthly_plan_list(
     year: int = Query(..., ge=2020, le=2100),
     month: int = Query(..., ge=1, le=12),
-    stage: str = Query("all", pattern="^(all|assembly|packaging|lean)$"),
+    stage: str = Query("all", pattern="^(all|assembly|packaging)$"),
     date_start: Optional[date] = Query(None),
     date_end: Optional[date] = Query(None),
     keyword: Optional[str] = Query(None),
@@ -276,6 +354,7 @@ async def update_monthly_plan(
             plan_id=plan_id,
             plan_date=payload.plan_date,
             daily_work_hours=payload.daily_work_hours,
+            schedule_bucket=payload.schedule_bucket,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

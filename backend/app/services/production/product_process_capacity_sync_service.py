@@ -124,6 +124,11 @@ class ProductProcessCapacitySyncService:
                     record = existing_by_oa_detail_id.get(oa_detail_id)
 
                 existing_metadata = parse_capacity_metadata(record.remark) if record else {}
+                manual_price = existing_metadata.get("manual_price")
+                effective_gjje = (
+                    manual_price if manual_price is not None else normalized["gjje"]
+                )
+                price_source = "manual" if manual_price is not None else "oa"
                 config_manpower, config_hour_price = await config_service.resolve_formula_inputs(
                     normalized["oa_workshop_name"],
                     process_type,
@@ -132,7 +137,7 @@ class ProductProcessCapacitySyncService:
                 upph_result = resolve_capacity_upph(
                     workshop_name=normalized["oa_workshop_name"],
                     process_type=process_type,
-                    gjje=normalized["gjje"],
+                    gjje=effective_gjje,
                     oa_raw_upph=normalized["oa_raw_upph"],
                     manpower=config_manpower,
                     hour_price=config_hour_price,
@@ -143,7 +148,10 @@ class ProductProcessCapacitySyncService:
                     oa_main_id=normalized["oa_main_id"],
                     oa_workshop_id=normalized["oa_workshop_id"],
                     oa_workshop_name=normalized["oa_workshop_name"],
-                    gjje=normalized["gjje"],
+                    gjje=effective_gjje,
+                    oa_gjje=normalized["gjje"] if manual_price is not None else None,
+                    manual_price=manual_price,
+                    price_source=price_source,
                     oa_raw_upph=upph_result.get("oa_raw_upph"),
                     formula_upph=upph_result.get("formula_upph"),
                     effective_upph=upph_result.get("effective_upph"),
@@ -151,6 +159,9 @@ class ProductProcessCapacitySyncService:
                     upph_source=upph_result.get("upph_source"),
                     manpower=upph_result.get("manpower"),
                     hour_price=upph_result.get("hour_price"),
+                    oa_manpower=normalized.get("oa_manpower"),
+                    bottleneck_hours=normalized.get("bottleneck_hours"),
+                    standard_capacity=normalized.get("standard_capacity"),
                     raw_remark=normalized.get("raw_remark"),
                 )
 
@@ -207,7 +218,7 @@ class ProductProcessCapacitySyncService:
                         record.product_name = normalized["product_name"]
                         record.process_type = process_type
                         record.upph = new_upph
-                        record.source = self.OA_SOURCE
+                        record.source = "manual" if price_source == "manual" else self.OA_SOURCE
                         record.sync_batch_no = sync_batch_no
                         record.last_sync_time = sync_time
                         record.is_active = True
@@ -408,12 +419,23 @@ class ProductProcessCapacitySyncService:
         remark_expr = "NULL"
         if "bz" in detail_columns:
             remark_expr = "LTRIM(RTRIM(CAST(b.bz AS NVARCHAR(MAX))))"
-        elif "bzcn" in detail_columns:
-            remark_expr = "LTRIM(RTRIM(CAST(b.bzcn AS NVARCHAR(MAX))))"
 
         workshop_id_expr = "LTRIM(RTRIM(CAST(a.cj AS VARCHAR(64))))"
         workshop_name_expr = "LTRIM(RTRIM(CAST(d.departmentname AS NVARCHAR(255))))"
         gjje_expr = "CAST(ISNULL(b.dj, 0) AS DECIMAL(15, 4))"
+        oa_manpower_expr = (
+            "CAST(ISNULL(b.rs, 0) AS INT)" if "rs" in detail_columns else "NULL"
+        )
+        bottleneck_hours_expr = (
+            "CAST(ISNULL(b.pjgs, 0) AS DECIMAL(15, 2))"
+            if "pjgs" in detail_columns
+            else "NULL"
+        )
+        standard_capacity_expr = (
+            "CAST(ISNULL(b.bzcn, 0) AS DECIMAL(15, 2))"
+            if "bzcn" in detail_columns
+            else "NULL"
+        )
         incremental_filter = self._build_incremental_filter(main_columns, incremental_since)
 
         return f"""
@@ -436,6 +458,9 @@ class ProductProcessCapacitySyncService:
             END AS process_type,
             {gjje_expr} AS gjje,
             CAST(ISNULL(b.pph, 0) AS DECIMAL(15, 2)) AS upph,
+            {oa_manpower_expr} AS oa_manpower,
+            {bottleneck_hours_expr} AS bottleneck_hours,
+            {standard_capacity_expr} AS standard_capacity,
             {remark_expr} AS remark
         FROM FWsv.ecology.dbo.formtable_main_51 a
         LEFT JOIN FWsv.ecology.dbo.formtable_main_51_dt1 b ON a.id = b.mainid
@@ -501,6 +526,9 @@ class ProductProcessCapacitySyncService:
             "process_type": process_type,
             "gjje": self._normalize_decimal(row.get("gjje")),
             "oa_raw_upph": self._normalize_decimal(row.get("upph")),
+            "oa_manpower": self._normalize_decimal(row.get("oa_manpower")),
+            "bottleneck_hours": self._normalize_decimal(row.get("bottleneck_hours")),
+            "standard_capacity": self._normalize_decimal(row.get("standard_capacity")),
             "raw_remark": self._normalize_text(row.get("remark")),
         }
 

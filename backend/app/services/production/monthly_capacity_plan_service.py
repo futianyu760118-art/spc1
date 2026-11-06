@@ -1,21 +1,26 @@
 """月度产能规划：按出货计划月份汇总订单人时与可用产能（只读）。"""
+import json
 import time
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
+from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.order.sale_order import SaleOrder, SaleOrderLine
+from app.models.production.monthly_capacity_scenario import MonthlyCapacityScenario
 from app.models.production.monthly_schedule_plan import MonthlySchedulePlan
 from app.models.production.schedule_plan import ProductionSchedulePlan
+from app.schemas.production.monthly_capacity_ai import AiSchedulePlanOut
+from app.services.ai import ChatOptions, NotSupportedError, ai_service
 from app.services.production.upph_calculation_service import UpphCalculationService
 
 STAGE_LABELS = {
     "assembly": "组装",
     "packaging": "包装",
-    "lean": "精益",
 }
+MONTHLY_STAGES = ("assembly", "packaging")
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -25,6 +30,13 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _resolve_integer_quantity(value: Any) -> int:
+    quantity = _to_float(value)
+    if quantity <= 0:
+        return 0
+    return max(1, int(round(quantity)))
 
 
 def _month_range(year: int, month: int) -> tuple[date, date]:
@@ -53,7 +65,6 @@ async def _compute_monthly_capacity_plan(
     daily_hours: float = 12.0,
     assembly_manpower: int = 14,
     packaging_manpower: int = 14,
-    lean_manpower: int = 10,
     include_sunday: bool = False,
     include_scheduled: bool = True,
     keyword: Optional[str] = None,
@@ -138,8 +149,8 @@ async def _compute_monthly_capacity_plan(
     rules_cache: dict[str, dict[str, Any]] = {}
     orders: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
-    stage_demand = {"assembly": 0.0, "packaging": 0.0, "lean": 0.0}
-    stage_prices = {"assembly": 0.0, "packaging": 0.0, "lean": 0.0}
+    stage_demand = {"assembly": 0.0, "packaging": 0.0}
+    stage_prices = {"assembly": 0.0, "packaging": 0.0}
 
     for row in rows:
         key = (str(row.order_no), str(row.line_no))
@@ -152,6 +163,7 @@ async def _compute_monthly_capacity_plan(
             missing.append({
                 "order_no": row.order_no,
                 "line_no": row.line_no,
+                "bom_no": bom_code or None,
                 "reason": "订单数量为空或为 0",
             })
             continue
@@ -159,6 +171,7 @@ async def _compute_monthly_capacity_plan(
             missing.append({
                 "order_no": row.order_no,
                 "line_no": row.line_no,
+                "bom_no": None,
                 "reason": "缺少 BOM",
             })
             continue
@@ -185,13 +198,10 @@ async def _compute_monthly_capacity_plan(
         )
         assembly_upph = _to_float(stage_rules.get("assembly", {}).get("upph"))
         packaging_upph = _to_float(stage_rules.get("packaging", {}).get("upph"))
-        lean_upph = _to_float(rules.get("total_upph")) if rules.get("schedule_bucket") == "lean" else 0.0
-        lean_hours = qty / lean_upph if lean_upph > 0 else 0.0
 
         order_stage_demand = {
             "assembly": round(assembly_hours, 2),
             "packaging": round(packaging_hours, 2),
-            "lean": round(lean_hours, 2),
         }
         for bucket, hours in order_stage_demand.items():
             if stage == "all" or stage == bucket:
@@ -201,10 +211,11 @@ async def _compute_monthly_capacity_plan(
                 elif bucket == "packaging":
                     stage_prices[bucket] += round(qty * packaging_price, 2)
 
-        if assembly_hours <= 0 and packaging_hours <= 0 and lean_hours <= 0:
+        if assembly_hours <= 0 and packaging_hours <= 0:
             missing.append({
                 "order_no": row.order_no,
                 "line_no": row.line_no,
+                "bom_no": bom_code,
                 "reason": "缺少有效工价/产能，无法计算人时",
             })
 
@@ -222,10 +233,8 @@ async def _compute_monthly_capacity_plan(
             "packaging_price": round(packaging_price, 4),
             "assembly_upph": round(assembly_upph, 2),
             "packaging_upph": round(packaging_upph, 2),
-            "lean_upph": round(lean_upph, 2),
             "assembly_hours": order_stage_demand["assembly"],
             "packaging_hours": order_stage_demand["packaging"],
-            "lean_hours": order_stage_demand["lean"],
             "total_hours": round(sum(order_stage_demand.values()), 2),
             "has_schedule": has_schedule,
         })
@@ -241,15 +250,13 @@ async def _compute_monthly_capacity_plan(
     stage_capacity = {
         "assembly": effective_workdays * assembly_manpower * daily_hours,
         "packaging": effective_workdays * packaging_manpower * daily_hours,
-        "lean": effective_workdays * lean_manpower * daily_hours,
     }
     stage_manpower = {
         "assembly": assembly_manpower,
         "packaging": packaging_manpower,
-        "lean": lean_manpower,
     }
     stages = []
-    selected_stages = list(STAGE_LABELS) if stage == "all" else [stage]
+    selected_stages = [stage] if stage in MONTHLY_STAGES else list(MONTHLY_STAGES)
     for bucket in selected_stages:
         demand = round(stage_demand[bucket], 2)
         available = round(stage_capacity[bucket], 2)
@@ -286,7 +293,6 @@ async def _compute_monthly_capacity_plan(
             "daily_hours": daily_hours,
             "assembly_manpower": assembly_manpower,
             "packaging_manpower": packaging_manpower,
-            "lean_manpower": lean_manpower,
             "include_sunday": include_sunday,
             "include_scheduled": include_scheduled,
         },
@@ -322,7 +328,6 @@ async def get_monthly_capacity_plan(
     daily_hours: float = 12.0,
     assembly_manpower: int = 14,
     packaging_manpower: int = 14,
-    lean_manpower: int = 10,
     include_sunday: bool = False,
     include_scheduled: bool = True,
     keyword: Optional[str] = None,
@@ -335,7 +340,6 @@ async def get_monthly_capacity_plan(
         daily_hours,
         assembly_manpower,
         packaging_manpower,
-        lean_manpower,
         include_sunday,
         include_scheduled,
         (keyword or "").strip(),
@@ -352,7 +356,6 @@ async def get_monthly_capacity_plan(
         daily_hours=daily_hours,
         assembly_manpower=assembly_manpower,
         packaging_manpower=packaging_manpower,
-        lean_manpower=lean_manpower,
         include_sunday=include_sunday,
         include_scheduled=include_scheduled,
         keyword=keyword,
@@ -400,38 +403,61 @@ def _next_production_date(target: date, include_sunday: bool = False) -> date:
     return current
 
 
-def build_daily_allocation_preview(
-    plan: dict[str, Any],
+def _build_allocation_row(
+    order: dict[str, Any],
     *,
     stage: str,
-    workdays: int,
-    daily_hours: float,
-    assembly_manpower: int,
-    packaging_manpower: int,
-    lean_manpower: int,
-    include_sunday: bool = False,
+    current_date: date,
+    quantity: int,
+    hours: float,
+    daily_capacity: float,
 ) -> dict[str, Any]:
-    """按阶段每日容量，把月度订单顺序往后填，仅做预览，不落库。"""
-    manpower_by_stage = {
-        "assembly": assembly_manpower,
-        "packaging": packaging_manpower,
-        "lean": lean_manpower,
+    return {
+        "date": current_date.isoformat(),
+        "stage": stage,
+        "stage_label": STAGE_LABELS[stage],
+        "order_no": order.get("order_no"),
+        "line_no": order.get("line_no"),
+        "product_code": order.get("product_code"),
+        "shipping_plan": order.get("shipping_plan"),
+        "quantity": quantity,
+        "hours": round(hours, 2),
+        "daily_capacity": round(daily_capacity, 2),
     }
-    selected_stages = ["assembly", "packaging", "lean"] if stage == "all" else [stage]
-    dates, target_workdays = _build_preview_workdays(
-        plan["year"],
-        plan["month"],
-        workdays,
-        include_sunday=include_sunday,
-    )
-    source_orders = plan.get("orders") or []
+
+
+def _append_late_if_needed(
+    late: list[dict[str, Any]],
+    order: dict[str, Any],
+    stage: str,
+    last_date: Optional[date],
+) -> None:
+    if not last_date or not order.get("shipping_plan"):
+        return
+    try:
+        shipping_date = date.fromisoformat(order["shipping_plan"])
+    except ValueError:
+        return
+    if last_date > shipping_date:
+        late.append({
+            "order_no": order.get("order_no"),
+            "line_no": order.get("line_no"),
+            "stage": stage,
+            "stage_label": STAGE_LABELS[stage],
+            "shipping_plan": shipping_date.isoformat(),
+            "last_alloc_date": last_date.isoformat(),
+            "late_days": (last_date - shipping_date).days,
+        })
+
+
+def _default_sorted_orders(source_orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     order_first_date: dict[str, str] = {}
     for item in source_orders:
         order_no = str(item.get("order_no") or "")
         shipping = item.get("shipping_plan") or "9999-12-31"
         if order_no not in order_first_date or shipping < order_first_date[order_no]:
             order_first_date[order_no] = shipping
-    orders = sorted(
+    return sorted(
         source_orders,
         key=lambda item: (
             order_first_date.get(str(item.get("order_no") or ""), "9999-12-31"),
@@ -440,6 +466,72 @@ def build_daily_allocation_preview(
             item.get("shipping_plan") or "9999-12-31",
         ),
     )
+
+
+def _order_source_orders(
+    source_orders: list[dict[str, Any]],
+    order_sequence: Optional[list[tuple[str, str]]],
+) -> list[dict[str, Any]]:
+    """按 AI 给出的订单行顺序重排；缺失的行按默认规则补到末尾，保证不丢单。"""
+    if not order_sequence:
+        return _default_sorted_orders(source_orders)
+
+    by_key = {
+        (str(item.get("order_no") or ""), str(item.get("line_no") or "")): item
+        for item in source_orders
+    }
+    group_rank: dict[str, int] = {}
+    groups: dict[str, list[dict[str, Any]]] = {}
+    seen: set[tuple[str, str]] = set()
+
+    def add(item: dict[str, Any]) -> None:
+        key = (str(item.get("order_no") or ""), str(item.get("line_no") or ""))
+        if key in seen:
+            return
+        seen.add(key)
+        order_no = key[0]
+        if order_no not in group_rank:
+            group_rank[order_no] = len(group_rank)
+        groups.setdefault(order_no, []).append(item)
+
+    for order_no, line_no in order_sequence:
+        item = by_key.get((str(order_no), str(line_no)))
+        if item:
+            add(item)
+    for item in _default_sorted_orders(source_orders):
+        add(item)
+
+    ordered: list[dict[str, Any]] = []
+    for order_no in sorted(groups, key=lambda value: group_rank[value]):
+        ordered.extend(groups[order_no])
+    return ordered
+
+
+def build_daily_allocation_preview(
+    plan: dict[str, Any],
+    *,
+    stage: str,
+    workdays: int,
+    daily_hours: float,
+    assembly_manpower: int,
+    packaging_manpower: int,
+    include_sunday: bool = False,
+    order_sequence: Optional[list[tuple[str, str]]] = None,
+) -> dict[str, Any]:
+    """按阶段每日容量，把月度订单顺序往后填，仅做预览，不落库。"""
+    manpower_by_stage = {
+        "assembly": assembly_manpower,
+        "packaging": packaging_manpower,
+    }
+    selected_stages = [stage] if stage in MONTHLY_STAGES else list(MONTHLY_STAGES)
+    dates, target_workdays = _build_preview_workdays(
+        plan["year"],
+        plan["month"],
+        workdays,
+        include_sunday=include_sunday,
+    )
+    source_orders = plan.get("orders") or []
+    orders = _order_source_orders(source_orders, order_sequence)
 
     order_groups: list[list[dict[str, Any]]] = []
     for order in orders:
@@ -455,14 +547,20 @@ def build_daily_allocation_preview(
     daily_used: dict[tuple[str, str], float] = {}
     assembly_end_by_order: dict[str, date] = {}
 
+    epsilon = 1e-6
     for current_stage in selected_stages:
-        hours_key = f"{current_stage}_hours"
+        upph_key = f"{current_stage}_upph"
         daily_capacity = max(1.0, manpower_by_stage[current_stage] * daily_hours)
         day_index = 0
         for group in order_groups:
             order_no = str(group[0].get("order_no") or "")
-            active_lines = [line for line in group if float(line.get(hours_key) or 0) > 0]
-            if not active_lines:
+            lines = []
+            for line in group:
+                upph = _to_float(line.get(upph_key))
+                quantity = _resolve_integer_quantity(line.get("quantity"))
+                if upph > 0 and quantity > 0:
+                    lines.append((line, upph, quantity))
+            if not lines:
                 continue
             if current_stage == "packaging":
                 assembly_end = assembly_end_by_order.get(order_no)
@@ -470,67 +568,77 @@ def build_daily_allocation_preview(
                     required_start = _next_production_date(assembly_end, include_sunday=include_sunday)
                     while day_index < len(dates) and dates[day_index] < required_start:
                         day_index += 1
-            total_remaining = sum(float(line.get(hours_key) or 0) for line in active_lines)
-            if total_remaining <= daily_capacity + 0.01 and day_index < len(dates):
-                current_date = dates[day_index]
-                used = daily_used.get((current_date.isoformat(), current_stage), 0.0)
-                if daily_capacity - used + 0.01 < total_remaining:
-                    day_index += 1
+
+            group_hours = sum(quantity / upph for _, upph, quantity in lines)
+            chosen_index = None
+            for index in range(day_index, len(dates)):
+                used = daily_used.get((dates[index].isoformat(), current_stage), 0.0)
+                if daily_capacity - used + epsilon >= group_hours:
+                    chosen_index = index
+                    break
+
             order_last_date = None
-            for order in active_lines:
-                remaining = float(order.get(hours_key) or 0)
-                shipping_date = None
-                if order.get("shipping_plan"):
-                    try:
-                        shipping_date = date.fromisoformat(order["shipping_plan"])
-                    except ValueError:
-                        shipping_date = None
-                last_date = None
-                while remaining > 0.01:
-                    if day_index >= len(dates):
-                        unscheduled.append({
-                            "order_no": order.get("order_no"),
-                            "line_no": order.get("line_no"),
-                            "stage": current_stage,
-                            "remaining_hours": round(remaining, 2),
-                            "reason": "月度工作日产能不足",
-                        })
-                        break
-                    current_date = dates[day_index]
-                    used = daily_used.get((current_date.isoformat(), current_stage), 0.0)
-                    available = max(0.0, daily_capacity - used)
-                    if available <= 0.01:
-                        day_index += 1
-                        continue
-                    take = min(remaining, available)
-                    allocations.append({
-                        "date": current_date.isoformat(),
-                        "stage": current_stage,
-                        "stage_label": STAGE_LABELS[current_stage],
-                        "order_no": order.get("order_no"),
-                        "line_no": order.get("line_no"),
-                        "product_code": order.get("product_code"),
-                        "shipping_plan": order.get("shipping_plan"),
-                        "hours": round(take, 2),
-                        "daily_capacity": round(daily_capacity, 2),
-                    })
-                    daily_used[(current_date.isoformat(), current_stage)] = used + take
-                    remaining -= take
-                    last_date = current_date
-                    if remaining > 0.01:
-                        day_index += 1
-                if last_date and (order_last_date is None or last_date > order_last_date):
-                    order_last_date = last_date
-                if last_date and shipping_date and last_date > shipping_date:
-                    late.append({
-                        "order_no": order.get("order_no"),
-                        "line_no": order.get("line_no"),
-                        "stage": current_stage,
-                        "stage_label": STAGE_LABELS[current_stage],
-                        "shipping_plan": shipping_date.isoformat(),
-                        "last_alloc_date": last_date.isoformat(),
-                        "late_days": (last_date - shipping_date).days,
-                    })
+            if chosen_index is not None:
+                day_index = chosen_index
+                current_date = dates[day_index]
+                key = (current_date.isoformat(), current_stage)
+                used = daily_used.get(key, 0.0)
+                for line, upph, quantity in lines:
+                    hours = quantity / upph
+                    allocations.append(_build_allocation_row(
+                        line,
+                        stage=current_stage,
+                        current_date=current_date,
+                        quantity=quantity,
+                        hours=hours,
+                        daily_capacity=daily_capacity,
+                    ))
+                    used += hours
+                    _append_late_if_needed(late, line, current_stage, current_date)
+                daily_used[key] = used
+                order_last_date = current_date
+            else:
+                for line, upph, quantity in lines:
+                    remaining = quantity
+                    line_last_date = None
+                    while remaining > 0:
+                        if day_index >= len(dates):
+                            unscheduled.append({
+                                "order_no": line.get("order_no"),
+                                "line_no": line.get("line_no"),
+                                "stage": current_stage,
+                                "remaining_quantity": remaining,
+                                "remaining_hours": round(remaining / upph, 2),
+                                "reason": "月度工作日产能不足",
+                            })
+                            break
+                        current_date = dates[day_index]
+                        key = (current_date.isoformat(), current_stage)
+                        used = daily_used.get(key, 0.0)
+                        available = daily_capacity - used
+                        max_quantity = int(available * upph + epsilon) if available > epsilon else 0
+                        if max_quantity <= 0:
+                            day_index += 1
+                            continue
+                        take = min(remaining, max_quantity)
+                        hours = take / upph
+                        allocations.append(_build_allocation_row(
+                            line,
+                            stage=current_stage,
+                            current_date=current_date,
+                            quantity=take,
+                            hours=hours,
+                            daily_capacity=daily_capacity,
+                        ))
+                        daily_used[key] = used + hours
+                        remaining -= take
+                        line_last_date = current_date
+                        if remaining > 0:
+                            day_index += 1
+                    if line_last_date:
+                        _append_late_if_needed(late, line, current_stage, line_last_date)
+                        if order_last_date is None or line_last_date > order_last_date:
+                            order_last_date = line_last_date
             if current_stage == "assembly" and order_last_date:
                 assembly_end_by_order[order_no] = order_last_date
 
@@ -575,10 +683,11 @@ async def generate_monthly_schedule_plans(
     daily_hours: float,
     assembly_manpower: int,
     packaging_manpower: int,
-    lean_manpower: int,
     operator: str,
     include_sunday: bool = False,
     include_scheduled: bool = True,
+    order_sequence: Optional[list[tuple[str, str]]] = None,
+    scheme_label: str = "月度排产方案",
 ) -> dict[str, Any]:
     """把每日分配预览落成独立的月度排产方案（不碰原排产表）。"""
     plan = await get_monthly_capacity_plan(
@@ -590,7 +699,6 @@ async def generate_monthly_schedule_plans(
         daily_hours=daily_hours,
         assembly_manpower=assembly_manpower,
         packaging_manpower=packaging_manpower,
-        lean_manpower=lean_manpower,
         include_sunday=include_sunday,
         include_scheduled=include_scheduled,
     )
@@ -601,8 +709,8 @@ async def generate_monthly_schedule_plans(
         daily_hours=daily_hours,
         assembly_manpower=assembly_manpower,
         packaging_manpower=packaging_manpower,
-        lean_manpower=lean_manpower,
         include_sunday=include_sunday,
+        order_sequence=order_sequence,
     )
     order_map = {
         (str(item["order_no"]), str(item["line_no"])): item
@@ -611,7 +719,6 @@ async def generate_monthly_schedule_plans(
     manpower_by_stage = {
         "assembly": assembly_manpower,
         "packaging": packaging_manpower,
-        "lean": lean_manpower,
     }
     batch_no = datetime.now().strftime("MS%Y%m%d%H%M%S")
     schedule_month = f"{year}-{month:02d}"
@@ -633,10 +740,9 @@ async def generate_monthly_schedule_plans(
             continue
         stage = str(allocation["stage"])
         upph = _to_float(order.get(f"{stage}_upph"))
-        hours = _to_float(allocation.get("hours"))
-        if upph <= 0 or hours <= 0:
+        quantity = _resolve_integer_quantity(allocation.get("quantity"))
+        if upph <= 0 or quantity <= 0:
             continue
-        quantity = round(hours * upph, 2)
         created.append({
             "order_no": key[0],
             "line_no": key[1],
@@ -647,18 +753,6 @@ async def generate_monthly_schedule_plans(
             "source_qty": _to_float(order.get("quantity")),
             "order": order,
         })
-
-    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
-    for item in created:
-        grouped.setdefault((item["order_no"], item["line_no"], item["stage"]), []).append(item)
-    for items in grouped.values():
-        total = round(sum(item["quantity"] for item in items), 2)
-        source_qty = round(float(items[0]["source_qty"] or 0), 2)
-        delta = round(source_qty - total, 2)
-        # 只修正小数取整误差；未排完的差额不能硬塞到最后一天
-        if items and abs(delta) <= 1.0:
-            last = items[-1]
-            last["quantity"] = max(0.0, round(last["quantity"] + delta, 2))
 
     plan_rows: list[MonthlySchedulePlan] = []
     for item in created:
@@ -698,7 +792,7 @@ async def generate_monthly_schedule_plans(
             source_promised_date=promised,
             price_total=price_total,
             status="planned",
-            remark="月度排产方案",
+            remark=scheme_label,
             is_active=True,
             created_by=operator,
         ))
@@ -710,6 +804,189 @@ async def generate_monthly_schedule_plans(
         "created_count": len(plan_rows),
         "late_count": len(preview.get("late") or []),
         "unscheduled_count": len(preview.get("unscheduled") or []),
+    }
+
+
+AI_SCHEDULE_MAX_LINES = 400
+
+
+def _collect_ai_schedulable_lines(plan: dict[str, Any], stage: str) -> list[dict[str, Any]]:
+    selected_stages = [stage] if stage in MONTHLY_STAGES else list(MONTHLY_STAGES)
+    lines: list[dict[str, Any]] = []
+    for item in plan.get("orders") or []:
+        quantity = _resolve_integer_quantity(item.get("quantity"))
+        if quantity <= 0:
+            continue
+        if not any(_to_float(item.get(f"{bucket}_upph")) > 0 for bucket in selected_stages):
+            continue
+        line = {
+            "order_no": str(item.get("order_no") or ""),
+            "line_no": str(item.get("line_no") or ""),
+            "product_code": item.get("product_code"),
+            "shipping_plan": item.get("shipping_plan"),
+            "quantity": quantity,
+        }
+        for bucket in MONTHLY_STAGES:
+            line[f"{bucket}_hours"] = round(_to_float(item.get(f"{bucket}_hours")), 2)
+            line[f"{bucket}_upph"] = round(_to_float(item.get(f"{bucket}_upph")), 2)
+        lines.append(line)
+    return lines
+
+
+def _build_ai_schedule_prompt(
+    plan: dict[str, Any],
+    lines: list[dict[str, Any]],
+    *,
+    workdays: int,
+    daily_hours: float,
+    assembly_manpower: int,
+    packaging_manpower: int,
+) -> str:
+    payload = {
+        "period": plan.get("month_label"),
+        "workdays": workdays,
+        "daily_hours": daily_hours,
+        "stage_daily_capacity_hours": {
+            "assembly": round(assembly_manpower * daily_hours, 2),
+            "packaging": round(packaging_manpower * daily_hours, 2),
+        },
+        "lines": lines,
+    }
+    return (
+        "你是制造业月度排产优化专家。请根据订单行明细与各阶段日产能，给出组装、包装的订单行排产先后顺序，"
+        "目标是把延期订单数量降到最低。\n\n"
+        "【硬约束】\n"
+        "- 只能对输入 lines 中出现的 order_no / line_no 排序，不得新增或臆造订单行。\n"
+        "- 同一订单的多行必须连续出现，保证同一订单整体优先完成。\n"
+        "- order_sequence 需覆盖全部输入行且每行只出现一次；若行数过多，按优先级给出尽可能完整的顺序。\n"
+        "- 交期越早越靠前；同交期时人时大的优先；没有交期的排在最后。\n\n"
+        "【输出要求】\n"
+        "- 必须输出纯 JSON，第一个字符是 '{'，最后一个字符是 '}'，不要使用 markdown 代码块或说明文字。\n"
+        "- summary: 80 字以内说明本次排序思路。\n"
+        "- order_sequence: 按排产先后排列的 [{order_no, line_no}] 数组。\n"
+        "- risks: 可能的风险点（如产能不足、交期集中）字符串数组。\n\n"
+        "【输入数据】\n"
+        f"{json.dumps(payload, ensure_ascii=False, default=str)}"
+    )
+
+
+def _normalize_ai_order_sequence(
+    raw_sequence: list[tuple[str, str]],
+    source_orders: list[dict[str, Any]],
+) -> tuple[list[tuple[str, str]], int, int]:
+    """校验 AI 顺序：丢弃臆造/重复行，缺失行按默认交期顺序补到末尾。"""
+    by_key = {
+        (str(item.get("order_no") or ""), str(item.get("line_no") or ""))
+        for item in source_orders
+    }
+    normalized: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    matched_count = 0
+    for order_no, line_no in raw_sequence:
+        key = (str(order_no), str(line_no))
+        if key in by_key and key not in seen:
+            normalized.append(key)
+            seen.add(key)
+            matched_count += 1
+    appended_count = 0
+    for item in _default_sorted_orders(source_orders):
+        key = (str(item.get("order_no") or ""), str(item.get("line_no") or ""))
+        if key not in seen:
+            normalized.append(key)
+            seen.add(key)
+            appended_count += 1
+    return normalized, matched_count, appended_count
+
+
+async def get_ai_allocation_preview(
+    db: AsyncSession,
+    *,
+    year: int,
+    month: int,
+    stage: str = "all",
+    workdays: int = 26,
+    daily_hours: float = 12.0,
+    assembly_manpower: int = 14,
+    packaging_manpower: int = 14,
+    include_sunday: bool = False,
+    include_scheduled: bool = True,
+    keyword: Optional[str] = None,
+) -> dict[str, Any]:
+    """调用大模型决定订单行排产顺序，再用确定性容量算法生成每日预览。"""
+    plan = await get_monthly_capacity_plan(
+        db,
+        year=year,
+        month=month,
+        stage=stage,
+        workdays=workdays,
+        daily_hours=daily_hours,
+        assembly_manpower=assembly_manpower,
+        packaging_manpower=packaging_manpower,
+        include_sunday=include_sunday,
+        include_scheduled=include_scheduled,
+        keyword=keyword,
+    )
+    schedulable_lines = _collect_ai_schedulable_lines(plan, stage)
+    if not schedulable_lines:
+        raise ValueError("当前条件下没有可排产的订单行，无法生成 AI 排产")
+
+    prompt = _build_ai_schedule_prompt(
+        plan,
+        schedulable_lines[:AI_SCHEDULE_MAX_LINES],
+        workdays=workdays,
+        daily_hours=daily_hours,
+        assembly_manpower=assembly_manpower,
+        packaging_manpower=packaging_manpower,
+    )
+    try:
+        ai_plan = await ai_service.structured_output(
+            prompt,
+            AiSchedulePlanOut,
+            ChatOptions(temperature=0.2, max_tokens=8192, timeout=120),
+        )
+    except NotSupportedError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "AI 服务未配置（当前 provider=rule_based，无法生成真实排产方案）。"
+                "请在后端 .env.local 设置 AI_DEFAULT_PROVIDER=openai 或 dashscope，"
+                "并配置对应的 API key 与 base_url 后重启服务再重试。"
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI 排产失败: {exc}")
+
+    raw_sequence = [(item.order_no, item.line_no) for item in ai_plan.order_sequence]
+    sequence, matched_count, appended_count = _normalize_ai_order_sequence(
+        raw_sequence, schedulable_lines
+    )
+    preview = build_daily_allocation_preview(
+        plan,
+        stage=stage,
+        workdays=workdays,
+        daily_hours=daily_hours,
+        assembly_manpower=assembly_manpower,
+        packaging_manpower=packaging_manpower,
+        include_sunday=include_sunday,
+        order_sequence=sequence,
+    )
+    return {
+        "summary": plan.get("summary"),
+        "stages": plan.get("stages"),
+        **preview,
+        "ai": {
+            "provider": ai_service.current_provider(),
+            "summary": ai_plan.summary,
+            "risks": ai_plan.risks,
+            "order_sequence": [
+                {"order_no": order_no, "line_no": line_no}
+                for order_no, line_no in sequence
+            ],
+            "matched_count": matched_count,
+            "appended_count": appended_count,
+        },
     }
 
 
@@ -786,19 +1063,12 @@ async def list_monthly_schedule_plans(
         )
     ).scalars().all()
     items = [_serialize_monthly_plan(row) for row in rows]
-    first_date_by_order: dict[str, str] = {}
-    for item in items:
-        order_no = item["order_no"]
-        plan_date = item["plan_date"] or "9999-12-31"
-        if order_no not in first_date_by_order or plan_date < first_date_by_order[order_no]:
-            first_date_by_order[order_no] = plan_date
+    # 按实际排产顺序展示：日期优先、同一天按计划创建顺序（生成时即排产顺序），
+    # 避免按订单号排序造成“订单未排完却先排了别的订单”的错觉。
     items.sort(
         key=lambda item: (
-            first_date_by_order.get(item["order_no"], "9999-12-31"),
-            item["order_no"],
-            item["plan_date"] or "",
-            item["schedule_bucket"],
-            item["line_no"],
+            item["plan_date"] or "9999-12-31",
+            item["id"],
         )
     )
     return items
@@ -900,12 +1170,38 @@ async def activate_monthly_schedule_batch(
     return {"batch_no": batch_no, "activated_count": len(rows)}
 
 
+async def _apply_schedule_bucket(
+    db: AsyncSession,
+    plan: MonthlySchedulePlan,
+    schedule_bucket: str,
+) -> None:
+    if schedule_bucket == plan.schedule_bucket:
+        return
+    bom_code = str(plan.bom_no or "").strip()
+    if not bom_code:
+        raise ValueError("该计划缺少 BOM，无法调整阶段")
+    rules = await UpphCalculationService(db).build_local_stage_rules(bom_code)
+    stage_rule = (rules.get("stage_rules") or {}).get(schedule_bucket) or {}
+    upph = _to_float(stage_rule.get("upph"))
+    price_total = _to_float(stage_rule.get("price_total"))
+    if upph <= 0:
+        raise ValueError(f"该 BOM 缺少{STAGE_LABELS[schedule_bucket]}阶段 UPPH，无法调整阶段")
+    scenario = await db.get(MonthlyCapacityScenario, 1)
+    manpower = getattr(scenario, f"{schedule_bucket}_manpower", None) if scenario else None
+    plan.schedule_bucket = schedule_bucket
+    plan.upph = upph
+    plan.price_total = price_total
+    if manpower:
+        plan.manpower = int(manpower)
+
+
 async def update_monthly_schedule_plan(
     db: AsyncSession,
     *,
     plan_id: int,
     plan_date: Optional[date] = None,
     daily_work_hours: Optional[float] = None,
+    schedule_bucket: Optional[str] = None,
 ) -> dict[str, Any]:
     plan = await db.get(MonthlySchedulePlan, plan_id)
     if not plan or not plan.is_active:
@@ -918,6 +1214,8 @@ async def update_monthly_schedule_plan(
         if daily_work_hours < 1 or daily_work_hours > 24:
             raise ValueError("每天工作时长必须在 1-24 小时之间")
         plan.daily_work_hours = daily_work_hours
+    if schedule_bucket:
+        await _apply_schedule_bucket(db, plan, schedule_bucket)
     await db.flush()
 
     required_hours = (

@@ -1341,6 +1341,9 @@ class ProductProcessCapacityOut(BaseModel):
     gjje: Optional[float] = None
     manpower: Optional[float] = None
     hour_price: Optional[float] = None
+    oa_manpower: Optional[float] = None
+    bottleneck_hours: Optional[float] = None
+    standard_capacity: Optional[float] = None
     oa_raw_upph: Optional[float] = None
     formula_upph: Optional[float] = None
     manual_upph: Optional[float] = None

@@ -6,6 +6,7 @@ import { appHistory } from './utils/appHistory'
 import Login from './pages/Login'
 import ShareAccess from './pages/ShareAccess'
 import SupplierClaimPrint from './pages/QualityCenter/SupplierClaims/print'
+import WeeklyCapacity from './pages/WeeklyCapacity/index'
 import {useAuthStore} from './store/auth'
 import {useThemeStore} from './store/theme'
 import {setGlobalMessageApi} from './utils/antdMessage'
@@ -101,6 +102,10 @@ export default function App() {
                                     </ShareRouteGuard>
                                 </PrivateRoute>
                             }
+                        />
+                        <Route
+                            path="/weekly-capacity"
+                            element={<PrivateRoute><WeeklyCapacity/></PrivateRoute>}
                         />
                         <Route
                             path="/"
