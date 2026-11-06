@@ -35,5 +35,20 @@ export const monthlyCapacityPlanApi = {
     api.put(`/production/monthly-capacity-plan/plans/${planId}`, data),
   getWeeklyCapacity: (params?: Record<string, any>) =>
     api.get('/production/weekly-capacity/next', { params }),
+  generateWeeklySnapshot: (params?: Record<string, any>) =>
+    api.post('/production/weekly-capacity/snapshots', null, { params }),
+  getWeeklySnapshot: (snapshotId: number) =>
+    api.get(`/production/weekly-capacity/snapshots/${snapshotId}`),
+  listWeeklySnapshots: (params?: Record<string, any>) =>
+    api.get('/production/weekly-capacity/snapshots', { params }),
+  publishWeeklySnapshot: (snapshotId: number) =>
+    api.post(`/production/weekly-capacity/snapshots/${snapshotId}/publish`),
+  listWeeklyRecipients: () => api.get('/production/weekly-capacity/recipients'),
+  listWeeklyRecipientOptions: () =>
+    api.get('/production/weekly-capacity/recipient-options'),
+  listWeeklyRecipientCandidates: (params?: Record<string, any>) =>
+    api.get('/production/weekly-capacity/recipient-candidates', { params }),
+  updateWeeklyRecipients: (items: Array<Record<string, any>>) =>
+    api.put('/production/weekly-capacity/recipients', { items }),
   pushWeeklyCapacity: () => api.post('/production/weekly-capacity/push'),
 }

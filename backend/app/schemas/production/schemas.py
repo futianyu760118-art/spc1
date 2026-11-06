@@ -598,6 +598,8 @@ class OrderForSchedulingOut(BaseModel):
     product_code: Optional[str] = None
     product_model: Optional[str] = None
     order_qty: Optional[float] = None
+    warehouse_in_qty: Optional[float] = None
+    remaining_qty: Optional[float] = None
     promised_date: Optional[date] = None
     risk_level: Optional[str] = None
     status: Optional[str] = None
@@ -696,6 +698,8 @@ class TodoWorkbenchItemOut(BaseModel):
     model_code: Optional[str] = None
     order_qty: Optional[float] = None
     quantity: Optional[float] = None
+    warehouse_in_qty: Optional[float] = None
+    remaining_qty: Optional[float] = None
     promised_date: Optional[date] = None
     source_promised_date: Optional[date] = None
     risk_level: Optional[str] = None

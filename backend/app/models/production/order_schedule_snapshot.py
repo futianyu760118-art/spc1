@@ -21,6 +21,7 @@ class ProductionOrderScheduleSnapshot(Base):
     product_code = Column(String(64), nullable=True, index=True)
     product_model = Column(String(128), nullable=True)
     order_qty = Column(Numeric(15, 2), nullable=True)
+    warehouse_in_qty = Column(Numeric(15, 2), nullable=True, comment="同步时固化的已入库数量")
     promised_date = Column(Date, nullable=True, index=True)
 
     upph_snapshot = Column(Numeric(15, 2), nullable=True, comment="同步时固化的UPPH")

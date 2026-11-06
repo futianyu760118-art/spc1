@@ -13,6 +13,7 @@ from app.models.production.labor_price_audit import ProductionLaborPriceAudit  #
 from app.models.production.labor_price import LaborPriceMain, LaborPriceDetail  # noqa: F401
 from app.models.production.monthly_schedule_plan import MonthlySchedulePlan  # noqa: F401
 from app.models.production.monthly_capacity_scenario import MonthlyCapacityScenario  # noqa: F401
+from app.models.production.weekly_capacity import WeeklyPlanSnapshot, WeeklyPushRecipient  # noqa: F401
 from app.models.production.base_condition import ProductionBaseCondition  # noqa: F401
 from app.models.production.workshop_daily_report import (  # noqa: F401
     WorkshopDailyReport,

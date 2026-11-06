@@ -94,6 +94,7 @@ class SaleOrderLine(Base):
     product_name = Column(String(256))
     product_model = Column(String(128), comment="产品型号")
     order_qty = Column(Numeric(15, 2))
+    warehouse_in_qty = Column(Numeric(15, 2), comment="已入库数量(同步自K3生产任务单)")
     order_amount = Column(Numeric(15, 2), comment="金额")
     promised_date = Column(Date)
     shipping_plan = Column(Date, comment="出货计划(冗余自 sale_order, 排产以此为准)")

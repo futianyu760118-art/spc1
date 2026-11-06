@@ -46,6 +46,10 @@ interface OrderRow {
   bom_no?: string
   shipping_plan?: string
   quantity: number
+  order_qty?: number
+  warehouse_in_qty?: number
+  remaining_qty?: number
+  is_fully_stock_in?: boolean
   status?: string
   schedule_bucket?: string
   assembly_price: number
@@ -66,6 +70,7 @@ interface OrderMasterRow {
   packaging_hours: number
   total_hours: number
   scheduled_count: number
+  stocked_in_count: number
   lines: OrderRow[]
 }
 
@@ -411,6 +416,7 @@ export default function MonthlyCapacityPlan() {
           packaging_hours: 0,
           total_hours: 0,
           scheduled_count: 0,
+          stocked_in_count: 0,
           lines: [],
         }
         groups.set(row.order_no, group)
@@ -421,6 +427,7 @@ export default function MonthlyCapacityPlan() {
       group.packaging_hours += row.packaging_hours
       group.total_hours += row.total_hours
       group.scheduled_count += row.has_schedule ? 1 : 0
+      group.stocked_in_count += row.is_fully_stock_in ? 1 : 0
       group.lines.push(row)
       if (row.shipping_plan) {
         if (!group.shipping_plan_start || row.shipping_plan < group.shipping_plan_start) {
@@ -444,11 +451,27 @@ export default function MonthlyCapacityPlan() {
     { title: 'BOM', dataIndex: 'bom_no', width: 220, ellipsis: true },
     { title: '出货计划', dataIndex: 'shipping_plan', width: 110 },
     {
-      title: '数量',
+      title: '剩余数量',
       dataIndex: 'quantity',
       width: 100,
       align: 'right',
       render: (value: number) => num(value, 0),
+    },
+    {
+      title: '入库情况',
+      width: 160,
+      render: (_: unknown, row: OrderRow) => {
+        const inQty = Number(row.warehouse_in_qty ?? 0)
+        const orderQty = Number(row.order_qty ?? row.quantity ?? 0)
+        if (!inQty) return <span style={{ color: '#8c8c8c' }}>未入库</span>
+        const full = !!row.is_fully_stock_in || (orderQty > 0 && inQty >= orderQty)
+        return (
+          <Space direction="vertical" size={0}>
+            <span>{`已入 ${num(inQty, 0)} / ${num(orderQty, 0)}`}</span>
+            <Tag color={full ? 'green' : 'orange'}>{full ? '已全部入库' : '部分入库'}</Tag>
+          </Space>
+        )
+      },
     },
     {
       title: '组装单价',
@@ -488,10 +511,13 @@ export default function MonthlyCapacityPlan() {
     {
       title: '排产状态',
       dataIndex: 'has_schedule',
-      width: 100,
-      render: (value: boolean) => (
-        <Tag color={value ? 'green' : 'default'}>{value ? '已排' : '未排'}</Tag>
-      ),
+      width: 110,
+      render: (value: boolean, row: OrderRow) => {
+        if (row.is_fully_stock_in) {
+          return <Tag color="green">已全部入库</Tag>
+        }
+        return <Tag color={value ? 'green' : 'default'}>{value ? '已排' : '未排'}</Tag>
+      },
     },
   ]
 
@@ -499,7 +525,7 @@ export default function MonthlyCapacityPlan() {
     { title: '订单号', dataIndex: 'order_no', width: 200, fixed: 'left' },
     { title: '行数', dataIndex: 'line_count', width: 70, align: 'right' },
     {
-      title: '总数量',
+      title: '剩余总量',
       dataIndex: 'total_quantity',
       width: 100,
       align: 'right',
@@ -539,6 +565,7 @@ export default function MonthlyCapacityPlan() {
       title: '排产状态',
       width: 100,
       render: (_: unknown, row: OrderMasterRow) => {
+        if (row.stocked_in_count === row.line_count) return <Tag color="green">已全部入库</Tag>
         if (row.scheduled_count === 0) return <Tag>未排</Tag>
         if (row.scheduled_count === row.line_count) return <Tag color="green">已排</Tag>
         return <Tag color="orange">部分已排</Tag>

@@ -11,10 +11,11 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.production.schedule_plans import (
+    _assert_order_line_schedulable,
     _invalidate_schedule_runtime_caches,
     _log_schedule_operation,
     _sync_snapshot_schedule_state_for_keys,
@@ -22,6 +23,7 @@ from app.api.v1.production.schedule_plans import (
 from app.core.audit import log_audit
 from app.core.database import get_db
 from app.core.security import PermissionChecker
+from app.models.order.sale_order import SaleOrderLine
 from app.models.production.schedule_plan import ProductionSchedulePlan
 from app.schemas.common import ResponseModel
 from app.schemas.production.schemas import (
@@ -191,6 +193,8 @@ async def insert_plan(
         raise HTTPException(status_code=400, detail="行号不能为空")
     if not (payload.product_code or "").strip():
         raise HTTPException(status_code=400, detail="产品编码不能为空")
+    if not payload.rework_request_id:
+        await _assert_order_line_schedulable(db, payload.order_no.strip(), str(payload.line_no or "").strip())
     try:
         plan_remark = payload.remark
         if payload.rework_request_id and not plan_remark:
@@ -199,6 +203,19 @@ async def insert_plan(
         if payload.rework_request_id and source_order_qty is None:
             # OA 返工是额外工作量，不冲抵原订单的待排余量
             source_order_qty = payload.quantity
+        if source_order_qty is None and not payload.rework_request_id:
+            # source_order_qty 保留订单原始量，避免数量变更检测把剩余量误判为订单变更
+            order_line_row = (await db.execute(
+                select(SaleOrderLine.order_qty)
+                .where(
+                    SaleOrderLine.order_no == payload.order_no.strip(),
+                    SaleOrderLine.line_no == str(payload.line_no or "").strip(),
+                )
+                .order_by(SaleOrderLine.id.desc())
+                .limit(1)
+            )).first()
+            if order_line_row is not None:
+                source_order_qty = float(order_line_row[0] or 0)
         async with db.begin_nested():
             plan, pushed, conflicts = await insert_schedule_plan(
                 db,
@@ -359,6 +376,16 @@ async def list_schedule_remainders(
         )
     )
     source_expr = func.max(ProductionSchedulePlan.source_order_qty)
+    warehouse_subq = (
+        select(
+            SaleOrderLine.order_no.label("order_no"),
+            SaleOrderLine.line_no.label("line_no"),
+            func.max(SaleOrderLine.warehouse_in_qty).label("warehouse_in_qty"),
+        )
+        .group_by(SaleOrderLine.order_no, SaleOrderLine.line_no)
+        .subquery()
+    )
+    warehouse_expr = func.coalesce(func.max(warehouse_subq.c.warehouse_in_qty), 0)
 
     conditions = [
         ProductionSchedulePlan.is_active == True,
@@ -386,10 +413,18 @@ async def list_schedule_remainders(
                 func.max(ProductionSchedulePlan.model_code).label("model_code"),
                 source_expr.label("source_order_qty"),
                 planned_expr.label("planned_qty"),
+                warehouse_expr.label("warehouse_in_qty"),
                 func.max(ProductionSchedulePlan.upph).label("upph"),
                 func.max(ProductionSchedulePlan.manpower).label("manpower"),
                 func.max(ProductionSchedulePlan.daily_work_hours).label("daily_work_hours"),
                 func.max(ProductionSchedulePlan.plan_date).label("last_plan_date"),
+            )
+            .outerjoin(
+                warehouse_subq,
+                and_(
+                    warehouse_subq.c.order_no == ProductionSchedulePlan.order_no,
+                    warehouse_subq.c.line_no == ProductionSchedulePlan.line_no,
+                ),
             )
             .where(*conditions)
             .group_by(
@@ -398,7 +433,7 @@ async def list_schedule_remainders(
                 ProductionSchedulePlan.source_process_type,
                 ProductionSchedulePlan.source_order_qty,
             )
-            .having(source_expr - planned_expr > 0.01)
+            .having(source_expr - warehouse_expr - planned_expr > 0.01)
             .order_by(func.max(ProductionSchedulePlan.plan_date).asc())
             .limit(200)
         )
@@ -408,6 +443,7 @@ async def list_schedule_remainders(
     for row in rows:
         source_qty = float(row.source_order_qty or 0)
         planned_qty = float(row.planned_qty or 0)
+        warehouse_in_qty = float(row.warehouse_in_qty or 0)
         items.append(ScheduleRemainderOut(
             order_no=row.order_no,
             line_no=row.line_no,
@@ -417,7 +453,7 @@ async def list_schedule_remainders(
             model_code=row.model_code,
             source_order_qty=source_qty,
             planned_qty=round(planned_qty, 2),
-            remaining_qty=round(source_qty - planned_qty, 2),
+            remaining_qty=round(max(source_qty - warehouse_in_qty - planned_qty, 0), 2),
             upph=float(row.upph) if row.upph is not None else None,
             manpower=int(row.manpower) if row.manpower is not None else None,
             daily_work_hours=(

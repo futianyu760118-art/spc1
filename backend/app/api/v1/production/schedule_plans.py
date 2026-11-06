@@ -360,6 +360,7 @@ ORDER_POOL_DISPLAY_STATUS_LABELS = {
 ORDER_POOL_REASON_SHORT_LABELS = {
     "already_scheduled": "已排产",
     "zero_quantity": "数量无效",
+    "fully_stock_in": "已全部入库",
     "non_schedulable_workshop": "命中其他车间，不参与自动排产",
     "lean_missing_upph": "已命中精益，但缺有效UPPH",
     "missing_upph": "已命中产能，但缺有效UPPH",
@@ -980,28 +981,33 @@ async def _get_effective_order_qty(
     line_no: str,
     order_qty: float,
     bom_no: Optional[str] = None,
-) -> tuple[float, float, str]:
+) -> tuple[float, float, str, float]:
     """获取排产有效数量(P 样自动合并到大货).
 
     规则:
     - 不是 P 开头的 BOM → 找同订单匹配的 P 样, 数量加到最大数量的大货行
-    - 返回: (有效数量, P样累加数量, P样行号列表)
+    - 返回: (有效数量, P样累加数量, P样行号列表, 已入库数量)
 
+    已入库数量含当前行 + 合并的 P 样, 供调用方计算剩余可排量。
     同订单同 BOM 有多个大货行时, P 样只加到数量最大的那个.
     """
+    current = (await db.execute(
+        select(SaleOrderLine.bom_no, SaleOrderLine.warehouse_in_qty)
+        .where(SaleOrderLine.order_no == order_no, SaleOrderLine.line_no == line_no)
+        .order_by(SaleOrderLine.id.desc())
+        .limit(1)
+    )).first()
+    current_warehouse_in_qty = float(current[1] or 0) if current else 0.0
+
     if bom_no:
         big_bom = str(bom_no).strip()
     else:
-        row = (await db.execute(
-            select(SaleOrderLine.bom_no)
-            .where(SaleOrderLine.order_no == order_no, SaleOrderLine.line_no == line_no)
-        )).first()
-        if not row:
-            return order_qty, 0.0, ""
-        big_bom = str(row[0] or "").strip()
+        if not current:
+            return order_qty, 0.0, "", 0.0
+        big_bom = str(current[0] or "").strip()
 
     if not big_bom or big_bom.upper().startswith("P-"):
-        return order_qty, 0.0, ""
+        return order_qty, 0.0, "", current_warehouse_in_qty
 
     # 查同订单同 BOM 的所有大货行, 找到数量最大的
     big_rows = (await db.execute(
@@ -1013,16 +1019,16 @@ async def _get_effective_order_qty(
         )
     )).all()
     if not big_rows:
-        return order_qty, 0.0, ""
+        return order_qty, 0.0, "", current_warehouse_in_qty
 
     max_line = max(big_rows, key=lambda r: float(r[1] or 0))
     if str(max_line[0]) != str(line_no):
-        return order_qty, 0.0, ""
+        return order_qty, 0.0, "", current_warehouse_in_qty
 
     # 查匹配的 P- 样
     p_bom = f"P-{big_bom}"
     p_rows = (await db.execute(
-        select(SaleOrderLine.line_no, SaleOrderLine.order_qty)
+        select(SaleOrderLine.line_no, SaleOrderLine.order_qty, SaleOrderLine.warehouse_in_qty)
         .where(
             SaleOrderLine.order_no == order_no,
             SaleOrderLine.bom_no == p_bom,
@@ -1031,8 +1037,25 @@ async def _get_effective_order_qty(
     )).all()
 
     p_qty = sum(float(r[1] or 0) for r in p_rows)
+    p_warehouse_in_qty = sum(float(r[2] or 0) for r in p_rows)
     p_lines = ", ".join(str(r[0]) for r in p_rows)
-    return order_qty + p_qty, p_qty, p_lines
+    return order_qty + p_qty, p_qty, p_lines, current_warehouse_in_qty + p_warehouse_in_qty
+
+
+async def _assert_order_line_schedulable(db: AsyncSession, order_no: str, line_no: str) -> None:
+    """已全部入库的订单行默认不允许排产。"""
+    row = (await db.execute(
+        select(SaleOrderLine.warehouse_in_qty, SaleOrderLine.order_qty)
+        .where(SaleOrderLine.order_no == order_no, SaleOrderLine.line_no == line_no)
+        .order_by(SaleOrderLine.id.desc())
+        .limit(1)
+    )).first()
+    if not row:
+        return
+    warehouse_in_qty = float(row[0] or 0)
+    order_qty = float(row[1] or 0)
+    if order_qty > 0 and warehouse_in_qty >= order_qty:
+        raise HTTPException(status_code=400, detail="该订单行已全部入库，默认不允许排产")
 
 
 def _build_delete_preview_response(
@@ -1161,6 +1184,8 @@ async def _build_order_scheduling_items(
     }
     for row in rows:
         order_line = row.SaleOrderLine
+        warehouse_in_qty = float(order_line.warehouse_in_qty or 0)
+        remaining_qty = _get_remaining_order_qty(order_line.order_qty, warehouse_in_qty)
         customer = row.customer
         current_risk_level = row.risk_level
         if risk_level and current_risk_level != risk_level:
@@ -1187,7 +1212,7 @@ async def _build_order_scheduling_items(
             )
         if current_schedule_bucket in {"lean", "assembly", "packaging"}:
             lean_workhour_plan = simulation_service.build_bucket_workhour_plan(
-                quantity=float(order_line.order_qty or 0),
+                quantity=remaining_qty,
                 upph=current_bucket_upph,
                 promised_date=_get_effective_due_date(order_line),
                 schedule_bucket=current_schedule_bucket,
@@ -1199,6 +1224,7 @@ async def _build_order_scheduling_items(
         display_state = _resolve_order_display_state(
             order_qty=float(order_line.order_qty or 0),
             scheduling_state=scheduling_state,
+            warehouse_in_qty=warehouse_in_qty,
         )
         scheduling_reason_details = list(display_state.get("details") or [])
         if lean_workhour_plan.get("work_hour_summary"):
@@ -1225,6 +1251,8 @@ async def _build_order_scheduling_items(
             product_code=order_line.product_code,
             product_model=order_line.product_model,
             order_qty=float(order_line.order_qty or 0),
+            warehouse_in_qty=warehouse_in_qty,
+            remaining_qty=remaining_qty,
             promised_date=_get_effective_due_date(order_line),
             risk_level=current_risk_level,
             status=order_line.status,
@@ -1415,10 +1443,16 @@ def _resolve_order_scheduling_state(
     }
 
 
+def _get_remaining_order_qty(order_qty: float, warehouse_in_qty: float) -> float:
+    """可排数量 = 订单量 - 已入库量，不小于 0。"""
+    return max(float(order_qty or 0) - float(warehouse_in_qty or 0), 0.0)
+
+
 def _resolve_order_display_state(
     *,
     order_qty: float,
     scheduling_state: dict[str, object],
+    warehouse_in_qty: float = 0.0,
 ) -> dict[str, object]:
     status = str(scheduling_state.get("status") or "pending")
     reason_code = str(scheduling_state.get("reason_code") or "")
@@ -1443,6 +1477,16 @@ def _resolve_order_display_state(
             "reason_code": "zero_quantity",
             "reason": ORDER_POOL_REASON_SHORT_LABELS["zero_quantity"],
             "details": ["订单数量小于等于0，当前不参与自动排产"],
+            "is_missing_upph": False,
+        }
+
+    if float(warehouse_in_qty or 0) >= order_qty:
+        return {
+            "status": "excluded",
+            "status_label": ORDER_POOL_DISPLAY_STATUS_LABELS["excluded"],
+            "reason_code": "fully_stock_in",
+            "reason": ORDER_POOL_REASON_SHORT_LABELS["fully_stock_in"],
+            "details": [f"已入库 {float(warehouse_in_qty or 0)} / 订单 {order_qty}，已全部入库，默认不参与排产"],
             "is_missing_upph": False,
         }
 
@@ -1723,6 +1767,8 @@ async def _refresh_order_schedule_snapshots(
 
     for row in stale_rows:
         order_line = row.SaleOrderLine
+        warehouse_in_qty = float(order_line.warehouse_in_qty or 0)
+        remaining_qty = _get_remaining_order_qty(order_line.order_qty, warehouse_in_qty)
         customer = getattr(row, "customer", None)
         risk_level = getattr(row, "risk_level", None)
         bom_no = _get_order_line_bom_code(order_line)
@@ -1743,7 +1789,7 @@ async def _refresh_order_schedule_snapshots(
             )
         if current_schedule_bucket in {"lean", "assembly", "packaging"}:
             lean_workhour_plan = simulation_service.build_bucket_workhour_plan(
-                quantity=float(order_line.order_qty or 0),
+                quantity=remaining_qty,
                 upph=current_bucket_upph,
                 promised_date=_get_effective_due_date(order_line),
                 schedule_bucket=current_schedule_bucket,
@@ -1755,6 +1801,7 @@ async def _refresh_order_schedule_snapshots(
         display_state = _resolve_order_display_state(
             order_qty=float(order_line.order_qty or 0),
             scheduling_state=scheduling_state,
+            warehouse_in_qty=warehouse_in_qty,
         )
         scheduling_reason_details = list(display_state.get("details") or [])
         if lean_workhour_plan.get("work_hour_summary"):
@@ -1769,6 +1816,7 @@ async def _refresh_order_schedule_snapshots(
             "product_code": order_line.product_code,
             "product_model": order_line.product_model,
             "order_qty": float(order_line.order_qty or 0),
+            "warehouse_in_qty": warehouse_in_qty,
             "promised_date": _get_effective_due_date(order_line),
             "upph_snapshot": float(schedule_context.get("total_upph") or 0),
             "schedule_bucket_snapshot": current_schedule_bucket,
@@ -3255,6 +3303,7 @@ async def _save_schedule_plan_record(
     operation_remark: Optional[str],
     manpower: Optional[int] = None,
     effective_order_qty: Optional[float] = None,
+    source_order_qty: Optional[float] = None,
     include_sunday: Optional[bool] = None,
 ) -> ProductionSchedulePlan:
     priority = _resolve_priority_by_risk(risk_level)
@@ -3272,8 +3321,9 @@ async def _save_schedule_plan_record(
         except Exception:
             pass
 
-    # 排产使用有效数量(含自动合并的大货样)
+    # 排产使用有效数量(含自动合并的大货样), source_order_qty 保留订单原始有效量
     used_qty = effective_order_qty if effective_order_qty and effective_order_qty > 0 else effective_order_qty
+    source_total = source_order_qty if source_order_qty is not None else used_qty
     schedule_data = ProductionSchedulePlanCreate(
         department=department,
         plan_date=calculation_result["plan_date"],
@@ -3295,7 +3345,7 @@ async def _save_schedule_plan_record(
         plan_version=plan_version,
         is_active=True,
         source_promised_date=_get_effective_due_date(order_line),
-        source_order_qty=used_qty,
+        source_order_qty=source_total,
         source_product_code=order_line.product_code,
         source_product_model=order_line.product_model,
         source_upph=resolved_upph,
@@ -3530,15 +3580,18 @@ async def _create_schedule_plan_from_request(
     bom_code = _get_order_line_bom_code(order_line)
 
     # 取有效排产数量(P 样自动合并到同订单同 BOM 的最大大货行)
-    effective_order_qty, merged_p_qty, merged_p_lines = await _get_effective_order_qty(
+    effective_order_qty, merged_p_qty, merged_p_lines, warehouse_in_qty = await _get_effective_order_qty(
         db,
         order_no=order_line.order_no,
         line_no=order_line.line_no,
         order_qty=float(order_line.order_qty or 0),
         bom_no=bom_code,
     )
-    if effective_order_qty <= 0:
-        raise HTTPException(status_code=400, detail="订单行数量无效")
+    source_order_qty = effective_order_qty
+    schedulable_order_qty = max(effective_order_qty - warehouse_in_qty, 0.0)
+    if schedulable_order_qty <= 0:
+        raise HTTPException(status_code=400, detail="该订单行已全部入库，无可排数量")
+    effective_order_qty = schedulable_order_qty
 
     schedule_bucket = None
     lean_workhour_plan = {}
@@ -3646,6 +3699,7 @@ async def _create_schedule_plan_from_request(
             operation_remark=operation_remark,
             manpower=effective_manpower,
             effective_order_qty=effective_order_qty,
+            source_order_qty=source_order_qty,
             include_sunday=resolved_include_sunday,
         )
         return [record], _build_schedule_response_calculation(
@@ -3939,6 +3993,7 @@ async def _create_schedule_plan_from_request(
             operation_remark=operation_remark or "两段排产创建-组装",
             manpower=assembly_manpower,
             effective_order_qty=effective_order_qty,
+            source_order_qty=source_order_qty,
             include_sunday=resolved_include_sunday,
         )
         packaging_record = await _save_schedule_plan_record(
@@ -3956,6 +4011,7 @@ async def _create_schedule_plan_from_request(
             operation_remark=operation_remark or "两段排产创建-包装",
             manpower=packaging_manpower,
             effective_order_qty=effective_order_qty,
+            source_order_qty=source_order_qty,
             include_sunday=resolved_include_sunday,
         )
         return [assembly_record, packaging_record], {
@@ -4073,6 +4129,7 @@ async def _create_schedule_plan_from_request(
             existing_plan=existing_plan,
             operation_remark=operation_remark,
             effective_order_qty=effective_order_qty,
+            source_order_qty=source_order_qty,
             include_sunday=resolved_include_sunday,
         )
     return [record], _build_schedule_response_calculation(
@@ -4900,6 +4957,8 @@ async def create_schedule_plan(
     current_user: dict = Depends(PermissionChecker("production.schedule_plans", "create")),
     db: AsyncSession = Depends(get_db),
 ):
+    if data.order_no and data.line_no:
+        await _assert_order_line_schedulable(db, data.order_no, data.line_no)
     record = ProductionSchedulePlan(**data.model_dump(), created_by=current_user["username"])
     db.add(record)
     await db.flush()
@@ -6074,6 +6133,8 @@ async def get_schedule_debug_trace(
             "product_model": order_line.product_model,
             "bom_no": bom_no,
             "order_qty": float(order_line.order_qty or 0),
+            "warehouse_in_qty": float(order_line.warehouse_in_qty or 0),
+            "remaining_qty": _get_remaining_order_qty(order_line.order_qty, order_line.warehouse_in_qty),
             "promised_date": _get_effective_due_date(order_line).isoformat() if _get_effective_due_date(order_line) else None,
             "updated_at": order_line.updated_at.isoformat() if order_line.updated_at else None,
         },
@@ -6484,6 +6545,13 @@ async def list_todo_workbench(
                     model_code=plan.model_code,
                     order_qty=float(plan.source_order_qty or plan.quantity or 0),
                     quantity=float(plan.quantity or 0),
+                    warehouse_in_qty=float(
+                        getattr(plan_snapshot_map.get((plan.order_no, plan.line_no)), "warehouse_in_qty", 0) or 0
+                    ),
+                    remaining_qty=_get_remaining_order_qty(
+                        float(plan.source_order_qty or plan.quantity or 0),
+                        getattr(plan_snapshot_map.get((plan.order_no, plan.line_no)), "warehouse_in_qty", 0),
+                    ),
                     promised_date=(
                         getattr(plan_snapshot_map.get((plan.order_no, plan.line_no)), "promised_date", None)
                         or plan.source_promised_date
@@ -6573,7 +6641,9 @@ async def list_todo_workbench(
                         product_model=snapshot.product_model,
                         model_code=snapshot.product_model,
                         order_qty=float(snapshot.order_qty or 0),
-                        quantity=float(snapshot.order_qty or 0),
+                        quantity=_get_remaining_order_qty(snapshot.order_qty, snapshot.warehouse_in_qty),
+                        warehouse_in_qty=float(snapshot.warehouse_in_qty or 0),
+                        remaining_qty=_get_remaining_order_qty(snapshot.order_qty, snapshot.warehouse_in_qty),
                         promised_date=snapshot.promised_date,
                         source_promised_date=snapshot.promised_date,
                         risk_level=snapshot.risk_level,
@@ -6979,6 +7049,8 @@ async def auto_schedule(
     - 第一次调用（confirm_risky=False）：若试算结果需要周日/前挪，返回 needs_confirm=True + calculation_result，不落库
     - 第二次调用（confirm_risky=True）：直接落库
     """
+    await _assert_order_line_schedulable(db, data.order_no, data.line_no)
+
     # v2 阶段 4：风险试算（不落库）——仅当未确认时检查
     if not data.confirm_risky:
         risky_preview = await _preview_schedule_risk(
@@ -7275,6 +7347,7 @@ async def batch_auto_schedule(
         )
         for index, item in enumerate(group_items):
             try:
+                await _assert_order_line_schedulable(db, item.order_no, item.line_no)
                 anchor_override = anchor_date if (can_merge and index > 0 and anchor_date) else None
                 records, calculation_result, response_message = await schedule_one(
                     item,
