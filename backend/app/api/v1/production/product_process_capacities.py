@@ -72,6 +72,12 @@ def _compose_capacity_metadata(
         upph_source=upph_result.get("upph_source"),
         manpower=upph_result.get("manpower"),
         hour_price=upph_result.get("hour_price"),
+        oa_manpower=metadata.get("oa_manpower"),
+        bottleneck_hours=metadata.get("bottleneck_hours"),
+        standard_capacity=metadata.get("standard_capacity"),
+        manual_price=metadata.get("manual_price"),
+        oa_gjje=metadata.get("oa_gjje"),
+        price_source=metadata.get("price_source"),
         raw_remark=raw_remark_value,
     )
     return upph_result, remark
@@ -91,6 +97,9 @@ def _serialize_capacity(record: ProductProcessCapacity) -> ProductProcessCapacit
         gjje=metadata.get("gjje"),
         manpower=metadata.get("manpower"),
         hour_price=metadata.get("hour_price"),
+        oa_manpower=metadata.get("oa_manpower"),
+        bottleneck_hours=metadata.get("bottleneck_hours"),
+        standard_capacity=metadata.get("standard_capacity"),
         oa_raw_upph=metadata.get("oa_raw_upph"),
         formula_upph=metadata.get("formula_upph"),
         manual_upph=metadata.get("manual_upph"),

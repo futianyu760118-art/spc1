@@ -86,6 +86,28 @@ ROLE_PERMISSION_ADDITIONS: Dict[str, Dict[str, List[str]]] = {
         "production.order_wage_lookup": ["read"],
         "production.monthly_capacity_plan": ["read", "manage"],
     },
+    # 车间侧可直接调整新排产方案的计划日期与日工时
+    "production_supervisor": {
+        "production.monthly_capacity_plan": ["read", "manage"],
+    },
+    "org34_pos91": {
+        "production.monthly_capacity_plan": ["read", "manage"],
+    },
+    "org40_pos91": {
+        "production.monthly_capacity_plan": ["read", "manage"],
+    },
+    "org46_pos91": {
+        "production.monthly_capacity_plan": ["read", "manage"],
+    },
+    "org44_pos97": {
+        "production.monthly_capacity_plan": ["read", "manage"],
+    },
+    "org46_pos97": {
+        "production.monthly_capacity_plan": ["read", "manage"],
+    },
+    "org59_pos97": {
+        "production.monthly_capacity_plan": ["read", "manage"],
+    },
     "purchase_manager": {
         "materials.task_stock_check": ["read"],
         "materials.inventory_board": ["read"],

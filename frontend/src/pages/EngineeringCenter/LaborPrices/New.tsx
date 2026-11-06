@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Alert,
   AutoComplete,
@@ -15,14 +15,22 @@ import {
 } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { engineeringApi } from '../../../services/engineering'
 
 interface DetailFormValue {
   process_type?: string
   gx?: number
+  pph?: number
+  bottleneck_hours?: number
+  standard_capacity?: number
+  manpower?: number
+  original_price?: number
+  original_process_type?: string
+  original_remark?: string
   price?: number
   remark?: string
+  oa_detail_id?: string
 }
 
 interface BomOption {
@@ -35,9 +43,15 @@ interface BomOption {
 interface CurrentPrice {
   process_type: string
   price: number
+  pph?: number
+  bottleneck_hours?: number
+  standard_capacity?: number
+  manpower?: number
   workshop_id?: string
   workshop_name?: string
   oa_main_id?: string
+  oa_detail_id?: string
+  remark?: string
 }
 
 const COMMON_PROCESS_TYPES = ['组装', '组装前加工', '包装', '包装前加工']
@@ -48,7 +62,11 @@ function normalizeProcess(value?: string) {
 
 export default function LaborPriceNew() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const editId = Number(searchParams.get('id') || 0)
   const [form] = Form.useForm()
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const skipCurrentLoadRef = useRef(false)
   const [submitting, setSubmitting] = useState<'draft' | 'pending' | null>(null)
   const [bomOptions, setBomOptions] = useState<BomOption[]>([])
   const [bomLoading, setBomLoading] = useState(false)
@@ -77,26 +95,92 @@ export default function LaborPriceNew() {
     loadBoms()
   }, [loadBoms])
 
+  useEffect(() => {
+    if (!editId) return
+    let active = true
+    engineeringApi
+      .getLaborPriceChange(editId)
+      .then((res: any) => {
+        if (!active) return
+        const data = res.data
+        if (!data || data.status !== 'draft') {
+          message.warning('只有草稿可以编辑')
+          navigate('/engineering/labor-price-changes', { replace: true })
+          return
+        }
+        skipCurrentLoadRef.current = true
+        setEditingId(editId)
+        form.setFieldsValue({
+          bom_code: data.bom_code,
+          product_code: data.product_code,
+          product_name: data.product_name,
+          workshop_id: data.workshop_id,
+          workshop_name: data.workshop_name,
+          effective_date: data.effective_date ? dayjs(data.effective_date) : undefined,
+          reason: data.reason,
+          remark: data.remark,
+          details: (data.details || []).map((detail: any) => ({
+            process_type: detail.process_type,
+            original_process_type: detail.process_type,
+            gx: detail.gx,
+            pph: detail.pph,
+            bottleneck_hours: detail.bottleneck_hours,
+            standard_capacity: detail.standard_capacity,
+            manpower: detail.manpower,
+            original_price: detail.original_price,
+            price: detail.price,
+            original_remark: detail.remark || '',
+            remark: detail.remark || '',
+            oa_detail_id: detail.oa_detail_id,
+          })),
+        })
+      })
+      .catch(() => {
+        // 全局拦截器提示
+      })
+    return () => {
+      active = false
+    }
+  }, [editId, form, navigate])
+
   const loadCurrentPrices = useCallback(async (bomCode?: string) => {
+    if (skipCurrentLoadRef.current) {
+      skipCurrentLoadRef.current = false
+      return
+    }
     if (!bomCode) {
       setCurrentPrices({})
+      form.setFieldsValue({ details: [{}] })
       return
     }
     setCurrentLoading(true)
     try {
       const res: any = await engineeringApi.listCurrentLaborPrices({ bom_code: bomCode })
+      const rows = (res.data || []) as CurrentPrice[]
       const map: Record<string, CurrentPrice> = {}
-      for (const item of (res.data || []) as CurrentPrice[]) {
-        map[item.process_type] = item
+      for (const item of rows) {
+        if (!map[item.process_type]) map[item.process_type] = item
       }
       setCurrentPrices(map)
-      const first = (res.data || [])[0] as CurrentPrice | undefined
-      if (first) {
-        form.setFieldsValue({
-          workshop_id: first.workshop_id,
-          workshop_name: first.workshop_name,
-        })
-      }
+      const details = rows.map((item) => ({
+        process_type: item.process_type,
+        original_process_type: item.process_type,
+        pph: item.pph,
+        bottleneck_hours: item.bottleneck_hours,
+        standard_capacity: item.standard_capacity,
+        manpower: item.manpower,
+        price: item.price,
+        original_price: item.price,
+        remark: item.remark || '',
+        original_remark: item.remark || '',
+        oa_detail_id: item.oa_detail_id,
+      }))
+      const first = rows[0]
+      form.setFieldsValue({
+        details: details.length ? details : [{}],
+        workshop_id: first?.workshop_id,
+        workshop_name: first?.workshop_name,
+      })
     } catch {
       setCurrentPrices({})
     } finally {
@@ -124,12 +208,22 @@ export default function LaborPriceNew() {
     if (!current) return
     const details = (form.getFieldValue('details') || []) as DetailFormValue[]
     const row = details[index] || {}
-    if (row.price === undefined || row.price === null) {
-      form.setFieldValue(['details', index, 'price'], current.price)
+    const processChanged =
+      normalizeProcess(value) !== normalizeProcess(row.original_process_type)
+    const nextRow = {
+      ...row,
+      price:
+        row.price === undefined || row.price === null ? current.price : row.price,
     }
-    if (!row.remark && current.oa_main_id) {
-      form.setFieldValue(['details', index, 'remark'], `引用 OA 主表 ${current.oa_main_id}`)
+    if (row.original_price === undefined || processChanged) {
+      nextRow.pph = current.pph
+      nextRow.bottleneck_hours = current.bottleneck_hours
+      nextRow.standard_capacity = current.standard_capacity
+      nextRow.manpower = current.manpower
     }
+    form.setFieldsValue({
+      details: details.map((item, itemIndex) => (itemIndex === index ? nextRow : item)),
+    })
   }
 
   const submitPrice = async (status: 'draft' | 'pending') => {
@@ -140,35 +234,68 @@ export default function LaborPriceNew() {
       return
     }
     const details = (values.details || []) as DetailFormValue[]
-    const processNames = details
-      .map((item) => normalizeProcess(item.process_type))
-      .filter(Boolean)
-    if (processNames.length !== new Set(processNames).size) {
-      message.warning('同一张工价单内工序不能重复')
+    const activeDetails = details.filter((item) => normalizeProcess(item.process_type))
+    const detailKeys = activeDetails.map(
+      (item) => `${normalizeProcess(item.process_type)}||${normalizeProcess(item.remark)}||${item.oa_detail_id || ''}`,
+    )
+    if (detailKeys.length !== new Set(detailKeys).size) {
+      message.warning('同一工序和备注不能重复')
       return
+    }
+    const changedDetails = activeDetails.filter((item) => {
+      if (item.original_price === undefined || item.original_price === null) return true
+      const priceChanged = Number(item.price ?? 0) !== Number(item.original_price)
+      const remarkChanged =
+        (item.remark || '').trim() !== (item.original_remark || '').trim()
+      const processChanged =
+        normalizeProcess(item.process_type) !== normalizeProcess(item.original_process_type)
+      return priceChanged || remarkChanged || processChanged
+    })
+    const detailsToSubmit = changedDetails.length
+      ? changedDetails
+      : editingId
+        ? activeDetails
+        : []
+    if (!detailsToSubmit.length) {
+      message.warning('没有修改任何工价，无需提交')
+      return
+    }
+
+    const payload = {
+      product_code: values.product_code,
+      product_name: values.product_name,
+      workshop_id: values.workshop_id,
+      workshop_name: values.workshop_name,
+      effective_date: values.effective_date
+        ? values.effective_date.format('YYYY-MM-DD')
+        : undefined,
+      reason: values.reason,
+      remark: values.remark,
+      status,
+      details: detailsToSubmit.map((item) => ({
+        process_type: item.process_type,
+        gx: item.gx,
+        original_price: item.original_price,
+        price: item.price,
+        pph: item.pph,
+        bottleneck_hours: item.bottleneck_hours,
+        standard_capacity: item.standard_capacity,
+        manpower: item.manpower,
+        oa_detail_id: item.oa_detail_id,
+        remark: item.remark,
+      })),
     }
 
     setSubmitting(status)
     try {
-      await engineeringApi.createLaborPriceChange({
-        bom_code: values.bom_code,
-        product_code: values.product_code,
-        product_name: values.product_name,
-        workshop_id: values.workshop_id,
-        workshop_name: values.workshop_name,
-        effective_date: values.effective_date
-          ? values.effective_date.format('YYYY-MM-DD')
-          : undefined,
-        reason: values.reason,
-        remark: values.remark,
-        status,
-        details: details.map((item) => ({
-          process_type: item.process_type,
-          gx: item.gx,
-          price: item.price,
-          remark: item.remark,
-        })),
-      })
+      if (editingId) {
+        await engineeringApi.updateLaborPriceChange(editingId, payload)
+      } else {
+        await engineeringApi.createLaborPriceChange({
+          ...payload,
+          bom_code: values.bom_code,
+        })
+      }
       message.success(status === 'draft' ? '已保存草稿' : '已提交审批')
       navigate('/engineering/labor-price-changes', { replace: true })
     } catch {
@@ -185,10 +312,17 @@ export default function LaborPriceNew() {
   return (
     <div style={{ padding: 16 }}>
       <Card
-        title="新建工价"
+        title={editingId ? '编辑工价草稿' : '新建工价'}
         extra={
           <Space>
             <Button onClick={() => navigate('/engineering/labor-price-changes')}>返回列表</Button>
+            <Button
+              loading={currentLoading}
+              disabled={!watchedBom}
+              onClick={() => loadCurrentPrices(watchedBom)}
+            >
+              载入当前 OA 工价
+            </Button>
             <Button loading={submitting === 'draft'} onClick={() => submitPrice('draft')}>
               保存草稿
             </Button>
@@ -206,8 +340,8 @@ export default function LaborPriceNew() {
           <Alert
             type="info"
             showIcon
-            message="先选 BOM，再按工序填写新单价；右侧会显示当前工价用于对比。"
-            description="提交后进入待审批，审批通过前不影响排产。不同工序是独立明细，新增不会让其他工序失效。"
+            message="选择 BOM 后会自动带出 OA 当前工序和单价，只改需要调整的行即可。"
+            description="只提交有修改或新增的明细；同一工序+备注不能重复。提交后进入待审批，审批通过前不影响排产。"
           />
           <Form form={form} layout="vertical" initialValues={{ details: [{}] }}>
             <Space size={16} wrap>
@@ -220,6 +354,7 @@ export default function LaborPriceNew() {
                 <Select
                   showSearch
                   allowClear
+                  disabled={!!editingId}
                   placeholder="搜索并选择 BOM / 产品"
                   filterOption={false}
                   loading={bomLoading}
@@ -267,10 +402,17 @@ export default function LaborPriceNew() {
                     const row = watchedDetails?.[field.name]
                     const processName = (row?.process_type || '').trim()
                     const current = currentPrices[processName]
+                    const processChanged =
+                      !!row?.original_process_type &&
+                      normalizeProcess(processName) !== normalizeProcess(row.original_process_type)
+                    const basePrice =
+                      !processChanged && row?.original_price !== undefined
+                        ? row.original_price
+                        : current?.price
                     const newPrice = row?.price
                     const diff =
-                      current && newPrice !== undefined && newPrice !== null
-                        ? Number((Number(newPrice) - current.price).toFixed(4))
+                      basePrice !== undefined && basePrice !== null && newPrice !== undefined && newPrice !== null
+                        ? Number((Number(newPrice) - Number(basePrice)).toFixed(4))
                         : null
                     return (
                       <Space key={field.key} align="start" wrap>
@@ -292,9 +434,11 @@ export default function LaborPriceNew() {
                           />
                         </Form.Item>
                         <div style={{ width: 190, paddingTop: index === 0 ? 30 : 0 }}>
-                          {current ? (
+                          {basePrice !== undefined && basePrice !== null ? (
                             <Space size={4} wrap>
-                              <Tag color="blue">当前 {current.price}</Tag>
+                              <Tag color="blue">
+                                {processChanged || row?.original_price === undefined ? '当前' : '原价'} {basePrice}
+                              </Tag>
                               {diff !== null && diff !== 0 && (
                                 <Tag color={diff > 0 ? 'red' : 'green'}>
                                   {diff > 0 ? '+' : ''}
@@ -308,6 +452,34 @@ export default function LaborPriceNew() {
                             </Tag>
                           )}
                         </div>
+                        <Form.Item
+                          name={[field.name, 'pph']}
+                          label={index === 0 ? 'PPH' : undefined}
+                          style={{ width: 90, marginBottom: 8 }}
+                        >
+                          <Input readOnly placeholder="-" />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, 'bottleneck_hours']}
+                          label={index === 0 ? '瓶颈工时' : undefined}
+                          style={{ width: 100, marginBottom: 8 }}
+                        >
+                          <Input readOnly placeholder="-" />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, 'standard_capacity']}
+                          label={index === 0 ? '标准产能' : undefined}
+                          style={{ width: 100, marginBottom: 8 }}
+                        >
+                          <Input readOnly placeholder="-" />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, 'manpower']}
+                          label={index === 0 ? '人数' : undefined}
+                          style={{ width: 80, marginBottom: 8 }}
+                        >
+                          <Input readOnly placeholder="-" />
+                        </Form.Item>
                         <Form.Item
                           name={[field.name, 'gx']}
                           label={index === 0 ? 'OA 工序码' : undefined}

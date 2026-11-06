@@ -74,6 +74,7 @@ import Dashboard372 from './pages/ProductionCenter/Dashboard372/index'
 import SchedulePlans from './pages/ProductionCenter/SchedulePlans/index'
 import ScheduleDateAdjust from './pages/ProductionCenter/ScheduleDateAdjust/index'
 import MonthlyCapacityPlan from './pages/ProductionCenter/MonthlyCapacityPlan/index'
+import WeeklyCapacity from './pages/WeeklyCapacity/index'
 import NewSchedulePlans from './pages/EngineeringCenter/NewSchedulePlans/index'
 import LaborPrices from './pages/EngineeringCenter/LaborPrices/index'
 import LaborPriceNew from './pages/EngineeringCenter/LaborPrices/New'
@@ -195,6 +196,10 @@ export default function App() {
                     <Routes>
                         <Route path="/login" element={<Login/>}/>
                         <Route path="/share/:token" element={<ShareAccess/>}/>
+                        <Route
+                            path="/weekly-capacity"
+                            element={<PrivateRoute><WeeklyCapacity/></PrivateRoute>}
+                        />
                         <Route
                             path="/"
                             element={

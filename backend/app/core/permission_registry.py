@@ -326,6 +326,7 @@ declare_permission("production.daily_report", "生产日报表", module="product
 declare_permission("production.labor_price_audit", "工价审核", module="production", parent_code="production", route_path="/labor-price-audits", sort_order=11)
 declare_permission("production.order_wage_lookup", "订单工价查询", module="production", parent_code="production", route_path="/order-wage-lookup", sort_order=12, actions=["read"])
 declare_permission("production.monthly_capacity_plan", "月度产能规划", module="production", parent_code="production", route_path="/production/monthly-capacity-plan", sort_order=13, actions=["read", "manage"])
+declare_permission("production.weekly_capacity", "下周产能计划", module="production", parent_code="production", route_path="/weekly-capacity", sort_order=14, actions=["read"])
 
 # 异常与质量中心
 declare_permission("exceptions", "异常与质量中心", module="exceptions", sort_order=6)

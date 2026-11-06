@@ -125,6 +125,9 @@ class UpphFormulaConfigService:
                 oa_workshop_id=metadata.get("oa_workshop_id"),
                 oa_workshop_name=current_workshop_name,
                 gjje=metadata.get("gjje"),
+                oa_gjje=metadata.get("oa_gjje"),
+                manual_price=metadata.get("manual_price"),
+                price_source=metadata.get("price_source"),
                 oa_raw_upph=upph_result.get("oa_raw_upph"),
                 formula_upph=upph_result.get("formula_upph"),
                 effective_upph=upph_result.get("effective_upph"),
@@ -132,6 +135,9 @@ class UpphFormulaConfigService:
                 upph_source=upph_result.get("upph_source"),
                 manpower=upph_result.get("manpower"),
                 hour_price=upph_result.get("hour_price"),
+                oa_manpower=metadata.get("oa_manpower"),
+                bottleneck_hours=metadata.get("bottleneck_hours"),
+                standard_capacity=metadata.get("standard_capacity"),
                 raw_remark=metadata.get("raw_remark"),
             )
             recalculated += 1
