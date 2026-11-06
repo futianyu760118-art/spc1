@@ -1,8 +1,11 @@
 from fastapi import APIRouter
 
-from app.api.v1 import agent, approval, assistant, basicdata, common, dashboard, engineering, exception, external, internal, masterdata, material, mrp, order, production, purchase, quality, rules, system, writeback
+from app.api.v1 import agent, approval, assistant, basicdata, common, dashboard, engineering, exception, external, internal, masterdata, material, m10, mrp, order, production, purchase, quality, rules, system, writeback
 
 api_router = APIRouter()
+
+# M10 微系统互连（只读自检与契约发现）
+api_router.include_router(m10.router, prefix="/m10", tags=["M10 互连"])
 
 # Dashboard
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["供应链驾驶舱"])

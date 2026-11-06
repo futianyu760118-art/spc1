@@ -1147,6 +1147,18 @@ export default function MainLayout() {
           {!isShareUser() && <AppTabs navTree={navTree} />}
           {!isShareUser() && <GlobalSearch items={navTree} />}
           <div className="tbv2-actions">
+            {!isShareUser() && (
+              <Button
+                type="text"
+                size="small"
+                icon={<AppstoreOutlined />}
+                title="M10 微系统"
+                style={{ fontSize: 'calc(0.875rem * var(--font-size-scale))', color: '#475569' }}
+                onClick={() => navigate('/m10')}
+              >
+                M10 微系统
+              </Button>
+            )}
             {!isShareUser() && !isSupplierUser() && canUseTopbar.share && <ShareButton />}
             {!isSupplierUser() && canUseTopbar.feedback && <FeedbackButton />}
             {canUseTopbar.fontSize && <FontSizeSetting />}
